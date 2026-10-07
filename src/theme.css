@@ -28,3 +28,37 @@ body { margin: 0; background: var(--md-sys-color-surface); color: var(--md-sys-c
 }
 .transport-bar label { display: flex; align-items: center; gap: 8px; }
 .transport-bar input { width: 5rem; }
+
+/* 工作区：轨道列表（左）与活动列表（右）。同样只负责排版，配色取自上面的 token。 */
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.track-list, .activity-feed {
+  padding: 12px 16px;
+  background: var(--md-sys-color-surface-container);
+  border-radius: var(--md-sys-shape-corner-large);
+}
+.track-list header, .activity-feed header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.track-list h2, .activity-feed h2 { font-size: var(--md-sys-typescale-title-medium-size); margin: 0; }
+.track-list ul, .activity-feed ul {
+  list-style: none; margin: 12px 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: 4px;
+}
+/* 事件会持续累积：只让活动列表自己滚动，避免把整页撑高。 */
+.activity-feed ul { max-height: 45vh; overflow-y: auto; }
+.track-list li {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px; border-radius: 8px; cursor: pointer;
+}
+.track-list li.selected { background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); }
+.track-list .meta { font-size: 0.75rem; opacity: 0.75; }
+.activity-feed li {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem; overflow-wrap: anywhere;
+}
+.empty { opacity: 0.7; }
