@@ -1,10 +1,18 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { AppShell } from "./components/AppShell";
 import { TrackList } from "./components/TrackList";
 import { TransportBar } from "./components/TransportBar";
-import { addTrack, clearProject, getProject, loadDemo, onEngineEvent, setTempo } from "./lib/api";
+import {
+  addTrack,
+  clearProject,
+  getProject,
+  loadDemo,
+  onEngineEvent,
+  renderPreview,
+  setTempo,
+} from "./lib/api";
 import type { Project } from "./lib/types";
 
 /** 活动列表最多保留的行数，避免长时间会话里无限增长。 */
@@ -16,6 +24,62 @@ function App() {
   const [playing, setPlaying] = useState(false);
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null);
   const [activity, setActivity] = useState<string[]>([]);
+
+  // 正在播放的 `<audio>` 元素与它的 blob URL；两者只由下面两个回调持有。
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
+  // `playing` 是异步 state，挡不住同一 tick 内的连点，所以额外用 ref 做同步守卫。
+  const playingRef = useRef(false);
+  // 每次 Play/Stop 都会递增；用它把"在途渲染"的结果作废，避免 Stop→Play 竞态下
+  // 上一次渲染的 blob 又被播一遍（并永久泄漏一个 object URL）。
+  const playTokenRef = useRef(0);
+
+  /** 停止播放、释放 blob URL 并把 transport 归位；重复调用是安全的空操作。 */
+  const stopPlayback = useCallback(() => {
+    playingRef.current = false;
+    playTokenRef.current += 1;
+    const audio = audioRef.current;
+    if (audio) {
+      audio.onended = null;
+      audio.pause();
+      audioRef.current = null;
+    }
+    // 不 revoke 会一直占住音频缓冲（blob 不会被 GC）。
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = null;
+    }
+    setPlaying(false);
+  }, []);
+
+  const handlePlay = useCallback(() => {
+    // 守卫：第一次点击后 `playing` 还是旧值，靠 ref 立刻挡住重复渲染/播放。
+    if (playingRef.current) return;
+    playingRef.current = true;
+    const token = (playTokenRef.current += 1);
+    setPlaying(true);
+
+    renderPreview()
+      .then((blob) => {
+        // 渲染是异步的：期间若已 Stop（或卸载），丢弃这次结果，避免"幽灵播放"。
+        if (playTokenRef.current !== token) return;
+        const url = URL.createObjectURL(blob);
+        objectUrlRef.current = url;
+        const audio = new Audio(url);
+        audio.onended = stopPlayback;
+        audioRef.current = audio;
+        audio.play().catch((err) => {
+          console.error("audio playback failed", err);
+          stopPlayback();
+        });
+      })
+      .catch((err) => {
+        console.error("render_preview failed", err);
+        stopPlayback();
+      });
+  }, [stopPlayback]);
+
+  useEffect(() => stopPlayback, [stopPlayback]);
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
@@ -82,8 +146,8 @@ function App() {
       <TransportBar
         tempo={project?.transport.tempo ?? 120}
         onTempoChange={handleTempoChange}
-        onPlay={() => setPlaying(true)}
-        onStop={() => setPlaying(false)}
+        onPlay={handlePlay}
+        onStop={stopPlayback}
         playing={playing}
       />
       {/* 首帧 `get_project` 未返回时没有可渲染的轨道；拿到快照后再挂载工作区。 */}

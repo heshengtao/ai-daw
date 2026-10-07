@@ -25,6 +25,11 @@ export function clearProject(): Promise<Project> {
 export function loadDemo(): Promise<Project> {
   return invoke<Project>("load_demo");
 }
+/** 渲染当前工程并返回可播放的 WAV Blob。 */
+export async function renderPreview(sampleRate = 44100): Promise<Blob> {
+  const bytes = await invoke<ArrayBuffer>("render_preview", { sampleRate });
+  return new Blob([bytes], { type: "audio/wav" });
+}
 /** 订阅引擎事件流。 */
 export function onEngineEvent(handler: (event: unknown) => void): Promise<UnlistenFn> {
   return listen(EVENT_ENGINE, (e) => handler(e.payload));

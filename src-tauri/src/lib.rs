@@ -15,6 +15,7 @@ pub fn run() {
             commands::set_tempo,
             commands::clear_project,
             commands::load_demo,
+            commands::render_preview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running daw-party");

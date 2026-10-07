@@ -4,6 +4,9 @@ use daw_party_engine::bus::Engine;
 use daw_party_engine::command::Command;
 use daw_party_engine::event::{Actor, Event};
 use daw_party_engine::model::{Note, Project};
+use daw_party_engine::registry::PluginRegistry;
+use daw_party_engine::render::{render, RenderOptions};
+use daw_party_engine::wav::wav_bytes;
 
 use crate::state::{AppState, EVENT_ENGINE};
 
@@ -81,4 +84,14 @@ pub fn load_demo(app: tauri::AppHandle, state: State<'_, AppState>) -> Project {
         let _ = app.emit(EVENT_ENGINE, event);
     }
     project
+}
+
+/// 离线渲染当前工程为 WAV 字节，供前端试听。
+#[tauri::command]
+pub fn render_preview(state: State<'_, AppState>, sample_rate: u32) -> tauri::ipc::Response {
+    let project = state.engine.lock().unwrap().project().clone();
+    let registry = PluginRegistry::with_builtins();
+    let options = RenderOptions { sample_rate: sample_rate as f64, tail_seconds: 0.5 };
+    let buffer = render(&project, &registry, &options);
+    tauri::ipc::Response::new(wav_bytes(&buffer, sample_rate))
 }
