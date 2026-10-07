@@ -299,8 +299,10 @@ EOF
 
 ```bash
 export HTTPS_PROXY=http://127.0.0.1:7892 HTTP_PROXY=http://127.0.0.1:7892
-npm install @m3e/react @m3e/web @m3e/icons
+npm install @m3e/react @m3e/web @m3e/icons lit @lit/react
 ```
+
+（`@m3e/react` v2.9.x 的 peerDependencies 是 `react >=18`、`@m3e/web ^2.9`、`lit ^3.3`、`@lit/react ^1.0`；脚手架给的是 React 19，满足要求。装完可直接读 `node_modules/@m3e/react/dist/src/<component>/index.d.ts` 确认各子路径的确切导出名——比猜名字可靠。）
 
 - [ ] **Step 2: 类型与 API 封装**
 
