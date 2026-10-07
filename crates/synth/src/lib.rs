@@ -107,8 +107,8 @@ impl Plugin for SynthPlugin {
         self.voices = [Voice::idle(); MAX_VOICES];
     }
 
-    fn process(&mut self, _ctx: &ProcessContext, out: &mut [&mut [f32]], events: &[TimedMidiEvent]) {
-        let frames = out.first().map_or(0, |c| c.len());
+    fn process(&mut self, _ctx: &ProcessContext, audio: &mut [&mut [f32]], events: &[TimedMidiEvent]) {
+        let frames = audio.first().map_or(0, |c| c.len());
         for frame in 0..frames {
             for ev in events.iter().filter(|e| e.frame as usize == frame) {
                 self.handle(ev.event);
@@ -119,7 +119,7 @@ impl Plugin for SynthPlugin {
                 mix += s;
             }
             mix = (mix * self.gain).clamp(-1.0, 1.0);
-            for ch in out.iter_mut() {
+            for ch in audio.iter_mut() {
                 ch[frame] = mix;
             }
         }

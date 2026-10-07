@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 /// 插件类别。
+///
+/// - [`PluginKind::Instrument`]：音源，接收 MIDI、产出音频；[`IoLayout::inputs`] 必须为 0。
+/// - [`PluginKind::Effect`]：效果，接收并产出音频；v1 要求 `inputs == outputs`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PluginKind {
     /// 音源（接收 MIDI，产出音频）。
@@ -9,7 +12,7 @@ pub enum PluginKind {
     Effect,
 }
 
-/// 通道布局。
+/// 通道布局（`inputs` / `outputs` 为通道数，不是总线数）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IoLayout {
     pub inputs: u16,

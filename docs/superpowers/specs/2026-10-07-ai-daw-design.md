@@ -112,7 +112,7 @@
 
 - 描述符：`id`、`name`、`kind: Instrument | Effect`、I/O 通道布局。
 - 生命周期：`init(sample_rate, block_size)`、`reset`、`process`。
-- 处理签名：`process(audio_in, midi_events, params) -> audio_out`。
+- 处理签名（已定形）：`process(&ProcessContext, audio: &mut [&mut [f32]], events: &[TimedMidiEvent])` —— **单一就地平面缓冲**，宿主调用前已把本块输入预填其中（效果器填上游信号，音源填静音）；插件就地读写，不得改通道数/帧数、不得分配。理由：Rust 下唯一无别名问题的表达，且与 nih-plug/JUCE 一致；VST3 适配时把同一块内存同时指给 `inputs`/`outputs`。参数不走 `process`，用 `get_param`/`set_param`。
 - 参数模型：`id`、名称、范围、当前值、可自动化标志；支持通用参数 UI。
 - 状态：`save_state` / `load_state`（存入工程）。
 - 适配器：

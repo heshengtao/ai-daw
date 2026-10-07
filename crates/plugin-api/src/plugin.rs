@@ -23,9 +23,17 @@ pub trait Plugin: Send {
     fn prepare(&mut self, sample_rate: f64, block_size: usize);
     /// 清空内部状态（延迟线、包络、声部）。
     fn reset(&mut self);
-    /// 处理一个音频块。`out` 为平面缓冲（通道 × 帧）。
-    /// Currently instruments only: the `out` planes are written and no input planes are provided yet; effects will need an input buffer parameter (see design spec §8).
-    fn process(&mut self, ctx: &ProcessContext, out: &mut [&mut [f32]], events: &[TimedMidiEvent]);
+    /// 就地处理一个音频块。
+    ///
+    /// `audio` 是平面缓冲（每个元素为一个通道的切片，长度均为本块帧数，即
+    /// `audio.len() == descriptor().io.outputs`）。宿主在调用前已把本块的输入**预填**
+    /// 其中：效果器填上游信号，音源（[`PluginKind::Instrument`]）填静音。
+    ///
+    /// 插件就地读并写同一块：不得改变通道数或帧数，也不得分配内存。
+    /// 音源可以忽略初始内容直接覆写。
+    ///
+    /// [`PluginKind::Instrument`]: crate::PluginKind::Instrument
+    fn process(&mut self, ctx: &ProcessContext, audio: &mut [&mut [f32]], events: &[TimedMidiEvent]);
     /// 序列化状态。
     fn save_state(&self) -> Vec<u8>;
     /// 反序列化状态。
@@ -71,13 +79,13 @@ mod tests {
         fn reset(&mut self) {}
         fn process(
             &mut self,
-            ctx: &ProcessContext,
-            out: &mut [&mut [f32]],
+            _ctx: &ProcessContext,
+            audio: &mut [&mut [f32]],
             _events: &[crate::TimedMidiEvent],
         ) {
-            for ch in out.iter_mut() {
-                for (i, s) in ch.iter_mut().enumerate() {
-                    *s = (i as f32 + ctx.block_size as f32) * self.gain;
+            for ch in audio.iter_mut() {
+                for s in ch.iter_mut() {
+                    *s *= self.gain;
                 }
             }
         }
@@ -94,19 +102,21 @@ mod tests {
     }
 
     #[test]
-    fn plugin_process_writes_output_and_state_roundtrips() {
+    fn effect_processes_prefilled_input_in_place() {
         let mut p = GainPlugin { gain: 0.5 };
-        p.prepare(48_000.0, 4);
+        p.prepare(48_000.0, 2);
         let ctx = ProcessContext {
             sample_rate: 48_000.0,
-            block_size: 4,
+            block_size: 2,
             tempo: 120.0,
             playing: true,
         };
-        let mut left = [0.0f32; 4];
-        let mut right = [0.0f32; 4];
+        // The host pre-fills the planes with the incoming signal.
+        let mut left = [1.0f32, -2.0];
+        let mut right = [0.5f32, 0.25];
         p.process(&ctx, &mut [&mut left, &mut right], &[]);
-        assert_eq!(left[0], 2.0);
+        assert_eq!(left, [0.5, -1.0]);
+        assert_eq!(right, [0.25, 0.125]);
 
         let state = p.save_state();
         let mut q = GainPlugin { gain: 0.0 };
