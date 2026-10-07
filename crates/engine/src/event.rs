@@ -1,7 +1,9 @@
+use serde::{Deserialize, Serialize};
+
 use crate::model::{ClipId, Note, TrackId};
 
 /// 变更来源。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Actor {
     /// 人类用户。
     Human,
@@ -10,7 +12,7 @@ pub enum Actor {
 }
 
 /// 事件：一次已发生、可重放的状态变更。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Event {
     /// 速度改变。
     TempoChanged { actor: Actor, tempo: f64 },
@@ -46,5 +48,19 @@ impl Event {
             | Event::GainChanged { actor, .. }
             | Event::PanChanged { actor, .. } => actor,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Event;
+    use crate::event::Actor;
+
+    #[test]
+    fn event_roundtrips_through_json() {
+        let e = Event::TrackAdded { actor: Actor::Agent("claude".into()), id: crate::model::TrackId(3), name: "Bass".into() };
+        let json = serde_json::to_string(&e).unwrap();
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, back);
     }
 }

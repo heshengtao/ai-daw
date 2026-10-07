@@ -1,49 +1,30 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
 
+/** 后端返回的工程快照（Task 3 会用完整的 TS 类型替换这里）。 */
+type ProjectSummary = {
+  name: string;
+  tracks: { name: string }[];
+};
+
+/** 占位外壳：只在启动时读取工程，并把工程名与轨道数渲染成纯文本。 */
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [project, setProject] = useState<ProjectSummary | null>(null);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
+  useEffect(() => {
+    invoke<ProjectSummary>("get_project")
+      .then(setProject)
+      .catch((err) => console.error("get_project failed", err));
+  }, []);
+
+  if (!project) {
+    return <main>loading…</main>;
   }
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
+    <main>
+      <p>project: {project.name}</p>
+      <p>tracks: {project.tracks.length}</p>
     </main>
   );
 }
