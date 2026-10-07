@@ -13,12 +13,20 @@ body { margin: 0; background: var(--md-sys-color-surface); color: var(--md-sys-c
 /* MD3 外壳布局：顶栏 + 传输条。以下规则只负责排版，配色取自上面的 token。 */
 .app-shell { display: flex; flex-direction: column; min-height: 100vh; }
 .app-bar {
-  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px;
   padding: 8px 16px;
   background: var(--md-sys-color-surface-container);
 }
 .app-bar h1 { font-size: var(--md-sys-typescale-title-medium-size); margin: 0; }
-.app-bar-actions { display: flex; gap: 8px; }
+.app-bar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* 导出目标路径：定宽输入框（长路径靠光标滚动查看），不把顶栏挤变形。 */
+.app-bar-actions .export-path { display: flex; align-items: center; gap: 8px; font-size: 0.75rem; }
+.app-bar-actions .export-path input {
+  width: 16rem; max-width: 40vw;
+  padding: 4px 8px; font: inherit;
+  color: var(--md-sys-color-on-surface); background: var(--md-sys-color-surface);
+  border: 1px solid var(--md-sys-color-primary); border-radius: 8px;
+}
 .app-shell main { display: flex; flex-direction: column; gap: 16px; padding: 16px; }
 .transport-bar {
   display: flex; align-items: center; gap: 16px;

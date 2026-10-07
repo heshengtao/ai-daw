@@ -1,5 +1,9 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { documentDir, join } from "@tauri-apps/api/path";
 import { M3eButton } from "@m3e/react/button";
+
+/** 导出文本框的默认文件名；目录取自系统文档目录。 */
+const DEFAULT_EXPORT_NAME = "daw-party-export.wav";
 
 /** `AppShell` 的 props：顶栏动作与主内容插槽。 */
 export interface AppShellProps {
@@ -7,12 +11,34 @@ export interface AppShellProps {
   onLoadDemo: () => void;
   /** 清空（新建）工程。 */
   onClear: () => void;
+  /** 导出当前工程为 WAV，参数为用户在文本框里填写的目标路径。 */
+  onExport: (path: string) => void;
   /** 主内容区（`App.tsx` 组合的传输条、轨道列表等）。 */
   children: ReactNode;
 }
 
-/** MD3 应用外壳：顶栏（应用名 + 示例/清空按钮）与 `<main>` 插槽。 */
-export function AppShell({ onLoadDemo, onClear, children }: AppShellProps) {
+/** MD3 应用外壳：顶栏（应用名 + 示例/清空/导出）与 `<main>` 插槽。 */
+export function AppShell({ onLoadDemo, onClear, onExport, children }: AppShellProps) {
+  // 导出路径是纯 UI 状态，放在这里而不是 `App`：它只服务于这个文本框，
+  // 也不会被任何后端返回值覆盖（导出结果只进活动列表）。
+  const [exportPath, setExportPath] = useState("");
+
+  useEffect(() => {
+    let disposed = false;
+    // 默认值 = `~/Documents/daw-party-export.wav`（由系统文档目录拼出）。
+    // 解析是异步的：先用 `prev || defaultPath` 兜底，保证解析返回时不会
+    // 清掉用户在这期间已经输入的内容。
+    documentDir()
+      .then((dir) => join(dir, DEFAULT_EXPORT_NAME))
+      .then((defaultPath) => {
+        if (!disposed) setExportPath((prev) => prev || defaultPath);
+      })
+      .catch((err) => console.error("resolve default export path failed", err));
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
   return (
     <div className="app-shell">
       <header className="app-bar">
@@ -20,6 +46,16 @@ export function AppShell({ onLoadDemo, onClear, children }: AppShellProps) {
         <div className="app-bar-actions">
           <M3eButton onClick={onLoadDemo}>Load demo</M3eButton>
           <M3eButton onClick={onClear}>New</M3eButton>
+          <label className="export-path">
+            Export to
+            <input
+              type="text"
+              value={exportPath}
+              placeholder={DEFAULT_EXPORT_NAME}
+              onChange={(e) => setExportPath(e.target.value)}
+            />
+          </label>
+          <M3eButton onClick={() => onExport(exportPath.trim())}>Export WAV</M3eButton>
         </div>
       </header>
       <main>{children}</main>

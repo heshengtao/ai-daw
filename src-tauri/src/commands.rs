@@ -95,3 +95,14 @@ pub fn render_preview(state: State<'_, AppState>, sample_rate: u32) -> tauri::ip
     let buffer = render(&project, &registry, &options);
     tauri::ipc::Response::new(wav_bytes(&buffer, sample_rate))
 }
+
+/// 把当前工程导出为 WAV 文件，返回写入的绝对路径。
+#[tauri::command]
+pub fn export_wav(state: State<'_, AppState>, path: String, sample_rate: u32) -> Result<String, String> {
+    let project = state.engine.lock().unwrap().project().clone();
+    let registry = PluginRegistry::with_builtins();
+    let options = RenderOptions { sample_rate: sample_rate as f64, tail_seconds: 0.5 };
+    let buffer = render(&project, &registry, &options);
+    daw_party_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| e.to_string())?;
+    Ok(path)
+}

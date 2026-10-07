@@ -30,6 +30,10 @@ export async function renderPreview(sampleRate = 44100): Promise<Blob> {
   const bytes = await invoke<ArrayBuffer>("render_preview", { sampleRate });
   return new Blob([bytes], { type: "audio/wav" });
 }
+/** 把当前工程导出为 WAV 文件，成功时返回写入的绝对路径。 */
+export function exportWav(path: string, sampleRate = 44100): Promise<string> {
+  return invoke<string>("export_wav", { path, sampleRate });
+}
 /** 订阅引擎事件流。 */
 export function onEngineEvent(handler: (event: unknown) => void): Promise<UnlistenFn> {
   return listen(EVENT_ENGINE, (e) => handler(e.payload));

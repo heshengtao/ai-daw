@@ -7,6 +7,7 @@ import { TransportBar } from "./components/TransportBar";
 import {
   addTrack,
   clearProject,
+  exportWav,
   getProject,
   loadDemo,
   onEngineEvent,
@@ -81,6 +82,11 @@ function App() {
 
   useEffect(() => stopPlayback, [stopPlayback]);
 
+  /** 往活动列表追加一行非引擎事件的消息（如导出结果）；与事件一样只保留最近若干行。 */
+  const pushActivity = useCallback((line: string) => {
+    setActivity((prev) => [...prev, line].slice(-MAX_ACTIVITY_LINES));
+  }, []);
+
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let disposed = false;
@@ -92,8 +98,7 @@ function App() {
     onEngineEvent((event) => {
       // 事件流只喂给活动列表（唯一消费者）；`project` 一律由命令返回的快照写回，
       // 所以同一次变更不会被"事件 + 返回值"重复应用。事件形状未知，序列化即展示。
-      const line = JSON.stringify(event);
-      setActivity((prev) => [...prev, line].slice(-MAX_ACTIVITY_LINES));
+      pushActivity(JSON.stringify(event));
     })
       .then((fn) => {
         // 卸载（含 React StrictMode 的二次挂载）时立即退订，避免泄漏。
@@ -106,7 +111,7 @@ function App() {
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [pushActivity]);
 
   const handleTempoChange = (bpm: number) => {
     setTempo(bpm)
@@ -141,8 +146,16 @@ function App() {
       .catch((err) => console.error("add_track failed", err));
   };
 
+  const handleExport = (path: string) => {
+    // 导出不改工程状态，所以结果只进活动列表：成功记下后端返回的绝对路径，
+    // 失败（目录不存在、无写权限、路径为空…）把错误原样写进活动列表，不静默吞掉。
+    exportWav(path)
+      .then((written) => pushActivity(`Exported WAV: ${written}`))
+      .catch((err) => pushActivity(`Export failed: ${err instanceof Error ? err.message : String(err)}`));
+  };
+
   return (
-    <AppShell onLoadDemo={handleLoadDemo} onClear={handleClear}>
+    <AppShell onLoadDemo={handleLoadDemo} onClear={handleClear} onExport={handleExport}>
       <TransportBar
         tempo={project?.transport.tempo ?? 120}
         onTempoChange={handleTempoChange}
