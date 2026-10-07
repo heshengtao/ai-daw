@@ -47,7 +47,7 @@ impl Project {
 mod tests {
     use super::*;
     use crate::model::track::{MixerChannel, Track};
-    use crate::model::Clip;
+    use crate::model::{Clip, ClipId, Note};
 
     #[test]
     fn project_roundtrips_through_json() {
@@ -76,5 +76,29 @@ mod tests {
             mixer: MixerChannel::default(),
         });
         assert_eq!(p.length_beats(), 5.0);
+    }
+
+    #[test]
+    fn project_wire_shape_is_stable() {
+        // `src/lib/types.ts` 依赖 TrackId / ClipId 序列化成裸数字、字段为 snake_case；
+        // 往返测试无法发现形状漂移，这里断言具体 JSON 形状。
+        let mut p = Project::new("t");
+        p.tracks.push(Track {
+            id: TrackId(7),
+            name: "Lead".into(),
+            instrument: None,
+            clips: vec![Clip {
+                id: ClipId(3),
+                start: 0.0,
+                length: 1.0,
+                notes: vec![Note { pitch: 60, start: 0.0, duration: 1.0, velocity: 100 }],
+            }],
+            mixer: MixerChannel::default(),
+        });
+        let v = serde_json::to_value(&p).unwrap();
+        assert!(v["tracks"][0]["id"].is_u64(), "TrackId must serialize as a bare number");
+        assert!(v["tracks"][0]["clips"][0]["id"].is_u64(), "ClipId must serialize as a bare number");
+        assert!(v["transport"]["time_sig_num"].is_u64(), "fields must be snake_case");
+        assert!(v["tracks"][0]["mixer"]["gain_db"].is_f64());
     }
 }

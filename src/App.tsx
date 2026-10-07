@@ -140,6 +140,10 @@ function App() {
   }, [pushActivity, reportError, loadProject]);
 
   const handleTempoChange = (bpm: number) => {
+    // 空字段会得到 `Number("") === 0`，NaN / 超范围值同样不安全：一律忽略，
+    // 绝不把 0 之类的值送进引擎（否则渲染时长会溢出并中止进程）。
+    // 注意：这里不写回 `project`，所以输入框里用户正在编辑的内容不会被覆盖。
+    if (!Number.isFinite(bpm) || bpm < 20 || bpm > 300) return;
     setTempo(bpm)
       .then(setProject)
       .catch((err) => reportError("set_tempo failed", err));

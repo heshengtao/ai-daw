@@ -30,7 +30,6 @@ daw-party-engine = { path = "../crates/engine" }
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
 strip = true
 
 # Opt out of the repository-root Cargo workspace: this crate is its own

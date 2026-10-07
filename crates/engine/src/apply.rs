@@ -4,7 +4,7 @@ use crate::model::{Clip, PluginInstance, Project};
 /// 把一个事件应用到工程状态。
 pub fn apply(project: &mut Project, event: &Event) {
     match event {
-        Event::TempoChanged { tempo, .. } => project.transport.tempo = *tempo,
+        Event::TempoChanged { tempo, .. } => project.transport.tempo = tempo.clamp(1.0, 1000.0),
         Event::TrackAdded { id, name, .. } => {
             project.tracks.push(crate::model::Track {
                 id: *id,
@@ -90,5 +90,15 @@ mod tests {
         let mut p = Project::new("t");
         apply(&mut p, &Event::TempoChanged { actor: Actor::Human, tempo: 90.0 });
         assert_eq!(p.transport.tempo, 90.0);
+    }
+
+    #[test]
+    fn tempo_event_is_defensively_clamped() {
+        // 手写 / 加载来的事件也必须落在安全区间，否则渲染时长会溢出。
+        let mut p = Project::new("t");
+        apply(&mut p, &Event::TempoChanged { actor: Actor::Human, tempo: 0.0 });
+        assert_eq!(p.transport.tempo, 1.0);
+        apply(&mut p, &Event::TempoChanged { actor: Actor::Human, tempo: 100000.0 });
+        assert_eq!(p.transport.tempo, 1000.0);
     }
 }

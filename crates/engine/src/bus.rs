@@ -9,16 +9,20 @@ pub struct Engine {
     history: Vec<Vec<Event>>,
     next_track_id: u64,
     next_clip_id: u64,
+    /// 引擎的初始工程名；撤销一次 `Clear` 时用它重建，恢复被清空前的名字。
+    initial_name: String,
 }
 
 impl Engine {
     /// 创建引擎：空工程（默认传输设置）、空历史，id 计数器从 1 开始。
     pub fn new(name: impl Into<String>) -> Self {
+        let name = name.into();
         Engine {
-            project: Project::new(name),
+            project: Project::new(name.clone()),
             history: vec![],
             next_track_id: 1,
             next_clip_id: 1,
+            initial_name: name,
         }
     }
 
@@ -33,7 +37,8 @@ impl Engine {
             .max()
             .unwrap_or(0)
             + 1;
-        Engine { project, history: vec![], next_track_id, next_clip_id }
+        let initial_name = project.name.clone();
+        Engine { project, history: vec![], next_track_id, next_clip_id, initial_name }
     }
 
     fn alloc_track_id(&mut self) -> TrackId {
@@ -75,7 +80,7 @@ impl Engine {
         match self.history.pop() {
             None => false,
             Some(_) => {
-                self.project = Project::new(self.project.name.clone());
+                self.project = Project::new(self.initial_name.clone());
                 let remaining: Vec<Vec<Event>> = self.history.clone();
                 for batch in remaining {
                     for ev in batch {
@@ -90,7 +95,9 @@ impl Engine {
     fn translate(&mut self, command: &Command, actor: &Actor) -> Vec<Event> {
         match command {
             Command::SetTempo(tempo) => {
-                vec![Event::TempoChanged { actor: actor.clone(), tempo: *tempo }]
+                // 夹紧到安全区间：`tempo` 会参与 `60 / bpm` 的秒数换算，0 或负数会
+                // 让渲染时长变成 Inf / NaN，最终触发超大分配而中止进程。
+                vec![Event::TempoChanged { actor: actor.clone(), tempo: tempo.clamp(1.0, 1000.0) }]
             }
             Command::AddTrack { name } => {
                 let id = self.alloc_track_id();
@@ -158,6 +165,17 @@ mod tests {
     }
 
     #[test]
+    fn set_tempo_is_clamped_to_safe_range() {
+        let mut e = Engine::new("demo");
+        // 0 BPM 会让渲染时长变成 Inf，必须被夹紧到 1.0。
+        e.execute(Command::SetTempo(0.0), Actor::Human);
+        assert_eq!(e.project().transport.tempo, 1.0);
+        // 过大的 BPM 同样被封顶到 1000.0。
+        e.execute(Command::SetTempo(100000.0), Actor::Human);
+        assert_eq!(e.project().transport.tempo, 1000.0);
+    }
+
+    #[test]
     fn add_clip_uses_allocated_ids_and_is_consistent() {
         let mut e = Engine::new("demo");
         let ev = e.execute(Command::AddTrack { name: "Keys".into() }, Actor::Human);
@@ -196,6 +214,8 @@ mod tests {
 
         assert!(e.undo());
         assert_eq!(e.project().tracks.len(), 1);
+        // 撤销 Clear 必须恢复被清空前的工程名，而不是保留 Clear 传入的新名。
+        assert_eq!(e.project().name, "demo");
     }
 
     #[test]
