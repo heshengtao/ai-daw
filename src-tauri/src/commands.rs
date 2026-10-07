@@ -38,10 +38,8 @@ pub fn set_tempo(app: tauri::AppHandle, state: State<'_, AppState>, bpm: f64) ->
 
 /// 清空为新工程。
 #[tauri::command]
-pub fn clear_project(state: State<'_, AppState>) -> Project {
-    let mut engine = state.engine.lock().unwrap();
-    *engine = Engine::new("untitled");
-    engine.project().clone()
+pub fn clear_project(app: tauri::AppHandle, state: State<'_, AppState>) -> Project {
+    run(&app, &state, Command::Clear { name: "untitled".into() })
 }
 
 /// 载入内置示例（C 大调琶音），让界面立刻有内容可看可听。

@@ -122,6 +122,9 @@ impl Engine {
             Command::SetPan { track, pan } => {
                 vec![Event::PanChanged { actor: actor.clone(), track: *track, pan: *pan }]
             }
+            Command::Clear { name } => {
+                vec![Event::ProjectCleared { actor: actor.clone(), name: name.clone() }]
+            }
         }
     }
 }
@@ -177,6 +180,22 @@ mod tests {
         // must not collide with the two loaded tracks
         assert_eq!(id.0, 3);
         assert_eq!(loaded.project().tracks.len(), 3);
+    }
+
+    #[test]
+    fn clear_resets_project_and_is_undoable() {
+        let mut e = Engine::new("demo");
+        e.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+        assert_eq!(e.project().tracks.len(), 1);
+
+        let events = e.execute(Command::Clear { name: "x".into() }, Actor::Human);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], crate::event::Event::ProjectCleared { .. }));
+        assert!(e.project().tracks.is_empty());
+        assert_eq!(e.project().name, "x");
+
+        assert!(e.undo());
+        assert_eq!(e.project().tracks.len(), 1);
     }
 
     #[test]

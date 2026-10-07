@@ -32,6 +32,8 @@ pub enum Event {
     GainChanged { actor: Actor, track: TrackId, gain_db: f32 },
     /// 声像改变。
     PanChanged { actor: Actor, track: TrackId, pan: f32 },
+    /// 工程被重置为空。`actor` 为发起者。
+    ProjectCleared { actor: Actor, name: String },
 }
 
 impl Event {
@@ -46,7 +48,8 @@ impl Event {
             | Event::ClipRemoved { actor, .. }
             | Event::NoteAdded { actor, .. }
             | Event::GainChanged { actor, .. }
-            | Event::PanChanged { actor, .. } => actor,
+            | Event::PanChanged { actor, .. }
+            | Event::ProjectCleared { actor, .. } => actor,
         }
     }
 }
@@ -62,5 +65,14 @@ mod tests {
         let json = serde_json::to_string(&e).unwrap();
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(e, back);
+    }
+
+    #[test]
+    fn project_cleared_roundtrips_through_json() {
+        let e = Event::ProjectCleared { actor: Actor::Agent("claude".into()), name: "x".into() };
+        let json = serde_json::to_string(&e).unwrap();
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, back);
+        assert_eq!(e.actor(), &Actor::Agent("claude".into()));
     }
 }

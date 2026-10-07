@@ -51,6 +51,7 @@ pub fn apply(project: &mut Project, event: &Event) {
                 t.mixer.pan = *pan;
             }
         }
+        Event::ProjectCleared { name, .. } => *project = Project::new(name.clone()),
     }
 }
 

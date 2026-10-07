@@ -21,4 +21,6 @@ pub enum Command {
     SetGain { track: TrackId, gain_db: f32 },
     /// 设置轨道声像（-1.0 最左，1.0 最右）。
     SetPan { track: TrackId, pan: f32 },
+    /// 清空为同名的空工程。
+    Clear { name: String },
 }
