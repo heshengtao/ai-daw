@@ -33,6 +33,9 @@ pub struct Player {
 
 impl Player {
     /// `max_block` 为回调可能请求的最大帧数；所有 scratch 缓冲按此预留，避免回调内分配。
+    ///
+    /// `scratch_events` 的上界不是帧数而是「单轨事件总数」：一个块最多只能取走某轨尚未
+    /// 消费的事件，因此事件数不会超过该轨事件表的总长度，也就不可能超过各轨长度的最大值。
     pub fn new(
         schedule: ScheduledEvents,
         registry: &PluginRegistry,
@@ -41,6 +44,8 @@ impl Player {
     ) -> Self {
         let tempo = schedule.tempo;
         let end_frame = schedule.end_frame;
+        // 单块内某轨最多发出的事件数 = 该轨事件总数上界（游标单调前进，每块只消费一次）。
+        let max_track_events = schedule.tracks.iter().map(|t| t.events.len()).max().unwrap_or(0);
         let mut tracks = Vec::with_capacity(schedule.tracks.len());
         for st in &schedule.tracks {
             let Some(instance) = &st.instrument else { continue };
@@ -72,7 +77,7 @@ impl Player {
             playing: false,
             scratch_left: vec![0.0; max_block],
             scratch_right: vec![0.0; max_block],
-            scratch_events: Vec::with_capacity(max_block.max(64)),
+            scratch_events: Vec::with_capacity(max_track_events.max(64)),
         }
     }
 
