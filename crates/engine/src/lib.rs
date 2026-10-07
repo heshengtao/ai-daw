@@ -5,8 +5,10 @@ pub mod bus;
 pub mod command;
 pub mod event;
 pub mod model;
+pub mod registry;
 
 pub use bus::Engine;
+pub use registry::PluginRegistry;
 
 /// 音频块帧数。
 pub const BLOCK_SIZE: usize = 256;
