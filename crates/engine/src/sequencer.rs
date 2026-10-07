@@ -7,8 +7,10 @@ use crate::model::Track;
 /// `block_start_beats` 为块起点的全局拍位置；`block_frames` 为块帧数。
 ///
 /// 块窗口为半开区间 `[block_start, block_end)`：恰好落在 `block_end` 上的音符边沿
-/// 属于下一块，会在下一块的帧 0 发出（不会重复发声，也不会丢事件）。因此本块内产出
-/// 的每个事件帧偏移恒定满足 `frame < block_frames`，可直接用于按帧索引的消费者
+/// 属于下一块，会在下一块的帧 0 发出（不会重复发声，也不会丢事件）。帧偏移以
+/// `.floor()` 向下取整：窗口保证 `0.0 <= sec - block_start_sec < block_frames / sample_rate`，
+/// 故取整结果恒落在 `0..block_frames` 内——绝不为 `block_frames`，绝不会被按帧索引的
+/// 消费者丢弃，也绝不会因四舍五入被推到块外而丢失。可直接用于按帧索引的消费者
 /// （如宿主 / VST3 host）。
 pub fn collect_track_events(
     track: &Track,
@@ -29,14 +31,14 @@ pub fn collect_track_events(
             let end_sec = beats_to_seconds(end_beat, tempo);
 
             if start_sec >= block_start_sec && start_sec < block_end_sec {
-                let frame = ((start_sec - block_start_sec) * sample_rate).round() as u32;
+                let frame = ((start_sec - block_start_sec) * sample_rate).floor() as u32;
                 out.push(TimedMidiEvent {
                     frame,
                     event: MidiEvent::NoteOn { note: note.pitch, velocity: note.velocity },
                 });
             }
             if end_sec >= block_start_sec && end_sec < block_end_sec {
-                let frame = ((end_sec - block_start_sec) * sample_rate).round() as u32;
+                let frame = ((end_sec - block_start_sec) * sample_rate).floor() as u32;
                 out.push(TimedMidiEvent { frame, event: MidiEvent::NoteOff { note: note.pitch } });
             }
         }
@@ -104,5 +106,51 @@ mod tests {
         let t = track_with_note();
         let events = collect_track_events(&t, 0.25, 1_000, 48_000.0, 120.0);
         assert!(events.is_empty());
+    }
+
+    /// Regression: an edge in the **last half-sample** of a block must not be lost.
+    ///
+    /// A 256-frame block at 48 kHz starts at beat 0, so `block_start_sec = 0.0` and
+    /// `block_end_sec = 256 / 48_000`. Placing the note start at exactly 255.7 frames
+    /// into the block is done with `start_sec = T * (60/120) = T * 0.5`, i.e.
+    /// `T = 255.7 / 24_000.0` beats.
+    ///
+    /// With `.round()`, `255.7` rounds **up** to frame `256`, which is outside the block
+    /// `[0, 256)` (the half-open guard `start_sec < block_end_sec` admits the edge), so a
+    /// frame-indexed consumer drops it — and the next block does not re-emit it either,
+    /// because its true time (255.7) is *before* the next block's start (256). The MIDI
+    /// edge is silently lost. `.floor()` yields frame `255`: always in range, never lost.
+    ///
+    /// All arithmetic is plain `f64` exactly as written, so the test is deterministic.
+    #[test]
+    fn edge_in_last_half_sample_is_not_lost() {
+        let t = Track {
+            id: TrackId(1),
+            name: "t".into(),
+            instrument: None,
+            clips: vec![Clip {
+                id: ClipId(1),
+                start: 0.0,
+                length: 4.0,
+                notes: vec![Note {
+                    pitch: 60,
+                    start: 255.7 / 24_000.0,
+                    duration: 0.001,
+                    velocity: 100,
+                }],
+            }],
+            mixer: Default::default(),
+        };
+
+        let events = collect_track_events(&t, 0.0, 256, 48_000.0, 120.0);
+
+        let note_on = events.iter().any(|e| {
+            matches!(e.event, MidiEvent::NoteOn { note: 60, velocity: 100 })
+        });
+        assert!(note_on, "NoteOn at 255.7 frames (last half-sample) was lost: {events:?}");
+        assert!(
+            events.iter().all(|e| (e.frame as usize) < 256),
+            "every frame offset must lie inside [0, 256): {events:?}"
+        );
     }
 }
