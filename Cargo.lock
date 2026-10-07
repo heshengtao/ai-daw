@@ -21,6 +21,7 @@ dependencies = [
  "daw-party-plugin-api",
  "daw-party-synth",
  "hound",
+ "rtrb",
  "serde",
  "serde_json",
  "tempfile",
@@ -129,6 +130,12 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "rtrb"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9278fb35b3e730abe136e9b395b5b81b96d06b9f5478a50f0c8430a2237b22de"
 
 [[package]]
 name = "rustix"

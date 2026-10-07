@@ -113,6 +113,11 @@ impl Player {
         }
     }
 
+    /// 从无锁队列取出所有待处理传输命令并应用。
+    pub fn drain_commands(&mut self, receiver: &mut crate::command_queue::CommandReceiver) {
+        receiver.drain(|command| self.apply_command(command));
+    }
+
     /// 填充一个交错立体声块（`out.len() >= frames * 2`）。实时安全：不分配内存。
     pub fn process_block(&mut self, out: &mut [f32], frames: usize) {
         debug_assert!(out.len() >= frames * 2);
@@ -245,5 +250,20 @@ mod tests {
         player.process_block(&mut out, 512);
         assert!(out.iter().all(|s| *s == 0.0));
         assert_eq!(player.position_frames(), 20_512);
+    }
+
+    #[test]
+    fn drain_commands_applies_queued_transport_commands() {
+        let mut player = Player::new(schedule(), &PluginRegistry::with_builtins(), 48_000.0, 512);
+        let (mut tx, mut rx) = crate::command_queue::command_queue(8);
+        assert!(tx.send(TransportCommand::Seek { frame: 1_024 }));
+        assert!(tx.send(TransportCommand::Play));
+        player.drain_commands(&mut rx);
+        assert!(player.is_playing());
+        assert_eq!(player.position_frames(), 1_024);
+        // Draining an empty queue must leave the transport untouched.
+        player.drain_commands(&mut rx);
+        assert!(player.is_playing());
+        assert_eq!(player.position_frames(), 1_024);
     }
 }

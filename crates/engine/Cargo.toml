@@ -10,6 +10,7 @@ daw-party-synth = { path = "../synth" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
 hound = "3"
+rtrb = "0.4"
 
 [dev-dependencies]
 serde_json = "1"

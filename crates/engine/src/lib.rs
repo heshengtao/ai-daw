@@ -4,6 +4,7 @@ pub mod apply;
 pub mod audio;
 pub mod bus;
 pub mod command;
+pub mod command_queue;
 pub mod event;
 pub mod model;
 pub mod player;
