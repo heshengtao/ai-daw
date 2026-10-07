@@ -26,6 +26,7 @@ impl Default for SynthPlugin {
 }
 
 impl SynthPlugin {
+    /// 构造合成器，使用默认参数（gain 0.8、attack 0.01 s、release 0.3 s）。
     pub fn new() -> Self {
         SynthPlugin {
             voices: [Voice::idle(); MAX_VOICES],
