@@ -10,6 +10,8 @@ pub mod model;
 pub mod player;
 pub mod registry;
 pub mod render;
+#[cfg(feature = "realtime")]
+pub mod realtime;
 pub mod schedule;
 pub mod transport;
 pub mod wav;

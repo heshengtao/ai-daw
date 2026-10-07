@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+realtime = ["dep:cpal"]
+
 [dependencies]
 daw-party-plugin-api = { path = "../plugin-api" }
 daw-party-synth = { path = "../synth" }
@@ -11,7 +15,12 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "1"
 hound = "3"
 rtrb = "0.4"
+cpal = { version = "0.18", optional = true }
 
 [dev-dependencies]
 serde_json = "1"
 tempfile = "3"
+
+[[example]]
+name = "play_demo"
+required-features = ["realtime"]
