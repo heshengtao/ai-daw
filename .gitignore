@@ -3,3 +3,7 @@ node_modules/
 target/
 dist/
 demo.wav
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
