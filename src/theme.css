@@ -1,0 +1,30 @@
+:root {
+  --md-sys-color-surface: #141218;
+  --md-sys-color-on-surface: #e6e0e9;
+  --md-sys-color-surface-container: #211f26;
+  --md-sys-color-primary: #d0bcff;
+  --md-sys-color-on-primary: #381e72;
+  --md-sys-shape-corner-large: 16px;
+  --md-sys-typescale-title-medium-size: 16px;
+}
+body { margin: 0; background: var(--md-sys-color-surface); color: var(--md-sys-color-on-surface);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+/* MD3 外壳布局：顶栏 + 传输条。以下规则只负责排版，配色取自上面的 token。 */
+.app-shell { display: flex; flex-direction: column; min-height: 100vh; }
+.app-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 8px 16px;
+  background: var(--md-sys-color-surface-container);
+}
+.app-bar h1 { font-size: var(--md-sys-typescale-title-medium-size); margin: 0; }
+.app-bar-actions { display: flex; gap: 8px; }
+.app-shell main { display: flex; flex-direction: column; gap: 16px; padding: 16px; }
+.transport-bar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 16px;
+  background: var(--md-sys-color-surface-container);
+  border-radius: var(--md-sys-shape-corner-large);
+}
+.transport-bar label { display: flex; align-items: center; gap: 8px; }
+.transport-bar input { width: 5rem; }
