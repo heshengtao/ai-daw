@@ -1,10 +1,10 @@
-use daw_party_plugin_api::ProcessContext;
-
 use crate::audio::AudioBuffer;
 use crate::beats_to_seconds;
 use crate::model::Project;
+use crate::player::Player;
 use crate::registry::PluginRegistry;
-use crate::sequencer::collect_track_events;
+use crate::schedule::ScheduledEvents;
+use crate::transport::TransportCommand;
 use crate::BLOCK_SIZE;
 
 /// 离线渲染选项。
@@ -16,15 +16,10 @@ pub struct RenderOptions {
     pub tail_seconds: f64,
 }
 
-/// dB → 线性增益。
-fn db_to_linear(db: f32) -> f32 {
-    10f32.powf(db / 20.0)
-}
-
 /// 把工程离线渲染为立体声交错缓冲。
 ///
-/// 逐块渲染每条未静音且已设置乐器的轨道：轨道增益（dB → 线性）与声像按等功率
-/// 分配到左右声道，块内的 MIDI 事件由 `collect_track_events` 收集。输出长度 =
+/// 与实时播放共用同一条代码路径：先把工程构建为 [`ScheduledEvents`]，再交给
+/// [`Player`] 逐块推进，输出因此与实时播放逐位一致（块大小无关）。输出长度 =
 /// （工程内容时长 + `tail_seconds`）× 采样率。相同工程与选项必然产出逐位相同的结果。
 pub fn render(project: &Project, registry: &PluginRegistry, options: &RenderOptions) -> AudioBuffer {
     let sr = options.sample_rate;
@@ -32,49 +27,21 @@ pub fn render(project: &Project, registry: &PluginRegistry, options: &RenderOpti
     let body_sec = beats_to_seconds(project.length_beats(), tempo);
     let total_frames = ((body_sec + options.tail_seconds) * sr) as usize;
 
-    let mut master = AudioBuffer::silence(2, total_frames);
+    let schedule = ScheduledEvents::from_project(project, sr);
+    let mut player = Player::new(schedule, registry, sr, BLOCK_SIZE);
+    player.apply_command(TransportCommand::Play);
 
-    for track in &project.tracks {
-        if track.mixer.mute {
-            continue;
-        }
-        let Some(instance) = &track.instrument else { continue };
-        let Some(mut plugin) = registry.create(&instance.plugin_id) else { continue };
-        plugin.prepare(sr, BLOCK_SIZE);
-        for (id, value) in &instance.params {
-            plugin.set_param(&id.clone().into(), *value);
-        }
-
-        let gain = db_to_linear(track.mixer.gain_db);
-        let pan = track.mixer.pan.clamp(-1.0, 1.0);
-        let left_gain = gain * ((1.0 - pan) * 0.5).sqrt();
-        let right_gain = gain * ((1.0 + pan) * 0.5).sqrt();
-
-        let mut block_start = 0usize;
-        while block_start < total_frames {
-            let frames = BLOCK_SIZE.min(total_frames - block_start);
-            let block_start_beats = (block_start as f64 / sr) * tempo / 60.0;
-            let events = collect_track_events(track, block_start_beats, frames, sr, tempo);
-
-            let mut left = vec![0.0f32; frames];
-            let mut right = vec![0.0f32; frames];
-            let ctx = ProcessContext {
-                sample_rate: sr,
-                block_size: frames,
-                tempo,
-                playing: true,
-            };
-            plugin.process(&ctx, &mut [&mut left, &mut right], &events);
-
-            for i in 0..frames {
-                master.set_sample(0, block_start + i, master.sample(0, block_start + i) + left[i] * left_gain);
-                master.set_sample(1, block_start + i, master.sample(1, block_start + i) + right[i] * right_gain);
-            }
-            block_start += frames;
-        }
+    let mut buffer = AudioBuffer::silence(2, total_frames);
+    let data = buffer.data_mut();
+    let mut block_start = 0usize;
+    while block_start < total_frames {
+        let frames = BLOCK_SIZE.min(total_frames - block_start);
+        let start = block_start * 2;
+        let end = start + frames * 2;
+        player.process_block(&mut data[start..end], frames);
+        block_start += frames;
     }
-
-    master
+    buffer
 }
 
 #[cfg(test)]
@@ -121,5 +88,27 @@ mod tests {
         assert_eq!(a.data(), b.data(), "render must be bit-identical");
         assert!(a.peak() > 0.05, "should be audible");
         assert!(a.data().iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn render_matches_player_at_different_block_size() {
+        let project = demo();
+        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.2 };
+        let registry = PluginRegistry::with_builtins();
+        let buffer = render(&project, &registry, &opts);
+
+        let schedule = crate::schedule::ScheduledEvents::from_project(&project, opts.sample_rate);
+        let mut player = crate::player::Player::new(schedule, &registry, opts.sample_rate, 4096);
+        player.apply_command(crate::transport::TransportCommand::Play);
+
+        let total = buffer.frames();
+        let mut out = vec![0.0f32; total * 2];
+        let mut off = 0usize;
+        while off < total {
+            let frames = 128usize.min(total - off);
+            player.process_block(&mut out[off * 2..(off + frames) * 2], frames);
+            off += frames;
+        }
+        assert_eq!(buffer.data(), out.as_slice(), "offline render must equal realtime Player output");
     }
 }

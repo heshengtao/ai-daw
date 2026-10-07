@@ -11,7 +11,6 @@ pub mod player;
 pub mod registry;
 pub mod render;
 pub mod schedule;
-pub mod sequencer;
 pub mod transport;
 pub mod wav;
 
