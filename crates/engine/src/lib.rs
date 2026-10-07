@@ -1,9 +1,12 @@
 #![forbid(unsafe_code)]
 
 pub mod apply;
+pub mod bus;
 pub mod command;
 pub mod event;
 pub mod model;
+
+pub use bus::Engine;
 
 /// 音频块帧数。
 pub const BLOCK_SIZE: usize = 256;
