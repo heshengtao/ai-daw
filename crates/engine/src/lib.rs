@@ -6,10 +6,12 @@ pub mod bus;
 pub mod command;
 pub mod event;
 pub mod model;
+pub mod player;
 pub mod registry;
 pub mod render;
 pub mod schedule;
 pub mod sequencer;
+pub mod transport;
 pub mod wav;
 
 pub use bus::Engine;
