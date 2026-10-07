@@ -23,7 +23,10 @@ export function TrackList({ project, selectedTrackId, onSelect, onAddTrack }: Tr
         <M3eButton onClick={add}>Add track</M3eButton>
       </header>
       {project.tracks.length === 0 ? (
-        <p className="empty">No tracks yet — add one, or load the demo.</p>
+        <div className="empty">
+          <p className="empty-title">No tracks yet</p>
+          <p className="empty-hint">Load the demo, or add a track to get started.</p>
+        </div>
       ) : (
         <ul>
           {project.tracks.map((t) => (

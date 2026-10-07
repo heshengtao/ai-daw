@@ -53,6 +53,21 @@ function App() {
     setPlaying(false);
   }, []);
 
+  /** 往活动列表追加一行消息（引擎事件、命令失败、导出结果共用）；只保留最近若干行。 */
+  const pushActivity = useCallback((line: string) => {
+    setActivity((prev) => [...prev, line].slice(-MAX_ACTIVITY_LINES));
+  }, []);
+
+  /** 把命令/播放失败写进活动列表（用户可见），同时保留一条控制台日志（便于排查）。 */
+  const reportError = useCallback(
+    (context: string, err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      pushActivity(`${context}: ${message}`);
+      console.error(context, err);
+    },
+    [pushActivity],
+  );
+
   const handlePlay = useCallback(() => {
     // 守卫：第一次点击后 `playing` 还是旧值，靠 ref 立刻挡住重复渲染/播放。
     if (playingRef.current) return;
@@ -70,22 +85,17 @@ function App() {
         audio.onended = stopPlayback;
         audioRef.current = audio;
         audio.play().catch((err) => {
-          console.error("audio playback failed", err);
+          reportError("Audio playback failed", err);
           stopPlayback();
         });
       })
       .catch((err) => {
-        console.error("render_preview failed", err);
+        reportError("Playback failed", err);
         stopPlayback();
       });
-  }, [stopPlayback]);
+  }, [stopPlayback, reportError]);
 
   useEffect(() => stopPlayback, [stopPlayback]);
-
-  /** 往活动列表追加一行非引擎事件的消息（如导出结果）；与事件一样只保留最近若干行。 */
-  const pushActivity = useCallback((line: string) => {
-    setActivity((prev) => [...prev, line].slice(-MAX_ACTIVITY_LINES));
-  }, []);
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
@@ -93,7 +103,7 @@ function App() {
 
     getProject()
       .then(setProject)
-      .catch((err) => console.error("get_project failed", err));
+      .catch((err) => reportError("get_project failed", err));
 
     onEngineEvent((event) => {
       // 事件流只喂给活动列表（唯一消费者）；`project` 一律由命令返回的快照写回，
@@ -105,18 +115,18 @@ function App() {
         if (disposed) fn();
         else unlisten = fn;
       })
-      .catch((err) => console.error("onEngineEvent failed", err));
+      .catch((err) => reportError("onEngineEvent failed", err));
 
     return () => {
       disposed = true;
       unlisten?.();
     };
-  }, [pushActivity]);
+  }, [pushActivity, reportError]);
 
   const handleTempoChange = (bpm: number) => {
     setTempo(bpm)
       .then(setProject)
-      .catch((err) => console.error("set_tempo failed", err));
+      .catch((err) => reportError("set_tempo failed", err));
   };
 
   const handleLoadDemo = () => {
@@ -127,7 +137,7 @@ function App() {
         setProject(next);
         setSelectedTrackId(null);
       })
-      .catch((err) => console.error("load_demo failed", err));
+      .catch((err) => reportError("load_demo failed", err));
   };
 
   const handleClear = () => {
@@ -136,14 +146,14 @@ function App() {
         setProject(next);
         setSelectedTrackId(null);
       })
-      .catch((err) => console.error("clear_project failed", err));
+      .catch((err) => reportError("clear_project failed", err));
   };
 
   const handleAddTrack = (name: string) => {
     // 与其它命令一致：以返回的快照写回，事件只进活动列表。
     addTrack(name)
       .then(setProject)
-      .catch((err) => console.error("add_track failed", err));
+      .catch((err) => reportError("add_track failed", err));
   };
 
   const handleExport = (path: string) => {
@@ -151,11 +161,16 @@ function App() {
     // 失败（目录不存在、无写权限、路径为空…）把错误原样写进活动列表，不静默吞掉。
     exportWav(path)
       .then((written) => pushActivity(`Exported WAV: ${written}`))
-      .catch((err) => pushActivity(`Export failed: ${err instanceof Error ? err.message : String(err)}`));
+      .catch((err) => reportError("Export failed", err));
   };
 
   return (
-    <AppShell onLoadDemo={handleLoadDemo} onClear={handleClear} onExport={handleExport}>
+    <AppShell
+      onLoadDemo={handleLoadDemo}
+      onClear={handleClear}
+      onExport={handleExport}
+      onError={pushActivity}
+    >
       <TransportBar
         tempo={project?.transport.tempo ?? 120}
         onTempoChange={handleTempoChange}
@@ -164,7 +179,7 @@ function App() {
         playing={playing}
       />
       {/* 首帧 `get_project` 未返回时没有可渲染的轨道；拿到快照后再挂载工作区。 */}
-      {project && (
+      {project ? (
         <div className="workspace">
           <TrackList
             project={project}
@@ -173,6 +188,11 @@ function App() {
             onAddTrack={handleAddTrack}
           />
           <ActivityFeed lines={activity} />
+        </div>
+      ) : (
+        <div className="empty">
+          <p className="empty-title">Loading project…</p>
+          <p className="empty-hint">Reading the current project from the engine.</p>
         </div>
       )}
     </AppShell>

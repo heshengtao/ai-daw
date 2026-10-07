@@ -14,7 +14,10 @@ export function ActivityFeed({ lines }: ActivityFeedProps) {
         <h2>Activity</h2>
       </header>
       {lines.length === 0 ? (
-        <p className="empty">No engine activity yet.</p>
+        <div className="empty">
+          <p className="empty-title">No activity yet</p>
+          <p className="empty-hint">Engine events and command results show up here.</p>
+        </div>
       ) : (
         <ul>
           {newestFirst.map(({ id, line }) => (
