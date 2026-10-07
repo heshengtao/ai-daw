@@ -1,0 +1,175 @@
+# daw-party — 轻量级 AI 原生 DAW 设计文档
+
+- 日期：2026-10-07
+- 状态：已评审通过，待实现
+- 许可证：Apache-2.0（计划开源）
+
+## 1. 目标与非目标
+
+### 目标
+- 一个**极轻量、干净、好用的原生 DAW**：多轨 MIDI 编曲、插件乐器宿主、基础混音与导出、音频片段/采样器、音频录制。
+- **插件优先**：所有音色都是插件；DAW 内置**唯一**一个音色插件——合成器。内置合成器与外部插件实现**同一套 ABI**。
+- **可被 AI 驱动**：引擎的每条变更都走统一的命令/事件总线，外部 harness（MCP + 本地 API + skills 文档包）可以捏音色、编曲、导出。
+- **AI 操作可视化 + 人类随时接管**：事件流带 actor 标签，前端动效呈现 AI 在做什么；人类可直接编辑、可暂停 agent、可全量撤销。
+
+### 非目标（v1 不做）
+- 插件进程隔离/沙箱（边界预留，后置）。
+- 视频/记谱/乐谱打印、云协作、内置音频大模型。
+- 移动端。
+
+### "轻量"的定义
+指**交互与体验的干净**（清爽 UI、快启动、低认知负担），不代表功能阉割。功能范围按 v1 明确列出。
+
+## 2. 设计原则
+
+1. **插件优先**：任何音源/效果都通过统一插件 ABI 接入，内置合成器是"第一个插件"。
+2. **工程即唯一真相源**：单份工程状态，AI 与人类改同一份，UI 订阅变更流。
+3. **接口先于功能**：引擎对外只暴露 Command/Event API；UI 与 AI 都只是客户端。
+4. **逻辑分层、物理先合**：引擎为独立 crate，v1 同进程运行，接口即契约，将来无痛拆进程/无头。
+
+## 3. 技术选型
+
+| 层 | 选择 |
+| --- | --- |
+| 应用外壳 | Tauri v2 |
+| 前端 | React + `@m3e/react`（Material 3 Expressive Web Components） |
+| 音频 IO | `cpal` |
+| 内置合成器 DSP | `fundsp` |
+| MIDI | `midir` |
+| WAV 读写 | `hound` |
+| 音频解码/重采样 | `symphonia` / `rubato` |
+| VST3 宿主 | 优先评估 `rack`、`symdaw/audio-plugin-host`；否则基于 MIT 的 VST3 SDK 做薄绑定 |
+| CLAP（后置） | `clack` |
+
+### 许可证结论
+- **VST 3.8 SDK（2025-10-20）已改为纯 MIT**，GPLv3/专有双授权已取消。MIT 与 Apache-2.0 兼容（保留 MIT 声明）。宿主 VST3 + Apache-2.0 开源可行。
+- 商标：使用 "VST" 名称/Logo 可选；若使用需遵守 Steinberg 商标规范，不影响 MIT 授权。
+- 注意：`openDAW`、`Strudel` 为 **AGPL**，仅可借鉴思路，不得直接抄代码。
+
+## 4. 整体架构（路线 B）
+
+引擎是**不依赖 UI 的独立 crate**，对外只暴露 Command/Event API。v1 运行在 Tauri 进程内，但内部模块边界即未来的进程边界；后续升级为独立进程（共享内存传音频 + IPC 传控制）或无头运行，均**零重构**。
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ Tauri App (src-tauri)                                     │
+│   ├─ owns engine instance (v1, in-process)                │
+│   ├─ bridges ipc Command/Event ↔ Tauri commands/events    │
+│   └─ (later) MCP server + local HTTP/WS                    │
+│   ┌────────────────────────────────────────────────────┐ │
+│   │ React + @m3e/react  (时间线/钢琴卷帘/混音台/可视化) │ │
+│   └────────────────────────────────────────────────────┘ │
+├──────────────────────────────────────────────────────────┤
+│ crates/engine  (no UI deps)                                │
+│   project model · command/event bus · transport ·          │
+│   sequencer · audio graph · render (RT + offline) · mix    │
+│        ▲                        │                          │
+│        │ plugin ABI             │ analysis                 │
+│   ┌────┴─────┐  ┌───────────┐  ┌┴──────────┐              │
+│   │ synth    │  │ host-vst3 │  │ analysis  │              │
+│   │ (内置)   │  │ (适配器)  │  │ listen    │              │
+│   └──────────┘  └───────────┘  └───────────┘              │
+└──────────────────────────────────────────────────────────┘
+```
+
+## 5. Workspace / Crate 划分
+
+- `crates/engine` — 工程模型、命令/事件总线、传输、音序器、音频图、实时与离线渲染、混音。
+- `crates/plugin-api` — 统一插件 ABI（trait + 描述符 + 参数模型 + 状态）。
+- `crates/synth` — 唯一内置音色插件（`fundsp`），实现同一 ABI。
+- `crates/host-vst3` — VST3 宿主适配器，把 VST3 实例适配为同一 ABI。
+- `crates/ipc` — 命令/事件/工程 schema（serde），API 契约，前后端与未来 AI 共用。
+- `crates/analysis` — 渲染结果 → 响度/频谱指标（AI 的"听感"闭环）。
+- `src-tauri` — Tauri App。
+- `src` — React 前端。
+- `docs` — 文档与设计。
+
+## 6. 核心领域模型
+
+- `Project` — 聚合根，序列化为**人类可读 JSON**。
+- `Track` — 承载 clips、插入效果、指向 MixerChannel。
+- `Clip` — `MidiClip`（含 `Note`）或 `AudioClip`（含音频引用/波形/crop）。
+- `Note` — pitch、start、duration、velocity、可选 articulation。
+- `AutomationLane` — 参数自动化曲线。
+- `PluginInstance` — 插件引用（format/id）+ 状态 blob + 参数现值。
+- `MixerChannel` — gain / pan / sends。
+- `Bus` / `Master` — 总线与主输出。
+- `Transport` — tempo、time signature、loop region、播放位置。
+
+### 变更模型（事件溯源）
+所有修改 = `Command` → 产出 `Event` → 应用到状态 → 持久化。
+- 人类与 AI 走同一条路 → 撤销/重做、回放、可视化天然可得。
+- `Event` 带 `actor: Human | Agent` 与目标元数据，供前端标注"谁改了什么"。
+
+## 7. 音频图与渲染
+
+- 信号流：`Track → 插入效果链 → MixerChannel(gain/pan/send) → Bus → Master → 输出`。
+- 块处理（256/512 帧），采样级 MIDI 音序。
+- **实时（cpal）与离线渲染共用同一张图**，导出与播放**逐位一致**。
+- 离线渲染用于：导出（WAV/分轨）、`analysis`（AI 听感）、确定性回归测试。
+
+## 8. 插件 ABI（统一音色接口）
+
+- 描述符：`id`、`name`、`kind: Instrument | Effect`、I/O 通道布局。
+- 生命周期：`init(sample_rate, block_size)`、`reset`、`process`。
+- 处理签名：`process(audio_in, midi_events, params) -> audio_out`。
+- 参数模型：`id`、名称、范围、当前值、可自动化标志；支持通用参数 UI。
+- 状态：`save_state` / `load_state`（存入工程）。
+- 适配器：
+  - `synth` 原生实现（内置第一个插件）。
+  - `host-vst3` 适配 VST3（v1：扫描、加载、通用参数、状态存取；插件原生 GUI 后置）。
+  - 后续：CLAP（`clack`）、AU。
+- 插件发现/扫描 + 注册表；缺失插件加载时给占位与告警。
+
+## 9. API 层（一鱼三吃）
+
+同一份 Command/Event 契约三种出口：
+1. 引擎 Rust API（进程内）。
+2. Tauri commands/events → React 前端。
+3. **外部**：MCP server + 本地 HTTP/WS + **skills 文档包**（后置）。
+
+- harness 通过 skills 学会调用工具，完成**捏音色 / 编曲 / 导出**，无需改动引擎。
+- `analysis` 提供 `listen` 式能力：渲染任意区间并返回响度/频谱等量化指标，构成 AI 的反馈闭环。
+- AI 接入点后置，但 v1 的数据模型与 API 已为其预留。
+
+## 10. 前端与 AI 可视化 + 人类接管
+
+- 视图：传输条、轨道列表、编曲时间线、钢琴卷帘/步进器、混音台、插件浏览器 + 通用参数面板、音频片段编辑器（波形）、导出。
+- **AI 可视化**：UI 订阅事件流，高亮被改动的轨道/音符/旋钮并做 MD3 Expressive 动效，附"AI 操作时间线"；AI 命令可节流播放以便人类观察。
+- **人类接管**：人类编辑走同一总线即时生效；可暂停 agent；全量撤销/重做。
+
+## 11. 错误处理
+
+- v1 不做插件进程隔离（单进程），但边界已预留；对插件 `process` 尽量 catch panic。
+- 缺失插件、渲染失败、音频设备丢失 → 统一以事件上报，UI 呈现。
+- 系统边界（文件、用户输入、外部插件）做校验；内部代码信任不变量。
+
+## 12. 测试策略
+
+- `engine`：工程模型与命令/事件**确定性**单测 + **离线渲染黄金 WAV 哈希**。
+- `synth`：DSP 单测（脉冲响应、稳定性等）。
+- `host-vst3`：用免费插件 + VST3 官方 Validator 做集成测试。
+- 前端：组件测试；后续用 `tauri-webdriver` 做 E2E。
+- 关键不变量：同工程 + 同命令序列 → 逐位一致的渲染结果。
+
+## 13. v1 构建阶段
+
+1. engine 核心：工程模型 + 命令/事件 + 传输 + 离线渲染内置合成器 → WAV。
+2. cpal 实时播放同一张图。
+3. 插件 ABI + 内置合成器 crate。
+4. VST3 宿主 crate + 扫描 + 通用参数。
+5. Tauri + React + `@m3e/react` 外壳：时间线/钢琴卷帘/混音台。
+6. 音频片段/采样器 + 录音。
+7. 导出（WAV / 分轨）。
+8. （后置）MCP/HTTP/WS + skills 包 + AI 可视化 + `analysis` 闭环。
+
+## 14. 决策记录
+
+| 决策 | 结论 | 理由 |
+| --- | --- | --- |
+| 音频引擎位置 | 独立 crate，v1 同进程 | 兼顾开发速度与"可无头/可拆进程/可被 AI 驱动"的终局 |
+| 插件格式 | VST3 优先 | 生态最大；SDK 已 MIT，许可无碍 |
+| 内置音色 | 仅一个合成器，实现同一 ABI | 贯彻"所有音色都是插件"，保持精简 |
+| 工程格式 | 人类可读 JSON，事件溯源 | AI 与人类共改同一份；可订阅、可撤销 |
+| 前端 | React + `@m3e/react` | MD3 Expressive 组件开箱即用，生态成熟 |
+| 开源许可 | Apache-2.0 | 与 MIT 的 VST3 SDK、clack 兼容 |
