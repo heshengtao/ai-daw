@@ -111,4 +111,57 @@ mod tests {
         }
         assert_eq!(buffer.data(), out.as_slice(), "offline render must equal realtime Player output");
     }
+
+    /// 回归测试（Plan 2 审查项 1）：正文很短、音符在正文末尾附近结束时，`render`
+    /// 必须继续把音符释放/衰减渲染进 `tail_seconds`。早期 `Player::process_block`
+    /// 会在到达 `end_frame` 时自动停止（`playing = false`），把尾音截断，导致每次
+    /// 导出结尾出现爆音；离线 `render` 现在循环调用 `process_block`，必须越过正文继续渲染。
+    #[test]
+    fn render_keeps_note_release_into_tail_after_body_end() {
+        use crate::model::{Clip, ClipId, PluginInstance, Track, TrackId};
+
+        // 长释放，确保尾音一直延续到缓冲末尾的「最后 0.1 s」窗口。
+        let mut params = std::collections::BTreeMap::new();
+        params.insert("release".to_string(), 1.0f32);
+
+        let mut p = Project::new("short");
+        p.transport.tempo = 120.0;
+        p.tracks.push(Track {
+            id: TrackId(1),
+            name: "Lead".into(),
+            instrument: Some(PluginInstance {
+                plugin_id: "builtin.synth".into(),
+                params,
+                state: vec![],
+            }),
+            clips: vec![Clip {
+                id: ClipId(1),
+                start: 0.0,
+                length: 0.05,
+                notes: vec![Note { pitch: 69, start: 0.0, duration: 0.05, velocity: 100 }],
+            }],
+            mixer: Default::default(),
+        });
+
+        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.5 };
+        let buffer = render(&p, &PluginRegistry::with_builtins(), &opts);
+        let data = buffer.data();
+        let frames = buffer.frames();
+
+        // 工程正文结束 = 0.05 拍 @120bpm = 0.025s = 1200 帧；其后全部属于 tail。
+        let end_frame = 1_200usize;
+        assert!(frames > end_frame, "buffer must include the tail region");
+
+        // 尾音区域 [end_frame, frames) 不能全零：释放/衰减确实被渲染了。
+        assert!(
+            data[end_frame * 2..].iter().any(|s| *s != 0.0),
+            "note release must be rendered into the tail region"
+        );
+        // 最强断言：缓冲「最后 0.1 s」也必须非零 —— 自动停止会在正文末尾截断尾音。
+        let last_100ms = (0.1 * 48_000.0) as usize;
+        assert!(
+            data[(frames - last_100ms) * 2..].iter().any(|s| *s != 0.0),
+            "note release must survive into the final 100ms of the tail"
+        );
+    }
 }

@@ -34,6 +34,9 @@ pub struct ScheduledEvents {
     pub end_frame: u64,
     /// 构建时使用的速度，供实时播放按拍推进时复用。
     pub tempo: f64,
+    /// 构建该事件表时使用的采样率（Hz）；所有 `frame` 均以此刻度定点。宿主应在
+    /// 采样率不一致时拒绝播放，否则事件会被静默错误定时。
+    pub sample_rate: f64,
 }
 
 impl ScheduledEvents {
@@ -68,7 +71,7 @@ impl ScheduledEvents {
             });
         }
 
-        ScheduledEvents { tracks, end_frame: to_frame(project.length_beats()), tempo }
+        ScheduledEvents { tracks, end_frame: to_frame(project.length_beats()), tempo, sample_rate }
     }
 }
 
@@ -120,5 +123,11 @@ mod tests {
         let s = ScheduledEvents::from_project(&project_with_note(), 48_000.0);
         assert!(s.tracks[0].instrument.is_none());
         assert_eq!(s.tracks[0].mixer.gain_db, 0.0);
+    }
+
+    #[test]
+    fn records_the_build_sample_rate() {
+        let s = ScheduledEvents::from_project(&project_with_note(), 44_100.0);
+        assert_eq!(s.sample_rate, 44_100.0);
     }
 }

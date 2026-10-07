@@ -25,7 +25,7 @@ fn main() {
 
     let schedule = ScheduledEvents::from_project(engine.project(), 48_000.0);
     let registry = PluginRegistry::with_builtins();
-    let options = RealtimeOptions { sample_rate: 48_000.0, max_block: 2048, command_capacity: 64 };
+    let options = RealtimeOptions { max_block: 2048, command_capacity: 64 };
 
     let mut host = match AudioHost::start(schedule, &registry, options) {
         Ok(host) => host,

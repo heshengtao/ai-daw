@@ -91,6 +91,15 @@ impl Player {
         self.position
     }
 
+    /// 工程内容结束帧（自播放起点起）；0 表示未设置。
+    ///
+    /// `Player` 自身不会在到达此帧时停止 —— 是否「播放到结尾即停」由宿主（如实时
+    /// 回调或离线渲染循环）决定。离线渲染因此可以越过工程正文继续渲染音符释放/衰减
+    /// 的尾音，避免结尾处的爆音。
+    pub fn end_frame(&self) -> u64 {
+        self.end_frame
+    }
+
     /// 定位到指定帧：重置所有插件并重算事件游标（已在播放中的音符不会被重新触发）。
     pub fn seek(&mut self, frame: u64) {
         self.position = frame;
@@ -119,6 +128,9 @@ impl Player {
     }
 
     /// 填充一个交错立体声块（`out.len() >= frames * 2`）。实时安全：不分配内存。
+    ///
+    /// 纯 DSP：只渲染 `frames` 帧并推进 `position`，绝不自行改变 `playing`（到达
+    /// `end_frame` 也不会停止）；「播到结尾即停」是宿主的策略。
     pub fn process_block(&mut self, out: &mut [f32], frames: usize) {
         debug_assert!(out.len() >= frames * 2);
         let out = &mut out[..frames * 2];
@@ -176,10 +188,6 @@ impl Player {
         }
 
         self.position = block_end;
-        if self.end_frame > 0 && self.position >= self.end_frame {
-            self.position = self.end_frame;
-            self.playing = false;
-        }
     }
 }
 
