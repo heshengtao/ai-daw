@@ -22,6 +22,20 @@ impl Engine {
         }
     }
 
+    /// 从已存在的工程构建引擎，并把 id 计数器恢复到不冲突的高水位。
+    pub fn from_project(project: Project) -> Self {
+        let next_track_id = project.tracks.iter().map(|t| t.id.0).max().unwrap_or(0) + 1;
+        let next_clip_id = project
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .map(|c| c.id.0)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        Engine { project, history: vec![], next_track_id, next_clip_id }
+    }
+
     fn alloc_track_id(&mut self) -> TrackId {
         let id = TrackId(self.next_track_id);
         self.next_track_id += 1;
@@ -148,5 +162,28 @@ mod tests {
         let ev = e.execute(Command::AddClip { track, start: 0.0, length: 8.0 }, Actor::Human);
         let clip = match ev[0] { crate::event::Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
         assert_eq!(e.project().track(track).unwrap().clips[0].id, clip);
+    }
+
+    #[test]
+    fn from_project_recovers_id_counters() {
+        let mut e = Engine::new("demo");
+        e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
+        e.execute(Command::AddTrack { name: "B".into() }, Actor::Human);
+        let project = e.project().clone();
+
+        let mut loaded = Engine::from_project(project);
+        let ev = loaded.execute(Command::AddTrack { name: "C".into() }, Actor::Human);
+        let id = match ev[0] { crate::event::Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        // must not collide with the two loaded tracks
+        assert_eq!(id.0, 3);
+        assert_eq!(loaded.project().tracks.len(), 3);
+    }
+
+    #[test]
+    fn from_empty_project_starts_ids_at_one() {
+        let mut e = Engine::from_project(crate::model::Project::new("empty"));
+        let ev = e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
+        let id = match ev[0] { crate::event::Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        assert_eq!(id.0, 1);
     }
 }
