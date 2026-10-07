@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
 
 pub mod apply;
+pub mod audio;
 pub mod bus;
 pub mod command;
 pub mod event;
 pub mod model;
 pub mod registry;
+pub mod render;
 pub mod sequencer;
 
 pub use bus::Engine;
