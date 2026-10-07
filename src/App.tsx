@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { M3eButton } from "@m3e/react/button";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { AppShell } from "./components/AppShell";
 import { TrackList } from "./components/TrackList";
@@ -22,6 +23,8 @@ const MAX_ACTIVITY_LINES = 100;
 /** 应用根组件：持有工程状态与本地 UI 状态，读取工程、订阅引擎事件，并把命令结果写回状态。 */
 function App() {
   const [project, setProject] = useState<Project | null>(null);
+  // 首帧 `get_project` 失败的原因；非 null 时渲染可重试的错误态（而不是永远停在"Loading"）。
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null);
   const [activity, setActivity] = useState<string[]>([]);
@@ -68,6 +71,21 @@ function App() {
     [pushActivity],
   );
 
+  /**
+   * 读取当前工程。成功时写回快照；失败时把原因记进 `loadError`（渲染可重试的错误态）
+   * 并把错误 push 进活动列表。重试前先清掉 `loadError`，UI 于是回到 "Loading" 态。
+   */
+  const loadProject = useCallback(() => {
+    setLoadError(null);
+    getProject()
+      .then(setProject)
+      .catch((err) => {
+        // 消息单独存一份：活动列表那行带上下文，错误态标题已表达"加载失败"，此处只显示原因。
+        setLoadError(err instanceof Error ? err.message : String(err));
+        reportError("get_project failed", err);
+      });
+  }, [reportError]);
+
   const handlePlay = useCallback(() => {
     // 守卫：第一次点击后 `playing` 还是旧值，靠 ref 立刻挡住重复渲染/播放。
     if (playingRef.current) return;
@@ -90,7 +108,7 @@ function App() {
         });
       })
       .catch((err) => {
-        reportError("Playback failed", err);
+        reportError("render_preview failed", err);
         stopPlayback();
       });
   }, [stopPlayback, reportError]);
@@ -101,9 +119,7 @@ function App() {
     let unlisten: UnlistenFn | undefined;
     let disposed = false;
 
-    getProject()
-      .then(setProject)
-      .catch((err) => reportError("get_project failed", err));
+    loadProject();
 
     onEngineEvent((event) => {
       // 事件流只喂给活动列表（唯一消费者）；`project` 一律由命令返回的快照写回，
@@ -121,7 +137,7 @@ function App() {
       disposed = true;
       unlisten?.();
     };
-  }, [pushActivity, reportError]);
+  }, [pushActivity, reportError, loadProject]);
 
   const handleTempoChange = (bpm: number) => {
     setTempo(bpm)
@@ -187,6 +203,17 @@ function App() {
             onSelect={setSelectedTrackId}
             onAddTrack={handleAddTrack}
           />
+          <ActivityFeed lines={activity} />
+        </div>
+      ) : loadError ? (
+        // 读取工程失败：给出可见的错误态与重试入口，并挂载活动列表，
+        // 这样 `reportError` push 的那行错误才会真正渲染出来（此前它会永久停在 Loading）。
+        <div className="workspace">
+          <div className="empty error-state">
+            <p className="empty-title">Could not load the project</p>
+            <p className="empty-hint">{loadError}</p>
+            <M3eButton onClick={loadProject}>Retry</M3eButton>
+          </div>
           <ActivityFeed lines={activity} />
         </div>
       ) : (

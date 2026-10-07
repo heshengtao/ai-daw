@@ -139,6 +139,8 @@ body {
 .empty p { margin: 0; }
 .empty .empty-title { font-weight: 500; color: var(--md-sys-color-on-surface); opacity: 0.85; }
 .empty .empty-hint { font-size: 0.8125rem; opacity: 0.8; }
+/* 加载失败的错误态：复用空状态排版，只把 "Retry" 按钮与文案拉开一点间距。 */
+.empty.error-state { gap: 12px; }
 
 /* M3 按钮动效：宿主元素过渡 + 轻微按下缩放（ripple 由组件自身负责）。 */
 m3e-button {
