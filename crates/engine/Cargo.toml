@@ -8,10 +8,9 @@ license.workspace = true
 daw-party-plugin-api = { path = "../plugin-api" }
 daw-party-synth = { path = "../synth" }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 thiserror = "1"
 hound = "3"
 
 [dev-dependencies]
-hound = "3"
+serde_json = "1"
 tempfile = "3"

@@ -24,6 +24,7 @@ pub trait Plugin: Send {
     /// 清空内部状态（延迟线、包络、声部）。
     fn reset(&mut self);
     /// 处理一个音频块。`out` 为平面缓冲（通道 × 帧）。
+    /// Currently instruments only: the `out` planes are written and no input planes are provided yet; effects will need an input buffer parameter (see design spec §8).
     fn process(&mut self, ctx: &ProcessContext, out: &mut [&mut [f32]], events: &[TimedMidiEvent]);
     /// 序列化状态。
     fn save_state(&self) -> Vec<u8>;

@@ -57,7 +57,6 @@ pub fn apply(project: &mut Project, event: &Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command::Command;
     use crate::event::{Actor, Event};
     use crate::model::{ClipId, Note, Project, TrackId};
 
@@ -83,8 +82,6 @@ mod tests {
             },
         );
         assert_eq!(p.track(t).unwrap().clips[0].notes.len(), 1);
-
-        let _ = Command::SetTempo(140.0);
     }
 
     #[test]

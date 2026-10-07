@@ -1,4 +1,3 @@
-use daw_party_engine::audio::AudioBuffer;
 use daw_party_engine::bus::Engine;
 use daw_party_engine::command::Command;
 use daw_party_engine::event::{Actor, Event};
@@ -38,11 +37,12 @@ fn renders_project_to_readable_wav() {
     let path = dir.path().join("out.wav");
     write_wav(&path, &buffer, 44_100).unwrap();
 
-    let reader = hound::WavReader::open(&path).unwrap();
-    let spec = reader.spec();
-    assert_eq!(spec.channels, 2);
-    assert_eq!(spec.sample_rate, 44_100);
+    let mut reader = hound::WavReader::open(&path).unwrap();
+    assert_eq!(reader.spec().channels, 2);
+    assert_eq!(reader.spec().sample_rate, 44_100);
     assert_eq!(reader.len(), buffer.frames() as u32 * 2);
-
-    let _ = AudioBuffer::silence(2, 0);
+    assert!(
+        reader.samples::<i16>().any(|s| s.unwrap() != 0),
+        "rendered wav must contain audible (non-zero) samples"
+    );
 }

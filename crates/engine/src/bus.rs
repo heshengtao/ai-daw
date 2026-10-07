@@ -60,7 +60,7 @@ impl Engine {
     pub fn undo(&mut self) -> bool {
         match self.history.pop() {
             None => false,
-            Some(events) => {
+            Some(_) => {
                 self.project = Project::new(self.project.name.clone());
                 let remaining: Vec<Vec<Event>> = self.history.clone();
                 for batch in remaining {
@@ -68,7 +68,6 @@ impl Engine {
                         apply(&mut self.project, &ev);
                     }
                 }
-                let _ = events;
                 true
             }
         }

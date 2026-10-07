@@ -32,6 +32,7 @@ pub fn collect_track_events(
 
             if start_sec >= block_start_sec && start_sec < block_end_sec {
                 let frame = ((start_sec - block_start_sec) * sample_rate).floor() as u32;
+                debug_assert!((frame as usize) < block_frames);
                 out.push(TimedMidiEvent {
                     frame,
                     event: MidiEvent::NoteOn { note: note.pitch, velocity: note.velocity },
@@ -39,6 +40,7 @@ pub fn collect_track_events(
             }
             if end_sec >= block_start_sec && end_sec < block_end_sec {
                 let frame = ((end_sec - block_start_sec) * sample_rate).floor() as u32;
+                debug_assert!((frame as usize) < block_frames);
                 out.push(TimedMidiEvent { frame, event: MidiEvent::NoteOff { note: note.pitch } });
             }
         }
