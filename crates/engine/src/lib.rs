@@ -8,6 +8,7 @@ pub mod event;
 pub mod model;
 pub mod registry;
 pub mod render;
+pub mod schedule;
 pub mod sequencer;
 pub mod wav;
 
