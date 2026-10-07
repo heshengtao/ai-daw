@@ -93,6 +93,15 @@ mod tests {
     fn note_off_at_block_boundary_lands_in_next_block() {
         // Note ends at beat 2.0 = 1.0s = the exact end of block N (0.0..1.0s).
         let t = track_with_note();
+        // Block N (0.0..1.0s): the boundary NoteOff is *excluded* here (half-open window),
+        // so this block must contain exactly the single NoteOn at frame 24000 — no
+        // out-of-range `frame == block_frames` (48000) copy. Without this first-block
+        // assertion a closed window (`end_sec <= block_end_sec`) would still pass the
+        // next-block check below.
+        let first = collect_track_events(&t, 0.0, 48_000, 48_000.0, 120.0);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].frame, 24_000);
+        assert!(matches!(first[0].event, MidiEvent::NoteOn { note: 60, velocity: 100 }));
         // Query the NEXT block: no `frame == block_frames` out-of-range copy is produced,
         // and the boundary NoteOff is closed at frame 0 of the following block instead.
         let events = collect_track_events(&t, 2.0, 48_000, 48_000.0, 120.0);
