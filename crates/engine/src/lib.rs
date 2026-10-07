@@ -9,6 +9,7 @@ pub mod model;
 pub mod registry;
 pub mod render;
 pub mod sequencer;
+pub mod wav;
 
 pub use bus::Engine;
 pub use registry::PluginRegistry;
