@@ -51,6 +51,10 @@ const en: Record<string, string> = {
   "synth.cutoff": "Cutoff",
   "synth.resonance": "Resonance",
   "synth.envAmount": "Env",
+  // 基础面板的小白化显示名（与上面三个技术名并存：高级面板仍用技术名）
+  "synth.brightness": "Brightness",
+  "synth.sharpness": "Sharpness",
+  "synth.filterEnvName": "Filter Envelope",
   "synth.keyFollow": "Kbd",
   "synth.vca": "VCA",
   "synth.attack": "Attack",
@@ -65,7 +69,7 @@ const en: Record<string, string> = {
   "synth.envelope": "Envelope",
   "synth.amp": "Amp",
   "synth.gain": "Level",
-  // basic / advanced layer toggle
+  // 基础 / 高级两层的切换按钮
   "synth.advanced": "Advanced",
   "synth.voiceCount": "{count} voices",
   "synth.legacyNote": "The envelope of this old preset has been mapped onto the full panel.",

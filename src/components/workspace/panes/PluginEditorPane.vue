@@ -153,7 +153,9 @@ async function commitEffect(index: number, id: string, value: number): Promise<v
               {{ editorOpen ? i18n.t("editor.closeWindow") : i18n.t("editor.openWindow") }}
             </button>
           </div>
+          <!-- 内置合成器的预设控件在面板内部（垫子 + 预设条）；只有外部插件在这里用共用预设条。 -->
           <PresetBar
+            v-if="!isBuiltinSynth"
             :plugin-id="track.instrument.plugin_id"
             :params="instrumentParams"
             @apply="applyPreset"

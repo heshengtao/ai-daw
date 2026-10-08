@@ -50,6 +50,10 @@ const zh: Record<string, string> = {
   "synth.cutoff": "截止",
   "synth.resonance": "共振",
   "synth.envAmount": "包络量",
+  // 基础面板的小白化显示名（与上面三个技术名并存：高级面板仍用技术名）
+  "synth.brightness": "亮度",
+  "synth.sharpness": "尖锐度",
+  "synth.filterEnvName": "滤波包络",
   "synth.keyFollow": "键跟随",
   "synth.vca": "VCA 包络",
   "synth.attack": "起音",

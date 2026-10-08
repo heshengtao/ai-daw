@@ -90,9 +90,11 @@ const LABELS: Record<string, string> = {
   pwm: "synth.pwm",
   glide: "synth.glide",
   hpf: "synth.hpf",
-  cutoff: "synth.cutoff",
-  resonance: "synth.resonance",
-  filterEnv: "synth.envAmount",
+  // 面板上露出的显示名走小白化词典（设计稿 §4.2）：截止→亮度、共振→尖锐度、包络量→滤波包络。
+  // `synth.cutoff` / `synth.resonance` / `synth.envAmount` 仍被别处使用，值不动，这里只换指向的键。
+  cutoff: "synth.brightness",
+  resonance: "synth.sharpness",
+  filterEnv: "synth.filterEnvName",
   keyFollow: "synth.keyFollow",
   attack: "synth.attack",
   decay: "synth.decay",
@@ -157,11 +159,35 @@ const advancedGroups = computed(() =>
   })),
 );
 
+/**
+ * 波形分段按钮上的小图标：一条 `viewBox="0 0 20 12"` 的示意曲线，纯内联 SVG（`currentColor`），
+ * 与按钮文字同色、随选中态一起变色，不引图标库。
+ */
 const WAVES = [
-  { value: 0, key: "synth.wave.saw" },
-  { value: 1, key: "synth.wave.square" },
-  { value: 2, key: "synth.wave.sine" },
-  { value: 3, key: "synth.wave.triangle" },
+  {
+    value: 0,
+    key: "synth.wave.saw",
+    // 锯齿：线性上升 + 竖直回落
+    d: "M1 9 L6 3 L6 9 L11 3 L11 9 L16 3 L16 9",
+  },
+  {
+    value: 1,
+    key: "synth.wave.square",
+    // 方波：平顶 + 竖直翻转
+    d: "M1 9 L4 9 L4 3 L9 3 L9 9 L14 9 L14 3 L18 3",
+  },
+  {
+    value: 2,
+    key: "synth.wave.sine",
+    // 正弦：两段二次曲线（T 自动镜像控制点）
+    d: "M1 6 Q3 1 5 6 T9 6 T13 6 T17 6",
+  },
+  {
+    value: 3,
+    key: "synth.wave.triangle",
+    // 三角：折线
+    d: "M1 9 L5 3 L9 9 L13 3 L17 9",
+  },
 ];
 
 const wave = computed(() => Math.round(shown("wave")));
@@ -299,7 +325,10 @@ function pickPad(option: PresetOption): void {
                 :aria-pressed="wave === w.value"
                 @click="setWave(w.value)"
               >
-                {{ t(w.key) }}
+                <svg class="seg-icon" viewBox="0 0 20 12" aria-hidden="true" focusable="false">
+                  <path :d="w.d" />
+                </svg>
+                <span class="seg-text">{{ t(w.key) }}</span>
               </button>
             </div>
 
@@ -319,27 +348,29 @@ function pickPad(option: PresetOption): void {
               />
             </div>
 
-            <!-- 高级区：默认收起，点「高级」才出现 -->
-            <div v-if="advanced" class="advanced">
-              <section v-for="group in advancedGroups" :key="group.title" class="group">
-                <div class="group-title">{{ group.title }}</div>
-                <div class="knobs">
-                  <Md3Knob
-                    v-for="k in group.knobs"
-                    :key="k.id"
-                    :model-value="shown(k.id)"
-                    :min="k.min"
-                    :max="k.max"
-                    :default="k.default"
-                    :size="k.size"
-                    :label="k.label"
-                    :display="display(k.id, shown(k.id))"
-                    @update:model-value="(v: number) => onLive(k.id, v)"
-                    @commit="(v: number) => onCommit(k.id, v)"
-                  />
-                </div>
-              </section>
-            </div>
+            <!-- 高级区：默认收起，点「高级」才出现（弹簧动画展开） -->
+            <transition name="adv">
+              <div v-if="advanced" class="advanced">
+                <section v-for="group in advancedGroups" :key="group.title" class="group">
+                  <div class="group-title">{{ group.title }}</div>
+                  <div class="knobs">
+                    <Md3Knob
+                      v-for="k in group.knobs"
+                      :key="k.id"
+                      :model-value="shown(k.id)"
+                      :min="k.min"
+                      :max="k.max"
+                      :default="k.default"
+                      :size="k.size"
+                      :label="k.label"
+                      :display="display(k.id, shown(k.id))"
+                      @update:model-value="(v: number) => onLive(k.id, v)"
+                      @commit="(v: number) => onCommit(k.id, v)"
+                    />
+                  </div>
+                </section>
+              </div>
+            </transition>
           </div>
 
           <button
@@ -551,6 +582,10 @@ function pickPad(option: PresetOption): void {
 .seg {
   flex: 1 1 0;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   border: 0;
   border-left: 1px solid rgb(var(--md-outline-variant) / 0.5);
   background: transparent;
@@ -569,6 +604,20 @@ function pickPad(option: PresetOption): void {
 .seg.on {
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
+}
+/* 波形小图标：跟着按钮文字变色（`currentColor`），选出「哪条是波形本身」 */
+.seg-icon {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 12px;
+  overflow: visible;
+}
+.seg-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .knobs {
@@ -592,6 +641,29 @@ function pickPad(option: PresetOption): void {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 10px;
+}
+/* 展开/收起：MD3 弹簧（设计稿 §4.2 的「弹簧动画」），从上方略缩略降地弹入 */
+.adv-enter-active,
+.adv-leave-active {
+  transition: opacity var(--md-spring-fast), transform var(--md-spring-fast);
+  transform-origin: top center;
+}
+.adv-enter-from,
+.adv-leave-to {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.98);
+}
+/* 系统开了「减弱动态效果」就直出、直隐 */
+@media (prefers-reduced-motion: reduce) {
+  .adv-enter-active,
+  .adv-leave-active {
+    transition: none;
+  }
+  .adv-enter-from,
+  .adv-leave-to {
+    opacity: 1;
+    transform: none;
+  }
 }
 .group {
   min-width: 0;
