@@ -980,8 +980,10 @@ pub async fn open_synth_window(app: tauri::AppHandle, track: u64) -> Result<(), 
             tauri::WebviewUrl::App(format!("index.html#/synth?track={track}").into()),
         )
         .title("内置合成器")
-        .inner_size(1060.0, 720.0)
-        .min_inner_size(560.0, 460.0)
+        // 面板是固定尺寸的设备（900×560），窗口按「标题栏 + 面板」留够地方，并锁死尺寸：
+        // 拖动窗口不会改变布局，键盘位置因此永远稳定。
+        .inner_size(960.0, 700.0)
+        .resizable(false)
         .build()
         .map(|_| ())
         .map_err(|e| e.to_string());

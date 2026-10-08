@@ -142,11 +142,13 @@ onMounted(() => {
 .focus-btn:hover {
   background-color: rgb(var(--md-primary) / 0.08);
 }
+/* 窗口是固定尺寸的（后端 `resizable(false)`），内容按固定尺寸排，不再需要纵向滚动。 */
 .body {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
-  padding: 10px 14px 18px;
+  display: flex;
+  justify-content: center;
+  padding: 10px 18px 18px;
 }
 .empty {
   margin: 40px auto;

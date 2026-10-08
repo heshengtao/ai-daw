@@ -6,7 +6,8 @@
  * 顶部是**预设垫子**——当前类别的几条预设排成一块块大圆角方块，点一下整组参数就切过去；
  * 中部左边是「屏幕」（一个周期示波器 + ADSR 曲线），右边是基础旋钮；
  * 底部是一条固定高度的试听键盘。设备里所有纵向区域都用固定高度 / `flex: 0 0 auto`，
- * 键盘因此永远不会被压扁变形；窄容器里的等比缩放在 Task 9 接上，按 `DEVICE_W` / `DEVICE_H` 算。
+ * 键盘因此永远不会被压扁变形；容器窄于 `DEVICE_W` 时面板整体等比缩小（`transform: scale`），
+ * 比例照样不变。容器宽于 `DEVICE_W` 时不放大，保持 1。
  *
  * 旋钮分两层：**基础**只露 8 个最常用的，其余（副振 / 脉宽 / 滑音 / 高通 / 滤波包络 / 键跟随 / LFO）
  * 收在「高级」里，默认不打扰小白。
@@ -14,7 +15,7 @@
  * 参数值来自工程的 `instrument.params`（缺省回落到参数表默认值）；拖动时用本地草稿保证跟手，
  * 松手才提交给引擎。
  */
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
 import Md3Knob from "@/components/common/Md3Knob.vue";
 import Oscilloscope from "@/components/common/Oscilloscope.vue";
@@ -42,6 +43,31 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+
+/**
+ * 容器宽度不够时整体等比缩小。
+ *
+ * 设备永远是 900×560，缩放只做一层 `transform: scale`——所以键盘（乃至任何一块）的比例都不会变形。
+ * 超过设计宽度就保持 1，不放大。`.fit` 的高度跟着缩，免得缩完在容器里留一大片空白。
+ */
+const fitEl = ref<HTMLElement | null>(null);
+const scale = ref(1);
+let ro: ResizeObserver | null = null;
+
+function measure(): void {
+  const el = fitEl.value;
+  if (!el) return;
+  // 分母是常量 `DEVICE_W`，不存在为 0 的情况。
+  scale.value = Math.min(1, el.clientWidth / DEVICE_W);
+}
+
+onMounted(() => {
+  measure();
+  ro = new ResizeObserver(measure);
+  if (fitEl.value) ro.observe(fitEl.value);
+});
+
+onUnmounted(() => ro?.disconnect());
 
 const SPECS: Record<string, ParamSpec> = Object.fromEntries(SYNTH_PARAMS.map((p) => [p.id, p]));
 
@@ -263,8 +289,8 @@ function pickPad(option: PresetOption): void {
 </script>
 
 <template>
-  <div class="fit">
-    <div class="device">
+  <div ref="fitEl" class="fit" :style="{ height: `${DEVICE_H * scale}px` }">
+    <div class="device" :style="{ transform: `scale(${scale})`, transformOrigin: 'top center' }">
       <!-- 顶部：预设垫子（当前类别的几条，点一下就切）＋ 类别 chips ＋ 预设条 -->
       <section class="presets">
         <div class="pads" role="group" :aria-label="t('preset.label')">
@@ -393,11 +419,13 @@ function pickPad(option: PresetOption): void {
 </template>
 
 <style scoped>
-/* 外层只负责把设备居中；窄容器里的等比缩放在 Task 9 追加。 */
+/* 外层负责居中与等比缩放：高度由内联样式跟着 `scale` 走。
+   `overflow: hidden` 兜住 `transform` 不改变布局盒子这件事——缩到一半时设备右边缘不会溢出去。 */
 .fit {
   width: 100%;
   display: flex;
   justify-content: center;
+  overflow: hidden;
 }
 
 /* 一台固定尺寸的设备面板：内部一律固定高度 / `flex: 0 0 auto`，键盘不会被压扁。
