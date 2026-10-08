@@ -117,7 +117,8 @@ const LABELS: Record<string, string> = {
   glide: "synth.glide",
   hpf: "synth.hpf",
   // 面板上露出的显示名走小白化词典（设计稿 §4.2）：截止→亮度、共振→尖锐度、包络量→滤波包络。
-  // `synth.cutoff` / `synth.resonance` / `synth.envAmount` 仍被别处使用，值不动，这里只换指向的键。
+  // 改指向后 `synth.cutoff` / `synth.resonance` / `synth.envAmount` 已无代码引用（成为孤儿键，
+  // 保留不删，避免误伤将来可能的复用）；值不动，这里只换旋钮指向的键。
   cutoff: "synth.brightness",
   resonance: "synth.sharpness",
   filterEnv: "synth.filterEnvName",
@@ -700,7 +701,7 @@ function pickPad(option: PresetOption): void {
   gap: 6px;
   padding: 10px 10px 12px;
   border-radius: 20px;
-  background-color: var(--app-inset);
+  background-color: rgb(var(--md-surface-container-low));
 }
 .group-title {
   padding-left: 4px;

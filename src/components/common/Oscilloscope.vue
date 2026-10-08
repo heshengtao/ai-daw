@@ -63,15 +63,16 @@ function draw(): void {
   ctx.stroke();
 }
 
-let raf = 0;
-function loop(): void {
-  draw();
-  raf = requestAnimationFrame(loop);
-}
+// 波形纯粹是解析算出来的，只在参数或尺寸变化时才会不同——没有动画需求，
+// 因此不用 rAF 帧循环，改为「按需重绘」：挂载时画一次、参数变时重画、容器尺寸变时重画。
+let ro: ResizeObserver | null = null;
+
 onMounted(() => {
-  raf = requestAnimationFrame(loop);
+  draw();
+  ro = new ResizeObserver(() => draw());
+  if (canvasEl.value) ro.observe(canvasEl.value);
 });
-onUnmounted(() => cancelAnimationFrame(raf));
+onUnmounted(() => ro?.disconnect());
 watch(() => JSON.stringify(props.params), draw);
 </script>
 

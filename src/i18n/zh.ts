@@ -83,6 +83,7 @@ const zh: Record<string, string> = {
   "preset.mine": "我的预设",
   "preset.factoryGroup": "出厂预设",
   "preset.userGroup": "我的预设",
+  "preset.copySuffix": "副本",
 
   // ---- 预设类别（slug → 显示名）----
   "presetCategory.bass": "贝斯",

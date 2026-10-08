@@ -52,7 +52,7 @@ const nameEl = ref<HTMLInputElement | null>(null);
 const busy = ref(false);
 
 function startNaming(): void {
-  draftName.value = active.value ? `${active.value.name} 副本` : "";
+  draftName.value = active.value ? `${active.value.name} ${t("preset.copySuffix")}` : "";
   naming.value = true;
   void nextTick(() => nameEl.value?.focus());
 }

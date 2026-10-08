@@ -70,7 +70,7 @@
 **尺寸与缩放**
 
 - `src-tauri/src/commands.rs::open_synth_window`
-  - `.inner_size(940.0, 680.0)`、`.resizable(false)`（去掉 560×460 的最小尺寸）。
+  - `.inner_size(960.0, 700.0)`、`.resizable(false)`（去掉 560×460 的最小尺寸）。
 - `SynthPanel.vue` 改为**固定设计宽 900px** 的设备面板：
   - 外层 `.fit`（`width:100%`）用 `ResizeObserver` 计算 `scale = min(1, 容器宽 / 900)`，对内层 `.device { width:900px; height:560px }` 施加 `transform: scale(scale); transform-origin: top center;`，并把 `.fit` 高度设为 `560*scale`。
   - 窗口里容器宽 ≥ 900 → `scale=1`，与设计稿 1:1；侧边栏窄时等比缩小，**键盘比例永不变形**。
@@ -117,7 +117,7 @@
   - `SYNTH_FACTORY_PRESETS` 扩到 **24 条**，6 类各 4：贝斯 Bass / 主音 Lead / 键盘 Keys / 铺底 Pad / 拨弦 Pluck / 音效 FX。
   - `FactoryPreset` 增加可选 `category: string`，取值为固定 slug（`bass|lead|keys|pad|pluck|fx`）；界面把 slug 映射为 i18n 键（`presetCategory.<slug>`）后显示，供分组与筛选。
   - 名称/说明沿用 i18n key 约定（`preset.<slug>.name` / `.note`），在 `zh.ts` / `en.ts` 各补齐 24 条。
-  - 新增预设的 `id` 只用于界面匹配（形如 `builtin.synth.p<slug>`），**不进** `LEGACY_SYNTH_IDS`，不参与 `canonicalPluginId`。
+  - 新增预设的 `id` 只用于界面匹配（形如 `builtin.synth.<slug>`），**不进** `LEGACY_SYNTH_IDS`，不参与 `canonicalPluginId`。
 - `src/stores/presets.ts`
   - `PresetOption` 增加 `category`；`forPlugin` 透传。
   - `match` 逻辑不变（仍按参数完全相等匹配，取最后一条）。

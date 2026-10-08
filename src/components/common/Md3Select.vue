@@ -44,7 +44,7 @@ const { t } = useI18n();
 /** 没有候选项时展开菜单显示的空态文案（比如「一个效果器插件都没有」）。 */
 const emptyText = computed(() => props.empty ?? t("select.empty"));
 
-/** 选项按 group 折叠成区块；keepOrder 保证与传入顺序一致。 */
+/** 选项按 group 折叠成区块（保持与传入顺序一致）。 */
 const groups = computed<{ title: string; items: SelectOption[] }[]>(() => {
   const out: { title: string; items: SelectOption[] }[] = [];
   const index = new Map<string, number>();
@@ -166,7 +166,8 @@ onUnmounted(() => {
       >
         <p v-if="options.length === 0" class="empty">{{ emptyText }}</p>
         <template v-for="g in groups" :key="g.title">
-          <p v-if="g.title" class="group-title">{{ g.title }}</p>
+          <!-- 分组标题：`listbox` 里合法子项只有 `option`，标题标记成 presentation 免得成为杂项节点。 -->
+          <p v-if="g.title" class="group-title" role="presentation">{{ g.title }}</p>
           <button
             v-for="o in g.items"
             :key="o.id"

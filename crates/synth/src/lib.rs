@@ -105,7 +105,7 @@ impl SynthPlugin {
 
     /// 用给定的 id / 名称 / 参数补丁构造一个预设实例。
     ///
-    /// 补丁里没提到的参数取 [`PARAM_TABLE`] 的默认值。
+    /// 补丁里没提到的参数取 [`default_params`] 的运行默认值。
     pub fn preset(id: &'static str, name: &'static str, patch: &[(&str, f32)]) -> Self {
         let mut synth = SynthPlugin {
             voices: [Voice::idle(); MAX_VOICES],
@@ -563,5 +563,12 @@ mod tests {
     fn default_wave_is_sine() {
         let s = SynthPlugin::new();
         assert_eq!(s.get_param(&ParamId::from("wave")), Some(2.0));
+        // 参数表里 `wave` 的**元数据**默认值也必须是正弦（2.0），与运行值一致。
+        let info = s
+            .params()
+            .into_iter()
+            .find(|p| p.id == ParamId::from("wave"))
+            .expect("参数表里应有 wave");
+        assert_eq!(info.default, 2.0);
     }
 }

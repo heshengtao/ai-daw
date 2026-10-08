@@ -84,6 +84,7 @@ const en: Record<string, string> = {
   "preset.mine": "Mine",
   "preset.factoryGroup": "Factory presets",
   "preset.userGroup": "My presets",
+  "preset.copySuffix": "Copy",
 
   // ---- 预设类别（slug → 显示名）----
   "presetCategory.bass": "Bass",
