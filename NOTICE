@@ -1,0 +1,24 @@
+daw-party
+Copyright the daw-party authors. Licensed under Apache-2.0.
+
+This product includes material adapted from other open-source projects:
+
+--------------------------------------------------------------------------------
+ExamBot / Exameow (https://github.com/heshengtao/exameow)
+Copyright the Exameow authors. Licensed under the Apache License, Version 2.0.
+
+The following files were adapted from that project and are redistributed under
+the terms of the Apache License, Version 2.0:
+
+  - tailwind.config.js                     (Material You tonal palettes, elevation,
+                                            shape and motion scales)
+  - src/assets/main.css                    (Material You design tokens, dark theme,
+                                            accent palettes, M3 component layer,
+                                            typography scale, scrollbars)
+  - src/composables/useTheme.ts            (light/dark/system theming)
+  - src/components/layout/TitleBar.vue     (custom Tauri title bar + drag region)
+  - src/components/layout/WindowControls.vue (window control buttons)
+  - src/components/common/SegmentedNav.vue   (measured sliding-pill navigation)
+
+Each adapted file carries a header comment noting its origin.
+--------------------------------------------------------------------------------
