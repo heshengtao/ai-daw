@@ -43,7 +43,7 @@ const PARAM_TABLE: [(&str, &str, f32, f32, f32); 18] = [
     ("gain", "Level", 0.0, 1.0, 0.8),
     ("attack", "Attack", 0.0, 1.0, 0.01),
     ("release", "Release", 0.0, 4.0, 0.3),
-    ("wave", "Wave", 0.0, 3.0, 0.0),
+    ("wave", "Wave", 0.0, 3.0, 2.0),
     ("sub", "Sub", 0.0, 1.0, 0.0),
     ("pwm", "PWM", 0.0, 1.0, 0.5),
     ("glide", "Glide", 0.0, 0.5, 0.0),
@@ -182,7 +182,7 @@ impl SynthPlugin {
 
 fn default_params() -> Params {
     Params {
-        wave: 0.0,
+        wave: 2.0,
         sub: 0.0,
         pwm: 0.5,
         glide: 0.0,
@@ -556,5 +556,12 @@ mod tests {
         assert_eq!(s.get_param(&ParamId::from("cutoff")), Some(1.0));
         // 未知参数名不得 panic。
         s.set_param(&ParamId::from("nope"), 1.0);
+    }
+
+    /// 默认音色必须是正弦（新手一上手就是一个干净的基础音）。
+    #[test]
+    fn default_wave_is_sine() {
+        let s = SynthPlugin::new();
+        assert_eq!(s.get_param(&ParamId::from("wave")), Some(2.0));
     }
 }
