@@ -16,6 +16,8 @@ export interface SelectOption {
   label: string;
   /** 第二行小字（可选）。 */
   hint?: string;
+  /** 分组标题（可选）：同 group 的选项渲染在同一个标题下。 */
+  group?: string;
 }
 
 const props = withDefaults(
@@ -41,6 +43,23 @@ const { t } = useI18n();
 
 /** 没有候选项时展开菜单显示的空态文案（比如「一个效果器插件都没有」）。 */
 const emptyText = computed(() => props.empty ?? t("select.empty"));
+
+/** 选项按 group 折叠成区块；keepOrder 保证与传入顺序一致。 */
+const groups = computed<{ title: string; items: SelectOption[] }[]>(() => {
+  const out: { title: string; items: SelectOption[] }[] = [];
+  const index = new Map<string, number>();
+  for (const o of props.options) {
+    const key = o.group ?? "";
+    let at = index.get(key);
+    if (at === undefined) {
+      at = out.length;
+      index.set(key, at);
+      out.push({ title: key, items: [] });
+    }
+    out[at]!.items.push(o);
+  }
+  return out;
+});
 
 const open = ref(false);
 const triggerEl = ref<HTMLElement | null>(null);
@@ -146,21 +165,24 @@ onUnmounted(() => {
         :aria-label="label"
       >
         <p v-if="options.length === 0" class="empty">{{ emptyText }}</p>
-        <button
-          v-for="o in options"
-          :key="o.id"
-          class="item"
-          type="button"
-          role="option"
-          :aria-selected="o.id === modelValue"
-          @click="pick(o.id)"
-        >
-          <span class="item-main">
-            <span class="item-label">{{ o.label }}</span>
-            <span v-if="o.hint" class="item-hint">{{ o.hint }}</span>
-          </span>
-          <CheckIcon v-if="o.id === modelValue" class="item-check" />
-        </button>
+        <template v-for="g in groups" :key="g.title">
+          <p v-if="g.title" class="group-title">{{ g.title }}</p>
+          <button
+            v-for="o in g.items"
+            :key="o.id"
+            class="item"
+            type="button"
+            role="option"
+            :aria-selected="o.id === modelValue"
+            @click="pick(o.id)"
+          >
+            <span class="item-main">
+              <span class="item-label">{{ o.label }}</span>
+              <span v-if="o.hint" class="item-hint">{{ o.hint }}</span>
+            </span>
+            <CheckIcon v-if="o.id === modelValue" class="item-check" />
+          </button>
+        </template>
       </div>
     </transition>
   </Teleport>
@@ -229,6 +251,13 @@ onUnmounted(() => {
   border: 1px solid rgb(var(--md-outline-variant) / 0.5);
   background-color: rgb(var(--md-surface-container-high));
   box-shadow: var(--md-elevation-3);
+}
+.md3-select-menu .group-title {
+  margin: 4px 0 2px;
+  padding: 2px 10px;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  color: rgb(var(--md-on-surface-muted));
 }
 .md3-select-menu .item {
   display: flex;
