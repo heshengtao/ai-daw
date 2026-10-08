@@ -77,7 +77,7 @@ watch(() => JSON.stringify(props.params), draw);
 
 <template>
   <div class="scope" :style="{ height: `${height}px` }">
-    <canvas ref="canvasEl" aria-label="waveform (one period)" />
+    <canvas ref="canvasEl" aria-label="一个周期的波形" />
   </div>
 </template>
 
