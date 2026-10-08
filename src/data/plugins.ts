@@ -57,6 +57,7 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
     note: "preset.lead.note",
     params: {
       gain: 0.75,
+      wave: 0,
       attack: 0.005,
       release: 0.25,
       cutoff: 0.8,
@@ -90,6 +91,7 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
     note: "preset.bass.note",
     params: {
       gain: 0.85,
+      wave: 0,
       attack: 0.002,
       release: 0.12,
       sub: 0.6,
@@ -106,6 +108,7 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
     note: "preset.pad.note",
     params: {
       gain: 0.55,
+      wave: 0,
       attack: 0.35,
       release: 1.2,
       cutoff: 0.5,
@@ -183,7 +186,7 @@ export const SYNTH_PARAMS: ParamSpec[] = [
   { id: "gain", name: "音量", min: 0, max: 1, step: 0.01, default: 0.8, digits: 2 },
   { id: "attack", name: "起音", min: 0, max: 1, step: 0.005, default: 0.01, unit: "s", digits: 3 },
   { id: "release", name: "释音", min: 0, max: 4, step: 0.01, default: 0.3, unit: "s", digits: 2 },
-  { id: "wave", name: "波形", min: 0, max: 3, step: 1, default: 0, digits: 0 },
+  { id: "wave", name: "波形", min: 0, max: 3, step: 1, default: 2, digits: 0 },
   { id: "sub", name: "低八度", min: 0, max: 1, step: 0.01, default: 0, digits: 2 },
   { id: "pwm", name: "脉宽", min: 0, max: 1, step: 0.01, default: 0.5, digits: 2 },
   { id: "glide", name: "滑音", min: 0, max: 0.5, step: 0.005, default: 0, unit: "s", digits: 3 },
