@@ -4,6 +4,7 @@
  * 交互模式参考 ExamBot（Apache-2.0）。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { useI18n } from "@/i18n";
 import { useRoute, useRouter } from "vue-router";
 import type { NavItem } from "./nav";
 
@@ -11,6 +12,7 @@ const props = defineProps<{ items: NavItem[] }>();
 
 const route = useRoute();
 const router = useRouter();
+const i18n = useI18n();
 const buttons = ref<(HTMLElement | null)[]>([]);
 const pill = ref<{ left: string; width: string }>({ left: "0px", width: "0px" });
 
@@ -53,7 +55,7 @@ onUnmounted(() => window.removeEventListener("resize", updatePill));
       @click="router.push(item.path)"
     >
       <component :is="item.icon" class="w-4 h-4" />
-      <span>{{ item.label }}</span>
+      <span>{{ i18n.t(item.labelKey) }}</span>
     </button>
   </nav>
 </template>

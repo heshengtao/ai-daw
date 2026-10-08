@@ -1,5 +1,11 @@
+use crate::model::TrackId;
+
 /// 运行时传输命令（不属于可撤销的工程编辑）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// 绝大多数字段是 `Copy` 标量：这些命令会经由无锁 SPSC 队列进入音频回调。
+/// `SetParam` 携带的参数名是唯一的所有权字段——它在控制侧分配妥当，推入队列与取出
+/// 都只是移动，**实时侧不会因此分配内存**。
+#[derive(Debug, Clone, PartialEq)]
 pub enum TransportCommand {
     /// 开始或恢复播放。
     Play,
@@ -9,4 +15,49 @@ pub enum TransportCommand {
     Stop,
     /// 定位到指定帧。
     Seek { frame: u64 },
+    /// 实时更新某轨的混音参数。
+    ///
+    /// 单独设立（而不是重建整张事件表）的原因是：拖动推子会以每秒数十次的频率产生
+    /// 参数变化，重建播放器会不断重置插件状态并造成音频中断。
+    SetTrackMix {
+        /// 目标轨道。
+        track: TrackId,
+        /// 增益（dB）。
+        gain_db: f32,
+        /// 声像（-1.0 最左，1.0 最右）。
+        pan: f32,
+        /// 是否静音。
+        mute: bool,
+        /// 是否独奏。
+        solo: bool,
+    },
+    /// 实时更新总输出增益（dB）。
+    SetMasterGain { gain_db: f32 },
+    /// 界面上按下的**试听音**：直接送给某条轨道的乐器，不写进工程。
+    ///
+    /// 这是「合成器界面上的键盘」那条路径——试听不该产生可撤销的编辑，也不该等传输。
+    Audition {
+        /// 目标轨道。
+        track: TrackId,
+        /// MIDI 音高。
+        note: u8,
+        /// 力度（0..=127）；松开时忽略。
+        velocity: u8,
+        /// `true` 按下，`false` 松开。
+        on: bool,
+    },
+    /// 实时更新某个插件的参数——直接作用于已装载的实例，**不重建播放器**。
+    ///
+    /// 与 [`Self::SetTrackMix`] 同理：插件界面上的旋钮会高频产生参数变化，重建播放器
+    /// 会不断重置插件状态并造成音频中断。
+    SetParam {
+        /// 目标轨道。
+        track: TrackId,
+        /// `None` = 轨道乐器；`Some(i)` = 效果链第 `i` 个。
+        effect: Option<usize>,
+        /// 参数标识（插件自报的 `params()` 里的 id）。
+        param: String,
+        /// 目标值。
+        value: f32,
+    },
 }

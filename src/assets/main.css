@@ -10,49 +10,71 @@
 /* ===== Material You Design Tokens ===== */
 @layer base {
   :root {
-    /* Source color */
-    --md-source: 26 108 255;
+    /* Source color — MD3 baseline lavender */
+    --md-source: 103 80 164;
 
-    /* Surfaces — tinted towards primary */
-    --md-surface:                   254 250 255;
-    --md-surface-container-lowest:  250 247 252;
-    --md-surface-container-low:     245 242 249;
-    --md-surface-container:         240 237 246;
-    --md-surface-container-high:    236 233 242;
-    --md-surface-container-highest: 230 227 236;
+    /* Surfaces */
+    --md-surface:                   254 247 255;
+    --md-surface-container-lowest:  255 255 255;
+    --md-surface-container-low:     247 242 250;
+    --md-surface-container:         243 237 247;
+    --md-surface-container-high:    236 230 240;
+    --md-surface-container-highest: 230 224 233;
 
     /* On surfaces */
     --md-on-surface:          28 27 31;
     --md-on-surface-variant:  73 69 79;
-    --md-on-surface-muted:    146 141 151;
+    --md-on-surface-muted:    121 116 126;
 
     /* Primary */
-    --md-primary:             26 108 255;
+    --md-primary:             103 80 164;
     --md-on-primary:          255 255 255;
-    --md-primary-container:   219 225 255;
-    --md-on-primary-container: 0 26 65;
+    --md-primary-container:   234 221 255;
+    --md-on-primary-container: 33 0 93;
 
     /* Secondary */
-    --md-secondary:           87 95 113;
+    --md-secondary:           98 91 113;
     --md-on-secondary:        255 255 255;
-    --md-secondary-container: 219 227 249;
-    --md-on-secondary-container: 19 28 44;
+    --md-secondary-container: 232 222 248;
+    --md-on-secondary-container: 29 25 43;
 
     /* Tertiary */
-    --md-tertiary:            113 82 114;
+    --md-tertiary:            125 82 96;
     --md-on-tertiary:         255 255 255;
-    --md-tertiary-container:  251 211 249;
-    --md-on-tertiary-container: 42 16 44;
+    --md-tertiary-container:  255 216 228;
+    --md-on-tertiary-container: 49 17 29;
 
     /* Error */
-    --md-error:               186 26 26;
+    --md-error:               179 38 30;
     --md-on-error:            255 255 255;
-    --md-error-container:     255 218 214;
-    --md-on-error-container:  65 0 2;
+    --md-error-container:     249 222 220;
+    --md-on-error-container:  65 14 11;
 
     /* Outlines */
     --md-outline:             121 116 126;
     --md-outline-variant:     202 196 208;
+
+    /* 应用层级：页面底 / 卡片 / 卡片内凹槽（亮暗各取合适的一层） */
+    --app-bg:   rgb(var(--md-surface-container));
+    --app-card: rgb(var(--md-surface));
+    --app-inset: rgb(var(--md-surface-container-low));
+
+    /* 网格线：亮色用深描边色，保证在浅底上看得见。
+       分三级：细分（吸附网格）/ 拍线 / 小节线——最细的一级必须很淡，
+       否则 1/16 网格在 56px 每拍时会变成一片密纹。 */
+    --grid-line-fine:   rgb(var(--md-outline-variant) / 0.34);
+    --grid-line:        rgb(var(--md-outline-variant) / 0.72);
+    --grid-line-strong: rgb(var(--md-outline) / 0.75);
+    --grid-bar:         rgb(var(--md-on-surface) / 0.34);
+    --grid-line-row:    rgb(var(--md-outline-variant) / 0.55);
+
+    /* 钢琴卷帘的琴键：白键 / 黑键必须一眼可分，所以不走 MD3 的层级色，
+       而是给一组专用 token（亮暗各一套）。 */
+    --piano-white:      #fbf9fe;
+    --piano-black:      #2a2830;
+    --piano-edge:       rgb(var(--md-outline-variant) / 0.8);
+    /* 卷帘里黑键行整行的压暗（透明，压在网格上） */
+    --roll-black-tint:  rgb(var(--md-on-surface) / 0.075);
 
     /* Shadows / Scrim */
     --md-scrim:               0 0 0;
@@ -74,43 +96,69 @@
     --md-state-hover-alpha: 0.08;
     --md-state-focus-alpha: 0.12;
     --md-state-press-alpha: 0.12;
+
+    /* Expressive motion — springs (MD3 Expressive) */
+    --md-spring-fast: 340ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    --md-spring-default: 520ms cubic-bezier(0.34, 1.42, 0.5, 1);
+    --md-spring-slow: 720ms cubic-bezier(0.22, 1.28, 0.36, 1);
+    --md-ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+    --md-ease-emphasized-decel: cubic-bezier(0.05, 0.7, 0.1, 1);
+    --md-ease-emphasized-accel: cubic-bezier(0.3, 0, 0.8, 0.15);
   }
 
   /* ===== Dark Theme ===== */
   .dark {
     --md-surface:              28 27 31;
-    --md-surface-container-lowest: 30 29 33;
-    --md-surface-container-low:    32 31 36;
-    --md-surface-container:    35 34 39;
-    --md-surface-container-high: 43 42 47;
-    --md-surface-container-highest: 51 50 55;
+    --md-surface-container-lowest: 15 13 19;
+    --md-surface-container-low:    29 27 32;
+    --md-surface-container:    33 31 38;
+    --md-surface-container-high: 43 41 48;
+    --md-surface-container-highest: 54 52 59;
 
-    --md-on-surface:          230 225 229;
+    --md-on-surface:          230 224 233;
     --md-on-surface-variant:   202 196 208;
     --md-on-surface-muted:     147 143 153;
 
-    --md-primary:             171 199 255;
-    --md-on-primary:           0 26 65;
-    --md-primary-container:    0 67 144;
-    --md-on-primary-container: 219 225 255;
+    --md-primary:             208 188 255;
+    --md-on-primary:           56 30 114;
+    --md-primary-container:    79 55 139;
+    --md-on-primary-container: 234 221 255;
 
-    --md-secondary:           191 199 221;
-    --md-on-secondary:        41 49 67;
-    --md-secondary-container:  63 71 89;
-    --md-on-secondary-container: 219 227 249;
+    --md-secondary:           204 194 220;
+    --md-on-secondary:        51 45 65;
+    --md-secondary-container:  74 68 88;
+    --md-on-secondary-container: 232 222 248;
 
-    --md-tertiary:            223 184 221;
-    --md-on-tertiary:         65 38 68;
-    --md-tertiary-container:   88 58 90;
-    --md-on-tertiary-container: 251 211 249;
+    --md-tertiary:            239 184 200;
+    --md-on-tertiary:         73 37 50;
+    --md-tertiary-container:   99 59 72;
+    --md-on-tertiary-container: 255 216 228;
 
-    --md-error:               255 180 171;
-    --md-on-error:            105 0 5;
-    --md-error-container:     147 0 10;
-    --md-on-error-container:  255 218 214;
+    --md-error:               242 184 181;
+    --md-on-error:            96 20 16;
+    --md-error-container:     140 29 24;
+    --md-on-error-container:  249 222 220;
 
     --md-outline:             147 143 153;
     --md-outline-variant:     73 69 79;
+
+    /* 深色：页面最暗，卡片更亮，凹槽介于两者之间 */
+    --app-bg:   rgb(var(--md-surface));
+    --app-card: rgb(var(--md-surface-container-high));
+    --app-inset: rgb(var(--md-surface-container));
+
+    /* 深色下描边色本身很暗，网格线改用浅色的 outline 才看得见 */
+    --grid-line-fine:   rgb(var(--md-outline) / 0.24);
+    --grid-line:        rgb(var(--md-outline) / 0.46);
+    --grid-line-strong: rgb(var(--md-outline) / 0.62);
+    --grid-bar:         rgb(var(--md-outline) / 0.82);
+    --grid-line-row:    rgb(var(--md-outline) / 0.22);
+
+    /* 深色琴键：白键用中间调灰紫（不用纯白，否则刺眼），黑键压到近黑 */
+    --piano-white:      #4b4853;
+    --piano-black:      #191820;
+    --piano-edge:       rgb(255 255 255 / 0.1);
+    --roll-black-tint:  rgb(0 0 0 / 0.28);
 
     --md-elevation-1: 0 1px 2px 0 rgba(0 0 0 / 0.3), 0 1px 3px 1px rgba(0 0 0 / 0.15);
     --md-elevation-2: 0 1px 2px 0 rgba(0 0 0 / 0.3), 0 2px 6px 2px rgba(0 0 0 / 0.15);
@@ -178,34 +226,35 @@
     --md-on-tertiary-container: 255 222 170;
   }
 
-  [data-accent="purple"] {
-    --md-source: 138 73 226;
-    --md-primary: 138 73 226;
+  /* 默认强调色就是 base（薰衣草），无需覆盖；data-accent="lavender" 直接落到 :root。 */
+  [data-accent="blue"] {
+    --md-source: 26 108 255;
+    --md-primary: 26 108 255;
     --md-on-primary: 255 255 255;
-    --md-primary-container: 237 221 255;
-    --md-on-primary-container: 45 0 92;
-    --md-secondary: 102 90 119;
+    --md-primary-container: 219 225 255;
+    --md-on-primary-container: 0 26 65;
+    --md-secondary: 87 95 113;
     --md-on-secondary: 255 255 255;
-    --md-secondary-container: 236 222 254;
-    --md-on-secondary-container: 34 24 49;
-    --md-tertiary: 126 82 96;
+    --md-secondary-container: 219 227 249;
+    --md-on-secondary-container: 19 28 44;
+    --md-tertiary: 113 82 114;
     --md-on-tertiary: 255 255 255;
-    --md-tertiary-container: 255 217 227;
-    --md-on-tertiary-container: 50 16 29;
+    --md-tertiary-container: 251 211 249;
+    --md-on-tertiary-container: 42 16 44;
   }
-  .dark[data-accent="purple"], [data-accent="purple"].dark {
-    --md-primary: 211 184 255;
-    --md-on-primary: 74 0 140;
-    --md-primary-container: 107 43 192;
-    --md-on-primary-container: 237 221 255;
-    --md-secondary: 208 194 225;
-    --md-on-secondary: 54 44 70;
-    --md-secondary-container: 78 67 94;
-    --md-on-secondary-container: 236 222 254;
-    --md-tertiary: 240 187 202;
-    --md-on-tertiary: 74 37 49;
-    --md-tertiary-container: 97 58 71;
-    --md-on-tertiary-container: 255 217 227;
+  .dark[data-accent="blue"], [data-accent="blue"].dark {
+    --md-primary: 171 199 255;
+    --md-on-primary: 0 26 65;
+    --md-primary-container: 0 67 144;
+    --md-on-primary-container: 219 225 255;
+    --md-secondary: 191 199 221;
+    --md-on-secondary: 41 49 67;
+    --md-secondary-container: 63 71 89;
+    --md-on-secondary-container: 219 227 249;
+    --md-tertiary: 223 184 221;
+    --md-on-tertiary: 65 38 68;
+    --md-tertiary-container: 88 58 90;
+    --md-on-tertiary-container: 251 211 249;
   }
 
   [data-accent="amber"] {
@@ -720,6 +769,79 @@
 
   .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
   .safe-top { padding-top: env(safe-area-inset-top, 0px); }
+
+  /* ---- MD3 Expressive primitives ---- */
+
+  /* 分段按钮组（主题选择等） */
+  .m3-seg {
+    @apply inline-flex items-center p-1 rounded-full;
+    background-color: rgb(var(--md-surface-container-high));
+    gap: 2px;
+  }
+
+  .m3-seg-btn {
+    @apply relative inline-flex items-center justify-center gap-2 px-4 h-9 rounded-full
+           text-sm font-medium cursor-pointer select-none border-0 bg-transparent;
+    color: rgb(var(--md-on-surface-variant));
+    white-space: nowrap;
+    transition:
+      color var(--md-spring-fast),
+      background-color var(--md-spring-fast);
+  }
+
+  .m3-seg-btn:hover {
+    color: rgb(var(--md-on-surface));
+  }
+
+  .m3-seg-btn.on {
+    background-color: rgb(var(--md-secondary-container));
+    color: rgb(var(--md-on-secondary-container));
+    box-shadow: var(--md-elevation-1);
+  }
+
+  /* MD3 开关：无原生外观；用强调减速曲线，不带过冲 */
+  .m3-switch {
+    @apply relative inline-flex items-center flex-none cursor-pointer border-0;
+    width: 52px;
+    height: 32px;
+    padding: 0;
+    border-radius: 999px;
+    background-color: rgb(var(--md-surface-container-highest));
+    border: 2px solid rgb(var(--md-outline));
+    transition:
+      background-color var(--md-ease-emphasized),
+      border-color var(--md-ease-emphasized);
+  }
+
+  .m3-switch::after {
+    content: '';
+    @apply absolute rounded-full;
+    top: 50%;
+    left: 6px;
+    width: 16px;
+    height: 16px;
+    margin-top: -8px;
+    background-color: rgb(var(--md-outline));
+    transition:
+      left var(--md-ease-emphasized-decel),
+      width var(--md-ease-emphasized-decel),
+      height var(--md-ease-emphasized-decel),
+      margin-top var(--md-ease-emphasized-decel),
+      background-color var(--md-ease-emphasized-decel);
+  }
+
+  .m3-switch.on {
+    background-color: rgb(var(--md-primary));
+    border-color: rgb(var(--md-primary));
+  }
+
+  .m3-switch.on::after {
+    left: 26px;
+    width: 24px;
+    height: 24px;
+    margin-top: -12px;
+    background-color: rgb(var(--md-on-primary));
+  }
 }
 
 /* ===== Utility ===== */

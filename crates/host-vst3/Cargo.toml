@@ -1,0 +1,15 @@
+[package]
+name = "daw-party-host-vst3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+daw-party-plugin-api = { path = "../plugin-api" }
+# VST3 后端：能正确托管没有音频输入总线的音源（truce-rack 的 VST3 后端不行）。
+vst3-host = "0.9"
+# CLAP 后端：truce-rack 的 CLAP 在加载 KR-106 时段错误，clack 能正常托管。
+clack-host = "0.2"
+clack-extensions = { version = "0.2", features = ["params", "state", "gui", "thread-check", "clack-host"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"

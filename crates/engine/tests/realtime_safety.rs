@@ -13,7 +13,6 @@ use daw_party_engine::player::Player;
 use daw_party_engine::registry::PluginRegistry;
 use daw_party_engine::schedule::ScheduledEvents;
 use daw_party_engine::transport::TransportCommand;
-
 /// 统计分配的全局分配器（仅本测试二进制生效）。
 struct CountingAllocator;
 
@@ -55,11 +54,12 @@ fn schedule() -> ScheduledEvents {
             params: Default::default(),
             state: vec![],
         }),
+        effects: vec![],
         clips: vec![Clip {
             id: ClipId(1),
             start: 0.0,
             length: 4.0,
-            notes: vec![Note { pitch: 69, start: 0.0, duration: 0.5, velocity: 100 }],
+            notes: vec![Note { pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
         }],
         mixer: Default::default(),
     });
@@ -75,22 +75,36 @@ fn realtime_block_path_does_not_allocate() {
     let (mut tx, mut rx) = command_queue(64);
     player.apply_command(TransportCommand::Play);
 
+    // 混音命令与传输命令共用同一条实时路径：拖动推子时每秒会进来几十条，
+    // 因此 `refresh_mix` 也必须在零分配的前提下工作。
+    let mix = |mute: bool, solo: bool| TransportCommand::SetTrackMix {
+        track: TrackId(1),
+        gain_db: -3.0,
+        pan: 0.25,
+        mute,
+        solo,
+    };
+
     let mut out = vec![0.0f32; MAX_BLOCK * 2];
 
     // 预热：跑通所有可能一次性增长（resize / realloc）的路径，并让队列里有真实命令。
-    for _ in 0..8 {
+    for i in 0..8 {
         player.process_block(&mut out, MAX_BLOCK);
-        for _ in 0..8 {
+        for _ in 0..4 {
             let _ = tx.send(TransportCommand::Play);
+            let _ = tx.send(mix(i % 2 == 0, false));
         }
+        let _ = tx.send(TransportCommand::SetMasterGain { gain_db: -1.0 });
         player.drain_commands(&mut rx);
     }
 
     // 测量窗口。
     ALLOCATIONS.store(0, Ordering::SeqCst);
-    for _ in 0..10_000 {
+    for i in 0..10_000 {
         player.process_block(&mut out, MAX_BLOCK);
         let _ = tx.send(TransportCommand::Play);
+        let _ = tx.send(mix(i % 2 == 0, i % 3 == 0));
+        let _ = tx.send(TransportCommand::SetMasterGain { gain_db: -1.0 });
         player.drain_commands(&mut rx);
     }
     let allocations = ALLOCATIONS.load(Ordering::SeqCst);

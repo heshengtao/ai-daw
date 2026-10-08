@@ -18,14 +18,18 @@ fn main() {
     let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
     for (i, pitch) in [60u8, 64, 67, 72, 67, 64, 60].into_iter().enumerate() {
         engine.execute(
-            Command::AddNote { track, clip, note: Note { pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100 } },
+            Command::AddNote { track, clip, note: Note { pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100, volume: 127 } },
             Actor::Human,
         );
     }
 
     let schedule = ScheduledEvents::from_project(engine.project(), 48_000.0);
     let registry = PluginRegistry::with_builtins();
-    let options = RealtimeOptions { max_block: 2048, command_capacity: 64 };
+    let options = RealtimeOptions {
+        max_block: 2048,
+        command_capacity: 64,
+        scope: std::sync::Arc::new(daw_party_engine::scope::ScopeBuffer::new(8192)),
+    };
 
     let mut host = match AudioHost::start(schedule, &registry, options) {
         Ok(host) => host,

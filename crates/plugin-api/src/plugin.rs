@@ -10,6 +10,23 @@ pub struct ProcessContext {
 }
 
 /// 统一的插件接口：内置合成器与外部宿主插件都实现它。
+///
+/// # 线程契约
+///
+/// 宿主在这些线程上调用本 trait 的方法，实现方（尤其是外部插件适配器）必须照此安排自己
+/// 的跨线程工作——CLAP 这类格式会**真的去核对**调用线程，违规时轻则刷警告、重则卡死宿主：
+///
+/// - [`prepare`](Plugin::prepare)：可能在**任意线程**被调用（宿主构建 `Player` 时）。
+///   需要主线程的实现（如 CLAP 的 `activate`）必须在这里自行派发。
+/// - [`reset`](Plugin::reset) / [`process`](Plugin::process)：在**音频线程**上调用。
+///   音频线程专属的工作（如 CLAP 的 `start_processing` / `clap_plugin.reset()`）要放在这里，
+///   而且实时路径上**不能加锁、不能分配、不能打日志**。
+/// - 构造与 `Drop`、[`save_state`](Plugin::save_state) / [`load_state`](Plugin::load_state)：
+///   在控制侧线程上调用，可以慢、可以加锁。
+///
+/// 因为 `start_processing` 只能在音频线程做，而 `activate` 只能在主线程做，实现方应当把
+/// 「激活」与「开始处理」拆成两步：前者在 `prepare` 里派发到主线程，后者推迟到第一次
+/// [`process`](Plugin::process)。
 pub trait Plugin: Send {
     /// 描述符。
     fn descriptor(&self) -> PluginDescriptor;
@@ -19,9 +36,9 @@ pub trait Plugin: Send {
     fn get_param(&self, id: &ParamId) -> Option<f32>;
     /// 设置参数值（实现方自行 clamp）。
     fn set_param(&mut self, id: &ParamId, value: f32);
-    /// 采样率/块大小变化时调用。
+    /// 采样率/块大小变化时调用（可能在任意线程；见上文的线程契约）。
     fn prepare(&mut self, sample_rate: f64, block_size: usize);
-    /// 清空内部状态（延迟线、包络、声部）。
+    /// 清空内部状态（延迟线、包络、声部）。在音频线程上调用。
     fn reset(&mut self);
     /// 就地处理一个音频块。
     ///
@@ -38,6 +55,13 @@ pub trait Plugin: Send {
     fn save_state(&self) -> Vec<u8>;
     /// 反序列化状态。
     fn load_state(&mut self, state: &[u8]) -> Result<(), PluginError>;
+    /// 抽干自上次调用以来**插件自身**产生的参数变化（例如用户在插件界面上拧了旋钮）。
+    ///
+    /// 纯 DSP 插件不产生内部参数变化，默认返回空即可。宿主在音频线程的块之间调用它，
+    /// 把结果回推给界面与撤销栈——这是「插件界面 → 工程模型」的回流通道。
+    fn take_param_changes(&mut self) -> Vec<(ParamId, f32)> {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -55,6 +79,7 @@ mod tests {
                 name: "Gain".into(),
                 kind: crate::PluginKind::Effect,
                 io: crate::IoLayout { inputs: 2, outputs: 2 },
+                capabilities: crate::PluginCapabilities::default(),
             }
         }
         fn params(&self) -> Vec<crate::ParamInfo> {

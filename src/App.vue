@@ -1,35 +1,48 @@
 <script setup lang="ts">
 /** 应用根：状态初始化、工程读写、试听、快捷键与布局组合。 */
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import { useRoute } from "vue-router";
 import { ExclamationTriangleIcon, ArrowPathIcon } from "@heroicons/vue/24/outline";
 import AppShell from "@/components/layout/AppShell.vue";
 import TrackHeaderList from "@/components/workspace/TrackHeaderList.vue";
-import InspectorPanel from "@/components/workspace/InspectorPanel.vue";
+import RightPanel from "@/components/workspace/RightPanel.vue";
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
-import EmptyState from "@/components/common/EmptyState.vue";
 import ToastHost from "@/components/common/ToastHost.vue";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
 import { useEngineEventsStore } from "@/stores/engineEvents";
-import { usePlayback } from "@/composables/usePlayback";
-import { exportWav } from "@/api/tauri";
+import { useTransportStore } from "@/stores/transport";
+import { usePluginsStore } from "@/stores/plugins";
+import { usePresetsStore } from "@/stores/presets";
+import { useI18n } from "@/i18n";
+import { exportWav, onPluginsEvent } from "@/api/tauri";
 import { pickProjectToOpen, pickProjectToSave, pickWavToSave } from "@/api/dialogs";
 
 const project = useProjectStore();
 const layout = useLayoutStore();
 const events = useEngineEventsStore();
+const transport = useTransportStore();
+const plugins = usePluginsStore();
+const presets = usePresetsStore();
+const i18n = useI18n();
+const route = useRoute();
+
+/** 设置页独占中栏：不显示音轨栏与右侧面板。 */
+const isSettings = computed(() => route.path.startsWith("/settings"));
+
+/**
+ * 独立窗口（合成器面板 / 插件界面宿主页）：只渲染自己的内容，不套工作区外壳。
+ */
+const isBareWindow = computed(
+  () => route.path.startsWith("/synth") || route.path.startsWith("/blank"),
+);
 
 const aiActive = ref(false);
 const exporting = ref(false);
 let pollTimer: number | null = null;
-
-const playback = usePlayback({
-  onError: (message, err) => layout.notify(`${message}：${String(err)}`),
-});
+let unlistenPlugins: (() => void) | null = null;
 
 const loaded = computed(() => project.project !== null);
-/** 首屏引导只在「还没开始」且工程为空时出现。 */
-const showIntro = computed(() => !project.started && (project.project?.tracks.length ?? 0) === 0);
 
 /** 用于文件名的工程名。 */
 const fileBase = computed(() => {
@@ -38,31 +51,38 @@ const fileBase = computed(() => {
 });
 
 function onResizeLeft(delta: number): void {
-  layout.trackWidth = Math.min(360, Math.max(160, layout.trackWidth + delta));
+  // 左栏上限为窗口的 1/4（由 layout store 统一夹紧）。
+  layout.resizeTrack(delta);
 }
 function onResizeRight(delta: number): void {
-  layout.inspectorWidth = Math.min(440, Math.max(200, layout.inspectorWidth + delta));
+  // 右栏上限为「扣掉左栏后剩余区域的 2/3」。
+  layout.resizeInspector(delta);
+}
+
+/** 窗口尺寸变化后重新夹紧左右面板宽度。 */
+function onWindowResize(): void {
+  layout.clampPanes();
 }
 
 async function onImport(): Promise<void> {
-  playback.stop();
+  await transport.stop();
   try {
     const path = await pickProjectToOpen();
     if (!path) return;
     await project.openFrom(path);
-    layout.notify("已导入工程");
+    layout.notify(i18n.t("app.imported"));
   } catch (err) {
-    layout.notify(`导入失败：${String(err)}`);
+    layout.notify(i18n.t("error.import", { error: String(err) }));
   }
 }
 
 async function onNew(): Promise<void> {
-  playback.stop();
+  await transport.stop();
   try {
     await project.newProject();
-    layout.notify("已新建空工程");
+    layout.notify(i18n.t("app.created"));
   } catch (err) {
-    layout.notify(`新建失败：${String(err)}`);
+    layout.notify(i18n.t("error.newProject", { error: String(err) }));
   }
 }
 
@@ -71,9 +91,9 @@ async function onSave(): Promise<void> {
     const path = await pickProjectToSave(`${fileBase.value}.json`);
     if (!path) return;
     const written = await project.saveTo(path);
-    layout.notify(`已保存：${written}`);
+    layout.notify(i18n.t("app.saved", { path: written }));
   } catch (err) {
-    layout.notify(`保存失败：${String(err)}`);
+    layout.notify(i18n.t("error.save", { error: String(err) }));
   }
 }
 
@@ -84,9 +104,9 @@ async function onExport(): Promise<void> {
     const path = await pickWavToSave(`${fileBase.value}.wav`);
     if (!path) return;
     const written = await exportWav(path, 44100);
-    layout.notify(`已导出：${written}`);
+    layout.notify(i18n.t("app.exported", { path: written }));
   } catch (err) {
-    layout.notify(`导出失败：${String(err)}`);
+    layout.notify(i18n.t("error.export", { error: String(err) }));
   } finally {
     exporting.value = false;
   }
@@ -94,17 +114,17 @@ async function onExport(): Promise<void> {
 
 async function onUndo(): Promise<void> {
   try {
-    if (!(await project.undo())) layout.notify("没有可撤销的操作");
+    if (!(await project.undo())) layout.notify(i18n.t("app.nothingToUndo"));
   } catch (err) {
-    layout.notify(`撤销失败：${String(err)}`);
+    layout.notify(i18n.t("error.undo", { error: String(err) }));
   }
 }
 
 async function onRedo(): Promise<void> {
   try {
-    if (!(await project.redo())) layout.notify("没有可重做的操作");
+    if (!(await project.redo())) layout.notify(i18n.t("app.nothingToRedo"));
   } catch (err) {
-    layout.notify(`重做失败：${String(err)}`);
+    layout.notify(i18n.t("error.redo", { error: String(err) }));
   }
 }
 
@@ -121,78 +141,131 @@ function onKey(e: KeyboardEvent): void {
     void (e.shiftKey ? onRedo() : onUndo());
     return;
   }
+  // 切换音轨栏（与顶栏/音轨栏里的按钮同一个动作）。
+  if (mod && !e.shiftKey && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    layout.showTrackHeaders = !layout.showTrackHeaders;
+    return;
+  }
+  // 顶栏不再放保存按钮，保存走快捷键。
+  if (mod && !e.shiftKey && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    void onSave();
+    return;
+  }
   if (e.key === "Escape" && layout.devDrawer) {
     layout.devDrawer = false;
     return;
   }
+  // 鼠标模式：1 = 拖拽（画片段/音符），2 = 框选。与顶栏的模式按钮同一个动作。
+  if (!mod && e.key === "1") {
+    e.preventDefault();
+    layout.setTool("draw");
+    return;
+  }
+  if (!mod && e.key === "2") {
+    e.preventDefault();
+    layout.setTool("select");
+    return;
+  }
+  // 传输快捷键：空格播放/暂停，Home 回到起点。
   if (e.code === "Space") {
     e.preventDefault();
-    if (playback.playing.value) playback.stop();
-    else void playback.play();
+    void transport.toggle();
+    return;
+  }
+  if (e.key === "Home") {
+    e.preventDefault();
+    void transport.rewind();
   }
 }
 
 onMounted(async () => {
   window.addEventListener("keydown", onKey);
-  await events.start();
-  await project.reload();
+  window.addEventListener("resize", onWindowResize);
+  layout.clampPanes();
+  // 每一步都独立：合成器那个二级窗口里，某一步失败不该把它拖成「永远空白」。
+  await Promise.allSettled([events.start(), transport.init(), project.reload()]);
+  // 初始工程是在界面起来之前建的（那时还不知道界面语言），这里按当前语言把默认分轨名改过来。
+  // 后端只在工程仍是默认模板时才改——用户动过就一个字都不动；改名不进撤销栈。
+  await project.localizeStarterTracks().catch(() => {});
+  // 用户预设：跨工程，取一次就够（保存/删除后会各自刷新）。
+  void presets.refresh();
+  // 插件目录：先取一次当前值，再等后端的后台扫描完成推送。
+  await plugins.refresh().catch(() => {});
+  unlistenPlugins = await onPluginsEvent(() => void plugins.refresh());
   pollTimer = window.setInterval(() => {
     aiActive.value = events.recentlyActive();
   }, 300);
 });
 onUnmounted(() => {
   window.removeEventListener("keydown", onKey);
+  window.removeEventListener("resize", onWindowResize);
   if (pollTimer !== null) window.clearInterval(pollTimer);
+  unlistenPlugins?.();
   events.stop();
+  transport.dispose();
 });
 </script>
 
 <template>
+  <!-- 独立窗口：窗口里只有它自己的内容 -->
+  <router-view v-if="isBareWindow" />
+
   <AppShell
-    :playing="playback.playing.value"
+    v-else
     :ai-active="aiActive"
-    @play="playback.play()"
-    @stop="playback.stop()"
     @import="onImport"
     @new="onNew"
     @save="onSave"
     @export="onExport"
   >
+    <!-- 左：音轨栏（全高，与顶栏融合） -->
+    <template #left>
+      <template v-if="!isSettings">
+        <TrackHeaderList
+          v-if="layout.showTrackHeaders"
+          :style="{ width: `${layout.trackWidth}px`, flex: '0 0 auto' }"
+        />
+        <PanelResizer v-if="layout.showTrackHeaders" side="left" @resize="onResizeLeft" />
+      </template>
+    </template>
+
+    <!-- 中：工作区 -->
+    <div v-if="isSettings" class="workspace-main">
+      <router-view />
+    </div>
+
     <!-- 启动失败：必须让用户看见，并能重试（而不是停在"载入中"）。 -->
-    <div v-if="project.loadError" class="center-state">
+    <div v-else-if="project.loadError" class="center-state">
       <div class="card-elevated center-card" role="alert">
         <ExclamationTriangleIcon class="w-7 h-7" :style="{ color: 'rgb(var(--md-error))' }" />
-        <h2 class="text-title-md">无法载入工程</h2>
+        <h2 class="text-title-md">{{ i18n.t("app.loadFailed") }}</h2>
         <p class="text-body-sm center-reason">{{ project.loadError }}</p>
         <button class="btn-filled" @click="project.reload()">
           <ArrowPathIcon class="w-5 h-5" />
-          重试
+          {{ i18n.t("app.retry") }}
         </button>
       </div>
     </div>
 
     <div v-else-if="!loaded" class="center-state">
-      <p class="text-body-md center-muted">正在载入工程…</p>
+      <p class="text-body-md center-muted">{{ i18n.t("app.loading") }}</p>
     </div>
 
-    <EmptyState v-else-if="showIntro" @import="onImport" @new="onNew" />
+    <div v-else class="workspace-main">
+      <router-view />
+    </div>
 
-    <template v-else>
-      <TrackHeaderList
-        v-if="layout.showTrackHeaders"
-        :style="{ width: `${layout.trackWidth}px`, flex: '0 0 auto' }"
-      />
-      <PanelResizer v-if="layout.showTrackHeaders" side="left" @resize="onResizeLeft" />
-
-      <div class="workspace-main">
-        <router-view />
-      </div>
-
-      <PanelResizer v-if="layout.showInspector" side="right" @resize="onResizeRight" />
-      <InspectorPanel
-        v-if="layout.showInspector"
-        :style="{ width: `${layout.inspectorWidth}px`, flex: '0 0 auto' }"
-      />
+    <!-- 右：标签页面板（全高） -->
+    <template #right>
+      <template v-if="!isSettings">
+        <PanelResizer v-if="layout.showInspector" side="right" @resize="onResizeRight" />
+        <RightPanel
+          v-if="layout.showInspector"
+          :style="{ width: `${layout.inspectorWidth}px`, flex: '0 0 auto' }"
+        />
+      </template>
     </template>
 
     <ToastHost />
@@ -204,6 +277,7 @@ onUnmounted(() => {
   flex: 1;
   min-width: 0;
   display: flex;
+  overflow: hidden;
 }
 .center-state {
   flex: 1;

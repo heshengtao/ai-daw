@@ -61,7 +61,7 @@ mod tests {
         let ev = e.execute(Command::AddClip { track, start: 0.0, length: 2.0 }, Actor::Human);
         let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
         e.execute(
-            Command::AddNote { track, clip, note: Note { pitch: 69, start: 0.0, duration: 1.0, velocity: 100 } },
+            Command::AddNote { track, clip, note: Note { pitch: 69, start: 0.0, duration: 1.0, velocity: 100, volume: 127 } },
             Actor::Human,
         );
         e.project().clone()
@@ -134,11 +134,12 @@ mod tests {
                 params,
                 state: vec![],
             }),
+            effects: vec![],
             clips: vec![Clip {
                 id: ClipId(1),
                 start: 0.0,
                 length: 0.05,
-                notes: vec![Note { pitch: 69, start: 0.0, duration: 0.05, velocity: 100 }],
+                notes: vec![Note { pitch: 69, start: 0.0, duration: 0.05, velocity: 100, volume: 127 }],
             }],
             mixer: Default::default(),
         });

@@ -4,22 +4,25 @@
  * 因此没有原生 number 控件的步进箭头）。
  */
 import { ref, watch } from "vue";
+import { useI18n } from "@/i18n";
 import { MinusIcon, PlusIcon } from "@heroicons/vue/24/outline";
 
-const props = withDefaults(
-  defineProps<{
+const props = withDefaults(defineProps<{
     modelValue: number;
     min?: number;
     max?: number;
     step?: number;
     label?: string;
     inputWidth?: string;
+    /** 禁用后不可编辑（用于「没有可编辑对象」的场景）。 */
+    disabled?: boolean;
   }>(),
-  { min: 0, max: 100, step: 1, inputWidth: "44px" },
+  { min: 0, max: 100, step: 1, inputWidth: "44px", disabled: false },
 );
 const emit = defineEmits<{ (e: "update:modelValue", v: number): void }>();
 
 const draft = ref(String(props.modelValue));
+const i18n = useI18n();
 
 watch(
   () => props.modelValue,
@@ -34,6 +37,7 @@ function clamp(n: number): number {
 
 /** 提交输入：非法值回退，合法值夹到区间后再向上报。 */
 function commit(): void {
+  if (props.disabled) return;
   const raw = draft.value.trim();
   const n = Number(raw);
   if (!raw || !Number.isFinite(n)) {
@@ -46,14 +50,20 @@ function commit(): void {
 }
 
 function bump(delta: number): void {
+  if (props.disabled) return;
   emit("update:modelValue", clamp(props.modelValue + delta));
 }
 </script>
 
 <template>
-  <div class="step">
+  <div class="step" :class="{ disabled }">
     <span v-if="label" class="step-label">{{ label }}</span>
-    <button class="step-btn" :aria-label="`减少${label ?? '数值'}`" @click="bump(-step)">
+    <button
+      class="step-btn"
+      :disabled="disabled"
+      :aria-label="i18n.t('value.decrease', { name: label ?? i18n.t('value.none') })"
+      @click="bump(-step)"
+    >
       <MinusIcon class="w-[13px] h-[13px]" />
     </button>
     <input
@@ -63,13 +73,19 @@ function bump(delta: number): void {
       inputmode="numeric"
       autocomplete="off"
       spellcheck="false"
-      :aria-label="label ?? '数值'"
+      :disabled="disabled"
+      :aria-label="label ?? i18n.t('value.none')"
       :style="{ width: inputWidth }"
       @change="commit"
       @blur="commit"
       @keydown.enter.prevent="commit"
     />
-    <button class="step-btn" :aria-label="`增加${label ?? '数值'}`" @click="bump(step)">
+    <button
+      class="step-btn"
+      :disabled="disabled"
+      :aria-label="i18n.t('value.increase', { name: label ?? i18n.t('value.none') })"
+      @click="bump(step)"
+    >
       <PlusIcon class="w-[13px] h-[13px]" />
     </button>
   </div>
@@ -90,6 +106,12 @@ function bump(delta: number): void {
 .step:focus-within {
   border-color: rgb(var(--md-primary));
   box-shadow: 0 0 0 2px rgb(var(--md-primary) / 0.22);
+}
+.step.disabled {
+  opacity: 0.5;
+}
+.step.disabled .step-btn {
+  cursor: default;
 }
 .step-label {
   font-size: 10px;

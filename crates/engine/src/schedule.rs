@@ -1,7 +1,7 @@
 use daw_party_plugin_api::MidiEvent;
 
 use crate::beats_to_seconds;
-use crate::model::{MixerChannel, PluginInstance, Project, TrackId};
+use crate::model::{MixerChannel, Note, PluginInstance, Project, TrackId};
 
 /// 一条已定绝对帧的 MIDI 事件。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -19,6 +19,8 @@ pub struct ScheduledTrack {
     pub track_id: TrackId,
     /// 轨道使用的乐器插件实例（无则静音/留空）。
     pub instrument: Option<PluginInstance>,
+    /// 轨道效果链（按顺序处理，接在乐器之后）。
+    pub effects: Vec<PluginInstance>,
     /// 轨道混音参数。
     pub mixer: MixerChannel,
     /// 按帧稳定排序的事件列表。
@@ -30,6 +32,8 @@ pub struct ScheduledTrack {
 pub struct ScheduledEvents {
     /// 各轨道的定帧事件表。
     pub tracks: Vec<ScheduledTrack>,
+    /// 总输出通道（增益在播放器里作用于各轨混合之后）。
+    pub master: MixerChannel,
     /// 工程内容总长度（帧），取所有片段结束位置的最大值。
     pub end_frame: u64,
     /// 构建时使用的速度，供实时播放按拍推进时复用。
@@ -54,8 +58,17 @@ impl ScheduledEvents {
                     let off = on + note.duration;
                     events.push(ScheduledMidi {
                         frame: to_frame(on),
+                        // 只送「演奏强度」。插件各自解释它（音色 / 振幅）——这是设计如此。
                         event: MidiEvent::NoteOn { note: note.pitch, velocity: note.velocity },
                     });
+                    // 单音音量与力度**分开发**：支持 per-note 音量的插件独立处理它，不改变音色。
+                    // 默认值 127（不衰减）不需要事件。
+                    if note.volume != Note::MAX_VOLUME {
+                        events.push(ScheduledMidi {
+                            frame: to_frame(on),
+                            event: MidiEvent::NoteVolume { note: note.pitch, value: note.volume },
+                        });
+                    }
                     events.push(ScheduledMidi {
                         frame: to_frame(off),
                         event: MidiEvent::NoteOff { note: note.pitch },
@@ -66,12 +79,19 @@ impl ScheduledEvents {
             tracks.push(ScheduledTrack {
                 track_id: track.id,
                 instrument: track.instrument.clone(),
+                effects: track.effects.clone(),
                 mixer: track.mixer,
                 events,
             });
         }
 
-        ScheduledEvents { tracks, end_frame: to_frame(project.length_beats()), tempo, sample_rate }
+        ScheduledEvents {
+            tracks,
+            master: project.master,
+            end_frame: to_frame(project.length_beats()),
+            tempo,
+            sample_rate,
+        }
     }
 }
 
@@ -87,11 +107,12 @@ mod tests {
             id: TrackId(1),
             name: "Lead".into(),
             instrument: None,
+            effects: vec![],
             clips: vec![Clip {
                 id: ClipId(1),
                 start: 0.0,
                 length: 4.0,
-                notes: vec![Note { pitch: 60, start: 1.0, duration: 1.0, velocity: 100 }],
+                notes: vec![Note { pitch: 60, start: 1.0, duration: 1.0, velocity: 100, volume: 127 }],
             }],
             mixer: Default::default(),
         });
@@ -126,8 +147,42 @@ mod tests {
     }
 
     #[test]
+    fn carries_master_channel() {
+        let mut p = project_with_note();
+        p.master.gain_db = -4.5;
+        p.master.pan = 0.25;
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        assert_eq!(s.master.gain_db, -4.5);
+        assert_eq!(s.master.pan, 0.25);
+    }
+
+    #[test]
     fn records_the_build_sample_rate() {
         let s = ScheduledEvents::from_project(&project_with_note(), 44_100.0);
         assert_eq!(s.sample_rate, 44_100.0);
+    }
+
+    #[test]
+    fn note_volume_travels_as_its_own_event() {
+        let mut p = project_with_note();
+        // 音量 64：力度保持原值，另发一条 NoteVolume。
+        p.tracks[0].clips[0].notes[0].volume = 64;
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        assert!(matches!(
+            s.tracks[0].events[0].event,
+            MidiEvent::NoteOn { note: 60, velocity: 100 }
+        ));
+        assert!(matches!(
+            s.tracks[0].events[1].event,
+            MidiEvent::NoteVolume { note: 60, value: 64 }
+        ));
+
+        // 音量归零：仍要送达（插件据此把该音压到静音）。
+        p.tracks[0].clips[0].notes[0].volume = 0;
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        assert!(matches!(
+            s.tracks[0].events[1].event,
+            MidiEvent::NoteVolume { note: 60, value: 0 }
+        ));
     }
 }

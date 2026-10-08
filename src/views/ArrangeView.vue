@@ -1,79 +1,703 @@
 <script setup lang="ts">
-/** 编排视图：网格铺满整宽，片段按轨道配色。 */
-import { computed, onMounted, onUnmounted, ref } from "vue";
+/**
+ * 编排视图：网格铺满整宽，片段按轨道配色。
+ *
+ * 行高与表头高度和左侧音轨栏严格一致，并通过 laneScrollTop 与音轨栏同步纵向滚动。
+ * 横向则与编辑视图**共用同一条时间轴**（`stores/timeline`）：同一缩放、同一滚动位置、
+ * 同一套由拍号推导的网格，标尺也是同一个组件。
+ *
+ * 交互（一次拖拽只提交一次，因此只产生一条撤销记录）：
+ * - **在空白处左键拖动 → 画出等长的新片段**（松手前是虚线预览；原地点击则只是选中轨道）；
+ * - 拖动片段本体 → 移动；多选时整组一起移动；单个片段可以上下换轨道；
+ * - 拖动片段右边缘 → 改长度；
+ * - 左键点击 → 选中；**单击片段会顺手打开右侧检查器**（方便立刻换音色）；Ctrl/Cmd+点击 → 加选；
+ * - **Shift/Alt + 左键拖动 → 框选**（顶栏的鼠标模式也能切换默认左键行为）；
+ * - **右键点击 → 删除**；**右键拖动 → 框选批量删除**；
+ * - 双击片段 → 进入它的钢琴卷帘；
+ * - Delete/Backspace → 删除所选片段；Ctrl/Cmd + 滚轮 → 缩放。
+ */
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import { useProjectStore } from "@/stores/project";
+import { useSelectionStore, type ClipSel } from "@/stores/selection";
+import { useTransportStore } from "@/stores/transport";
+import { useLayoutStore } from "@/stores/layout";
+import { useTimelineStore } from "@/stores/timeline";
+import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
 import { trackHue } from "@/utils/trackColor";
+import { laneScrollTop } from "@/composables/useLaneScroll";
+import { capturePointer } from "@/utils/pointer";
+import { useI18n } from "@/i18n";
+import type { Clip, ClipPlacement, Note, Track } from "@/api/types";
 
 const store = useProjectStore();
-const zoom = ref(56); // 每拍像素
+const i18n = useI18n();
+const selection = useSelectionStore();
+const transport = useTransportStore();
+const layout = useLayoutStore();
+const timeline = useTimelineStore();
+const router = useRouter();
+
+/** 与 TrackHeaderList 约定的行高（px）。 */
+const LANE_H = 64;
+/** 新片段的最短长度（拍）：低于它视为「原地点击」。 */
+const MIN_CREATE_BEATS = 1 / 32;
+
+const scroller = ref<HTMLElement | null>(null);
+const lanesEl = ref<HTMLElement | null>(null);
+let applyingScroll = false;
 
 const tracks = computed(() => store.project?.tracks ?? []);
-const beatsPerBar = computed(() => store.project?.transport.time_sig_num ?? 4);
 
-/** 内容长度（小节）。 */
-const contentBars = computed(() => {
-  const beats = tracks.value.flatMap((t) => t.clips).reduce((m, c) => Math.max(m, c.start + c.length), 0);
-  return Math.max(4, Math.ceil(beats / beatsPerBar.value) + 2);
+/**
+ * 时间轴在 T=0 **左侧**预留的空白宽度（px）。
+ *
+ * 不留的话工程起点就贴在滚动区最左边：想点「第 0 拍」只能贴着边线点，很容易点空；留一小段
+ * 之后 0 拍永远点得到，视觉上也能看出「这里是工程的开始」。网格、片段、播放头的坐标都以
+ * 内容元素的左边缘为原点，所以只有「指针 → 拍」和缩放锚点两处换算需要减掉它。
+ */
+const TIMELINE_INSET_PX = 26;
+
+/** 指针 x → 拍（已含横向滚动；落在预留空白里算第 0 拍）。 */
+function beatAt(clientX: number): number {
+  const el = scroller.value;
+  if (!el) return 0;
+  const rect = el.getBoundingClientRect();
+  return Math.max(0, (clientX - rect.left - TIMELINE_INSET_PX + el.scrollLeft) / timeline.zoom);
+}
+
+/** 有符号吸附（拖动增量必须允许负值）。 */
+function snapDelta(beat: number): number {
+  const s = timeline.snap;
+  return Math.round(beat / s) * s;
+}
+
+/** 指针 y → 所在轨道的 id（跨轨道拖动用）；越界返回 null。 */
+function trackAt(clientY: number): number | null {
+  const el = lanesEl.value;
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
+  const index = Math.floor((clientY - rect.top) / LANE_H);
+  return tracks.value[index]?.id ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// 拖拽状态机
+// ---------------------------------------------------------------------------
+
+type DragMode = "create" | "move" | "resize" | "marquee" | "marquee-delete";
+
+interface MoveDrag {
+  originBeat: number;
+  /** 拖动前的 (track, clip, start) 快照。 */
+  base: (ClipSel & { start: number; length: number })[];
+  delta: number;
+  /** 目标轨道（单个片段可跨轨道拖动；多选时恒等于原轨道）。 */
+  targetTrack: number | null;
+  moved: boolean;
+}
+
+const mode = ref<DragMode | null>(null);
+/** 拖拽创建中的片段（拍）。 */
+const create = reactive({ trackId: 0, from: 0, to: 0 });
+/** 移动中的片段预览。 */
+const moveDrag = ref<MoveDrag | null>(null);
+/** 缩放中的片段预览。 */
+const resizeDrag = ref<{ track: number; clip: number; originBeat: number; base: number; next: number; moved: boolean } | null>(null);
+/** 框选矩形（客户端坐标，用于 fixed 覆盖层与相交测试）。 */
+const marquee = reactive({ x1: 0, y1: 0, x2: 0, y2: 0 });
+
+const marqueeStyle = computed(() => ({
+  left: `${Math.min(marquee.x1, marquee.x2)}px`,
+  top: `${Math.min(marquee.y1, marquee.y2)}px`,
+  width: `${Math.abs(marquee.x2 - marquee.x1)}px`,
+  height: `${Math.abs(marquee.y2 - marquee.y1)}px`,
+}));
+
+/** 框选矩形与某个元素的客户端矩形是否相交。 */
+function intersects(el: Element): boolean {
+  const r = el.getBoundingClientRect();
+  const left = Math.min(marquee.x1, marquee.x2);
+  const right = Math.max(marquee.x1, marquee.x2);
+  const top = Math.min(marquee.y1, marquee.y2);
+  const bottom = Math.max(marquee.y1, marquee.y2);
+  return !(r.right < left || r.left > right || r.bottom < top || r.top > bottom);
+}
+
+// ---------------------------------------------------------------------------
+// 片段渲染
+// ---------------------------------------------------------------------------
+
+/** 渲染用：拖动中的片段使用预览值。 */
+function effStart(clip: Clip): number {
+  const d = moveDrag.value;
+  if (d) {
+    const item = d.base.find((b) => b.clip === clip.id);
+    if (item) return Math.max(0, item.start + d.delta);
+  }
+  return clip.start;
+}
+
+function effLength(clip: Clip): number {
+  const r = resizeDrag.value;
+  if (r && r.clip === clip.id) return r.next;
+  return clip.length;
+}
+
+/**
+ * 该片段是否正被拖到别的轨道上。
+ * 拖到别处时要把它从原轨道隐藏，改在目标轨道画一个预览块——否则会看到它「粘」在原处。
+ */
+function isDraggingAway(clip: Clip, trackId: number): boolean {
+  const d = moveDrag.value;
+  if (!d || d.targetTrack === null || d.targetTrack === trackId) return false;
+  return d.base.some((b) => b.clip === clip.id);
+}
+
+/** 跨轨道拖动时，目标轨道上显示的预览块（只有单片段拖动才会出现）。 */
+const dragGhost = computed(() => {
+  const d = moveDrag.value;
+  if (!d || d.targetTrack === null || d.base.length !== 1) return null;
+  const item = d.base[0];
+  if (item.track === d.targetTrack) return null;
+  return { track: d.targetTrack, start: Math.max(0, item.start + d.delta), length: item.length };
 });
 
-/** 标尺多画一段，保证拉伸或滚动时右侧仍有刻度与网格。 */
-const totalBars = computed(() => contentBars.value + 24);
-
-const beatsTotal = computed(() => totalBars.value * beatsPerBar.value);
-
-/** 至少铺满可视宽度，避免右侧出现空白。 */
-const widthStyle = computed(() => ({ width: `max(100%, ${beatsTotal.value * zoom.value}px)` }));
-const beatPx = computed(() => `${zoom.value}px`);
-const barPx = computed(() => `${zoom.value * beatsPerBar.value}px`);
-
-function clipStyle(start: number, length: number, index: number): Record<string, string> {
+function ghostStyle(trackId: number, index: number): Record<string, string> {
+  const g = dragGhost.value;
+  if (!g || g.track !== trackId) return {};
   return {
-    left: `${start * zoom.value}px`,
-    width: `${Math.max(6, length * zoom.value)}px`,
+    left: `${g.start * timeline.zoom}px`,
+    width: `${Math.max(6, g.length * timeline.zoom)}px`,
     "--track-hue": String(trackHue(index)),
   };
 }
 
-// 播放头：离线预览没有实时位置，仅作视觉指示。
-const playheadPct = ref(0);
-let timer: number | null = null;
+function clipStyle(clip: Clip, index: number): Record<string, string> {
+  return {
+    left: `${effStart(clip) * timeline.zoom}px`,
+    width: `${Math.max(6, effLength(clip) * timeline.zoom)}px`,
+    "--track-hue": String(trackHue(index)),
+  };
+}
+
+/**
+ * 片段内音符预览的纵向映射：按**该片段自身的音域**自适应（至少 12 个半音）。
+ * 若固定用 36..84，低音线会全挤在底部 15% 里，形状完全看不出来。
+ */
+function pitchRange(clip: Clip): { low: number; high: number } {
+  const pitches = clip.notes.map((n) => n.pitch);
+  if (pitches.length === 0) return { low: 48, high: 60 };
+  const lo = Math.min(...pitches) - 2;
+  const hi = Math.max(...pitches) + 2;
+  const span = Math.max(12, hi - lo);
+  const center = (lo + hi) / 2;
+  return { low: Math.round(center - span / 2), high: Math.round(center + span / 2) };
+}
+
+/** 每个片段的预览音域（按片段 id 缓存，避免每个音符都重算一遍）。 */
+const previewRanges = computed(() => {
+  const map = new Map<number, { low: number; high: number }>();
+  for (const t of tracks.value) for (const c of t.clips) map.set(c.id, pitchRange(c));
+  return map;
+});
+
+/**
+ * 片段内的音符预览：**迷你钢琴卷帘**。
+ * 横轴 = 时间，纵轴 = 音高。以前这里是一根居中细条，看起来像滚动条——现在不会了。
+ */
+function blipStyle(n: Note, clip: Clip): Record<string, string> {
+  const range = previewRanges.value.get(clip.id) ?? { low: 48, high: 60 };
+  const span = Math.max(1, range.high - range.low + 1);
+  const pitch = Math.min(range.high, Math.max(range.low, n.pitch));
+  return {
+    left: `${(n.start / clip.length) * 100}%`,
+    width: `${Math.max(1.5, (n.duration / clip.length) * 100)}%`,
+    top: `${((range.high - pitch) / span) * 100}%`,
+    height: `${(100 / span) * 4}%`,
+  };
+}
+
+function isSelected(clip: Clip, trackId: number): boolean {
+  return selection.isClipSelected(trackId, clip.id);
+}
+
+// ---------------------------------------------------------------------------
+// 单击打开检查器（延迟一点点，好让双击有机会取消它）
+// ---------------------------------------------------------------------------
+
+let inspectorTimer: number | null = null;
+
+/**
+ * 单击片段 → 打开右侧检查器，方便立刻换音色。
+ * 故意延后 220ms：双击片段是要进钢琴卷帘的，而打开检查器会让中栏变窄、
+ * 第二次点击可能落到别的片段上——所以双击时必须能取消这次打开。
+ */
+function scheduleOpenInspector(): void {
+  if (inspectorTimer !== null) window.clearTimeout(inspectorTimer);
+  inspectorTimer = window.setTimeout(() => {
+    inspectorTimer = null;
+    layout.openTab("inspector");
+  }, 220);
+}
+
+function cancelOpenInspector(): void {
+  if (inspectorTimer !== null) {
+    window.clearTimeout(inspectorTimer);
+    inspectorTimer = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 指针按下
+// ---------------------------------------------------------------------------
+
+function onClipPointerDown(e: PointerEvent, track: Track, clip: Clip): void {
+  if (e.button !== 0) return;
+  e.stopPropagation();
+
+  // Ctrl/Cmd 点击：加入/移出选择，不启动拖动。
+  if (e.metaKey || e.ctrlKey) {
+    selection.toggleClip(track.id, clip.id);
+    return;
+  }
+  // 点未选中的片段 → 先把它设为唯一选择；点已选中的 → 保留整组（便于整组拖动）。
+  if (!selection.isClipSelected(track.id, clip.id)) {
+    selection.selectClip(track.id, clip.id);
+  } else {
+    selection.selectTrack(track.id);
+    selection.clipId = clip.id;
+  }
+
+  capturePointer(e.currentTarget, e.pointerId);
+  const base = (selection.clipRefs.length > 0 ? selection.clipRefs : [{ track: track.id, clip: clip.id }])
+    .map((ref) => {
+      const t = tracks.value.find((x) => x.id === ref.track);
+      const c = t?.clips.find((x) => x.id === ref.clip);
+      return c ? { ...ref, start: c.start, length: c.length } : null;
+    })
+    .filter((x): x is ClipSel & { start: number; length: number } => x !== null);
+
+  // 跨轨道拖动只对单个片段开放：多选时各自的原轨道不同，「一起挪到哪一条」没有明确答案。
+  moveDrag.value = {
+    originBeat: beatAt(e.clientX),
+    base,
+    delta: 0,
+    targetTrack: base.length === 1 ? track.id : null,
+    moved: false,
+  };
+  mode.value = "move";
+}
+
+function onResizePointerDown(e: PointerEvent, track: Track, clip: Clip): void {
+  if (e.button !== 0) return;
+  e.stopPropagation();
+  selection.selectClip(track.id, clip.id);
+  capturePointer(e.currentTarget, e.pointerId);
+  resizeDrag.value = {
+    track: track.id,
+    clip: clip.id,
+    originBeat: beatAt(e.clientX),
+    base: clip.length,
+    next: clip.length,
+    moved: false,
+  };
+  mode.value = "resize";
+}
+
+/** 空白处按下：右键 → 框选删除；Shift/Alt 或「框选模式」→ 框选；否则左键拖拽创建片段。 */
+function onLanePointerDown(e: PointerEvent, track: Track): void {
+  if (e.button === 2) {
+    // 片段自己处理右键（右键点击删除 / 整组删除），这里只管空白区域。
+    if ((e.target as HTMLElement).closest(".clip")) return;
+    capturePointer(e.currentTarget, e.pointerId);
+    selection.selectTrack(track.id);
+    mode.value = "marquee-delete";
+    marquee.x1 = marquee.x2 = e.clientX;
+    marquee.y1 = marquee.y2 = e.clientY;
+    return;
+  }
+  if (e.button !== 0) return;
+  const beat = Math.max(0, snapDelta(beatAt(e.clientX)));
+
+  // 顶栏的鼠标模式决定左键的默认含义；Shift/Alt 随时可以临时切到框选。
+  if (e.shiftKey || e.altKey || layout.tool === "select") {
+    capturePointer(e.currentTarget, e.pointerId);
+    mode.value = "marquee";
+    marquee.x1 = marquee.x2 = e.clientX;
+    marquee.y1 = marquee.y2 = e.clientY;
+    return;
+  }
+
+  capturePointer(e.currentTarget, e.pointerId);
+  selection.selectTrack(track.id);
+  create.trackId = track.id;
+  create.from = beat;
+  create.to = beat;
+  mode.value = "create";
+}
+
+/** 抑制原生右键菜单（框选删除与右键删除都在自己的处理里）。 */
+function onLaneContextMenu(e: MouseEvent): void {
+  e.preventDefault();
+}
+
+function onClipContextMenu(e: MouseEvent, track: Track, clip: Clip): void {
+  e.preventDefault();
+  e.stopPropagation();
+  // 右键点未选中的片段：只删它；点已选中的：删掉整组。
+  const targets = selection.isClipSelected(track.id, clip.id)
+    ? selection.clipRefs.map((r) => ({ track: r.track, clip: r.clip }))
+    : [{ track: track.id, clip: clip.id }];
+  void deleteClips(targets);
+}
+
+// ---------------------------------------------------------------------------
+// 指针移动
+// ---------------------------------------------------------------------------
+
+function onPointerMove(e: PointerEvent): void {
+  switch (mode.value) {
+    case "create": {
+      create.to = Math.max(0, snapDelta(beatAt(e.clientX)));
+      break;
+    }
+    case "move": {
+      const d = moveDrag.value;
+      if (!d) break;
+      const delta = snapDelta(beatAt(e.clientX) - d.originBeat);
+      if (delta !== d.delta) {
+        d.delta = delta;
+        d.moved = true;
+      }
+      // 纵向：单个片段可以换轨道（多选时锁死在原轨道）。
+      if (d.base.length === 1) {
+        const target = trackAt(e.clientY);
+        if (target !== null && target !== d.targetTrack) {
+          d.targetTrack = target;
+          d.moved = true;
+        }
+      }
+      break;
+    }
+    case "resize": {
+      const r = resizeDrag.value;
+      if (!r) break;
+      const next = Math.max(MIN_CREATE_BEATS, snapDelta(r.base + (beatAt(e.clientX) - r.originBeat)));
+      if (next !== r.next) {
+        r.next = next;
+        r.moved = true;
+      }
+      break;
+    }
+    case "marquee":
+    case "marquee-delete": {
+      marquee.x2 = e.clientX;
+      marquee.y2 = e.clientY;
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 指针松开
+// ---------------------------------------------------------------------------
+
+async function onPointerUp(): Promise<void> {
+  const current = mode.value;
+  mode.value = null;
+
+  if (current === "create") {
+    const start = Math.min(create.from, create.to);
+    const length = Math.abs(create.to - create.from);
+    if (length >= MIN_CREATE_BEATS) {
+      try {
+        await store.addClip(create.trackId, start, length);
+        layout.notify(i18n.t("arrange.clipAdded"));
+      } catch (err) {
+        layout.notify(i18n.t("error.addClip", { error: String(err) }));
+      }
+    }
+    return;
+  }
+
+  if (current === "move") {
+    const d = moveDrag.value;
+    moveDrag.value = null;
+    if (!d) return;
+    // 没动过 = 一次单击：顺手打开检查器（方便换音色）。
+    if (!d.moved) {
+      scheduleOpenInspector();
+      return;
+    }
+    const items: ClipPlacement[] = d.base.map((b) => ({
+      track: b.track,
+      clip: b.clip,
+      to_track: d.targetTrack ?? b.track,
+      start: Math.max(0, b.start + d.delta),
+    }));
+    try {
+      if (items.length === 1) {
+        const only = items[0];
+        // 同轨道只改起点时走更轻的命令，跨轨道才需要搬移。
+        if (only.to_track === only.track) await store.moveClip(only.track, only.clip, only.start);
+        else await store.moveClips(items);
+      } else {
+        await store.moveClips(items);
+      }
+    } catch (err) {
+      layout.notify(i18n.t("error.moveClip", { error: String(err) }));
+    }
+    return;
+  }
+
+  if (current === "resize") {
+    const r = resizeDrag.value;
+    resizeDrag.value = null;
+    if (!r || !r.moved) return;
+    try {
+      await store.resizeClip(r.track, r.clip, r.next);
+    } catch (err) {
+      layout.notify(i18n.t("error.resizeClip", { error: String(err) }));
+    }
+    return;
+  }
+
+  if (current === "marquee") {
+    const refs: ClipSel[] = [];
+    lanesEl.value?.querySelectorAll<HTMLElement>(".clip").forEach((el) => {
+      if (!intersects(el)) return;
+      const track = Number(el.dataset.track);
+      const clip = Number(el.dataset.clip);
+      if (Number.isFinite(track) && Number.isFinite(clip)) refs.push({ track, clip });
+    });
+    selection.setClipSelection(refs);
+    return;
+  }
+
+  if (current === "marquee-delete") {
+    const width = Math.abs(marquee.x2 - marquee.x1);
+    const height = Math.abs(marquee.y2 - marquee.y1);
+    // 几乎没动 = 一次右键点击：删除指针下的那一个片段（由 contextmenu 处理），这里不做事。
+    if (width < 4 && height < 4) return;
+    const items: { track: number; clip: number }[] = [];
+    lanesEl.value?.querySelectorAll<HTMLElement>(".clip").forEach((el) => {
+      if (!intersects(el)) return;
+      const track = Number(el.dataset.track);
+      const clip = Number(el.dataset.clip);
+      if (Number.isFinite(track) && Number.isFinite(clip)) items.push({ track, clip });
+    });
+    await deleteClips(items);
+  }
+}
+
+async function deleteClips(items: { track: number; clip: number }[]): Promise<void> {
+  if (items.length === 0) return;
+  try {
+    await store.removeClips(items);
+    layout.notify(
+      items.length === 1
+        ? i18n.t("arrange.clipRemoved")
+        : i18n.t("arrange.clipsRemoved", { count: items.length }),
+    );
+  } catch (err) {
+    layout.notify(i18n.t("error.removeClip", { error: String(err) }));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 其它
+// ---------------------------------------------------------------------------
+
+/** 双击片段：进入它的钢琴卷帘（并取消那次「单击开检查器」）。 */
+function onClipDoubleClick(track: Track, clip: Clip): void {
+  cancelOpenInspector();
+  selection.selectClip(track.id, clip.id);
+  void router.push("/edit");
+}
+
+/** Delete / Backspace 删除所选片段。 */
+function onKey(e: KeyboardEvent): void {
+  if (e.key !== "Delete" && e.key !== "Backspace") return;
+  if (e.target instanceof HTMLInputElement) return;
+  const items = selection.clipRefs;
+  if (items.length === 0) return;
+  e.preventDefault();
+  void deleteClips(items.map((r) => ({ track: r.track, clip: r.clip })));
+}
+
+const playheadPx = computed(() => transport.positionBeats * timeline.zoom);
+
+/** 播放时让播放头保持在可视范围内。 */
+watch(
+  () => transport.positionBeats,
+  (beats) => {
+    if (!transport.playing) return;
+    const el = scroller.value;
+    if (!el) return;
+    const x = beats * timeline.zoom;
+    if (x < el.scrollLeft + 40 || x > el.scrollLeft + el.clientWidth - 80) {
+      timeline.scrollLeft = Math.max(0, x - el.clientWidth * 0.25);
+    }
+  },
+);
+
+/** 自己滚动：纵向广播给音轨栏，横向写回共享时间轴。 */
+function onScroll(): void {
+  const el = scroller.value;
+  if (!el) return;
+  if (!applyingScroll && Math.abs(timeline.scrollLeft - el.scrollLeft) >= 1) {
+    timeline.scrollLeft = el.scrollLeft;
+  }
+  laneScrollTop.value = el.scrollTop;
+}
+
+// 共享时间轴的横向位置变了（另一个视图滚的、或播放头跟随）→ 跟随。
+watch(
+  () => timeline.scrollLeft,
+  (v) => {
+    const el = scroller.value;
+    if (!el || Math.abs(el.scrollLeft - v) < 1) return;
+    applyingScroll = true;
+    el.scrollLeft = v;
+    requestAnimationFrame(() => {
+      applyingScroll = false;
+    });
+  },
+);
+
+watch(laneScrollTop, (v) => {
+  const el = scroller.value;
+  if (!el || Math.abs(el.scrollTop - v) < 1) return;
+  el.scrollTop = v;
+});
+
+/** Ctrl/Cmd + 滚轮缩放：锚点在指针下，两个视图同步。 */
+function onWheel(e: WheelEvent): void {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  e.preventDefault();
+  const el = scroller.value;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  el.scrollLeft = timeline.zoomAt(
+    e.clientX - rect.left,
+    e.deltaY < 0 ? 1.15 : 1 / 1.15,
+    TIMELINE_INSET_PX,
+  );
+}
+
 onMounted(() => {
-  timer = window.setInterval(() => {
-    playheadPct.value = (playheadPct.value + 0.35) % 100;
-  }, 33);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
+  window.addEventListener("keydown", onKey);
+  // 进视图时对齐共享时间轴的横向位置（从编辑切过来时视角不变）。
+  requestAnimationFrame(() => {
+    const el = scroller.value;
+    if (el) el.scrollLeft = timeline.scrollLeft;
+  });
 });
 onUnmounted(() => {
-  if (timer !== null) window.clearInterval(timer);
+  window.removeEventListener("pointerup", onPointerUp);
+  window.removeEventListener("pointercancel", onPointerUp);
+  window.removeEventListener("keydown", onKey);
+  cancelOpenInspector();
 });
 </script>
 
 <template>
-  <div class="arrange">
-    <div class="ruler">
-      <div class="ruler-inner" :style="widthStyle">
-        <span v-for="bar in totalBars" :key="bar" class="bar-mark" :style="{ width: barPx }">{{ bar }}</span>
-      </div>
+  <div
+    ref="scroller"
+    class="arrange"
+    :style="{ paddingLeft: `${TIMELINE_INSET_PX}px` }"
+    @scroll="onScroll"
+    @pointermove="onPointerMove"
+    @wheel="onWheel"
+  >
+    <!-- 标尺：与编辑视图同一个组件、同一条时间轴 -->
+    <div class="ruler-wrap" :style="timeline.widthStyle">
+      <TimelineRuler />
     </div>
 
-    <div class="lanes" :style="widthStyle">
-      <div v-for="(track, ti) in tracks" :key="track.id" class="lane">
+    <div ref="lanesEl" class="lanes" :style="timeline.widthStyle" @contextmenu="onLaneContextMenu">
+      <div
+        v-for="(track, ti) in tracks"
+        :key="track.id"
+        class="lane"
+        :class="{ selected: selection.trackId === track.id }"
+        :style="{ height: `${LANE_H}px` }"
+        @pointerdown="onLanePointerDown($event, track)"
+      >
+        <!-- 拖拽创建的预览 -->
         <div
-          v-for="clip in track.clips"
-          :key="clip.id"
-          class="clip"
-          :style="clipStyle(clip.start, clip.length, ti)"
-        >
-          <span
-            v-for="(n, i) in clip.notes"
-            :key="i"
-            class="note-blip"
-            :style="{ left: `${(n.start / clip.length) * 100}%`, width: `${Math.max(1.5, (n.duration / clip.length) * 100)}%` }"
-          />
-        </div>
+          v-if="mode === 'create' && create.trackId === track.id"
+          class="clip-ghost"
+          :style="{
+            left: `${Math.min(create.from, create.to) * timeline.zoom}px`,
+            width: `${Math.max(2, Math.abs(create.to - create.from) * timeline.zoom)}px`,
+            '--track-hue': String(trackHue(ti)),
+          }"
+        />
+
+        <!-- 跨轨道拖动的落点预览 -->
+        <div
+          v-if="dragGhost && dragGhost.track === track.id"
+          class="clip-ghost"
+          :style="ghostStyle(track.id, ti)"
+        />
+
+        <template v-for="clip in track.clips" :key="clip.id">
+          <div
+            v-if="!isDraggingAway(clip, track.id)"
+            class="clip"
+            :class="{
+              dragging: moveDrag?.base.some((b) => b.clip === clip.id),
+              selected: isSelected(clip, track.id),
+            }"
+            :style="clipStyle(clip, ti)"
+            :data-track="track.id"
+            :data-clip="clip.id"
+            :title="
+              i18n.t('arrange.clipTitle', {
+                start: effStart(clip).toFixed(2),
+                length: effLength(clip).toFixed(2),
+              })
+            "
+            @pointerdown="onClipPointerDown($event, track, clip)"
+            @dblclick.stop="onClipDoubleClick(track, clip)"
+            @contextmenu="onClipContextMenu($event, track, clip)"
+          >
+            <!-- 片段内容：迷你钢琴卷帘（横轴时间、纵轴音高） -->
+            <span
+              v-for="(n, i) in clip.notes"
+              :key="i"
+              class="note-blip"
+              :style="blipStyle(n, clip)"
+            />
+            <span
+              class="clip-handle"
+              aria-hidden="true"
+              @pointerdown="onResizePointerDown($event, track, clip)"
+            />
+          </div>
+        </template>
       </div>
-      <div v-if="tracks.length === 0" class="lane-empty text-body-md">还没有轨道</div>
-      <div class="playhead" :style="{ left: `${playheadPct}%` }" />
+
+      <div v-if="tracks.length === 0" class="lane-empty text-body-md">
+        还没有轨道——在左侧点「新增轨道」，然后在网格上拖动即可画出片段
+      </div>
+
+      <div class="playhead" :style="{ left: `${playheadPx}px` }" />
     </div>
+
+    <!-- 框选矩形：客户端坐标的固定覆盖层 -->
+    <div
+      v-if="mode === 'marquee' || mode === 'marquee-delete'"
+      class="marquee"
+      :class="{ danger: mode === 'marquee-delete' }"
+      :style="marqueeStyle"
+    />
   </div>
 </template>
 
@@ -84,31 +708,18 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: auto;
-  background-color: rgb(var(--md-surface-container-lowest));
+  background-color: transparent;
+  scrollbar-width: thin;
+  /* 拖拽/框选期间不允许浏览器把空白处当成文本选中（否则会出现一条蓝色高亮） */
+  user-select: none;
+  -webkit-user-select: none;
 }
-.ruler {
-  height: 26px;
-  flex: 0 0 auto;
+/* 标尺外层：吸附在顶部，宽度与网格一致 */
+.ruler-wrap {
   position: sticky;
   top: 0;
-  z-index: 2;
-  background-color: rgb(var(--md-surface-container-low));
-  border-bottom: 1px solid rgb(var(--md-outline-variant) / 0.3);
-}
-.ruler-inner {
-  display: flex;
-  height: 100%;
-}
-.bar-mark {
+  z-index: 3;
   flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  padding-left: 7px;
-  font-size: 10px;
-  letter-spacing: 0.5px;
-  white-space: nowrap;
-  color: rgb(var(--md-on-surface-variant));
-  border-left: 1px solid rgb(var(--md-outline-variant) / 0.4);
 }
 .lanes {
   position: relative;
@@ -116,33 +727,67 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
 }
-/* 网格用 repeating 背景铺满整条 lane，不再依赖固定宽度 */
 .lane {
   position: relative;
-  height: 64px;
   flex: 0 0 auto;
-  border-bottom: 1px solid rgb(var(--md-outline-variant) / 0.18);
-  background-image:
-    repeating-linear-gradient(to right, rgb(var(--md-outline-variant) / 0.16) 0 1px, transparent 1px v-bind(beatPx)),
-    repeating-linear-gradient(to right, rgb(var(--md-outline-variant) / 0.38) 0 1px, transparent 1px v-bind(barPx));
+  border-bottom: 1px solid var(--grid-line-row);
+  background-image: v-bind("timeline.gridBackground");
+  cursor: crosshair;
+}
+.lane.selected {
+  background-color: rgb(var(--md-primary) / 0.05);
+}
+/* 拖拽创建预览：虚线框 + 轨道色淡填充 */
+.clip-ghost {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  border-radius: 12px;
+  border: 2px dashed hsl(var(--track-hue) 60% 62%);
+  background-color: hsl(var(--track-hue) 45% 45% / 0.22);
+  pointer-events: none;
 }
 .clip {
   position: absolute;
-  top: 9px;
-  bottom: 9px;
-  border-radius: 10px;
-  background-color: hsl(var(--track-hue) 42% 30%);
-  border: 1px solid hsl(var(--track-hue) 55% 48% / 0.85);
+  top: 8px;
+  bottom: 8px;
+  border-radius: 12px;
+  background-color: hsl(var(--track-hue) 42% 32%);
+  border: 1px solid hsl(var(--track-hue) 60% 62% / 0.9);
+  box-shadow: var(--md-elevation-1);
   overflow: hidden;
+  cursor: grab;
+  touch-action: none;
 }
+.clip.dragging {
+  cursor: grabbing;
+  opacity: 0.9;
+}
+.clip.selected {
+  border-color: rgb(var(--md-primary));
+  box-shadow: 0 0 0 2px rgb(var(--md-primary) / 0.75);
+}
+/* 片段里的音符：小方块，位置对应音高、长度对应时长（迷你钢琴卷帘） */
 .note-blip {
   position: absolute;
-  top: 44%;
-  height: 14%;
   min-height: 3px;
   border-radius: 2px;
-  background-color: hsl(var(--track-hue) 65% 82%);
-  opacity: 0.9;
+  background-color: hsl(var(--track-hue) 72% 88%);
+  box-shadow: 0 0 0 1px hsl(var(--track-hue) 40% 22% / 0.5);
+  pointer-events: none;
+}
+/* 右边缘的缩放热区：命中区 10px，视觉上只有一条细亮边 */
+.clip-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: ew-resize;
+  border-right: 2px solid transparent;
+}
+.clip:hover .clip-handle {
+  border-right-color: hsl(var(--track-hue) 70% 88% / 0.8);
 }
 .lane-empty {
   padding: 24px;
@@ -153,12 +798,20 @@ onUnmounted(() => {
   top: 0;
   bottom: 0;
   width: 2px;
-  background-color: rgb(var(--md-primary) / 0.85);
+  background-color: rgb(var(--md-primary) / 0.9);
+  pointer-events: none;
+  z-index: 2;
+}
+/* 框选矩形 */
+.marquee {
+  position: fixed;
+  z-index: 50;
+  border: 1px solid rgb(var(--md-primary));
+  background-color: rgb(var(--md-primary) / 0.16);
   pointer-events: none;
 }
-@media (prefers-reduced-motion: reduce) {
-  .playhead {
-    display: none;
-  }
+.marquee.danger {
+  border-color: rgb(var(--md-error));
+  background-color: rgb(var(--md-error) / 0.16);
 }
 </style>

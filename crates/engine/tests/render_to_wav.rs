@@ -19,7 +19,7 @@ fn demo() -> daw_party_engine::model::Project {
             Command::AddNote {
                 track,
                 clip,
-                note: Note { pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100 },
+                note: Note { pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100, volume: 127 },
             },
             Actor::Human,
         );

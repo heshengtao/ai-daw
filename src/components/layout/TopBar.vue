@@ -1,33 +1,32 @@
 <script setup lang="ts">
 /**
- * 唯一的顶部栏：窗口拖拽区 + 标志 + 左/右栏开关 + 工程名 + 导航 + 工具按钮。
- * 系统标题栏已由 Rust 侧去掉（macOS Overlay / Windows·Linux 无边框）。
+ * 顶栏：左侧工程名 + 工具区；右侧是「右侧面板的标签栏 + 面板开关」。
+ * 顶栏横跨"工作区 + 右侧面板"两列，右端恒等于窗口右端——
+ * 因此面板开关固定在顶栏最右，展开/收起时鼠标不用移动。
  */
 import { computed } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  FolderOpenIcon,
+  ArrowUpTrayIcon,
+  PlusIcon,
+  Cog6ToothIcon,
   Squares2X2Icon,
   PencilSquareIcon,
   AdjustmentsHorizontalIcon,
-  CircleStackIcon,
-  ComputerDesktopIcon,
-  SunIcon,
-  MoonIcon,
-  CommandLineIcon,
-  FolderOpenIcon,
-  ArrowDownTrayIcon,
-  ArrowUpTrayIcon,
-  PlusIcon,
+  PencilIcon,
+  CursorArrowRaysIcon,
 } from "@heroicons/vue/24/outline";
-import WindowControls from "./WindowControls.vue";
-import SegmentedNav from "@/components/common/SegmentedNav.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
-import Logo from "@/components/common/Logo.vue";
+import PanelIcon from "@/components/common/PanelIcon.vue";
+import PanelTabs from "@/components/workspace/PanelTabs.vue";
 import type { NavItem } from "@/components/common/nav";
 import { useLayoutStore } from "@/stores/layout";
+import { useI18n } from "@/i18n";
 import { useProjectStore } from "@/stores/project";
-import { useTheme } from "@/composables/useTheme";
-import { isLinux, isMacOS, isTauri, isWindows } from "@/utils/platform";
+import { lastWorkspace } from "@/router";
+import { isMacOS, isTauri } from "@/utils/platform";
 
 const emit = defineEmits<{
   (e: "import"): void;
@@ -36,30 +35,45 @@ const emit = defineEmits<{
   (e: "export"): void;
 }>();
 
+const route = useRoute();
+const router = useRouter();
 const layout = useLayoutStore();
 const projectStore = useProjectStore();
-const { theme, cycleTheme } = useTheme();
+const i18n = useI18n();
 
 const isMac = isMacOS();
-const showWindowControls = isTauri() && (isWindows() || isLinux());
 
 const navItems: NavItem[] = [
-  { label: "编排", path: "/arrange", icon: Squares2X2Icon },
-  { label: "编辑", path: "/edit", icon: PencilSquareIcon },
-  { label: "混音", path: "/mix", icon: AdjustmentsHorizontalIcon },
-  { label: "浏览", path: "/browse", icon: CircleStackIcon },
+  { labelKey: "topbar.view.arrange", path: "/arrange", icon: Squares2X2Icon },
+  { labelKey: "topbar.view.edit", path: "/edit", icon: PencilSquareIcon },
+  { labelKey: "topbar.view.mix", path: "/mix", icon: AdjustmentsHorizontalIcon },
 ];
 
-/** 工程名（空工程时给一个可读的默认文案）。 */
+const isSettings = computed(() => route.path.startsWith("/settings"));
+
+function isActive(path: string): boolean {
+  return route.path === path || route.path.startsWith(`${path}/`);
+}
+
 const projectName = computed(() => {
   const name = projectStore.project?.name;
-  return !name || name === "untitled" ? "未命名工程" : name;
+  return !name || name === "untitled" ? i18n.t("settings.untitled") : name;
 });
 
-const themeTip = computed(() => {
-  if (theme.value === "system") return "主题：跟随系统（点击切换）";
-  return theme.value === "light" ? "主题：浅色（点击切换）" : "主题：深色（点击切换）";
-});
+/** 鼠标模式：拖拽（在空白处拖动 = 画片段/音符）或框选。 */
+const isDrawTool = computed(() => layout.tool === "draw");
+const toolText = computed(() =>
+  i18n.t(isDrawTool.value ? "topbar.toolDraw" : "topbar.toolSelect"),
+);
+
+/** 音轨栏收起（或处于设置页，侧栏本就不渲染）时，顶栏顶到窗口最左，macOS 下要给红绿灯让位。 */
+const showMacPad = computed(() => isMac && (isSettings.value || !layout.showTrackHeaders));
+
+/** 设置按钮：进入设置，或从设置返回上一个工作区视图。 */
+function toggleSettings(): void {
+  if (isSettings.value) void router.push(lastWorkspace.value);
+  else void router.push("/settings");
+}
 
 function onMouseDown(e: MouseEvent): void {
   if (!isTauri()) return;
@@ -76,184 +90,202 @@ function onMouseDown(e: MouseEvent): void {
 </script>
 
 <template>
-  <header class="top-bar" :class="isMac ? 'pad-mac' : ''" @mousedown="onMouseDown">
-    <!-- 标志 -->
-    <Logo class="app-logo" />
+  <header class="top-bar" :class="{ 'pad-mac': showMacPad }" @mousedown="onMouseDown">
+    <!-- 左：工程名 + 工具区 -->
+    <div class="bar-main">
+      <Tooltip v-if="!isSettings && !layout.showTrackHeaders" :text="i18n.t('topbar.showTracks')">
+        <button class="bar-btn" :aria-label="i18n.t('topbar.showTracksLabel')" @click="layout.showTrackHeaders = true">
+          <PanelIcon side="left" :filled="false" class="bar-icon" />
+        </button>
+      </Tooltip>
 
-    <!-- 左栏开关 -->
-    <Tooltip :text="layout.showTrackHeaders ? '收起左侧轨道列表' : '展开左侧轨道列表'">
-      <button
-        class="bar-btn"
-        :class="{ on: layout.showTrackHeaders }"
-        :aria-label="layout.showTrackHeaders ? '收起左侧轨道列表' : '展开左侧轨道列表'"
-        @click="layout.showTrackHeaders = !layout.showTrackHeaders"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <rect x="2.8" y="4.8" width="18.4" height="14.4" rx="3" stroke="currentColor" stroke-width="1.6" />
-          <line x1="9.6" y1="4.8" x2="9.6" y2="19.2" stroke="currentColor" stroke-width="1.6" />
-          <path
-            v-if="layout.showTrackHeaders"
-            d="M5.8 4.8h3.8v14.4H5.8a3 3 0 0 1-3-3V7.8a3 3 0 0 1 3-3z"
-            fill="currentColor"
-          />
-        </svg>
-      </button>
-    </Tooltip>
+      <div class="name-block">
+        <span class="name-strong">{{ projectName }}</span>
+      </div>
 
-    <!-- 名称：粗体工程名 + 灰字应用名 -->
-    <div class="name-block">
-      <span class="name-strong">{{ projectName }}</span>
-      <span class="name-muted">daw-party</span>
+      <div class="flex-1" />
+
+      <div class="bar-actions">
+        <Tooltip :text="i18n.t('topbar.import')" align="end">
+          <button class="bar-btn" :aria-label="i18n.t('topbar.importLabel')" @click="emit('import')">
+            <FolderOpenIcon class="bar-icon" />
+          </button>
+        </Tooltip>
+        <Tooltip :text="i18n.t('topbar.new')" align="end">
+          <button class="bar-btn" :aria-label="i18n.t('topbar.new')" @click="emit('new')">
+            <PlusIcon class="bar-icon" />
+          </button>
+        </Tooltip>
+        <Tooltip :text="i18n.t('topbar.export')" align="end">
+          <button class="bar-btn" :aria-label="i18n.t('topbar.exportLabel')" @click="emit('export')">
+            <ArrowUpTrayIcon class="bar-icon" />
+          </button>
+        </Tooltip>
+
+        <span class="bar-sep" />
+
+        <Tooltip v-for="item in navItems" :key="item.path" :text="i18n.t(item.labelKey)" align="end">
+          <button
+            class="bar-btn"
+            :class="{ on: isActive(item.path) && !isSettings }"
+            :aria-label="i18n.t(item.labelKey)"
+            :aria-current="isActive(item.path) && !isSettings ? 'page' : undefined"
+            @click="router.push(item.path)"
+          >
+            <component :is="item.icon" class="bar-icon" />
+          </button>
+        </Tooltip>
+
+        <span class="bar-sep" />
+
+        <!-- 鼠标模式：拖拽 / 框选。两者共用左键拖动，必须显式切换。 -->
+        <Tooltip :text="toolText" align="end">
+          <button
+            class="bar-btn tool-btn"
+            :class="{ on: !isDrawTool }"
+            :aria-label="toolText"
+            :aria-pressed="!isDrawTool"
+            @click="layout.toggleTool()"
+          >
+            <PencilIcon v-if="isDrawTool" class="bar-icon" />
+            <CursorArrowRaysIcon v-else class="bar-icon" />
+          </button>
+        </Tooltip>
+
+        <span class="bar-sep" />
+
+        <Tooltip :text="isSettings ? i18n.t('topbar.backToWorkspace') : i18n.t('settings.title')" align="end">
+          <button
+            class="bar-btn"
+            :class="{ on: isSettings }"
+            :aria-label="isSettings ? i18n.t('topbar.backToWorkspace') : i18n.t('settings.title')"
+            :aria-current="isSettings ? 'page' : undefined"
+            @click="toggleSettings"
+          >
+            <Cog6ToothIcon class="bar-icon" />
+          </button>
+        </Tooltip>
+      </div>
     </div>
 
-    <SegmentedNav :items="navItems" class="bar-nav" />
+    <!-- 右：右侧面板的标签栏（与下方面板同宽、同一行）+ 面板开关 -->
+    <div
+      v-if="!isSettings"
+      class="bar-tabs"
+      :class="{ 'has-panel': layout.showInspector }"
+      :style="layout.showInspector ? { width: `${layout.inspectorWidth}px` } : undefined"
+    >
+      <PanelTabs v-if="layout.showInspector" />
 
-    <div class="flex-1" />
-
-    <div class="bar-actions">
-      <Tooltip text="导入工程…" align="end">
-        <button class="bar-btn" aria-label="导入工程" @click="emit('import')">
-          <FolderOpenIcon class="w-[18px] h-[18px]" />
-        </button>
-      </Tooltip>
-      <Tooltip text="新建工程" align="end">
-        <button class="bar-btn" aria-label="新建工程" @click="emit('new')">
-          <PlusIcon class="w-[18px] h-[18px]" />
-        </button>
-      </Tooltip>
-      <Tooltip text="保存工程…" align="end">
-        <button class="bar-btn" aria-label="保存工程" @click="emit('save')">
-          <ArrowDownTrayIcon class="w-[18px] h-[18px]" />
-        </button>
-      </Tooltip>
-      <Tooltip text="导出 WAV…" align="end">
-        <button class="bar-btn" aria-label="导出 WAV" @click="emit('export')">
-          <ArrowUpTrayIcon class="w-[18px] h-[18px]" />
-        </button>
-      </Tooltip>
-
-      <span class="bar-sep" />
-
-      <Tooltip :text="themeTip" align="end">
-        <button class="bar-btn" aria-label="切换主题" @click="cycleTheme">
-          <SunIcon v-if="theme === 'light'" class="w-[18px] h-[18px]" />
-          <MoonIcon v-else-if="theme === 'dark'" class="w-[18px] h-[18px]" />
-          <ComputerDesktopIcon v-else class="w-[18px] h-[18px]" />
-        </button>
-      </Tooltip>
-      <Tooltip text="开发者日志 (Ctrl/Cmd+Shift+D)" align="end">
-        <button
-          class="bar-btn"
-          :class="{ on: layout.devDrawer }"
-          aria-label="开发者日志"
-          @click="layout.toggleDevDrawer()"
-        >
-          <CommandLineIcon class="w-[18px] h-[18px]" />
-        </button>
-      </Tooltip>
-
-      <!-- 右栏开关 -->
-      <Tooltip :text="layout.showInspector ? '收起右侧检查器' : '展开右侧检查器'" align="end">
+      <Tooltip
+        class="tabs-toggle"
+        :text="layout.showInspector ? i18n.t('topbar.hidePanel') : i18n.t('topbar.showPanel')"
+        align="end"
+      >
         <button
           class="bar-btn"
           :class="{ on: layout.showInspector }"
-          :aria-label="layout.showInspector ? '收起右侧检查器' : '展开右侧检查器'"
+          :aria-label="layout.showInspector ? i18n.t('topbar.hidePanel') : i18n.t('topbar.showPanel')"
           @click="layout.showInspector = !layout.showInspector"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <rect x="2.8" y="4.8" width="18.4" height="14.4" rx="3" stroke="currentColor" stroke-width="1.6" />
-            <line x1="14.4" y1="4.8" x2="14.4" y2="19.2" stroke="currentColor" stroke-width="1.6" />
-            <path
-              v-if="layout.showInspector"
-              d="M14.4 4.8h3.8a3 3 0 0 1 3 3v8.4a3 3 0 0 1-3 3h-3.8z"
-              fill="currentColor"
-            />
-          </svg>
+          <PanelIcon side="right" :filled="layout.showInspector" class="bar-icon" />
         </button>
       </Tooltip>
-
-      <WindowControls v-if="showWindowControls" class="h-full" />
     </div>
   </header>
 </template>
 
 <style scoped>
 .top-bar {
-  height: 44px;
+  height: 52px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  background-color: rgb(var(--md-surface-container));
-  border-bottom: 1px solid rgb(var(--md-outline-variant) / 0.3);
+  padding: 0;
+  background-color: var(--app-card);
+  border-bottom: 1px solid rgb(var(--md-outline-variant) / 0.4);
   flex: 0 0 auto;
   user-select: none;
 }
-/* macOS：给红黄绿让位 */
-.pad-mac {
+.bar-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+}
+/* 音轨栏收起后顶栏顶到窗口最左：macOS 下给红绿灯让位 */
+.top-bar.pad-mac .bar-main {
   padding-left: 78px;
 }
-.app-logo {
-  width: 20px;
-  height: 20px;
+
+/* ---- 右侧面板的标签区 ---- */
+.bar-tabs {
   flex: 0 0 auto;
-  color: rgb(var(--md-primary));
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  /* 顶栏右端始终是窗口右端：右内边距恒为 12px + 窗口按钮预留 */
+  padding-right: calc(12px + var(--win-reserve));
 }
+.bar-tabs.has-panel {
+  padding-left: 8px;
+  border-left: 1px solid rgb(var(--md-outline-variant) / 0.4);
+}
+/* 开关永远贴在这一段的最右 */
+.tabs-toggle {
+  margin-left: auto;
+}
+
 .name-block {
   display: flex;
   align-items: baseline;
   gap: 7px;
   min-width: 0;
   flex: 0 1 auto;
-  margin-left: 2px;
 }
 .name-strong {
-  font-weight: 700;
-  font-size: 13px;
+  font-weight: 500;
+  font-size: 14px;
   letter-spacing: -0.1px;
   color: rgb(var(--md-on-surface));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.name-muted {
-  font-size: 12px;
-  color: rgb(var(--md-on-surface-muted));
-  white-space: nowrap;
-}
-.bar-nav {
-  margin-left: 8px;
-  flex: 0 1 auto;
-  min-width: 0;
-}
 .bar-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   flex: 0 0 auto;
 }
 .bar-sep {
   width: 1px;
-  height: 18px;
-  margin: 0 4px;
+  height: 20px;
+  margin: 0 5px;
   background-color: rgb(var(--md-outline-variant) / 0.55);
   flex: 0 0 auto;
 }
-/* 顶栏专用的小号图标按钮 */
+/* MD3 图标按钮：圆形，无原生外观 */
 .bar-btn {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: 999px;
   background: transparent;
   color: rgb(var(--md-on-surface-variant));
   cursor: pointer;
-  white-space: nowrap;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+.bar-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
 }
 .bar-btn:hover {
   background-color: rgb(var(--md-on-surface-variant) / var(--md-state-hover-alpha));
@@ -267,22 +299,14 @@ function onMouseDown(e: MouseEvent): void {
   outline-offset: 1px;
 }
 .bar-btn.on {
-  color: rgb(var(--md-primary));
-}
-
-/* 窄屏：逐级让位，先收导航、再收应用名，永远不换行 */
-@media (max-width: 1100px) {
-  .bar-nav {
-    display: none;
-  }
-}
-@media (max-width: 720px) {
-  .name-muted {
-    display: none;
-  }
+  background-color: rgb(var(--md-secondary-container));
+  color: rgb(var(--md-on-secondary-container));
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .bar-btn {
+    transition: none;
+  }
   .bar-btn:active {
     transform: none;
   }

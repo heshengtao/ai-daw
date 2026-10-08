@@ -6,8 +6,24 @@ import { ref, watch } from "vue";
 
 /** 主题模式。 */
 export type Theme = "system" | "light" | "dark";
-/** 强调色。 */
-export type AccentColor = "blue" | "green" | "coral" | "purple" | "amber";
+/** 强调色；`lavender` 为 MD3 基线默认色。 */
+export type AccentColor = "lavender" | "blue" | "green" | "coral" | "amber";
+
+/** 可选强调色（顺序即设置页展示顺序；swatch 仅用于色板预览）。 */
+export const ACCENTS: { id: AccentColor; labelKey: string; swatch: string }[] = [
+  { id: "lavender", labelKey: "accent.lavender", swatch: "#6750A4" },
+  { id: "blue", labelKey: "accent.blue", swatch: "#1A6CFF" },
+  { id: "green", labelKey: "accent.green", swatch: "#2E7D4F" },
+  { id: "coral", labelKey: "accent.coral", swatch: "#E05642" },
+  { id: "amber", labelKey: "accent.amber", swatch: "#BD8900" },
+];
+
+/** 主题模式的可选项（设置页展示用）。 */
+export const THEMES: { id: Theme; labelKey: string }[] = [
+  { id: "system", labelKey: "theme.system" },
+  { id: "light", labelKey: "theme.light" },
+  { id: "dark", labelKey: "theme.dark" },
+];
 
 const THEME_KEY = "daw-party-theme";
 const ACCENT_KEY = "daw-party-accent";
@@ -21,10 +37,8 @@ function loadTheme(): Theme {
 
 function loadAccent(): AccentColor {
   const saved = localStorage.getItem(ACCENT_KEY);
-  if (saved === "blue" || saved === "green" || saved === "coral" || saved === "purple" || saved === "amber") {
-    return saved;
-  }
-  return "blue";
+  if (ACCENTS.some((a) => a.id === saved)) return saved as AccentColor;
+  return "lavender";
 }
 
 const theme = ref<Theme>(loadTheme());

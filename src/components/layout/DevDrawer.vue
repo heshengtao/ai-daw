@@ -7,8 +7,10 @@ import { XMarkIcon, TrashIcon } from "@heroicons/vue/24/outline";
 import Tooltip from "@/components/common/Tooltip.vue";
 import { useEngineEventsStore } from "@/stores/engineEvents";
 import { useLayoutStore } from "@/stores/layout";
+import { useI18n } from "@/i18n";
 
 const layout = useLayoutStore();
+const i18n = useI18n();
 const events = useEngineEventsStore();
 </script>
 
@@ -21,21 +23,21 @@ const events = useEngineEventsStore();
           <span class="tag">engine events</span>
         </div>
         <div class="flex items-center gap-1">
-          <Tooltip text="清空日志" align="end">
-            <button class="btn-icon" aria-label="清空日志" @click="events.clear()">
+          <Tooltip :text="i18n.t('dev.clear')" align="end">
+            <button class="btn-icon" :aria-label="i18n.t('dev.clear')" @click="events.clear()">
               <TrashIcon class="w-4 h-4" />
             </button>
           </Tooltip>
-          <Tooltip text="关闭 (Esc)" align="end">
-            <button class="btn-icon" aria-label="关闭" @click="layout.devDrawer = false">
+          <Tooltip :text="i18n.t('dev.close')" align="end">
+            <button class="btn-icon" :aria-label="i18n.t('common.close')" @click="layout.devDrawer = false">
               <XMarkIcon class="w-4 h-4" />
             </button>
           </Tooltip>
         </div>
       </header>
-      <p class="dev-note">引擎事件原始流（AI/引擎调试用，非面向用户）。</p>
+      <p class="dev-note">{{ i18n.t("dev.note") }}</p>
       <div class="dev-log">
-        <p v-if="events.lines.length === 0" class="dev-empty">暂无事件。执行命令后会在此出现。</p>
+        <p v-if="events.lines.length === 0" class="dev-empty">{{ i18n.t("dev.empty") }}</p>
         <code v-for="(line, i) in [...events.lines].reverse()" :key="i" class="dev-line">{{ line }}</code>
       </div>
     </aside>

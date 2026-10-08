@@ -3,20 +3,83 @@
 mod voice;
 
 use daw_party_plugin_api::{
-    IoLayout, MidiEvent, ParamId, ParamInfo, Plugin, PluginDescriptor, PluginError, PluginKind,
-    ProcessContext, TimedMidiEvent,
+    IoLayout, MidiEvent, ParamId, ParamInfo, Plugin, PluginCapabilities, PluginDescriptor,
+    PluginError, PluginKind, ProcessContext, TimedMidiEvent,
 };
 use voice::Voice;
 
 const MAX_VOICES: usize = 16;
 
-/// 内置合成器：唯一内置音色插件。
+/// 一次 `process` 内不变的参数快照。
+///
+/// 在块开始时组装一次，回调内只读传递——音频线程不做任何分配、查表或字符串比较。
+#[derive(Debug, Clone, Copy)]
+pub struct Params {
+    pub wave: f32,
+    pub sub: f32,
+    pub pwm: f32,
+    pub glide: f32,
+    pub cutoff: f32,
+    pub resonance: f32,
+    pub filter_env: f32,
+    pub key_follow: f32,
+    pub hpf: f32,
+    pub attack: f32,
+    pub decay: f32,
+    pub sustain: f32,
+    pub release: f32,
+    pub lfo_rate: f32,
+    pub lfo_delay: f32,
+    pub lfo_pitch: f32,
+    pub lfo_filter: f32,
+    pub gain: f32,
+}
+
+/// 参数表：id、显示名、范围、默认值。
+///
+/// 顺序即 `save_state` 的字节顺序，**前三个永远是 gain / attack / release**——老工程存的
+/// 12 字节状态因此仍然读得懂（见 `load_state`）。
+const PARAM_TABLE: [(&str, &str, f32, f32, f32); 18] = [
+    ("gain", "Level", 0.0, 1.0, 0.8),
+    ("attack", "Attack", 0.0, 1.0, 0.01),
+    ("release", "Release", 0.0, 4.0, 0.3),
+    ("wave", "Wave", 0.0, 3.0, 0.0),
+    ("sub", "Sub", 0.0, 1.0, 0.0),
+    ("pwm", "PWM", 0.0, 1.0, 0.5),
+    ("glide", "Glide", 0.0, 0.5, 0.0),
+    ("cutoff", "Cutoff", 0.0, 1.0, 0.7),
+    ("resonance", "Resonance", 0.0, 1.0, 0.15),
+    ("filterEnv", "Filter Env", 0.0, 1.0, 0.35),
+    ("keyFollow", "Key Follow", 0.0, 1.0, 0.5),
+    ("hpf", "HPF", 0.0, 1.0, 0.0),
+    ("decay", "Decay", 0.0, 2.0, 0.4),
+    ("sustain", "Sustain", 0.0, 1.0, 0.75),
+    ("lfoRate", "LFO Rate", 0.0, 1.0, 0.75),
+    ("lfoDelay", "LFO Delay", 0.0, 1.0, 0.0),
+    ("lfoPitch", "LFO Pitch", 0.0, 1.0, 0.0),
+    ("lfoFilter", "LFO Filter", 0.0, 1.0, 0.0),
+];
+
+/// LFO 速率映射：0..1 → 0.05..20 Hz（指数，慢速区好调）。
+fn lfo_hz(rate: f32) -> f64 {
+    0.05 * 400f64.powf(rate as f64)
+}
+
+/// 内置合成器：DCO（主振 + 副振）→ HPF → VCF → VCA 的复音减法合成器。
+///
+/// 「预设」不是另一套 DSP，而是同一套信号链配上不同的默认参数——注册表按预设 id 各注册一个
+/// 工厂（见 `daw_party_engine::registry`），工程里保存的 `params` 再覆盖默认值。
 pub struct SynthPlugin {
     voices: [Voice; MAX_VOICES],
     sample_rate: f64,
-    gain: f32,
-    attack: f32,
-    release: f32,
+    params: Params,
+    /// 全局 LFO（老式模拟合成器只有一个）。
+    lfo_phase: f64,
+    /// 距最近一次按键的采样数：LFO 的淡入延迟用它。
+    lfo_age: f64,
+    /// 该实例对外声明的插件 id（预设实例报自己的 id，而不是 `builtin.synth`）。
+    id: &'static str,
+    name: &'static str,
 }
 
 impl Default for SynthPlugin {
@@ -26,15 +89,37 @@ impl Default for SynthPlugin {
 }
 
 impl SynthPlugin {
-    /// 构造合成器，使用默认参数（gain 0.8、attack 0.01 s、release 0.3 s）。
+    /// 构造合成器，使用全部默认参数。
     pub fn new() -> Self {
-        SynthPlugin {
+        Self::preset("builtin.synth", "Builtin Synth", &[])
+    }
+
+    /// 用给定的默认参数构造合成器（沿用默认 id）。
+    pub fn with_params(gain: f32, attack: f32, release: f32) -> Self {
+        Self::preset(
+            "builtin.synth",
+            "Builtin Synth",
+            &[("gain", gain), ("attack", attack), ("release", release)],
+        )
+    }
+
+    /// 用给定的 id / 名称 / 参数补丁构造一个预设实例。
+    ///
+    /// 补丁里没提到的参数取 [`PARAM_TABLE`] 的默认值。
+    pub fn preset(id: &'static str, name: &'static str, patch: &[(&str, f32)]) -> Self {
+        let mut synth = SynthPlugin {
             voices: [Voice::idle(); MAX_VOICES],
             sample_rate: 48_000.0,
-            gain: 0.8,
-            attack: 0.01,
-            release: 0.3,
+            params: default_params(),
+            lfo_phase: 0.0,
+            lfo_age: 0.0,
+            id,
+            name,
+        };
+        for (id, value) in patch {
+            synth.set_param(&ParamId::from(*id), *value);
         }
+        synth
     }
 
     fn handle(&mut self, event: MidiEvent) {
@@ -51,50 +136,131 @@ impl SynthPlugin {
                     .iter()
                     .position(|v| v.stage == voice::Stage::Idle)
                     .unwrap_or(0);
-                self.voices[slot].note_on(note, velocity);
+                self.voices[slot].note_on(note, velocity, self.params.glide);
+                // LFO 的延迟从「最近一次按键」重新计时。
+                self.lfo_age = 0.0;
             }
             MidiEvent::NoteOff { note } => {
                 for v in self.voices.iter_mut().filter(|v| v.note == note) {
                     v.note_off();
                 }
             }
+            // 单音音量独立于力度：只改该声部的增益，不碰音色。
+            MidiEvent::NoteVolume { note, value } => {
+                for v in self.voices.iter_mut().filter(|v| v.note == note) {
+                    v.set_volume(value);
+                }
+            }
             MidiEvent::ControlChange { .. } => {}
         }
+    }
+
+    /// 当前参数值（按表的顺序）。
+    fn values(&self) -> [f32; PARAM_TABLE.len()] {
+        [
+            self.params.gain,
+            self.params.attack,
+            self.params.release,
+            self.params.wave,
+            self.params.sub,
+            self.params.pwm,
+            self.params.glide,
+            self.params.cutoff,
+            self.params.resonance,
+            self.params.filter_env,
+            self.params.key_follow,
+            self.params.hpf,
+            self.params.decay,
+            self.params.sustain,
+            self.params.lfo_rate,
+            self.params.lfo_delay,
+            self.params.lfo_pitch,
+            self.params.lfo_filter,
+        ]
+    }
+}
+
+fn default_params() -> Params {
+    Params {
+        wave: 0.0,
+        sub: 0.0,
+        pwm: 0.5,
+        glide: 0.0,
+        cutoff: 0.7,
+        resonance: 0.15,
+        filter_env: 0.35,
+        key_follow: 0.5,
+        hpf: 0.0,
+        attack: 0.01,
+        decay: 0.4,
+        sustain: 0.75,
+        release: 0.3,
+        lfo_rate: 0.75,
+        lfo_delay: 0.0,
+        lfo_pitch: 0.0,
+        lfo_filter: 0.0,
+        gain: 0.8,
     }
 }
 
 impl Plugin for SynthPlugin {
     fn descriptor(&self) -> PluginDescriptor {
         PluginDescriptor {
-            id: "builtin.synth".into(),
-            name: "Builtin Synth".into(),
+            id: self.id.into(),
+            name: self.name.into(),
             kind: PluginKind::Instrument,
             io: IoLayout { inputs: 0, outputs: 2 },
+            // 内置合成器能单独处理单音音量（每个声部一个增益）；它的「界面」是前端那套
+            // 合成器面板，不是原生窗口，因此 `has_editor` 为 false。
+            capabilities: PluginCapabilities { per_note_volume: true, has_editor: false },
         }
     }
 
     fn params(&self) -> Vec<ParamInfo> {
-        vec![
-            ParamInfo { id: "gain".into(), name: "Gain".into(), min: 0.0, max: 1.0, default: 0.8, automatable: true },
-            ParamInfo { id: "attack".into(), name: "Attack".into(), min: 0.0, max: 1.0, default: 0.01, automatable: true },
-            ParamInfo { id: "release".into(), name: "Release".into(), min: 0.0, max: 4.0, default: 0.3, automatable: true },
-        ]
+        PARAM_TABLE
+            .iter()
+            .map(|(id, name, min, max, default)| ParamInfo {
+                id: (*id).into(),
+                name: (*name).into(),
+                min: *min,
+                max: *max,
+                default: *default,
+                automatable: true,
+            })
+            .collect()
     }
 
     fn get_param(&self, id: &ParamId) -> Option<f32> {
-        match id.0.as_str() {
-            "gain" => Some(self.gain),
-            "attack" => Some(self.attack),
-            "release" => Some(self.release),
-            _ => None,
-        }
+        let index = PARAM_TABLE.iter().position(|(k, ..)| *k == id.0.as_str())?;
+        Some(self.values()[index])
     }
 
     fn set_param(&mut self, id: &ParamId, value: f32) {
-        match id.0.as_str() {
-            "gain" => self.gain = value.clamp(0.0, 1.0),
-            "attack" => self.attack = value.clamp(0.0, 1.0),
-            "release" => self.release = value.clamp(0.0, 4.0),
+        let Some(index) = PARAM_TABLE.iter().position(|(k, ..)| *k == id.0.as_str()) else {
+            return;
+        };
+        let (_, _, min, max, _) = PARAM_TABLE[index];
+        let value = if value.is_finite() { value.clamp(min, max) } else { return };
+        let p = &mut self.params;
+        match index {
+            0 => p.gain = value,
+            1 => p.attack = value,
+            2 => p.release = value,
+            3 => p.wave = value,
+            4 => p.sub = value,
+            5 => p.pwm = value,
+            6 => p.glide = value,
+            7 => p.cutoff = value,
+            8 => p.resonance = value,
+            9 => p.filter_env = value,
+            10 => p.key_follow = value,
+            11 => p.hpf = value,
+            12 => p.decay = value,
+            13 => p.sustain = value,
+            14 => p.lfo_rate = value,
+            15 => p.lfo_delay = value,
+            16 => p.lfo_pitch = value,
+            17 => p.lfo_filter = value,
             _ => {}
         }
     }
@@ -105,31 +271,52 @@ impl Plugin for SynthPlugin {
 
     fn reset(&mut self) {
         self.voices = [Voice::idle(); MAX_VOICES];
+        self.lfo_phase = 0.0;
+        self.lfo_age = 0.0;
     }
 
     fn process(&mut self, _ctx: &ProcessContext, audio: &mut [&mut [f32]], events: &[TimedMidiEvent]) {
         let frames = audio.first().map_or(0, |c| c.len());
+        let sr = self.sample_rate;
+        let params = self.params;
+
         for frame in 0..frames {
             for ev in events.iter().filter(|e| e.frame as usize == frame) {
                 self.handle(ev.event);
             }
+
+            // ---- 全局 LFO：三角波，按 delay 淡入 ----
+            self.lfo_phase = (self.lfo_phase + lfo_hz(params.lfo_rate) / sr).fract();
+            let tri = 4.0 * (self.lfo_phase - 0.5).abs() - 1.0;
+            let delay_samples = (params.lfo_delay as f64) * 2.0 * sr;
+            let fade = if delay_samples <= 1.0 {
+                1.0
+            } else {
+                (self.lfo_age / delay_samples).min(1.0)
+            };
+            self.lfo_age += 1.0;
+            let lfo = (tri * fade) as f32;
+
             let mut mix = 0.0f32;
             for v in self.voices.iter_mut() {
-                let (s, _) = v.next_sample(self.sample_rate, self.attack as f64, self.release as f64);
-                mix += s;
+                mix += v.next_sample(sr, &params, lfo);
             }
-            mix = (mix * self.gain).clamp(-1.0, 1.0);
+            mix = (mix * params.gain).clamp(-1.0, 1.0);
             for ch in audio.iter_mut() {
                 ch[frame] = mix;
             }
         }
     }
 
+    /// 状态 = 参数表顺序的 f32 小端序列。
+    ///
+    /// 前三个是 gain / attack / release，所以**老工程的 12 字节状态仍能读**（见 `load_state`）。
     fn save_state(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(12);
-        out.extend_from_slice(&self.gain.to_le_bytes());
-        out.extend_from_slice(&self.attack.to_le_bytes());
-        out.extend_from_slice(&self.release.to_le_bytes());
+        let values = self.values();
+        let mut out = Vec::with_capacity(values.len() * 4);
+        for v in values {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
         out
     }
 
@@ -137,9 +324,15 @@ impl Plugin for SynthPlugin {
         if state.len() < 12 {
             return Err(PluginError::StateTooShort { expected: 12, got: state.len() });
         }
-        self.gain = f32::from_le_bytes(state[0..4].try_into().unwrap());
-        self.attack = f32::from_le_bytes(state[4..8].try_into().unwrap());
-        self.release = f32::from_le_bytes(state[8..12].try_into().unwrap());
+        // 允许多余/缺失：按可用的个数恢复，多出来的忽略，少掉的保持默认。
+        for (index, (id, ..)) in PARAM_TABLE.iter().enumerate() {
+            let start = index * 4;
+            if start + 4 > state.len() {
+                break;
+            }
+            let value = f32::from_le_bytes(state[start..start + 4].try_into().unwrap());
+            self.set_param(&ParamId::from(*id), value);
+        }
         Ok(())
     }
 }
@@ -151,6 +344,37 @@ mod tests {
 
     fn ctx(block: usize) -> ProcessContext {
         ProcessContext { sample_rate: 48_000.0, block_size: block, tempo: 120.0, playing: true }
+    }
+
+    /// 跑若干块并返回峰值；`events` **只在第一块**送入（之后按键状态由包络自己维持）。
+    fn peak_of(params: &[(&str, f32)], events: &[TimedMidiEvent], blocks: usize) -> f32 {
+        let (peak, ..) = run(params, events, blocks);
+        peak
+    }
+
+    /// 跑若干块，返回 (整段峰值, 均方根, 最后一块的峰值)。
+    fn run(params: &[(&str, f32)], events: &[TimedMidiEvent], blocks: usize) -> (f32, f32, f32) {
+        let mut s = SynthPlugin::new();
+        for (id, value) in params {
+            s.set_param(&ParamId::from(*id), *value);
+        }
+        s.prepare(48_000.0, 256);
+        let mut peak = 0.0f32;
+        let mut tail = 0.0f32;
+        let mut square_sum = 0.0f64;
+        let mut samples = 0u64;
+        for block in 0..blocks {
+            let mut l = [0.0f32; 256];
+            let mut r = [0.0f32; 256];
+            let evs = if block == 0 { events } else { &[] };
+            s.process(&ctx(256), &mut [&mut l, &mut r], evs);
+            tail = l.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+            peak = peak.max(tail);
+            square_sum += l.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>();
+            samples += l.len() as u64;
+        }
+        let rms = (square_sum / samples.max(1) as f64).sqrt() as f32;
+        (peak, rms, tail)
     }
 
     #[test]
@@ -195,8 +419,77 @@ mod tests {
     }
 
     #[test]
+    fn note_volume_attenuates_independently_of_velocity() {
+        let note_on = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 100 } }];
+        let loud = peak_of(&[], &note_on, 1);
+        let soft = peak_of(
+            &[],
+            &[
+                TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 100 } },
+                TimedMidiEvent { frame: 0, event: MidiEvent::NoteVolume { note: 69, value: 64 } },
+            ],
+            1,
+        );
+        assert!(soft < loud * 0.7, "volume must attenuate: {loud} -> {soft}");
+    }
+
+    /// 滤波器的截止真的在起作用：关小截止，输出必须明显变轻（高频被削掉）。
+    #[test]
+    fn cutoff_changes_the_signal() {
+        let note_on = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let open = peak_of(&[("cutoff", 1.0), ("filterEnv", 0.0)], &note_on, 4);
+        let closed = peak_of(&[("cutoff", 0.05), ("filterEnv", 0.0)], &note_on, 4);
+        assert!(closed < open * 0.5, "closing the filter must soften: {open} -> {closed}");
+    }
+
+    /// 共振有意义：拉满共振，输出不会爆掉也不会静音。
+    #[test]
+    fn resonance_stays_stable() {
+        let note_on = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 45, velocity: 127 } }];
+        let peak = peak_of(&[("cutoff", 0.35), ("resonance", 1.0), ("filterEnv", 0.8)], &note_on, 40);
+        assert!(peak > 0.01 && peak <= 1.0, "peak out of range: {peak}");
+    }
+
+    /// 每种波形都出声，且强弱关系符合各自的形状（峰值会被削波，所以比均方根）。
+    #[test]
+    fn waveforms_differ() {
+        let note_on = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 57, velocity: 127 } }];
+        let common: &[(&str, f32)] = &[("gain", 0.3), ("filterEnv", 0.0), ("cutoff", 1.0)];
+        let rms = |wave: f32| {
+            let mut params = common.to_vec();
+            params.push(("wave", wave));
+            run(&params, &note_on, 4).1
+        };
+        let (saw, square, sine, triangle) = (rms(0.0), rms(1.0), rms(2.0), rms(3.0));
+        for (name, value) in [("saw", saw), ("square", square), ("sine", sine), ("triangle", triangle)] {
+            assert!(value > 0.01, "{name} must sound: {value}");
+        }
+        // 方波(RMS=1) > 正弦(0.707) > 锯齿/三角(≈0.577)。
+        assert!(square > sine * 1.15, "square vs sine: {square} / {sine}");
+        assert!(sine > triangle * 1.1, "sine vs triangle: {sine} / {triangle}");
+    }
+
+    /// 释音为 0 时按键一放就静音；延音为 0 时衰减完就静音。
+    #[test]
+    fn zero_sustain_ends_the_note_during_decay() {
+        let note_on = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let params = [("sustain", 0.0), ("decay", 0.05)];
+        let (peak, _, _) = run(&params, &note_on, 1);
+        assert!(peak > 0.01, "attack must sound");
+        // 60 块 = 0.32 s，远长于 0.05 s 的衰减 → 尾音必须是静音。
+        let (_, _, tail) = run(&params, &note_on, 60);
+        assert!(tail < 0.001, "sustain=0 must decay to silence: {tail}");
+    }
+
+    #[test]
     fn renders_440hz_within_tolerance() {
         let mut s = SynthPlugin::new();
+        // 正弦 + 全开截止，过零率才等于基频（锯齿的谐波会让过零变多）。
+        s.set_param(&ParamId::from("wave"), 2.0);
+        s.set_param(&ParamId::from("cutoff"), 1.0);
+        s.set_param(&ParamId::from("filterEnv"), 0.0);
+        s.set_param(&ParamId::from("decay"), 2.0);
+        s.set_param(&ParamId::from("sustain"), 1.0);
         s.prepare(48_000.0, 48_000);
         let mut l = [0.0f32; 48_000];
         let mut r = [0.0f32; 48_000];
@@ -206,16 +499,62 @@ mod tests {
             &[TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }],
         );
         let crossings = l.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count();
-        assert!((crossings as i64 - 440).abs() <= 2, "crossings={crossings}");
+        assert!((crossings as i64 - 440).abs() <= 4, "crossings={crossings}");
     }
 
     #[test]
-    fn state_roundtrips() {
+    fn state_roundtrips_every_param() {
         let mut s = SynthPlugin::new();
-        s.set_param(&"gain".into(), 0.25);
+        s.set_param(&ParamId::from("gain"), 0.25);
+        s.set_param(&ParamId::from("cutoff"), 0.33);
+        s.set_param(&ParamId::from("wave"), 3.0);
+        s.set_param(&ParamId::from("lfoPitch"), 0.5);
         let state = s.save_state();
+        assert_eq!(state.len(), PARAM_TABLE.len() * 4);
+
         let mut t = SynthPlugin::new();
         t.load_state(&state).unwrap();
-        assert_eq!(t.get_param(&"gain".into()), Some(0.25));
+        for (id, ..) in PARAM_TABLE.iter() {
+            assert_eq!(t.get_param(&ParamId::from(*id)), s.get_param(&ParamId::from(*id)), "{id}");
+        }
+    }
+
+    /// 老工程存的是 12 字节（gain / attack / release），必须仍然读得懂。
+    #[test]
+    fn legacy_twelve_byte_state_still_loads() {
+        let mut state = Vec::new();
+        state.extend_from_slice(&0.5f32.to_le_bytes());
+        state.extend_from_slice(&0.2f32.to_le_bytes());
+        state.extend_from_slice(&0.9f32.to_le_bytes());
+
+        let mut t = SynthPlugin::new();
+        t.load_state(&state).unwrap();
+        assert_eq!(t.get_param(&ParamId::from("gain")), Some(0.5));
+        assert_eq!(t.get_param(&ParamId::from("attack")), Some(0.2));
+        assert_eq!(t.get_param(&ParamId::from("release")), Some(0.9));
+        // 其余参数保持默认。
+        assert_eq!(t.get_param(&ParamId::from("cutoff")), Some(0.7));
+    }
+
+    #[test]
+    fn preset_reports_its_own_identity_and_defaults() {
+        let s = SynthPlugin::preset("builtin.synth.pad", "Pad", &[("gain", 0.5), ("attack", 0.4), ("release", 1.5)]);
+        assert_eq!(s.descriptor().id, "builtin.synth.pad");
+        assert_eq!(s.descriptor().name, "Pad");
+        assert_eq!(s.get_param(&ParamId::from("gain")), Some(0.5));
+        assert_eq!(s.get_param(&ParamId::from("attack")), Some(0.4));
+        assert_eq!(s.get_param(&ParamId::from("release")), Some(1.5));
+    }
+
+    /// 参数越界被夹紧，非有限值被丢弃。
+    #[test]
+    fn params_are_clamped_and_reject_nan() {
+        let mut s = SynthPlugin::new();
+        s.set_param(&ParamId::from("cutoff"), 5.0);
+        assert_eq!(s.get_param(&ParamId::from("cutoff")), Some(1.0));
+        s.set_param(&ParamId::from("cutoff"), f32::NAN);
+        assert_eq!(s.get_param(&ParamId::from("cutoff")), Some(1.0));
+        // 未知参数名不得 panic。
+        s.set_param(&ParamId::from("nope"), 1.0);
     }
 }

@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::command_queue::{command_queue, CommandSender};
 use crate::player::Player;
 use crate::registry::PluginRegistry;
+use crate::scope::ScopeBuffer;
 use crate::schedule::ScheduledEvents;
 use crate::transport::TransportCommand;
 
@@ -14,12 +15,14 @@ use crate::transport::TransportCommand;
 ///
 /// 采样率不在选项中：设备默认输出采样率才是权威来源，[`AudioHost::start`] 会用它，
 /// 并在与 [`ScheduledEvents::sample_rate`] 不一致时报错。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct RealtimeOptions {
     /// 音频回调请求的最大帧数：用于预分配 scratch 缓冲，并作为固定块大小请求设备。
     pub max_block: usize,
     /// 控制侧 → 音频侧命令队列容量。
     pub command_capacity: usize,
+    /// 界面画波形用的缓冲；音频回调每块往里推一份。
+    pub scope: Arc<ScopeBuffer>,
 }
 
 /// 实时宿主错误。
@@ -64,12 +67,50 @@ pub fn write_interleaved(staging: &[f32], data: &mut [f32], frames: usize, chann
     }
 }
 
+/// 控制侧可观测的传输状态：音频线程写入，任意线程读取。
+///
+/// 单独抽出来是因为 `cpal::Stream` 在多数平台上是 `!Send`，宿主必须被创建并持有在
+/// 专用音频线程里；而界面需要随时读取播放位置与播放状态。`SharedTransport` 就是这条
+/// 跨线程通道：音频线程重建宿主时复用同一个实例，因此对外可观测状态不会随重建丢失。
+#[derive(Clone, Default)]
+pub struct SharedTransport {
+    position: Arc<AtomicU64>,
+    playing: Arc<AtomicBool>,
+}
+
+impl SharedTransport {
+    /// 新建一份共享状态（初始位置 0、未播放）。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 音频线程最近一次报告的播放位置（帧）。
+    pub fn position_frames(&self) -> u64 {
+        self.position.load(Ordering::Relaxed)
+    }
+
+    /// 音频线程最近一次报告的播放状态。
+    pub fn is_playing(&self) -> bool {
+        self.playing.load(Ordering::Relaxed)
+    }
+}
+
+/// 默认输出设备的采样率（Hz）；无法查询时返回 `None`（例如无音频设备的 CI 环境）。
+///
+/// 调度表以固定采样率定点，必须在构建之前知道设备采样率，因此需要一个不打开流的
+/// 探测入口。
+pub fn default_output_sample_rate() -> Option<u32> {
+    let host = cpal::default_host();
+    let device = host.default_output_device()?;
+    let supported = device.default_output_config().ok()?;
+    Some(supported.sample_rate())
+}
+
 /// cpal 实时播放宿主：拥有输出流与控制侧命令发送端。
 pub struct AudioHost {
     stream: cpal::Stream,
     commands: CommandSender,
-    position: Arc<AtomicU64>,
-    playing: Arc<AtomicBool>,
+    shared: SharedTransport,
 }
 
 impl AudioHost {
@@ -80,6 +121,19 @@ impl AudioHost {
         schedule: ScheduledEvents,
         registry: &PluginRegistry,
         options: RealtimeOptions,
+    ) -> Result<Self, RealtimeError> {
+        Self::start_with(schedule, registry, options, SharedTransport::new())
+    }
+
+    /// 与 [`AudioHost::start`] 相同，但复用调用方提供的共享状态。
+    ///
+    /// 音频线程重建宿主（例如工程被编辑）时传入同一个 `SharedTransport`，界面侧因此
+    /// 不必重新订阅就能继续读到位置与播放状态。
+    pub fn start_with(
+        schedule: ScheduledEvents,
+        registry: &PluginRegistry,
+        options: RealtimeOptions,
+        shared: SharedTransport,
     ) -> Result<Self, RealtimeError> {
         let host = cpal::default_host();
         let device = host.default_output_device().ok_or(RealtimeError::NoDevice)?;
@@ -112,10 +166,10 @@ impl AudioHost {
         config.buffer_size = cpal::BufferSize::Fixed(max_block as u32);
 
         let (tx, mut rx) = command_queue(options.command_capacity);
-        let position = Arc::new(AtomicU64::new(0));
-        let playing = Arc::new(AtomicBool::new(false));
-        let position_cb = Arc::clone(&position);
-        let playing_cb = Arc::clone(&playing);
+        let position_cb = Arc::clone(&shared.position);
+        let playing_cb = Arc::clone(&shared.playing);
+        // 波形缓冲：回调侧只写，界面侧只读（都用原子，不加锁）。
+        let scope = Arc::clone(&options.scope);
 
         let mut player = Player::new(schedule, registry, config.sample_rate as f64, max_block);
         let mut staging: Vec<f32> = Vec::with_capacity(max_block * 2);
@@ -144,6 +198,9 @@ impl AudioHost {
 
                     write_interleaved(&staging[..need], data, frames, channels);
 
+                    // 给界面画波形：推入刚渲染好的这块（下混成单声道）。
+                    scope.push_interleaved(&staging[..need], frames);
+
                     // 宿主策略：播放到工程结尾即暂停（而非回卷）。这是 `Player` 不再
                     // 自行自动停止后，「播到结尾即停」行为的归属地。
                     if player.end_frame() > 0 && player.position_frames() >= player.end_frame() {
@@ -161,37 +218,47 @@ impl AudioHost {
 
         stream.play().map_err(|e| RealtimeError::Cpal(e.to_string()))?;
 
-        Ok(AudioHost { stream, commands: tx, position, playing })
+        Ok(AudioHost { stream, commands: tx, shared })
+    }
+
+    /// 发送任意传输命令，返回是否成功入队（队列满时不阻塞地返回 `false`）。
+    pub fn send(&mut self, command: TransportCommand) -> bool {
+        self.commands.send(command)
     }
 
     /// 发送 `Play` 命令，返回是否成功入队（队列满时不阻塞地返回 `false`）。
     pub fn play(&mut self) -> bool {
-        self.commands.send(TransportCommand::Play)
+        self.send(TransportCommand::Play)
     }
 
     /// 发送 `Pause` 命令，返回是否成功入队。
     pub fn pause(&mut self) -> bool {
-        self.commands.send(TransportCommand::Pause)
+        self.send(TransportCommand::Pause)
     }
 
     /// 发送 `Stop` 命令（停止并回到起点），返回是否成功入队。
     pub fn stop(&mut self) -> bool {
-        self.commands.send(TransportCommand::Stop)
+        self.send(TransportCommand::Stop)
     }
 
     /// 发送 `Seek` 命令定位到指定帧，返回是否成功入队。
     pub fn seek(&mut self, frame: u64) -> bool {
-        self.commands.send(TransportCommand::Seek { frame })
+        self.send(TransportCommand::Seek { frame })
+    }
+
+    /// 本宿主对外暴露的共享传输状态。
+    pub fn shared(&self) -> SharedTransport {
+        self.shared.clone()
     }
 
     /// 音频线程最近一次报告的播放位置（帧）。
     pub fn position_frames(&self) -> u64 {
-        self.position.load(Ordering::Relaxed)
+        self.shared.position_frames()
     }
 
     /// 音频线程最近一次报告的播放状态。
     pub fn is_playing(&self) -> bool {
-        self.playing.load(Ordering::Relaxed)
+        self.shared.is_playing()
     }
 }
 
@@ -213,6 +280,7 @@ mod tests {
             id: TrackId(1),
             name: "Lead".into(),
             instrument: Some(PluginInstance { plugin_id: "builtin.synth".into(), params: Default::default(), state: vec![] }),
+            effects: vec![],
             clips: vec![],
             mixer: Default::default(),
         };
@@ -220,7 +288,7 @@ mod tests {
             id: ClipId(1),
             start: 0.0,
             length: 1.0,
-            notes: vec![Note { pitch: 69, start: 0.0, duration: 0.5, velocity: 100 }],
+            notes: vec![Note { pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
         });
         p.tracks.push(track);
         ScheduledEvents::from_project(&p, 48_000.0)
@@ -255,14 +323,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn shared_transport_starts_idle_and_survives_cloning() {
+        let shared = SharedTransport::new();
+        let observer = shared.clone();
+        assert_eq!(observer.position_frames(), 0);
+        assert!(!observer.is_playing());
+    }
+
     // 依赖真实音频设备的冒烟测试：在无设备环境（CI）应返回错误而非 panic。
     #[test]
     fn start_returns_result_without_panicking() {
-        let options = RealtimeOptions { max_block: 2048, command_capacity: 64 };
+        let options = RealtimeOptions {
+            max_block: 2048,
+            command_capacity: 64,
+            scope: Arc::new(ScopeBuffer::new(crate::SCOPE_CAPACITY)),
+        };
         match AudioHost::start(schedule(), &PluginRegistry::with_builtins(), options) {
             Ok(mut host) => {
                 assert!(host.play());
                 assert_eq!(host.position_frames(), 0);
+                // 宿主暴露的共享状态必须与自身读数一致。
+                assert_eq!(host.shared().position_frames(), host.position_frames());
+                assert!(!host.shared().is_playing());
             }
             Err(e) => {
                 assert!(

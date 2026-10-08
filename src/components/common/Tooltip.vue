@@ -3,7 +3,7 @@
 import { onUnmounted, ref } from "vue";
 
 const props = withDefaults(
-  defineProps<{ text: string; place?: "below" | "above"; align?: "center" | "end"; delay?: number }>(),
+  defineProps<{ text: string; place?: "below" | "above" | "right"; align?: "center" | "end"; delay?: number }>(),
   { place: "below", align: "center", delay: 300 },
 );
 
@@ -75,6 +75,11 @@ onUnmounted(clearTimer);
 }
 .tip-above {
   bottom: calc(100% + 7px);
+}
+.tip-right {
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
 }
 .tip-center {
   left: 50%;

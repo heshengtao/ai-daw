@@ -56,6 +56,7 @@ mod tests {
             id: TrackId(1),
             name: "Lead".into(),
             instrument: None,
+            effects: vec![],
             clips: vec![],
             mixer: MixerChannel::default(),
         });
@@ -72,6 +73,7 @@ mod tests {
             id: TrackId(1),
             name: "Lead".into(),
             instrument: None,
+            effects: vec![],
             clips: vec![Clip { id: crate::model::ClipId(1), start: 2.0, length: 3.0, notes: vec![] }],
             mixer: MixerChannel::default(),
         });
@@ -87,11 +89,12 @@ mod tests {
             id: TrackId(7),
             name: "Lead".into(),
             instrument: None,
+            effects: vec![],
             clips: vec![Clip {
                 id: ClipId(3),
                 start: 0.0,
                 length: 1.0,
-                notes: vec![Note { pitch: 60, start: 0.0, duration: 1.0, velocity: 100 }],
+                notes: vec![Note { pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 }],
             }],
             mixer: MixerChannel::default(),
         });

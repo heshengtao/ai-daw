@@ -4,8 +4,16 @@
  */
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { isTauri } from "@/utils/platform";
+import { useI18n } from "@/i18n";
 
-const PROJECT_FILTER = [{ name: "daw-party 工程", extensions: ["json"] }];
+/** 过滤器名字要按当前语言取，所以每次现算（对话框是低频操作）。 */
+function projectFilter() {
+  return [{ name: useI18n().t("dialog.projectFilter"), extensions: ["json"] }];
+}
+
+function wavFilter() {
+  return [{ name: useI18n().t("dialog.wavFilter"), extensions: ["wav"] }];
+}
 
 /** 选择要导入的工程文件；取消返回 null。 */
 export async function pickProjectToOpen(): Promise<string | null> {
@@ -13,7 +21,7 @@ export async function pickProjectToOpen(): Promise<string | null> {
   const selected = await openDialog({
     multiple: false,
     directory: false,
-    filters: PROJECT_FILTER,
+    filters: projectFilter(),
   });
   return typeof selected === "string" ? selected : null;
 }
@@ -21,7 +29,7 @@ export async function pickProjectToOpen(): Promise<string | null> {
 /** 选择工程保存路径；取消返回 null。 */
 export async function pickProjectToSave(defaultPath: string): Promise<string | null> {
   if (!isTauri()) return `mock://${defaultPath}`;
-  const selected = await saveDialog({ defaultPath, filters: PROJECT_FILTER });
+  const selected = await saveDialog({ defaultPath, filters: projectFilter() });
   return selected ?? null;
 }
 
@@ -30,7 +38,7 @@ export async function pickWavToSave(defaultPath: string): Promise<string | null>
   if (!isTauri()) return `mock://${defaultPath}`;
   const selected = await saveDialog({
     defaultPath,
-    filters: [{ name: "WAV 音频", extensions: ["wav"] }],
+    filters: wavFilter(),
   });
   return selected ?? null;
 }
