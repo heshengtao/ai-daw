@@ -65,6 +65,8 @@ const en: Record<string, string> = {
   "synth.envelope": "Envelope",
   "synth.amp": "Amp",
   "synth.gain": "Level",
+  // basic / advanced layer toggle
+  "synth.advanced": "Advanced",
   "synth.voiceCount": "{count} voices",
   "synth.legacyNote": "The envelope of this old preset has been mapped onto the full panel.",
   "synth.windowEmpty": "This track has no built-in synth.",

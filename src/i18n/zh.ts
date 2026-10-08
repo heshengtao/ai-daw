@@ -64,6 +64,8 @@ const zh: Record<string, string> = {
   "synth.envelope": "包络",
   "synth.amp": "总输出",
   "synth.gain": "音量",
+  // 基础 / 高级两层的切换按钮
+  "synth.advanced": "高级",
   "synth.voiceCount": "{count} 个声部",
   "synth.legacyNote": "这条轨道用的老预设音色已映射到完整面板上。",
   "synth.windowEmpty": "这条轨道上没有内置合成器。",

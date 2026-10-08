@@ -164,6 +164,7 @@ async function commitEffect(index: number, id: string, value: number): Promise<v
             :params="instrumentParams"
             :track="track.id"
             @commit="commitInstrument"
+            @apply-preset="applyPreset"
           />
           <PluginParamList
             v-else

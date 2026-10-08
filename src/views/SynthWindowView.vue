@@ -89,7 +89,7 @@ onMounted(() => {
           @apply="applyPreset"
         />
       </div>
-      <SynthPanel :params="params" :track="track.id" @commit="commit" />
+      <SynthPanel :params="params" :track="track.id" @commit="commit" @apply-preset="applyPreset" />
     </div>
 
     <p v-else-if="store.loadError" class="empty">
