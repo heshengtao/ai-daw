@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 应用根：状态初始化、命令动作、试听、快捷键与布局组合。 */
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import { documentDir, join } from "@tauri-apps/api/path";
 import { ExclamationTriangleIcon, ArrowPathIcon } from "@heroicons/vue/24/outline";
 import AppShell from "@/components/layout/AppShell.vue";
 import TrackHeaderList from "@/components/workspace/TrackHeaderList.vue";
@@ -12,12 +13,14 @@ import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
 import { useEngineEventsStore } from "@/stores/engineEvents";
 import { usePlayback } from "@/composables/usePlayback";
+import { exportWav } from "@/api/tauri";
 
 const project = useProjectStore();
 const layout = useLayoutStore();
 const events = useEngineEventsStore();
 
 const aiActive = ref(false);
+const exporting = ref(false);
 let pollTimer: number | null = null;
 
 const playback = usePlayback({
@@ -51,6 +54,22 @@ async function onNew(): Promise<void> {
     layout.notify("已新建空工程");
   } catch (err) {
     layout.notify(`新建失败：${String(err)}`);
+  }
+}
+
+/** 导出到「文稿」目录（文件对话框在后续版本接入）。 */
+async function onExport(): Promise<void> {
+  if (exporting.value) return;
+  exporting.value = true;
+  try {
+    const dir = await documentDir();
+    const path = await join(dir, "daw-party-export.wav");
+    const written = await exportWav(path, 44100);
+    layout.notify(`已导出：${written}`);
+  } catch (err) {
+    layout.notify(`导出失败：${String(err)}`);
+  } finally {
+    exporting.value = false;
   }
 }
 
@@ -90,6 +109,7 @@ onUnmounted(() => {
     @stop="playback.stop()"
     @demo="onDemo"
     @new="onNew"
+    @export="onExport"
   >
     <!-- 启动失败：必须让用户看见，并能重试（而不是停在"载入中"）。 -->
     <div v-if="project.loadError" class="center-state">
@@ -134,12 +154,14 @@ onUnmounted(() => {
 }
 .center-state {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 .center-card {
   width: 380px;
+  max-width: 100%;
   padding: 26px 24px;
   display: flex;
   flex-direction: column;

@@ -879,3 +879,14 @@
   max-width: 100%;
   border-radius: 8px;
 }
+
+/* ===== daw-party overrides ===== */
+
+/* 按钮文字永不换行（窄屏请改用隐藏/图标化，而不是让它换行）。 */
+.btn-filled,
+.btn-tonal,
+.btn-outlined,
+.btn-text,
+.btn-icon {
+  white-space: nowrap;
+}

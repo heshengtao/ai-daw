@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** 编排视图：时间线网格 + 带轨道配色的片段块（编辑功能后续接入）。 */
+/** 编排视图：网格铺满整宽，片段按轨道配色。 */
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useProjectStore } from "@/stores/project";
 import { trackHue } from "@/utils/trackColor";
@@ -9,15 +9,22 @@ const zoom = ref(56); // 每拍像素
 
 const tracks = computed(() => store.project?.tracks ?? []);
 const beatsPerBar = computed(() => store.project?.transport.time_sig_num ?? 4);
-const totalBars = computed(() => {
+
+/** 内容长度（小节）。 */
+const contentBars = computed(() => {
   const beats = tracks.value.flatMap((t) => t.clips).reduce((m, c) => Math.max(m, c.start + c.length), 0);
-  return Math.max(4, Math.ceil(beats / beatsPerBar.value) + 1);
+  return Math.max(4, Math.ceil(beats / beatsPerBar.value) + 2);
 });
 
-const gridStyle = computed(() => ({
-  width: `${totalBars.value * beatsPerBar.value * zoom.value}px`,
-  backgroundSize: `${zoom.value}px 100%, ${zoom.value * beatsPerBar.value}px 100%`,
-}));
+/** 标尺多画一段，保证拉伸或滚动时右侧仍有刻度与网格。 */
+const totalBars = computed(() => contentBars.value + 24);
+
+const beatsTotal = computed(() => totalBars.value * beatsPerBar.value);
+
+/** 至少铺满可视宽度，避免右侧出现空白。 */
+const widthStyle = computed(() => ({ width: `max(100%, ${beatsTotal.value * zoom.value}px)` }));
+const beatPx = computed(() => `${zoom.value}px`);
+const barPx = computed(() => `${zoom.value * beatsPerBar.value}px`);
 
 function clipStyle(start: number, length: number, index: number): Record<string, string> {
   return {
@@ -43,16 +50,13 @@ onUnmounted(() => {
 <template>
   <div class="arrange">
     <div class="ruler">
-      <div class="ruler-inner" :style="{ width: gridStyle.width }">
-        <span v-for="bar in totalBars" :key="bar" class="bar-mark" :style="{ width: `${beatsPerBar * zoom}px` }">
-          {{ bar }}
-        </span>
+      <div class="ruler-inner" :style="widthStyle">
+        <span v-for="bar in totalBars" :key="bar" class="bar-mark" :style="{ width: barPx }">{{ bar }}</span>
       </div>
     </div>
 
-    <div class="lanes">
+    <div class="lanes" :style="widthStyle">
       <div v-for="(track, ti) in tracks" :key="track.id" class="lane">
-        <div class="lane-grid" :style="gridStyle" />
         <div
           v-for="clip in track.clips"
           :key="clip.id"
@@ -84,7 +88,7 @@ onUnmounted(() => {
   background-color: rgb(var(--md-surface-container-lowest));
 }
 .ruler {
-  height: 28px;
+  height: 26px;
   flex: 0 0 auto;
   position: sticky;
   top: 0;
@@ -103,25 +107,25 @@ onUnmounted(() => {
   padding-left: 7px;
   font-size: 10px;
   letter-spacing: 0.5px;
+  white-space: nowrap;
   color: rgb(var(--md-on-surface-variant));
   border-left: 1px solid rgb(var(--md-outline-variant) / 0.4);
 }
 .lanes {
   position: relative;
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
 }
+/* 网格用 repeating 背景铺满整条 lane，不再依赖固定宽度 */
 .lane {
   position: relative;
   height: 64px;
+  flex: 0 0 auto;
   border-bottom: 1px solid rgb(var(--md-outline-variant) / 0.18);
-}
-.lane-grid {
-  position: absolute;
-  inset: 0;
   background-image:
-    linear-gradient(to right, rgb(var(--md-outline-variant) / 0.16) 1px, transparent 1px),
-    linear-gradient(to right, rgb(var(--md-outline-variant) / 0.38) 1px, transparent 1px);
+    repeating-linear-gradient(to right, rgb(var(--md-outline-variant) / 0.16) 0 1px, transparent 1px v-bind(beatPx)),
+    repeating-linear-gradient(to right, rgb(var(--md-outline-variant) / 0.38) 0 1px, transparent 1px v-bind(barPx));
 }
 .clip {
   position: absolute;

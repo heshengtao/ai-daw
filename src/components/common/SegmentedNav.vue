@@ -48,7 +48,7 @@ onUnmounted(() => window.removeEventListener("resize", updatePill));
       v-for="(item, idx) in items"
       :key="item.path"
       :ref="(el) => { if (el) buttons[idx] = el as HTMLElement }"
-      class="relative z-10 flex items-center gap-2 px-4 h-9 rounded-full text-sm font-medium cursor-pointer select-none border-0 bg-transparent"
+      class="relative z-10 flex items-center gap-2 px-4 h-9 rounded-full text-sm font-medium cursor-pointer select-none border-0 bg-transparent whitespace-nowrap"
       :style="{ color: activeIndex === idx ? 'rgb(var(--md-on-secondary-container))' : 'rgb(var(--md-on-surface-variant))' }"
       @click="router.push(item.path)"
     >

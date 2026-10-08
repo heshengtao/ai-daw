@@ -1,14 +1,13 @@
-/** 布局偏好与轻量通知（snackbar）；布局持久化到 localStorage。 */
+/**
+ * 布局偏好与轻量通知（snackbar）：面板可见性与宽度，持久化到 localStorage。
+ * 面板开关直接由顶栏的两个按钮控制，不再有"简单/专业模式"这层概念。
+ */
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
-
-/** 界面密度模式。 */
-export type LayoutMode = "simple" | "pro";
 
 const KEY = "daw-party-layout";
 
 interface Persisted {
-  mode: LayoutMode;
   showTrackHeaders: boolean;
   showInspector: boolean;
   trackWidth: number;
@@ -25,7 +24,6 @@ function load(): Partial<Persisted> {
 
 export const useLayoutStore = defineStore("layout", () => {
   const saved = load();
-  const mode = ref<LayoutMode>(saved.mode ?? "simple");
   const showTrackHeaders = ref(saved.showTrackHeaders ?? true);
   const showInspector = ref(saved.showInspector ?? false);
   const trackWidth = ref(saved.trackWidth ?? 220);
@@ -37,12 +35,11 @@ export const useLayoutStore = defineStore("layout", () => {
   let toastTimer: number | null = null;
 
   watch(
-    [mode, showTrackHeaders, showInspector, trackWidth, inspectorWidth],
+    [showTrackHeaders, showInspector, trackWidth, inspectorWidth],
     () => {
       localStorage.setItem(
         KEY,
         JSON.stringify({
-          mode: mode.value,
           showTrackHeaders: showTrackHeaders.value,
           showInspector: showInspector.value,
           trackWidth: trackWidth.value,
@@ -52,17 +49,6 @@ export const useLayoutStore = defineStore("layout", () => {
     },
     { deep: true },
   );
-
-  /** 切换密度模式；简单模式收起检查器。 */
-  function setMode(next: LayoutMode): void {
-    mode.value = next;
-    showInspector.value = next === "pro";
-  }
-
-  /** 在简单/专业之间切换。 */
-  function togglePro(): void {
-    setMode(mode.value === "pro" ? "simple" : "pro");
-  }
 
   /** 开关开发者抽屉。 */
   function toggleDevDrawer(): void {
@@ -80,15 +66,12 @@ export const useLayoutStore = defineStore("layout", () => {
   }
 
   return {
-    mode,
     showTrackHeaders,
     showInspector,
     trackWidth,
     inspectorWidth,
     devDrawer,
     toast,
-    setMode,
-    togglePro,
     toggleDevDrawer,
     notify,
   };

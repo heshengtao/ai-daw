@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** 空状态引导卡片（面向新手）。 */
+/** 空状态引导卡片（面向新手），在可用区域中居中。 */
 import { SparklesIcon, ArrowDownTrayIcon, PlusIcon } from "@heroicons/vue/24/outline";
 
 defineProps<{ aiReady?: boolean }>();
@@ -11,7 +11,7 @@ const emit = defineEmits<{ (e: "demo"): void; (e: "new"): void }>();
     <div class="card-elevated empty-card">
       <h2 class="text-headline-sm">开始做一段音乐</h2>
       <p class="text-body-md empty-hint">
-        先载入一段示例听听看，或者从空白工程开始。你也可以随时从右上角展开专业面板。
+        先载入一段示例听听看，或者从空白工程开始。你也可以随时用左上角与右上角的按钮展开专业面板。
       </p>
       <div class="empty-actions">
         <button class="btn-filled" @click="emit('demo')">
@@ -32,12 +32,16 @@ const emit = defineEmits<{ (e: "demo"): void; (e: "new"): void }>();
 </template>
 
 <style scoped>
+/* flex:1 + min-width:0 才能真正在可用区域里居中（否则会缩到内容宽度并贴左）。 */
 .empty-state {
-  height: 100%;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
+  overflow: auto;
 }
 .empty-card {
   max-width: 460px;
