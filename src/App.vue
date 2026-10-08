@@ -1,7 +1,6 @@
 <script setup lang="ts">
-/** 应用根：状态初始化、命令动作、试听、快捷键与布局组合。 */
+/** 应用根：状态初始化、工程读写、试听、快捷键与布局组合。 */
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { documentDir, join } from "@tauri-apps/api/path";
 import { ExclamationTriangleIcon, ArrowPathIcon } from "@heroicons/vue/24/outline";
 import AppShell from "@/components/layout/AppShell.vue";
 import TrackHeaderList from "@/components/workspace/TrackHeaderList.vue";
@@ -14,6 +13,7 @@ import { useLayoutStore } from "@/stores/layout";
 import { useEngineEventsStore } from "@/stores/engineEvents";
 import { usePlayback } from "@/composables/usePlayback";
 import { exportWav } from "@/api/tauri";
+import { pickProjectToOpen, pickProjectToSave, pickWavToSave } from "@/api/dialogs";
 
 const project = useProjectStore();
 const layout = useLayoutStore();
@@ -28,7 +28,14 @@ const playback = usePlayback({
 });
 
 const loaded = computed(() => project.project !== null);
-const isEmpty = computed(() => (project.project?.tracks.length ?? 0) === 0);
+/** 首屏引导只在「还没开始」且工程为空时出现。 */
+const showIntro = computed(() => !project.started && (project.project?.tracks.length ?? 0) === 0);
+
+/** 用于文件名的工程名。 */
+const fileBase = computed(() => {
+  const name = project.project?.name;
+  return !name || name === "untitled" ? "untitled" : name;
+});
 
 function onResizeLeft(delta: number): void {
   layout.trackWidth = Math.min(360, Math.max(160, layout.trackWidth + delta));
@@ -37,33 +44,45 @@ function onResizeRight(delta: number): void {
   layout.inspectorWidth = Math.min(440, Math.max(200, layout.inspectorWidth + delta));
 }
 
-async function onDemo(): Promise<void> {
+async function onImport(): Promise<void> {
   playback.stop();
   try {
-    await project.loadDemo();
-    layout.notify("已载入示例工程");
+    const path = await pickProjectToOpen();
+    if (!path) return;
+    await project.openFrom(path);
+    layout.notify("已导入工程");
   } catch (err) {
-    layout.notify(`载入失败：${String(err)}`);
+    layout.notify(`导入失败：${String(err)}`);
   }
 }
 
 async function onNew(): Promise<void> {
   playback.stop();
   try {
-    await project.clearAll();
+    await project.newProject();
     layout.notify("已新建空工程");
   } catch (err) {
     layout.notify(`新建失败：${String(err)}`);
   }
 }
 
-/** 导出到「文稿」目录（文件对话框在后续版本接入）。 */
+async function onSave(): Promise<void> {
+  try {
+    const path = await pickProjectToSave(`${fileBase.value}.json`);
+    if (!path) return;
+    const written = await project.saveTo(path);
+    layout.notify(`已保存：${written}`);
+  } catch (err) {
+    layout.notify(`保存失败：${String(err)}`);
+  }
+}
+
 async function onExport(): Promise<void> {
   if (exporting.value) return;
   exporting.value = true;
   try {
-    const dir = await documentDir();
-    const path = await join(dir, "daw-party-export.wav");
+    const path = await pickWavToSave(`${fileBase.value}.wav`);
+    if (!path) return;
     const written = await exportWav(path, 44100);
     layout.notify(`已导出：${written}`);
   } catch (err) {
@@ -73,13 +92,40 @@ async function onExport(): Promise<void> {
   }
 }
 
+async function onUndo(): Promise<void> {
+  try {
+    if (!(await project.undo())) layout.notify("没有可撤销的操作");
+  } catch (err) {
+    layout.notify(`撤销失败：${String(err)}`);
+  }
+}
+
+async function onRedo(): Promise<void> {
+  try {
+    if (!(await project.redo())) layout.notify("没有可重做的操作");
+  } catch (err) {
+    layout.notify(`重做失败：${String(err)}`);
+  }
+}
+
 function onKey(e: KeyboardEvent): void {
-  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "d") {
+  if (e.target instanceof HTMLInputElement) return;
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.shiftKey && e.key.toLowerCase() === "d") {
     e.preventDefault();
     layout.toggleDevDrawer();
-  } else if (e.key === "Escape" && layout.devDrawer) {
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    void (e.shiftKey ? onRedo() : onUndo());
+    return;
+  }
+  if (e.key === "Escape" && layout.devDrawer) {
     layout.devDrawer = false;
-  } else if (e.code === "Space" && !(e.target instanceof HTMLInputElement)) {
+    return;
+  }
+  if (e.code === "Space") {
     e.preventDefault();
     if (playback.playing.value) playback.stop();
     else void playback.play();
@@ -107,8 +153,9 @@ onUnmounted(() => {
     :ai-active="aiActive"
     @play="playback.play()"
     @stop="playback.stop()"
-    @demo="onDemo"
+    @import="onImport"
     @new="onNew"
+    @save="onSave"
     @export="onExport"
   >
     <!-- 启动失败：必须让用户看见，并能重试（而不是停在"载入中"）。 -->
@@ -128,10 +175,13 @@ onUnmounted(() => {
       <p class="text-body-md center-muted">正在载入工程…</p>
     </div>
 
-    <EmptyState v-else-if="isEmpty" @demo="onDemo" @new="onNew" />
+    <EmptyState v-else-if="showIntro" @import="onImport" @new="onNew" />
 
     <template v-else>
-      <TrackHeaderList v-if="layout.showTrackHeaders" :style="{ width: `${layout.trackWidth}px`, flex: '0 0 auto' }" />
+      <TrackHeaderList
+        v-if="layout.showTrackHeaders"
+        :style="{ width: `${layout.trackWidth}px`, flex: '0 0 auto' }"
+      />
       <PanelResizer v-if="layout.showTrackHeaders" side="left" @resize="onResizeLeft" />
 
       <div class="workspace-main">
@@ -139,7 +189,10 @@ onUnmounted(() => {
       </div>
 
       <PanelResizer v-if="layout.showInspector" side="right" @resize="onResizeRight" />
-      <InspectorPanel v-if="layout.showInspector" :style="{ width: `${layout.inspectorWidth}px`, flex: '0 0 auto' }" />
+      <InspectorPanel
+        v-if="layout.showInspector"
+        :style="{ width: `${layout.inspectorWidth}px`, flex: '0 0 auto' }"
+      />
     </template>
 
     <ToastHost />

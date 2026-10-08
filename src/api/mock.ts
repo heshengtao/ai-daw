@@ -2,7 +2,7 @@
  * 开发用假数据：只在「浏览器里且非 Tauri」时启用，用于在没有后端的情况下预览界面。
  * 生产构建（`vite build`）里 `import.meta.env.DEV` 为 false，本模块不会被用到。
  */
-import type { Note, Project } from "./types";
+import type { HistoryDepths, HistoryState, Note, Project } from "./types";
 
 /** 是否使用假数据。 */
 export function mockEnabled(): boolean {
@@ -10,17 +10,11 @@ export function mockEnabled(): boolean {
 }
 
 function triad(root: number, beat: number): Note[] {
-  return [0, 4, 7].map((i) => ({
-    pitch: root + i,
-    start: beat,
-    duration: 1.6,
-    velocity: 88,
-  }));
+  return [0, 4, 7].map((i) => ({ pitch: root + i, start: beat, duration: 1.6, velocity: 88 }));
 }
 
 function melody(): Note[] {
-  const pitches = [72, 74, 76, 79, 76, 74, 72, 67];
-  return pitches.map((pitch, i) => ({
+  return [72, 74, 76, 79, 76, 74, 72, 67].map((pitch, i) => ({
     pitch,
     start: i,
     duration: 0.7,
@@ -29,8 +23,7 @@ function melody(): Note[] {
 }
 
 function bass(): Note[] {
-  const pitches = [36, 36, 41, 41, 43, 43, 36, 36];
-  return pitches.map((pitch, i) => ({
+  return [36, 36, 41, 41, 43, 43, 36, 36].map((pitch, i) => ({
     pitch,
     start: i,
     duration: 0.9,
@@ -48,7 +41,14 @@ function sample(): Project {
         id: 1,
         name: "和弦",
         instrument: { plugin_id: "builtin.synth", params: { gain: 0.6 }, state: [] },
-        clips: [{ id: 1, start: 0, length: 8, notes: [...triad(48, 0), ...triad(53, 2), ...triad(55, 4), ...triad(48, 6)] }],
+        clips: [
+          {
+            id: 1,
+            start: 0,
+            length: 8,
+            notes: [...triad(48, 0), ...triad(53, 2), ...triad(55, 4), ...triad(48, 6)],
+          },
+        ],
         mixer: { gain_db: -3, pan: 0, mute: false, solo: false },
       },
       {
@@ -69,7 +69,18 @@ function sample(): Project {
   };
 }
 
-let state: Project = sample();
+function empty(): Project {
+  return {
+    name: "untitled",
+    transport: { tempo: 120, time_sig_num: 4, time_sig_den: 4 },
+    tracks: [],
+    master: { gain_db: 0, pan: 0, mute: false, solo: false },
+  };
+}
+
+let state: Project = empty();
+let undoDepth = 3;
+let redoDepth = 0;
 let nextTrackId = 4;
 let nextClipId = 4;
 
@@ -88,18 +99,43 @@ export const mockApi = {
       clips: [{ id: nextClipId++, start: 0, length: 4, notes: [] }],
       mixer: { gain_db: 0, pan: 0, mute: false, solo: false },
     });
+    undoDepth += 1;
+    redoDepth = 0;
     return clone(state);
   },
   setTempo: (bpm: number): Project => {
     state.transport.tempo = bpm;
+    undoDepth += 1;
+    redoDepth = 0;
     return clone(state);
   },
   clearProject: (): Project => {
-    state = { name: "untitled", transport: { tempo: 120, time_sig_num: 4, time_sig_den: 4 }, tracks: [], master: { gain_db: 0, pan: 0, mute: false, solo: false } };
+    state = empty();
+    undoDepth += 1;
+    redoDepth = 0;
     return clone(state);
   },
-  loadDemo: (): Project => {
+  historyDepths: (): HistoryDepths => ({ undo: undoDepth, redo: redoDepth }),
+  undo: (): HistoryState => {
+    if (undoDepth > 0) {
+      undoDepth -= 1;
+      redoDepth += 1;
+      // 假数据只做计数演示，不真的回滚内容。
+    }
+    return { project: clone(state), undo_depth: undoDepth, redo_depth: redoDepth };
+  },
+  redo: (): HistoryState => {
+    if (redoDepth > 0) {
+      redoDepth -= 1;
+      undoDepth += 1;
+    }
+    return { project: clone(state), undo_depth: undoDepth, redo_depth: redoDepth };
+  },
+  saveProject: (path: string): string => path,
+  openProject: (): Project => {
     state = sample();
+    undoDepth = 0;
+    redoDepth = 0;
     return clone(state);
   },
   renderPreview: (): Blob => new Blob([new Uint8Array(0)], { type: "audio/wav" }),

@@ -8,15 +8,21 @@ defineProps<{ playing: boolean; aiActive: boolean }>();
 const emit = defineEmits<{
   (e: "play"): void;
   (e: "stop"): void;
-  (e: "demo"): void;
+  (e: "import"): void;
   (e: "new"): void;
+  (e: "save"): void;
   (e: "export"): void;
 }>();
 </script>
 
 <template>
   <div class="app-root">
-    <TopBar @demo="emit('demo')" @new="emit('new')" @export="emit('export')" />
+    <TopBar
+      @import="emit('import')"
+      @new="emit('new')"
+      @save="emit('save')"
+      @export="emit('export')"
+    />
 
     <main class="app-main">
       <slot />

@@ -1,5 +1,8 @@
 # daw-party 最小桌面外壳实现计划（Plan 4a）
 
+> **状态（2026-10-08）**：✅ **已落地，但实现栈与本文不同**——最终采用 **Vue 3 + Pinia + Vue Router + Tailwind（Material You token 适配自 Exameow）**，而非本文所写的 React 18 + `@m3e/react`；文件布局亦不同（`src/main.ts`、`*.vue`、`src/api/`、`src/stores/`、`src/composables/`）。功能范围（窗口、工程操作、离线渲染试听、导出 WAV）均已实现。
+> 「原生实时传输」属 Plan 4b，**尚未开始**；后续路线见 `../ROADMAP.md` §5 Stage A。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 一个能启动的桌面应用：Tauri 窗口 + MD3 Expressive 界面（顶栏 / 传输条 / 轨道列表 / 活动列表），能操作工程（改速度、加轨道、载入示例）、**渲染试听**、**导出 WAV**。

@@ -5,8 +5,9 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "core:path:allow-resolve-directory",
-    "core:path:allow-join",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
     "core:window:allow-start-dragging",
     "core:window:allow-toggle-maximize",
     "core:window:allow-minimize",

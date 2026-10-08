@@ -1,13 +1,29 @@
 use tauri::{Emitter, State};
 
+use daw_party_engine::bus::Engine;
 use daw_party_engine::command::Command;
 use daw_party_engine::event::{Actor, Event};
-use daw_party_engine::model::{Note, Project};
+use daw_party_engine::model::Project;
 use daw_party_engine::registry::PluginRegistry;
 use daw_party_engine::render::{render, RenderOptions};
 use daw_party_engine::wav::wav_bytes;
 
 use crate::state::{AppState, EVENT_ENGINE};
+
+/// 撤销/重做之后返回的历史状态（让界面能立刻更新按钮可用性）。
+#[derive(serde::Serialize)]
+pub struct HistoryState {
+    pub project: Project,
+    pub undo_depth: usize,
+    pub redo_depth: usize,
+}
+
+/// 当前历史深度。
+#[derive(serde::Serialize)]
+pub struct HistoryDepths {
+    pub undo: usize,
+    pub redo: usize,
+}
 
 /// 读取当前工程快照。
 #[tauri::command]
@@ -44,41 +60,68 @@ pub fn clear_project(app: tauri::AppHandle, state: State<'_, AppState>) -> Proje
     run(&app, &state, Command::Clear { name: "untitled".into() })
 }
 
-/// 载入内置示例（C 大调琶音），让界面立刻有内容可看可听。
-///
-/// 全部经由 `run()`（命令/事件总线）构造：每次变更都会广播事件并进入撤销历史，
-/// 不再直接替换引擎（那样会绕过命令/事件模型、重置 id 计数器，且不可撤销）。
+/// 当前可撤销 / 可重做的次数。
 #[tauri::command]
-pub fn load_demo(app: tauri::AppHandle, state: State<'_, AppState>) -> Project {
-    let _ = run(&app, &state, Command::Clear { name: "demo".into() });
-    let after_track = run(&app, &state, Command::AddTrack { name: "Lead".into() });
-    let track = after_track.tracks.last().expect("just added").id;
-    let after_instrument = run(
-        &app,
-        &state,
-        Command::SetTrackInstrument { track, plugin_id: "builtin.synth".into() },
-    );
-    let after_clip = run(&app, &state, Command::AddClip { track, start: 0.0, length: 4.0 });
-    let clip = after_clip
-        .tracks
-        .iter()
-        .find(|t| t.id == track)
-        .and_then(|t| t.clips.last())
-        .expect("just added")
-        .id;
-    let mut project = after_instrument;
-    for (i, pitch) in [60u8, 64, 67, 72, 67, 64, 60, 64].into_iter().enumerate() {
-        project = run(
-            &app,
-            &state,
-            Command::AddNote {
-                track,
-                clip,
-                note: Note { pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100 },
-            },
-        );
+pub fn history_depths(state: State<'_, AppState>) -> HistoryDepths {
+    let engine = state.engine.lock().unwrap();
+    HistoryDepths { undo: engine.undo_depth(), redo: engine.redo_depth() }
+}
+
+/// 撤销最后一次命令。
+#[tauri::command]
+pub fn undo(state: State<'_, AppState>) -> HistoryState {
+    let mut engine = state.engine.lock().unwrap();
+    engine.undo();
+    HistoryState {
+        project: engine.project().clone(),
+        undo_depth: engine.undo_depth(),
+        redo_depth: engine.redo_depth(),
     }
-    project
+}
+
+/// 重做上一次被撤销的命令。
+#[tauri::command]
+pub fn redo(state: State<'_, AppState>) -> HistoryState {
+    let mut engine = state.engine.lock().unwrap();
+    engine.redo();
+    HistoryState {
+        project: engine.project().clone(),
+        undo_depth: engine.undo_depth(),
+        redo_depth: engine.redo_depth(),
+    }
+}
+
+/// 把当前工程保存为 JSON 文件，返回写入的绝对路径。
+#[tauri::command]
+pub async fn save_project(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let project = { state.engine.lock().unwrap().project().clone() };
+    let json = serde_json::to_string_pretty(&project).map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::write(&path, json).map_err(|e| e.to_string())?;
+        Ok::<String, String>(path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 从 JSON 文件导入工程：替换当前工程并清空历史（导入是一个新的起点）。
+#[tauri::command]
+pub async fn open_project(state: State<'_, AppState>, path: String) -> Result<Project, String> {
+    let text = tauri::async_runtime::spawn_blocking(move || std::fs::read_to_string(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let mut project: Project =
+        serde_json::from_str(&text).map_err(|e| format!("不是有效的工程文件：{e}"))?;
+    // 与 `SetTempo` 一致地夹紧：非有限或 0 的速度会让离线渲染时长变成 Inf。
+    if !project.transport.tempo.is_finite() {
+        project.transport.tempo = 120.0;
+    }
+    project.transport.tempo = project.transport.tempo.clamp(1.0, 1000.0);
+
+    let mut engine = state.engine.lock().unwrap();
+    *engine = Engine::from_project(project);
+    Ok(engine.project().clone())
 }
 
 /// 采样率必须落在合理区间，避免渲染出无效 WAV 或触发超大分配。

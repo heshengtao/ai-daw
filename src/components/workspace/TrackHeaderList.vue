@@ -4,6 +4,7 @@ import { ref } from "vue";
 import { PlusIcon } from "@heroicons/vue/24/outline";
 import { useProjectStore } from "@/stores/project";
 import { trackHue } from "@/utils/trackColor";
+import Tooltip from "@/components/common/Tooltip.vue";
 
 const store = useProjectStore();
 const selected = ref<number | null>(null);
@@ -23,9 +24,11 @@ function addTrack(): void {
   <div class="track-heads">
     <header class="heads-head">
       <span class="text-label-sm">轨道</span>
-      <button class="btn-icon" title="新增轨道" @click="addTrack">
-        <PlusIcon class="w-4 h-4" />
-      </button>
+      <Tooltip text="新增轨道" align="end">
+        <button class="btn-icon" aria-label="新增轨道" @click="addTrack">
+          <PlusIcon class="w-4 h-4" />
+        </button>
+      </Tooltip>
     </header>
 
     <ul class="heads-list">

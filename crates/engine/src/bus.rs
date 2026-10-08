@@ -7,6 +7,8 @@ use crate::model::{ClipId, Project, TrackId};
 pub struct Engine {
     project: Project,
     history: Vec<Vec<Event>>,
+    /// 被撤销的命令批次，供 `redo` 重放；一旦执行新命令即清空。
+    redo: Vec<Vec<Event>>,
     next_track_id: u64,
     next_clip_id: u64,
     /// 引擎的初始工程名；撤销一次 `Clear` 时用它重建，恢复被清空前的名字。
@@ -20,6 +22,7 @@ impl Engine {
         Engine {
             project: Project::new(name.clone()),
             history: vec![],
+            redo: vec![],
             next_track_id: 1,
             next_clip_id: 1,
             initial_name: name,
@@ -38,7 +41,7 @@ impl Engine {
             .unwrap_or(0)
             + 1;
         let initial_name = project.name.clone();
-        Engine { project, history: vec![], next_track_id, next_clip_id, initial_name }
+        Engine { project, history: vec![], redo: vec![], next_track_id, next_clip_id, initial_name }
     }
 
     fn alloc_track_id(&mut self) -> TrackId {
@@ -71,23 +74,52 @@ impl Engine {
         }
         if !events.is_empty() {
             self.history.push(events.clone());
+            // 新命令会作废已有的重做历史。
+            self.redo.clear();
         }
         events
     }
 
     /// 撤销最后一次命令；成功返回 true。
+    ///
+    /// 采用"重放"实现：从初始工程重新应用剩余历史，因此撤销永远得到一致状态，
+    /// 无需为每条命令编写逆操作。
     pub fn undo(&mut self) -> bool {
         match self.history.pop() {
             None => false,
-            Some(_) => {
-                self.project = Project::new(self.initial_name.clone());
-                let remaining: Vec<Vec<Event>> = self.history.clone();
-                for batch in remaining {
-                    for ev in batch {
-                        apply(&mut self.project, &ev);
-                    }
-                }
+            Some(batch) => {
+                self.redo.push(batch);
+                self.replay_history();
                 true
+            }
+        }
+    }
+
+    /// 重做上一次被撤销的命令；成功返回 true。
+    pub fn redo(&mut self) -> bool {
+        match self.redo.pop() {
+            None => false,
+            Some(batch) => {
+                for ev in &batch {
+                    apply(&mut self.project, ev);
+                }
+                self.history.push(batch);
+                true
+            }
+        }
+    }
+
+    /// 可重做的命令次数。
+    pub fn redo_depth(&self) -> usize {
+        self.redo.len()
+    }
+
+    /// 从初始工程重放当前历史，重建撤销后的状态。
+    fn replay_history(&mut self) {
+        self.project = Project::new(self.initial_name.clone());
+        for batch in self.history.clone() {
+            for ev in batch {
+                apply(&mut self.project, &ev);
             }
         }
     }
@@ -216,6 +248,60 @@ mod tests {
         assert_eq!(e.project().tracks.len(), 1);
         // 撤销 Clear 必须恢复被清空前的工程名，而不是保留 Clear 传入的新名。
         assert_eq!(e.project().name, "demo");
+    }
+
+    #[test]
+    fn redo_reapplies_the_undone_command() {
+        let mut e = Engine::new("demo");
+        e.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+        e.execute(Command::SetTempo(150.0), Actor::Human);
+
+        assert!(e.undo());
+        assert_eq!(e.project().transport.tempo, 120.0);
+        assert_eq!(e.redo_depth(), 1);
+
+        assert!(e.redo());
+        assert_eq!(e.project().transport.tempo, 150.0);
+        assert_eq!(e.project().tracks.len(), 1);
+        assert_eq!(e.redo_depth(), 0);
+        // 重做到底之后再重做应当失败。
+        assert!(!e.redo());
+    }
+
+    #[test]
+    fn redo_restores_a_cleared_project_with_all_tracks() {
+        let mut e = Engine::new("demo");
+        e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
+        e.execute(Command::AddTrack { name: "B".into() }, Actor::Human);
+        e.execute(Command::Clear { name: "gone".into() }, Actor::Human);
+        assert_eq!(e.project().tracks.len(), 0);
+
+        assert!(e.undo());
+        assert_eq!(e.project().tracks.len(), 2);
+        assert!(e.redo());
+        assert_eq!(e.project().tracks.len(), 0);
+        assert_eq!(e.project().name, "gone");
+    }
+
+    #[test]
+    fn new_command_invalidates_redo_history() {
+        let mut e = Engine::new("demo");
+        e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
+        assert!(e.undo());
+        assert_eq!(e.redo_depth(), 1);
+
+        e.execute(Command::AddTrack { name: "B".into() }, Actor::Human);
+        assert_eq!(e.redo_depth(), 0);
+        assert!(!e.redo());
+        assert_eq!(e.project().tracks.len(), 1);
+        assert_eq!(e.project().tracks[0].name, "B");
+    }
+
+    #[test]
+    fn redo_is_a_noop_with_empty_history() {
+        let mut e = Engine::new("demo");
+        assert!(!e.redo());
+        assert_eq!(e.redo_depth(), 0);
     }
 
     #[test]

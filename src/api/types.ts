@@ -47,3 +47,16 @@ export interface Project {
   tracks: Track[];
   master: MixerChannel;
 }
+
+/** 撤销 / 重做之后的返回：工程快照 + 最新历史深度。 */
+export interface HistoryState {
+  project: Project;
+  undo_depth: number;
+  redo_depth: number;
+}
+
+/** 当前可撤销 / 可重做的次数。 */
+export interface HistoryDepths {
+  undo: number;
+  redo: number;
+}

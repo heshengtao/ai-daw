@@ -62,7 +62,6 @@ onUnmounted(() => {
           :key="clip.id"
           class="clip"
           :style="clipStyle(clip.start, clip.length, ti)"
-          :title="`${clip.notes.length} 音符`"
         >
           <span
             v-for="(n, i) in clip.notes"

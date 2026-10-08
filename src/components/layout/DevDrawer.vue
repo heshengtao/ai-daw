@@ -4,6 +4,7 @@
  * 默认关闭，`Cmd/Ctrl+Shift+D` 呼出，Esc 关闭。不属于面向用户的界面。
  */
 import { XMarkIcon, TrashIcon } from "@heroicons/vue/24/outline";
+import Tooltip from "@/components/common/Tooltip.vue";
 import { useEngineEventsStore } from "@/stores/engineEvents";
 import { useLayoutStore } from "@/stores/layout";
 
@@ -20,12 +21,16 @@ const events = useEngineEventsStore();
           <span class="tag">engine events</span>
         </div>
         <div class="flex items-center gap-1">
-          <button class="btn-icon" title="清空" @click="events.clear()">
-            <TrashIcon class="w-4 h-4" />
-          </button>
-          <button class="btn-icon" title="关闭" @click="layout.devDrawer = false">
-            <XMarkIcon class="w-4 h-4" />
-          </button>
+          <Tooltip text="清空日志" align="end">
+            <button class="btn-icon" aria-label="清空日志" @click="events.clear()">
+              <TrashIcon class="w-4 h-4" />
+            </button>
+          </Tooltip>
+          <Tooltip text="关闭 (Esc)" align="end">
+            <button class="btn-icon" aria-label="关闭" @click="layout.devDrawer = false">
+              <XMarkIcon class="w-4 h-4" />
+            </button>
+          </Tooltip>
         </div>
       </header>
       <p class="dev-note">引擎事件原始流（AI/引擎调试用，非面向用户）。</p>

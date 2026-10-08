@@ -1,5 +1,8 @@
 # daw-party 引擎核心实现计划（Plan 1：无头引擎）
 
+> **状态（2026-10-08）**：✅ **已全部落地**。对应 `crates/{plugin-api,synth,engine}`。
+> 注意：本计划的 `sequencer.rs` 已在 Plan 2 Task 4 中删除，其职责由 `schedule.rs` + `player.rs` 承担——下方任务文本保留为历史记录。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 建立一个无 UI 的 Rust 引擎基础——工程模型 + 命令/事件总线 + 音序器 + 统一插件 ABI + 内置合成器，能把工程离线渲染为逐位一致的 WAV。

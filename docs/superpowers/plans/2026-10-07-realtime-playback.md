@@ -1,5 +1,8 @@
 # daw-party 实时播放与传输控制实现计划（Plan 2）
 
+> **状态（2026-10-08）**：✅ **已全部落地**。对应 `engine/src/{schedule,player,transport,command_queue,realtime}.rs` 与 `examples/play_demo.rs`。
+> UI 侧的「原生实时传输」属 Plan 4b，**尚未接入**（前端目前仍是离线渲染试听）；后续路线见 `../ROADMAP.md` §5 Stage A。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让同一张音频图在 cpal 上实时播放，提供播放/暂停/停止/定位的传输控制，且实时回调内不分配内存（realtime-safe），并与离线渲染逐位一致。

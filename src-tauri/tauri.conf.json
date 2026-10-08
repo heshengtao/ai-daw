@@ -12,9 +12,13 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "daw-party",
-        "width": 800,
-        "height": 600
+        "width": 1280,
+        "height": 800,
+        "minWidth": 720,
+        "minHeight": 480,
+        "create": false
       }
     ],
     "security": {

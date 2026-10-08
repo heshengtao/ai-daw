@@ -1,8 +1,10 @@
 # daw-party — 轻量级 AI 原生 DAW 设计文档
 
 - 日期：2026-10-07
-- 状态：已评审通过，待实现
-- 许可证：Apache-2.0（计划开源）
+- 状态：已评审通过，**部分实现中**（进度见 `../ROADMAP.md`）
+- 许可证：Apache-2.0（**纯 Apache-2.0-only，无 GPL**）
+
+> **修订说明（2026-10-08）**：本文档的部分技术选型已随实现演进，权威口径以 `../ROADMAP.md` 为准。主要偏差：前端实际为 **Vue 3 + Pinia + Vue Router + Tailwind**（非 React + `@m3e/react`）；内置合成器为**手写正弦 + 线性 ADSR**（未引入 `fundsp`）；VST3 宿主首选 **`truce-rack`**；**不使用 ASIO**（其 SDK 为 GPLv3/专有，破坏 Apache-2.0）。
 
 ## 1. 目标与非目标
 
@@ -29,20 +31,24 @@
 
 ## 3. 技术选型
 
-| 层 | 选择 |
-| --- | --- |
-| 应用外壳 | Tauri v2 |
-| 前端 | React + `@m3e/react`（Material 3 Expressive Web Components） |
-| 音频 IO | `cpal` |
-| 内置合成器 DSP | `fundsp` |
-| MIDI | `midir` |
-| WAV 读写 | `hound` |
-| 音频解码/重采样 | `symphonia` / `rubato` |
-| VST3 宿主 | 优先评估 `rack`、`symdaw/audio-plugin-host`；否则基于 MIT 的 VST3 SDK 做薄绑定 |
-| CLAP（后置） | `clack` |
+| 层 | 选择 | 状态 |
+| --- | --- | --- |
+| 应用外壳 | Tauri v2 | ✅ |
+| 前端 | **Vue 3 + Pinia + Vue Router + Tailwind**（Material You token，适配自 Exameow） | ✅ |
+| 音频 IO | `cpal`（Windows 走 **WASAPI**，不用 ASIO——见下方许可证结论） | ✅ |
+| 实时/离线渲染 | 自研 `Player` + `ScheduledEvents`（离线与实时逐位一致） | ✅ |
+| 内置合成器 DSP | **手写正弦振荡器 + 线性 ADSR**（`fundsp` 未引入） | ✅ |
+| WAV 读写 | `hound` | ✅ |
+| MIDI 输入 | `midir` | ⬜ |
+| 音频解码/重采样 | `symphonia` / `rubato` | ⬜ |
+| VST3 宿主 | **首选 `truce-rack`**（MIT OR Apache-2.0、纯 Rust binding；CLAP+VST3 默认，AU/LV2 可选）；否则基于 MIT 的 VST3 SDK 做薄绑定 | ⬜ |
+| CLAP（后置） | `clack`（或随 `truce-rack` 一并获得） | ⬜ |
+| 响度/频谱分析 | `ebur128` / `rustfft` | ⬜ |
 
 ### 许可证结论
-- **VST 3.8 SDK（2025-10-20）已改为纯 MIT**，GPLv3/专有双授权已取消。MIT 与 Apache-2.0 兼容（保留 MIT 声明）。宿主 VST3 + Apache-2.0 开源可行。
+- **VST 3.8 SDK（2025-10）已改为纯 MIT**，GPLv3/专有双授权已取消。MIT 与 Apache-2.0 兼容（保留 MIT 声明）。宿主 VST3 + Apache-2.0 开源可行。
+- **ASIO SDK 同期转为 GPLv3（开源变体）/ Steinberg 专有**：在 Windows 启用 ASIO 后端会使整个应用受 GPLv3 约束，**与纯 Apache-2.0 不兼容**。故本项目**不使用 ASIO**，低延迟走 WASAPI。
+- **依赖策略**：只放行 MIT / Apache-2.0 / BSD / ISC / CC0 / Zlib；**禁 GPL / AGPL / ASIO 专有件**（用 `cargo-deny` 在 CI 拦截）。据此，`Dhwani`（GPL-3.0-only）**不可用**。
 - 商标：使用 "VST" 名称/Logo 可选；若使用需遵守 Steinberg 商标规范，不影响 MIT 授权。
 - 注意：`openDAW`、`Strudel` 为 **AGPL**，仅可借鉴思路，不得直接抄代码。
 
@@ -57,7 +63,7 @@
 │   ├─ bridges ipc Command/Event ↔ Tauri commands/events    │
 │   └─ (later) MCP server + local HTTP/WS                    │
 │   ┌────────────────────────────────────────────────────┐ │
-│   │ React + @m3e/react  (时间线/钢琴卷帘/混音台/可视化) │ │
+│   │ Vue 3 + Pinia + Tailwind  (时间线/钢琴卷帘/混音台/可视化) │ │
 │   └────────────────────────────────────────────────────┘ │
 ├──────────────────────────────────────────────────────────┤
 │ crates/engine  (no UI deps)                                │
@@ -74,14 +80,14 @@
 
 ## 5. Workspace / Crate 划分
 
-- `crates/engine` — 工程模型、命令/事件总线、传输、音序器、音频图、实时与离线渲染、混音。
-- `crates/plugin-api` — 统一插件 ABI（trait + 描述符 + 参数模型 + 状态）。
-- `crates/synth` — 唯一内置音色插件（`fundsp`），实现同一 ABI。
-- `crates/host-vst3` — VST3 宿主适配器，把 VST3 实例适配为同一 ABI。
-- `crates/ipc` — 命令/事件/工程 schema（serde），API 契约，前后端与未来 AI 共用。
-- `crates/analysis` — 渲染结果 → 响度/频谱指标（AI 的"听感"闭环）。
-- `src-tauri` — Tauri App。
-- `src` — React 前端。
+- `crates/engine` — ✅ **已实现**：工程模型、命令/事件总线、传输、调度、实时与离线渲染、混音。
+- `crates/plugin-api` — ✅ **已实现**：统一插件 ABI（trait + 描述符 + 参数模型 + 状态）。
+- `crates/synth` — ✅ **已实现**：唯一内置音色插件（**手写正弦 + 线性 ADSR**，非 `fundsp`），实现同一 ABI。
+- `crates/host-vst3` — ⬜ **未开始**：VST3 宿主适配器，把 VST3 实例适配为同一 ABI（首选 `truce-rack`）。
+- `crates/ipc` — ⬜ **未开始**：命令/事件/工程 schema（serde），API 契约，前后端与未来 AI 共用。
+- `crates/analysis` — ⬜ **未开始**：渲染结果 → 响度/频谱指标（AI 的"听感"闭环；用 `ebur128`/`rustfft`）。
+- `src-tauri` — ✅ **已实现**：Tauri App（薄命令层；实时传输待接）。
+- `src` — ✅ **已实现**：**Vue 3** 前端。
 - `docs` — 文档与设计。
 
 ## 6. 核心领域模型
@@ -125,7 +131,7 @@
 
 同一份 Command/Event 契约三种出口：
 1. 引擎 Rust API（进程内）。
-2. Tauri commands/events → React 前端。
+2. Tauri commands/events → Vue 前端。
 3. **外部**：MCP server + 本地 HTTP/WS + **skills 文档包**（后置）。
 
 - harness 通过 skills 学会调用工具，完成**捏音色 / 编曲 / 导出**，无需改动引擎。
@@ -158,7 +164,7 @@
 2. cpal 实时播放同一张图。
 3. 插件 ABI + 内置合成器 crate。
 4. VST3 宿主 crate + 扫描 + 通用参数。
-5. Tauri + React + `@m3e/react` 外壳：时间线/钢琴卷帘/混音台。
+5. Tauri + Vue 3 外壳：时间线/钢琴卷帘/混音台。
 6. 音频片段/采样器 + 录音。
 7. 导出（WAV / 分轨）。
 8. （后置）MCP/HTTP/WS + skills 包 + AI 可视化 + `analysis` 闭环。
@@ -171,5 +177,5 @@
 | 插件格式 | VST3 优先 | 生态最大；SDK 已 MIT，许可无碍 |
 | 内置音色 | 仅一个合成器，实现同一 ABI | 贯彻"所有音色都是插件"，保持精简 |
 | 工程格式 | 人类可读 JSON，事件溯源 | AI 与人类共改同一份；可订阅、可撤销 |
-| 前端 | React + `@m3e/react` | MD3 Expressive 组件开箱即用，生态成熟 |
+| 前端 | Vue 3 + Pinia + Vue Router + Tailwind（Material You） | 实际采用；轻量、生态成熟、便于与 Tauri IPC 对接 |
 | 开源许可 | Apache-2.0 | 与 MIT 的 VST3 SDK、clack 兼容 |
