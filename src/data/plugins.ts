@@ -39,90 +39,288 @@ export const SYNTH_ID = "builtin.synth";
  * 这些 id 曾经是独立的插件条目（`builtin.synth.lead` 等）。现在它们只是「内置合成器的一组
  * 参数」：插件清单里只留内置合成器一条，切预设即切音色。
  *
- * 引擎仍然按这些 id 注册（老工程照旧能加载、听感不变，见 `registry.rs::BUILTIN_PRESETS`），
- * 所以数值必须与那边保持一致。
+ * 其中**前四条**（lead / pluck / bass / pad）在引擎里仍然按原 id 注册
+ * （老工程照旧能加载、听感不变，见 `registry.rs::BUILTIN_PRESETS`），所以它们的数值必须与
+ * 那边保持一致；后 20 条是新加的音色，只存在于界面这一层。
  */
 export interface FactoryPreset {
-  /** 稳定 id；同时也是老的插件 id。 */
+  /** 稳定 id；前四条同时也是老的插件 id（见 `LEGACY_SYNTH_IDS`）。 */
   id: string;
   name: string;
   note: string;
+  /** 类别 slug：bass | lead | keys | pad | pluck | fx（界面映射为 i18n 键 presetCategory.<slug>）。 */
+  category: string;
   params: Record<string, number>;
 }
 
+/**
+ * 24 条出厂预设：6 类各 4 条。
+ *
+ * 每条都是**补丁**（只列改过的参数），未列出的取 `SYNTH_DEFAULTS`；`params` 里显式写出的
+ * `wave` 是为了不受默认波形变化影响（老四条与引擎补丁一致）。
+ * 顺序按类别排列：主音 → 拨弦 → 低音 → 铺底 → 键盘 → 音效。
+ */
 export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
+  // ---- 主音 Lead ----
   {
     id: "builtin.synth.lead",
     name: "preset.lead.name",
     note: "preset.lead.note",
+    category: "lead",
     params: {
-      gain: 0.75,
-      wave: 0,
-      attack: 0.005,
-      release: 0.25,
-      cutoff: 0.8,
-      resonance: 0.22,
-      filterEnv: 0.45,
-      decay: 0.35,
-      sustain: 0.7,
-      lfoRate: 0.8,
-      lfoDelay: 0.35,
-      lfoPitch: 0.1,
+      gain: 0.75, wave: 0, attack: 0.005, release: 0.25, cutoff: 0.8, resonance: 0.22,
+      filterEnv: 0.45, decay: 0.35, sustain: 0.7, lfoRate: 0.8, lfoDelay: 0.35, lfoPitch: 0.1,
     },
   },
+  {
+    id: "builtin.synth.lead.soft",
+    name: "preset.lead.soft.name",
+    note: "preset.lead.soft.note",
+    category: "lead",
+    params: {
+      gain: 0.7, wave: 2, attack: 0.02, release: 0.3, cutoff: 0.7, resonance: 0.1,
+      decay: 0.4, sustain: 0.75,
+    },
+  },
+  {
+    id: "builtin.synth.lead.square",
+    name: "preset.lead.square.name",
+    note: "preset.lead.square.note",
+    category: "lead",
+    params: {
+      gain: 0.72, wave: 1, attack: 0.004, release: 0.2, cutoff: 0.65, resonance: 0.25,
+      filterEnv: 0.4, decay: 0.3, sustain: 0.7,
+    },
+  },
+  {
+    id: "builtin.synth.lead.sync",
+    name: "preset.lead.sync.name",
+    note: "preset.lead.sync.note",
+    category: "lead",
+    params: {
+      gain: 0.7, wave: 3, attack: 0.003, release: 0.18, cutoff: 0.85, resonance: 0.35,
+      filterEnv: 0.5, decay: 0.25, sustain: 0.65, lfoRate: 0.85, lfoPitch: 0.15,
+    },
+  },
+  // ---- 拨弦 Pluck ----
   {
     id: "builtin.synth.pluck",
     name: "preset.pluck.name",
     note: "preset.pluck.note",
+    category: "pluck",
     params: {
-      gain: 0.8,
-      wave: 1,
-      attack: 0.001,
-      release: 0.08,
-      cutoff: 0.55,
-      filterEnv: 0.7,
-      decay: 0.12,
-      sustain: 0,
+      gain: 0.8, wave: 1, attack: 0.001, release: 0.08, cutoff: 0.55, filterEnv: 0.7,
+      decay: 0.12, sustain: 0,
     },
   },
+  {
+    id: "builtin.synth.pluck.soft",
+    name: "preset.pluck.soft.name",
+    note: "preset.pluck.soft.note",
+    category: "pluck",
+    params: {
+      gain: 0.75, wave: 3, attack: 0.002, release: 0.2, cutoff: 0.5, resonance: 0.1,
+      filterEnv: 0.5, decay: 0.2, sustain: 0.1,
+    },
+  },
+  {
+    id: "builtin.synth.pluck.bell",
+    name: "preset.pluck.bell.name",
+    note: "preset.pluck.bell.note",
+    category: "pluck",
+    params: {
+      gain: 0.72, wave: 2, attack: 0.001, release: 0.35, cutoff: 0.85, resonance: 0.25,
+      filterEnv: 0.6, decay: 0.45, sustain: 0,
+    },
+  },
+  {
+    id: "builtin.synth.pluck.mute",
+    name: "preset.pluck.mute.name",
+    note: "preset.pluck.mute.note",
+    category: "pluck",
+    params: {
+      gain: 0.78, wave: 0, attack: 0.001, release: 0.06, cutoff: 0.4, resonance: 0.2,
+      filterEnv: 0.55, decay: 0.1, sustain: 0,
+    },
+  },
+  // ---- 低音 Bass ----
   {
     id: "builtin.synth.bass",
     name: "preset.bass.name",
     note: "preset.bass.note",
+    category: "bass",
     params: {
-      gain: 0.85,
-      wave: 0,
-      attack: 0.002,
-      release: 0.12,
-      sub: 0.6,
-      cutoff: 0.35,
-      resonance: 0.25,
-      filterEnv: 0.5,
-      decay: 0.25,
-      sustain: 0.5,
+      gain: 0.85, wave: 0, attack: 0.002, release: 0.12, sub: 0.6, cutoff: 0.35,
+      resonance: 0.25, filterEnv: 0.5, decay: 0.25, sustain: 0.5,
     },
   },
+  {
+    id: "builtin.synth.bass.sub",
+    name: "preset.bass.sub.name",
+    note: "preset.bass.sub.note",
+    category: "bass",
+    params: {
+      gain: 0.8, wave: 0, attack: 0.004, release: 0.2, sub: 0.9, cutoff: 0.28,
+      decay: 0.35, sustain: 0.6,
+    },
+  },
+  {
+    id: "builtin.synth.bass.round",
+    name: "preset.bass.round.name",
+    note: "preset.bass.round.note",
+    category: "bass",
+    params: {
+      gain: 0.8, wave: 2, attack: 0.006, release: 0.18, sub: 0.4, cutoff: 0.3,
+      resonance: 0.1, decay: 0.3, sustain: 0.55,
+    },
+  },
+  {
+    id: "builtin.synth.bass.pick",
+    name: "preset.bass.pick.name",
+    note: "preset.bass.pick.note",
+    category: "bass",
+    params: {
+      gain: 0.8, wave: 1, attack: 0.001, release: 0.08, cutoff: 0.55, filterEnv: 0.7,
+      decay: 0.12, sustain: 0.1,
+    },
+  },
+  // ---- 铺底 Pad ----
   {
     id: "builtin.synth.pad",
     name: "preset.pad.name",
     note: "preset.pad.note",
+    category: "pad",
     params: {
-      gain: 0.55,
-      wave: 0,
-      attack: 0.35,
-      release: 1.2,
-      cutoff: 0.5,
-      filterEnv: 0.3,
-      decay: 1,
-      sustain: 0.8,
-      lfoRate: 0.6,
-      lfoFilter: 0.15,
+      gain: 0.55, wave: 0, attack: 0.35, release: 1.2, cutoff: 0.5, filterEnv: 0.3,
+      decay: 1, sustain: 0.8, lfoRate: 0.6, lfoFilter: 0.15,
+    },
+  },
+  {
+    id: "builtin.synth.pad.strings",
+    name: "preset.pad.strings.name",
+    note: "preset.pad.strings.note",
+    category: "pad",
+    params: {
+      gain: 0.6, wave: 0, attack: 0.25, release: 1, sub: 0.2, cutoff: 0.55,
+      resonance: 0.15, filterEnv: 0.25, decay: 0.9, sustain: 0.85, lfoRate: 0.5, lfoFilter: 0.1,
+    },
+  },
+  {
+    id: "builtin.synth.pad.glass",
+    name: "preset.pad.glass.name",
+    note: "preset.pad.glass.note",
+    category: "pad",
+    params: {
+      gain: 0.5, wave: 2, attack: 0.5, release: 1.5, cutoff: 0.7, resonance: 0.18,
+      filterEnv: 0.2, decay: 1.2, sustain: 0.8, lfoRate: 0.4, lfoPitch: 0.05,
+    },
+  },
+  {
+    id: "builtin.synth.pad.choir",
+    name: "preset.pad.choir.name",
+    note: "preset.pad.choir.note",
+    category: "pad",
+    params: {
+      gain: 0.52, wave: 3, attack: 0.4, release: 1.4, sub: 0.15, cutoff: 0.45,
+      filterEnv: 0.35, decay: 1.1, sustain: 0.85, lfoRate: 0.55, lfoFilter: 0.2,
+    },
+  },
+  // ---- 键盘 Keys ----
+  {
+    id: "builtin.synth.keys.ep",
+    name: "preset.keys.ep.name",
+    note: "preset.keys.ep.note",
+    category: "keys",
+    params: {
+      gain: 0.75, wave: 2, attack: 0.008, release: 0.45, cutoff: 0.6, resonance: 0.12,
+      filterEnv: 0.35, decay: 0.5, sustain: 0.5,
+    },
+  },
+  {
+    id: "builtin.synth.keys.bell",
+    name: "preset.keys.bell.name",
+    note: "preset.keys.bell.note",
+    category: "keys",
+    params: {
+      gain: 0.7, wave: 2, attack: 0.001, release: 0.8, cutoff: 0.9, resonance: 0.2,
+      filterEnv: 0.6, decay: 0.9, sustain: 0.2,
+    },
+  },
+  {
+    id: "builtin.synth.keys.organ",
+    name: "preset.keys.organ.name",
+    note: "preset.keys.organ.note",
+    category: "keys",
+    params: {
+      gain: 0.72, wave: 1, attack: 0.003, release: 0.12, sub: 0.3, cutoff: 0.75,
+      sustain: 0.95,
+    },
+  },
+  {
+    id: "builtin.synth.keys.pluck",
+    name: "preset.keys.pluck.name",
+    note: "preset.keys.pluck.note",
+    category: "keys",
+    params: {
+      gain: 0.78, wave: 3, attack: 0.001, release: 0.25, cutoff: 0.55, filterEnv: 0.65,
+      decay: 0.3, sustain: 0.15,
+    },
+  },
+  // ---- 音效 FX ----
+  {
+    id: "builtin.synth.fx.riser",
+    name: "preset.fx.riser.name",
+    note: "preset.fx.riser.note",
+    category: "fx",
+    params: {
+      gain: 0.6, wave: 0, attack: 0.6, release: 0.8, cutoff: 0.4, resonance: 0.4,
+      filterEnv: 0.8, decay: 1.5, sustain: 0.9, lfoRate: 0.9, lfoFilter: 0.35, lfoPitch: 0.2,
+    },
+  },
+  {
+    id: "builtin.synth.fx.wobble",
+    name: "preset.fx.wobble.name",
+    note: "preset.fx.wobble.note",
+    category: "fx",
+    params: {
+      gain: 0.65, wave: 1, attack: 0.01, release: 0.3, sub: 0.4, pwm: 0.5, cutoff: 0.35,
+      resonance: 0.5, filterEnv: 0.5, decay: 0.6, sustain: 0.7, lfoRate: 0.35, lfoFilter: 0.8,
+    },
+  },
+  {
+    id: "builtin.synth.fx.drone",
+    name: "preset.fx.drone.name",
+    note: "preset.fx.drone.note",
+    category: "fx",
+    params: {
+      gain: 0.5, wave: 0, attack: 0.8, release: 2, sub: 0.7, cutoff: 0.35,
+      resonance: 0.3, decay: 2, sustain: 0.95, lfoRate: 0.25, lfoFilter: 0.4,
+    },
+  },
+  {
+    id: "builtin.synth.fx.blip",
+    name: "preset.fx.blip.name",
+    note: "preset.fx.blip.note",
+    category: "fx",
+    params: {
+      gain: 0.7, wave: 1, attack: 0.001, release: 0.05, pwm: 0.8, cutoff: 0.8,
+      resonance: 0.5, filterEnv: 0.8, decay: 0.06, sustain: 0,
     },
   },
 ];
 
-/** 老的「预设音色」插件 id：现在都归内置合成器。 */
-export const LEGACY_SYNTH_IDS: string[] = SYNTH_FACTORY_PRESETS.map((p) => p.id);
+/**
+ * 老的「预设音色」插件 id：现在都归内置合成器。
+ *
+ * **只有**这四条走过 `canonicalPluginId`（老工程里轨道直接挂在它们身上）。上面新增的 20 条
+ * 只是「同一台合成器的一组参数」，id 仅用于界面匹配，不进这份名单、不参与归一键。
+ */
+export const LEGACY_SYNTH_IDS: string[] = [
+  "builtin.synth.lead",
+  "builtin.synth.pluck",
+  "builtin.synth.bass",
+  "builtin.synth.pad",
+];
 
 /** 把插件 id 归一到「哪个插件」这一层：老的预设音色都算内置合成器。 */
 export function canonicalPluginId(pluginId: string): string {
