@@ -776,8 +776,14 @@ export interface Keyframe {
 给 `Transport` 加字段：
 
 ```ts
-  /** 速度/拍号关键点（按 beat 升序）。空表示整首恒定。 */
-  keyframes: Keyframe[];
+  /**
+   * 速度/拍号关键点（按 beat 升序）。空表示整首恒定。
+   *
+   * **可选**：Rust 侧用了 `#[serde(default, skip_serializing_if = "Vec::is_empty")]`，
+   * 没有任何关键点时这个字段**不会出现在 IPC 载荷里**（这也是老工程零改动的原因），
+   * 所以前端读到的可能是 `undefined`——所有读取处都要 `?? []`。
+   */
+  keyframes?: Keyframe[];
 ```
 
 - [ ] **Step 2: API**
@@ -1075,7 +1081,7 @@ git commit -m "feat(tempo): transport seeks and reports position via the tempo m
     const t = project.value?.transport;
     if (!t) return null;
     const half = meterBeatAt(beat, t) / 8; // 半个 1/16 格
-    return t.keyframes.find((k) => Math.abs(k.beat - beat) < half) ?? null;
+    return (t.keyframes ?? []).find((k) => Math.abs(k.beat - beat) < half) ?? null;
   }
 
   /** 按所在分段的 1/16 拍吸附。 */
