@@ -2,6 +2,7 @@ use crate::apply::apply;
 use crate::command::Command;
 use crate::event::{Actor, Event};
 use crate::model::{ClipId, Project, TrackId};
+use crate::tempo::TempoMap;
 
 /// 引擎：持有工程状态、执行命令、产出事件、支持撤销。
 pub struct Engine {
@@ -17,6 +18,11 @@ pub struct Engine {
     next_clip_id: u64,
     /// 引擎的初始工程名；撤销一次 `Clear` 时用它重建，恢复被清空前的名字。
     initial_name: String,
+    /// 最近一次「保存到文件」时的快照。当前工程与它不同即表示有未保存的改动（dirty）。
+    ///
+    /// 用整份快照而不是「有没有执行过命令」来判断：撤销回到保存点、改回原值等
+    /// 都会让 dirty 自动变回 false，不必额外维护。
+    saved: Project,
 }
 
 impl Engine {
@@ -26,12 +32,13 @@ impl Engine {
         let project = Project::new(name.clone());
         Engine {
             initial: project.clone(),
-            project,
+            project: project.clone(),
             history: vec![],
             redo: vec![],
             next_track_id: 1,
             next_clip_id: 1,
             initial_name: name,
+            saved: project,
         }
     }
 
@@ -48,7 +55,18 @@ impl Engine {
             + 1;
         let initial_name = project.name.clone();
         let initial = project.clone();
-        Engine { initial, project, history: vec![], redo: vec![], next_track_id, next_clip_id, initial_name }
+        let saved = project.clone();
+        Engine { initial, project, history: vec![], redo: vec![], next_track_id, next_clip_id, initial_name, saved }
+    }
+
+    /// 从「工作副本 + 保存基线」构建引擎（会话缓存恢复用）。
+    ///
+    /// 与 [`Self::from_project`] 的唯一区别是基线可以不同于当前工程：若缓存里记录着
+    /// 未保存的改动，恢复后 `is_dirty()` 依旧为真。
+    pub fn restore(project: Project, saved: Project) -> Self {
+        let mut engine = Engine::from_project(project);
+        engine.saved = saved;
+        engine
     }
 
     /// 新建工程：清空并铺上默认分轨模板（见 [`crate::STARTER_TRACKS`]）。
@@ -64,6 +82,8 @@ impl Engine {
         }
         // 这一步铺出来的分轨不在历史里，所以它才是重放基线。
         engine.initial = engine.project.clone();
+        // 刚铺好的模板没有任何未保存的改动。
+        engine.saved = engine.project.clone();
         engine
     }
 
@@ -83,6 +103,8 @@ impl Engine {
             track.name = name.clone();
         }
         self.initial = self.project.clone();
+        // 按语言改名属于「初始状态」，不该把刚启动的工程标成 dirty。
+        self.saved = self.project.clone();
         true
     }
 
@@ -120,6 +142,21 @@ impl Engine {
     /// 当前工程状态。
     pub fn project(&self) -> &Project {
         &self.project
+    }
+
+    /// 是否有未保存的改动。
+    pub fn is_dirty(&self) -> bool {
+        self.project != self.saved
+    }
+
+    /// 最近一次保存/打开/新建时的工程快照（会话缓存用它记录「保存基线」）。
+    pub fn saved(&self) -> &Project {
+        &self.saved
+    }
+
+    /// 把当前工程记为「已保存」的基线（保存成功后调用）。
+    pub fn mark_saved(&mut self) {
+        self.saved = self.project.clone();
     }
 
     /// 可撤销的命令次数。
@@ -314,6 +351,81 @@ impl Engine {
                     length: crate::model::Clip::normalize_length(*length),
                 }]
             }
+            Command::SplitClip { track, clip, beat } => {
+                let Some(existing) = self
+                    .project
+                    .track(*track)
+                    .and_then(|t| t.clips.iter().find(|c| c.id == *clip))
+                else {
+                    return vec![];
+                };
+                let (start, len) = (existing.start, existing.length);
+                let at = *beat;
+                // 必须切在片段内部，且两侧都留得下一段合法长度。
+                let eps = 1e-6;
+                if !(at.is_finite() && at > start + eps && at < start + len - eps) {
+                    return vec![];
+                }
+                let rel = at - start;
+
+                // 音符：完全在左 / 完全在右 / 跨过切点（切成两半）。
+                let mut left_notes = Vec::new();
+                let mut right_notes = Vec::new();
+                for n in &existing.notes {
+                    let n_end = n.start + n.duration;
+                    if n_end <= rel + eps {
+                        left_notes.push(*n);
+                    } else if n.start >= rel - eps {
+                        right_notes.push(crate::model::Note { start: n.start - rel, ..*n });
+                    } else {
+                        left_notes.push(crate::model::Note { duration: rel - n.start, ..*n });
+                        right_notes.push(crate::model::Note { start: 0.0, duration: n_end - rel, ..*n });
+                    }
+                }
+
+                // 音频：按**秒**比例切素材窗口。采样率在比值里约掉，所以只需要速度表。
+                let mut left_audio = None;
+                let mut right_audio = None;
+                if let Some(src) = &existing.audio {
+                    // 没有窗口长度信息（旧工程）→ 无从确定左半段到哪停，安静忽略。
+                    let Some(window) = src.frames else { return vec![] };
+                    if window < 2 {
+                        return vec![];
+                    }
+                    let map = TempoMap::from_transport(&self.project.transport);
+                    let span = map.beats_to_seconds(start + len) - map.beats_to_seconds(start);
+                    let frac = if span > 0.0 {
+                        (map.beats_to_seconds(at) - map.beats_to_seconds(start)) / span
+                    } else {
+                        0.5
+                    };
+                    let left_frames = ((window as f64) * frac.clamp(0.0, 1.0)).round() as u64;
+                    let left_frames = left_frames.clamp(1, window - 1);
+                    left_audio = Some(crate::model::AudioSource {
+                        path: src.path.clone(),
+                        offset_frames: src.offset_frames,
+                        frames: Some(left_frames),
+                    });
+                    right_audio = Some(crate::model::AudioSource {
+                        path: src.path.clone(),
+                        offset_frames: src.offset_frames + left_frames,
+                        frames: Some(window - left_frames),
+                    });
+                }
+
+                let new_clip = self.alloc_clip_id();
+                vec![Event::ClipSplit {
+                    actor: actor.clone(),
+                    track: *track,
+                    clip: *clip,
+                    new_clip,
+                    at_beat: at,
+                    left_notes,
+                    right_notes,
+                    left_audio,
+                    right_audio,
+                }]
+            }
             Command::AddNote { track, clip, note } => {
                 vec![Event::NoteAdded {
                     actor: actor.clone(),
@@ -446,6 +558,9 @@ impl Engine {
                     value: *value,
                 }]
             }
+            Command::RenameProject { name } => {
+                vec![Event::ProjectRenamed { actor: actor.clone(), name: name.clone() }]
+            }
             Command::NewProject { name, track_names } => {
                 // 先清空，再铺默认分轨：每一步都走正常事件，因此整条链天然可撤销。
                 let mut events =
@@ -535,7 +650,7 @@ mod tests {
                 track,
                 start: -5.0,
                 length: 1e9,
-                source: AudioSource { path: "/tmp/a.wav".into(), offset_frames: 0 },
+                source: AudioSource { path: "/tmp/a.wav".into(), offset_frames: 0, frames: None },
             },
             Actor::Human,
         );
@@ -572,7 +687,7 @@ mod tests {
             Command::SetClipAudio {
                 track,
                 clip,
-                audio: Some(AudioSource { path: "x.wav".into(), offset_frames: 0 }),
+                audio: Some(AudioSource { path: "x.wav".into(), offset_frames: 0, frames: None }),
             },
             Actor::Human,
         );
@@ -1140,5 +1255,123 @@ mod tests {
     fn keyframe_events_are_structural() {
         assert!(!Event::KeyframeSet { actor: Actor::Human, beat: 1.0, tempo: 120.0, num: 4, den: 4 }.is_mix_only());
         assert!(!Event::KeyframeRemoved { actor: Actor::Human, beat: 1.0 }.is_mix_only());
+    }
+
+    #[test]
+    fn rename_project_emits_event_and_is_undoable() {
+        let mut e = Engine::new("demo");
+        let events = e.execute(Command::RenameProject { name: "Song".into() }, Actor::Human);
+        assert!(matches!(events.as_slice(), [Event::ProjectRenamed { name, .. }] if name == "Song"));
+        assert_eq!(e.project().name, "Song");
+        assert!(e.undo());
+        assert_eq!(e.project().name, "demo");
+    }
+
+    #[test]
+    fn dirty_tracks_the_saved_baseline() {
+        let mut e = Engine::new_project("demo");
+        assert!(!e.is_dirty(), "刚建好的工程是干净的");
+
+        e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
+        assert!(e.is_dirty(), "编辑之后变成 dirty");
+
+        e.mark_saved();
+        assert!(!e.is_dirty(), "保存后回到干净");
+
+        // 撤销回到保存点之后，也应当自动变回干净。
+        e.execute(Command::AddTrack { name: "B".into() }, Actor::Human);
+        assert!(e.is_dirty());
+        e.undo();
+        assert!(!e.is_dirty(), "撤销回到保存点 → 不再是 dirty");
+
+        // 改了名字也算改动。
+        e.execute(Command::RenameProject { name: "Renamed".into() }, Actor::Human);
+        assert!(e.is_dirty());
+    }
+
+    #[test]
+    fn restore_keeps_the_unsaved_difference() {
+        let mut e = Engine::new("demo");
+        let saved = e.project().clone();
+        e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
+        let working = e.project().clone();
+
+        let restored = Engine::restore(working, saved);
+        assert!(restored.is_dirty(), "缓存里带着未保存改动，恢复后仍应为 dirty");
+    }
+
+    #[test]
+    fn split_clip_cuts_notes_at_the_beat() {
+        let mut e = Engine::new("t");
+        let ev = e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
+        let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        let ev = e.execute(Command::AddClip { track, start: 0.0, length: 4.0 }, Actor::Human);
+        let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
+        let note = |pitch, start, duration| crate::model::Note { pitch, start, duration, velocity: 100, volume: 127 };
+        e.execute(Command::AddNote { track, clip, note: note(60, 0.0, 1.0) }, Actor::Human);
+        e.execute(Command::AddNote { track, clip, note: note(62, 1.0, 2.0) }, Actor::Human); // 跨过第 2 拍
+        e.execute(Command::AddNote { track, clip, note: note(64, 3.0, 0.5) }, Actor::Human);
+
+        let events = e.execute(Command::SplitClip { track, clip, beat: 2.0 }, Actor::Human);
+        assert!(matches!(events.as_slice(), [Event::ClipSplit { .. }]));
+
+        let t = e.project().track(track).unwrap();
+        assert_eq!(t.clips.len(), 2);
+        let (left, right) = (&t.clips[0], &t.clips[1]);
+        assert_eq!((left.start, left.length), (0.0, 2.0));
+        assert_eq!((right.start, right.length), (2.0, 2.0));
+
+        let left_pitches: Vec<u8> = left.notes.iter().map(|n| n.pitch).collect();
+        assert_eq!(left_pitches, vec![60, 62]);
+        assert_eq!(left.notes[1].duration, 1.0, "跨过切点的音符左半段被截断");
+        let right_pitches: Vec<u8> = right.notes.iter().map(|n| n.pitch).collect();
+        assert_eq!(right_pitches, vec![62, 64]);
+        assert_eq!((right.notes[0].start, right.notes[0].duration), (0.0, 1.0));
+        assert_eq!((right.notes[1].start, right.notes[1].duration), (1.0, 0.5));
+
+        assert!(e.undo());
+        assert_eq!(e.project().track(track).unwrap().clips.len(), 1, "切分可撤销");
+    }
+
+    #[test]
+    fn split_audio_clip_divides_the_source_window() {
+        use crate::model::AudioSource;
+        let mut e = Engine::new("t");
+        let ev = e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
+        let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        let ev = e.execute(
+            Command::AddAudioClip {
+                track,
+                start: 0.0,
+                length: 4.0,
+                source: AudioSource { path: "/tmp/a.wav".into(), offset_frames: 100, frames: Some(800) },
+            },
+            Actor::Human,
+        );
+        let clip = match ev[0] { Event::AudioClipAdded { clip, .. } => clip, _ => unreachable!() };
+
+        e.execute(Command::SplitClip { track, clip, beat: 2.0 }, Actor::Human);
+        let t = e.project().track(track).unwrap();
+        let left = t.clips[0].audio.clone().unwrap();
+        let right = t.clips[1].audio.clone().unwrap();
+        assert_eq!(left.offset_frames, 100);
+        assert_eq!(left.frames, Some(400), "左半段窗口取一半");
+        assert_eq!(right.offset_frames, 500);
+        assert_eq!(right.frames, Some(400));
+        // 两半段铺满各自的跨度，比值一致 → 不变调。
+        assert_eq!(left.frames.unwrap() as f64 / t.clips[0].length, right.frames.unwrap() as f64 / t.clips[1].length);
+    }
+
+    #[test]
+    fn split_clip_ignores_beats_outside_the_clip() {
+        let mut e = Engine::new("t");
+        let ev = e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
+        let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        let ev = e.execute(Command::AddClip { track, start: 2.0, length: 2.0 }, Actor::Human);
+        let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
+        for beat in [2.0, 1.0, 4.0, 9.0, f64::NAN] {
+            assert!(e.execute(Command::SplitClip { track, clip, beat }, Actor::Human).is_empty());
+        }
+        assert_eq!(e.project().track(track).unwrap().clips.len(), 1);
     }
 }

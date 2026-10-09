@@ -12,11 +12,12 @@ import { usePluginsStore } from "@/stores/plugins";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
 import { useI18n } from "@/i18n";
-import { canonicalPluginId, DELAY_ID, REVERB_ID, SYNTH_ID } from "@/data/plugins";
+import { canonicalPluginId, CHORUS_ID, DELAY_ID, DRIVE_ID, EQ_ID, REVERB_ID, SYNTH_ID } from "@/data/plugins";
 import { openEffectWindow, openPluginWindow, openSynthWindow } from "@/api/tauri";
+import { isTauri } from "@/utils/platform";
 
 /** 有独立面板的内置效果器（点「界面」开我们自己的窗口，而不是原生窗口）。 */
-const BUILTIN_EFFECT_IDS = [DELAY_ID, REVERB_ID];
+const BUILTIN_EFFECT_IDS = [DELAY_ID, REVERB_ID, CHORUS_ID, DRIVE_ID, EQ_ID];
 
 export function isBuiltinEffect(pluginId: string | undefined | null): boolean {
   return !!pluginId && BUILTIN_EFFECT_IDS.includes(canonicalPluginId(pluginId));
@@ -87,14 +88,20 @@ export function usePluginInterface() {
    * （引擎的编辑器句柄是按**轨道**记的，一轨只有一个乐器编辑器），所以退回侧边栏的
    * 「插件界面」标签——那里够宽，参数再多也放得下。
    */
-  async function openEffect(trackId: number, index: number, pluginId: string): Promise<void> {
+  async function openEffect(trackId: number, pluginId: string): Promise<void> {
     if (isBuiltinEffect(pluginId)) {
-      try {
-        await openEffectWindow(trackId, index);
+      // 浏览器预览里没有独立窗口：退回侧边栏面板。
+      if (!isTauri()) {
+        layout.openTab("editor");
         return;
-      } catch {
-        // 浏览器预览 / 建窗失败：退回侧边栏面板，功能不打折。
       }
+      try {
+        await openEffectWindow(trackId, pluginId);
+      } catch (err) {
+        // 后端只会在「这个效果器已经不在链上」时失败——明说，而不是开一扇空窗。
+        layout.notify(String(err));
+      }
+      return;
     }
     layout.openTab("editor");
   }

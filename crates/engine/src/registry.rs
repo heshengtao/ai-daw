@@ -16,6 +16,12 @@ pub const BUILTIN_SYNTH: &str = "builtin.synth";
 pub const BUILTIN_DELAY: &str = daw_party_effects::DELAY_ID;
 /// 内置混响的插件 id。
 pub const BUILTIN_REVERB: &str = daw_party_effects::REVERB_ID;
+/// 内置合唱的插件 id。
+pub const BUILTIN_CHORUS: &str = daw_party_effects::CHORUS_ID;
+/// 内置过载/失真的插件 id。
+pub const BUILTIN_DRIVE: &str = daw_party_effects::DRIVE_ID;
+/// 内置两段 EQ 的插件 id。
+pub const BUILTIN_EQ: &str = daw_party_effects::EQ_ID;
 
 /// 内置合成器的**出厂预设**：同一套信号链，不同的参数补丁。
 ///
@@ -219,6 +225,9 @@ impl PluginRegistry {
         // 内置效果器：以前空间感只能靠外部 VST3，铺底/弦乐/管乐只能干着听。
         r.register(BUILTIN_DELAY, |_track| Box::new(daw_party_effects::Delay::new()));
         r.register(BUILTIN_REVERB, |_track| Box::new(daw_party_effects::Reverb::new()));
+        r.register(BUILTIN_CHORUS, |_track| Box::new(daw_party_effects::Chorus::new()));
+        r.register(BUILTIN_DRIVE, |_track| Box::new(daw_party_effects::Drive::new()));
+        r.register(BUILTIN_EQ, |_track| Box::new(daw_party_effects::Eq::new()));
         r
     }
 
@@ -268,7 +277,7 @@ mod tests {
     #[test]
     fn builtins_include_the_effects() {
         let r = PluginRegistry::with_builtins();
-        for id in [BUILTIN_DELAY, BUILTIN_REVERB] {
+        for id in [BUILTIN_DELAY, BUILTIN_REVERB, BUILTIN_CHORUS, BUILTIN_DRIVE, BUILTIN_EQ] {
             let p = r.create(id, TrackId(1)).unwrap_or_else(|| panic!("{id} 未注册"));
             let d = p.descriptor();
             assert_eq!(d.kind, PluginKind::Effect, "{id} 应当是效果器");

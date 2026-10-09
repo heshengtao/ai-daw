@@ -12,7 +12,6 @@ import type {
   CatalogPlugin,
   ClipPlacement,
   ClipRef,
-  EffectSpec,
   HistoryDepths,
   HistoryState,
   McpConfig,
@@ -175,8 +174,9 @@ const MOCK_PARAMS: Record<string, BackendParam[]> = {
   ],
 };
 /** 铺上默认分轨的空工程。`names` 是界面按当前语言给出的分轨名（按模板顺序）。 */
-function starterProject(names?: string[]): Project {
+function starterProject(names?: string[], tempo?: number): Project {
   const p = empty();
+  if (Number.isFinite(tempo)) p.transport.tempo = Math.min(1000, Math.max(1, tempo!));
   p.tracks = STARTER_TRACKS.map(({ name, plugin_id }, i) => ({
     id: nextTrackId++,
     name: names?.[i] ?? name,
@@ -209,6 +209,11 @@ let nextClipId = 1;
 // 初始状态就是「新建工程」的结果：与真实后端 `Engine::new_project` 一致（带默认分轨、不带历史）。
 let state: Project = starterProject();
 
+/** 是否有未保存改动（预览里只按「有没有编辑过」粗略模拟）。 */
+let dirty = false;
+/** 当前工程的文件路径（预览里的假路径）。 */
+let sessionPath: string | null = null;
+
 /** 快照式撤销栈：浏览器预览里的撤销/重做与真实引擎行为一致。 */
 const undoStack: Project[] = [];
 const redoStack: Project[] = [];
@@ -223,6 +228,7 @@ function commit(mutate: () => void): Project {
   if (undoStack.length > 200) undoStack.shift();
   redoStack.length = 0;
   mutate();
+  dirty = true;
   return clone(state);
 }
 
@@ -434,24 +440,6 @@ export const mockApi = {
       }
     }),
 
-  applyPreset: (trackId: number, params: Record<string, number>, effects: EffectSpec[]): Project =>
-    commit(() => {
-      const t = track(trackId);
-      if (!t) return;
-      const inst = t.instrument;
-      if (inst) {
-        for (const [id, value] of Object.entries(params)) {
-          if (Number.isFinite(value)) inst.params[id] = value;
-        }
-      }
-      // 与后端一致：**替换**整条效果链。
-      t.effects = effects.map((spec) => ({
-        plugin_id: spec.plugin_id,
-        params: { ...spec.params },
-        state: [],
-      }));
-    }),
-
   setEffectParams: (trackId: number, index: number, params: Record<string, number>): Project =>
     commit(() => {
       const fx = track(trackId)?.effects[index];
@@ -517,15 +505,23 @@ export const mockApi = {
       );
     }),
 
-  newProject: (trackNames?: string[]): Project => {
+  newProject: (trackNames?: string[], tempo?: number): Project => {
     transport.position_frames = 0;
     transport.playing = false;
     const next = commit(() => {
-      state = starterProject(trackNames);
+      state = starterProject(trackNames, tempo);
     });
+    // 新建的工程是干净的，也没有对应的文件。
+    dirty = false;
+    sessionPath = null;
     emitTransport();
     return next;
   },
+
+  renameProject: (name: string): Project =>
+    commit(() => {
+      state.name = name;
+    }),
 
   /** 与后端一致：只在工程仍是默认模板时才按语言改名，且不进撤销栈。 */
   localizeStarterTracks: (names: string[]): Project => {
@@ -650,7 +646,7 @@ export const mockApi = {
       state.master.gain_db = gainDb;
     }),
 
-  historyDepths: (): HistoryDepths => ({ undo: undoStack.length, redo: redoStack.length }),
+  historyDepths: (): HistoryDepths => ({ undo: undoStack.length, redo: redoStack.length, dirty }),
 
   undo: (): HistoryState => {
     const previous = undoStack.pop();
@@ -658,7 +654,7 @@ export const mockApi = {
       redoStack.push(clone(state));
       state = previous;
     }
-    return { project: clone(state), undo_depth: undoStack.length, redo_depth: redoStack.length };
+    return { project: clone(state), undo_depth: undoStack.length, redo_depth: redoStack.length, dirty };
   },
 
   redo: (): HistoryState => {
@@ -667,10 +663,20 @@ export const mockApi = {
       undoStack.push(clone(state));
       state = next;
     }
-    return { project: clone(state), undo_depth: undoStack.length, redo_depth: redoStack.length };
+    return { project: clone(state), undo_depth: undoStack.length, redo_depth: redoStack.length, dirty };
   },
 
-  saveProject: (path: string): string => path,
+  saveProject: (path: string): string => {
+    dirty = false;
+    sessionPath = path;
+    return path;
+  },
+
+  currentProjectPath: (): string | null => sessionPath,
+
+  cacheSession: (path: string | null): void => {
+    sessionPath = path;
+  },
 
   openProject: (): Project => {
     state = sample();
@@ -678,6 +684,7 @@ export const mockApi = {
     nextClipId = 4;
     undoStack.length = 0;
     redoStack.length = 0;
+    dirty = false;
     transport.position_frames = 0;
     transport.playing = false;
     emitTransport();
@@ -719,7 +726,8 @@ export const mockApi = {
           start: Math.max(0, start),
           length: 2,
           notes: [],
-          audio: { path, offset_frames: 0 },
+          // 假素材：给一个窗口长度，让预览里的切分也能走通。
+          audio: { path, offset_frames: 0, frames: 96000 },
         });
       }
     }),
@@ -730,6 +738,7 @@ export const mockApi = {
     length: number,
     path: string,
     offsetFrames: number,
+    frames?: number,
   ): Project =>
     commit(() => {
       const t = track(trackId);
@@ -739,9 +748,56 @@ export const mockApi = {
           start: Math.max(0, start),
           length,
           notes: [],
-          audio: { path, offset_frames: offsetFrames },
+          audio: { path, offset_frames: offsetFrames, frames },
         });
       }
+    }),
+
+  /** 在第 `beat` 拍切分片段（预览版按拍数近似切音频窗口）。 */
+  splitClip: (trackId: number, clipId: number, beat: number): Project =>
+    commit(() => {
+      const t = track(trackId);
+      const c = t?.clips.find((x) => x.id === clipId);
+      if (!t || !c) return;
+      const end = c.start + c.length;
+      const eps = 1e-6;
+      if (!(Number.isFinite(beat) && beat > c.start + eps && beat < end - eps)) return;
+      const rel = beat - c.start;
+
+      const leftNotes: Note[] = [];
+      const rightNotes: Note[] = [];
+      for (const n of c.notes) {
+        const nEnd = n.start + n.duration;
+        if (nEnd <= rel + eps) leftNotes.push(n);
+        else if (n.start >= rel - eps) rightNotes.push({ ...n, start: n.start - rel });
+        else {
+          leftNotes.push({ ...n, duration: rel - n.start });
+          rightNotes.push({ ...n, start: 0, duration: nEnd - rel });
+        }
+      }
+
+      let rightAudio = c.audio;
+      if (c.audio) {
+        if (c.audio.frames === undefined) return; // 无窗口长度 → 不切（与引擎一致）
+        const window = c.audio.frames;
+        if (window < 2) return;
+        const leftFrames = Math.min(window - 1, Math.max(1, Math.round((window * rel) / c.length)));
+        c.audio = { ...c.audio, frames: leftFrames };
+        rightAudio = { ...c.audio, offset_frames: c.audio.offset_frames + leftFrames, frames: window - leftFrames };
+      }
+
+      c.length = rel;
+      c.notes = leftNotes;
+      const right = {
+        id: nextClipId++,
+        start: beat,
+        length: end - beat,
+        notes: rightNotes,
+        audio: rightAudio,
+      };
+      const at = t.clips.findIndex((x) => x.start > right.start);
+      if (at < 0) t.clips.push(right);
+      else t.clips.splice(at, 0, right);
     }),
 
   audioWaveform: (_path: string, buckets: number): number[] => {

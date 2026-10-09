@@ -12,6 +12,7 @@
  * - 拖动片段右边缘 → 改长度；
  * - 左键点击 → 选中；**单击片段会顺手打开右侧检查器**（方便立刻换音色）；Ctrl/Cmd+点击 → 加选；
  * - **Shift/Alt + 左键拖动 → 框选**（顶栏的鼠标模式也能切换默认左键行为）；
+ * - **分隔模式（顶栏 / 快捷键 3）**：左键点击片段 → 在该拍切成两段（razor）；
  * - **右键点击 → 删除**；**右键拖动 → 框选批量删除**；
  * - 双击片段 → 进入它的钢琴卷帘；
  * - Delete/Backspace → 删除所选片段；Ctrl/Cmd + 滚轮 → 缩放。
@@ -255,9 +256,31 @@ function cancelOpenInspector(): void {
 // 指针按下
 // ---------------------------------------------------------------------------
 
+/**
+ * 在指针所在处切分片段（分隔模式）。
+ *
+ * 切成两半之后左半段沿用原 id；切在片段之外（含两端）时直接忽略。
+ */
+async function splitAt(clientX: number, track: Track, clip: Clip): Promise<void> {
+  const beat = timeline.snapBeats(beatAt(clientX));
+  if (!(beat > clip.start + 1e-6 && beat < clip.start + clip.length - 1e-6)) return;
+  try {
+    await store.splitClip(track.id, clip.id, beat);
+    layout.notify(i18n.t("arrange.clipSplit"));
+  } catch (err) {
+    layout.notify(i18n.t("error.splitClip", { error: String(err) }));
+  }
+}
+
 function onClipPointerDown(e: PointerEvent, track: Track, clip: Clip): void {
   if (e.button !== 0) return;
   e.stopPropagation();
+
+  // 分隔模式：点片段即在该拍切开，不启动拖动。
+  if (layout.tool === "split") {
+    void splitAt(e.clientX, track, clip);
+    return;
+  }
 
   // Ctrl/Cmd 点击：加入/移出选择，不启动拖动。
   if (e.metaKey || e.ctrlKey) {
@@ -321,6 +344,8 @@ function onLanePointerDown(e: PointerEvent, track: Track): void {
     return;
   }
   if (e.button !== 0) return;
+  // 分隔模式只对片段生效，空白处按下不做任何事。
+  if (layout.tool === "split") return;
   const beat = Math.max(0, snapDelta(beatAt(e.clientX)));
 
   // 顶栏的鼠标模式决定左键的默认含义；Shift/Alt 随时可以临时切到框选。
@@ -550,7 +575,7 @@ async function pasteClip(): Promise<void> {
   try {
     // 音频片段：内容在 `audio` 上、`notes` 是空的。必须按音频建块，否则粘出来是个等长的空块。
     if (p.audio) {
-      await store.addAudioClip(trackId, start, p.length, p.audio.path, p.audio.offset_frames);
+      await store.addAudioClip(trackId, start, p.length, p.audio.path, p.audio.offset_frames, p.audio.frames);
       const track = store.project?.tracks.find((x) => x.id === trackId);
       const created = track?.clips[track.clips.length - 1];
       if (created) selection.selectClip(trackId, created.id);
@@ -733,6 +758,7 @@ onUnmounted(() => {
             :class="{
               dragging: moveDrag?.base.some((b) => b.clip === clip.id),
               selected: isSelected(clip, track.id),
+              'split-cursor': layout.tool === 'split',
             }"
             :style="clipStyle(clip, ti)"
             :data-track="track.id"
@@ -872,6 +898,10 @@ onUnmounted(() => {
 .clip.dragging {
   cursor: grabbing;
   opacity: 0.9;
+}
+/* 分隔模式：光标提示「这一下是切开」 */
+.clip.split-cursor {
+  cursor: col-resize;
 }
 .clip.selected {
   border-color: rgb(var(--md-primary));

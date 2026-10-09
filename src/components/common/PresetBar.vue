@@ -2,7 +2,7 @@
 /**
  * 预设条：一键切音色。
  *
- * - 选一个预设 → 把它的参数整组写回当前轨道（一次事务，一个撤销步骤）；
+ * - 选一个预设 → 把它的**参数**整组写回当前轨道（一次事务，一个撤销步骤）；预设不碰效果链；
  * - 「另存为…」把**当前**参数存成一条新预设；
  * - 自存预设可以删除；出厂预设（内置合成器那几组）只能另存为。
  *
@@ -15,7 +15,6 @@ import { computed, nextTick, ref, watch } from "vue";
 import { BookmarkIcon, PlusIcon, TrashIcon } from "@heroicons/vue/24/outline";
 
 import Md3Select from "@/components/common/Md3Select.vue";
-import type { EffectSpec } from "@/api/types";
 import { usePresetsStore } from "@/stores/presets";
 import { useI18n } from "@/i18n";
 
@@ -23,20 +22,18 @@ const props = defineProps<{
   pluginId: string;
   /** 当前参数（用来判断命中哪个预设、以及「另存为」存什么）。 */
   params: Record<string, number>;
-  /** 当前效果链：参与「命中哪个预设」的判断（带混响的铺底 ≠ 同一组参数加个效果）。 */
-  effects?: EffectSpec[];
 }>();
 
 const emit = defineEmits<{
-  /** 选了一条预设：整组参数 + 它自带的效果链（父组件一次事务写回）。 */
-  (e: "apply", params: Record<string, number>, effects: EffectSpec[]): void;
+  /** 选了一条预设：整组参数（父组件一次事务写回；预设不碰效果链）。 */
+  (e: "apply", params: Record<string, number>): void;
 }>();
 
 const presets = usePresetsStore();
 const { t } = useI18n();
 
 const options = computed(() => presets.forPlugin(props.pluginId));
-const active = computed(() => presets.match(props.pluginId, props.params, props.effects));
+const active = computed(() => presets.match(props.pluginId, props.params));
 
 /** 喂给 `Md3Select` 的选项：按出厂 / 自存分组（同组的项在 `options` 里已经相邻）。 */
 const selectOptions = computed(() =>
@@ -82,7 +79,7 @@ async function commitName(): Promise<void> {
 
 function pick(id: string): void {
   const option = options.value.find((p) => p.id === id);
-  if (option) emit("apply", option.params, option.effects);
+  if (option) emit("apply", option.params);
 }
 
 async function remove(): Promise<void> {

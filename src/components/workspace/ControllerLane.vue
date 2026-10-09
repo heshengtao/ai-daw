@@ -7,14 +7,17 @@
  *   同一绝对时间轴——所以片段有偏移时也照样对齐）；
  * - **高度**表示当前所选属性。
  *
- * 目前只做两个**所有音源都通用**的属性（不同插件将来会带来各自的属性）：
- * - **力度**（演奏强度）：手弹得多重。内置合成器把它折算成振幅；
- * - **音量**（单音电平）：纯增益微调，不改变音色，默认 127（不衰减）。
+ * 属性用**下拉选择**（与主流 DAW 的控制器/包络选择一致），列表可扩展。目前有两项：
+ * - **力度**（velocity，演奏强度）：**所有乐器通用**——它写在 Note On 里，任何 MIDI 音源都收。
+ * - **音量**（单音电平）：纯增益微调，不改音色。支持「逐音符音量」的音源（内置合成器）直接生效；
+ *   其余音源由引擎**折算进力度**（见 `player::fold_note_volume`），所以也照样有反应，只是表现方式
+ *   取决于音源怎么解释力度。
  *
  * 交互：上下拖动条子改值（多选整组、松手才提交一次）；空白处左键框选；
  * 右键点击删除、右键拖动框选批量删除。
  */
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import Md3Select from "@/components/common/Md3Select.vue";
 import { capturePointer } from "@/utils/pointer";
 import { useI18n } from "@/i18n";
 import { useTimelineStore } from "@/stores/timeline";
@@ -62,8 +65,8 @@ const SPECS: Record<ControllerProperty, Spec> = {
   },
 };
 
-/** 分段按钮的展示顺序（按需求原文：音量在前）。 */
-const OPTIONS: ControllerProperty[] = ["volume", "velocity"];
+/** 下拉里的展示顺序：**力度在前**（它是所有音源都通用的那一个）。 */
+const OPTIONS: ControllerProperty[] = ["velocity", "volume"];
 
 const props = defineProps<{
   notes: Note[];
@@ -85,6 +88,19 @@ const emit = defineEmits<{
 const timeline = useTimelineStore();
 const i18n = useI18n();
 const spec = computed(() => SPECS[props.property]);
+
+/** 下拉选项：名称 + 一句说明（`Md3Select` 会把说明显示成第二行小字）。 */
+const chooserOptions = computed(() =>
+  OPTIONS.map((opt) => ({
+    id: opt,
+    label: i18n.t(SPECS[opt].labelKey),
+    hint: i18n.t(SPECS[opt].hintKey),
+  })),
+);
+
+function onChoose(id: string): void {
+  emit("update:property", id as ControllerProperty);
+}
 
 /** 拖动中的值（预览用）；松手才提交。 */
 const dragValue = ref<number | null>(null);
@@ -269,18 +285,14 @@ onUnmounted(() => {
   <div class="lane-block">
     <!-- 头部：属性选择 + 读数 -->
     <div class="lane-head">
-      <div class="seg" role="group" :aria-label="i18n.t('lane.velocity')">
-        <button
-          v-for="opt in OPTIONS"
-          :key="opt"
-          class="seg-btn"
-          :class="{ on: property === opt }"
-          :aria-pressed="property === opt"
-          :title="i18n.t(SPECS[opt].hintKey)"
-          @click="emit('update:property', opt)"
-        >
-          {{ i18n.t(SPECS[opt].labelKey) }}
-        </button>
+      <!-- 属性选择：下拉（与主流 DAW 的控制器/包络选择一致），说明文字在菜单里 -->
+      <div class="lane-chooser">
+        <Md3Select
+          :model-value="property"
+          :options="chooserOptions"
+          :label="i18n.t('lane.property')"
+          @select="onChoose"
+        />
       </div>
 
       <span v-if="readout" class="readout">
@@ -350,39 +362,22 @@ onUnmounted(() => {
   padding: 0 12px;
   border-bottom: 1px solid rgb(var(--md-outline-variant) / 0.35);
 }
-/* 属性选择：自绘分段按钮 */
-.seg {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 999px;
-  background-color: rgb(var(--md-surface-container-highest));
+/* 属性下拉：压到与泳道头部同高的小尺寸（`Md3Select` 默认是 34px 的宽药丸） */
+.lane-chooser {
   flex: 0 0 auto;
+  display: inline-flex;
+  min-width: 0;
 }
-.seg-btn {
-  height: 20px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: rgb(var(--md-on-surface-variant));
+.lane-chooser :deep(.md3-select) {
+  width: 120px;
+  height: 22px;
+  padding: 0 8px 0 10px;
+  gap: 6px;
   font-size: 11px;
-  cursor: pointer;
-  transition: background-color 0.14s ease, color 0.14s ease;
 }
-.seg-btn:hover:not(.on) {
-  color: rgb(var(--md-on-surface));
-}
-/* 选中的那一项要**一眼看得出来**：高对比实心底 + 加粗（原来用容器色，和轨道底色太接近）。 */
-.seg-btn.on {
-  background-color: rgb(var(--md-primary));
-  color: rgb(var(--md-on-primary));
-  font-weight: 600;
-}
-.seg-btn:focus-visible {
-  outline: 2px solid rgb(var(--md-primary));
-  outline-offset: 1px;
+.lane-chooser :deep(.caret) {
+  width: 13px;
+  height: 13px;
 }
 .readout {
   font-size: 11px;
@@ -461,10 +456,5 @@ onUnmounted(() => {
 .marquee.danger {
   border-color: rgb(var(--md-error));
   background-color: rgb(var(--md-error) / 0.16);
-}
-@media (prefers-reduced-motion: reduce) {
-  .seg-btn {
-    transition: none;
-  }
 }
 </style>

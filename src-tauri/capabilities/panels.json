@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "panels",
+  "description": "Capabilities for the plugin/panel windows (built-in synth, built-in effects, native plugin UI hosts, blank)",
+  "windows": ["synth-*", "effect-*", "plugin-ui-*", "blank"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy"
+  ]
+}

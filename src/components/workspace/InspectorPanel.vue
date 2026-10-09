@@ -316,7 +316,7 @@ async function toggleSolo(): Promise<void> {
               <button
                 class="open-editor small"
                 :aria-label="i18n.t('inspector.openInterface', { name: plugins.name(fx.plugin_id) })"
-                @click="pluginInterface.openEffect(track!.id, i, fx.plugin_id)"
+                @click="pluginInterface.openEffect(track!.id, fx.plugin_id)"
               >
                 {{ i18n.t("panel.openEditor") }}
               </button>

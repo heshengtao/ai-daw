@@ -8,7 +8,7 @@
  *
  * 清单按分类分组；音色多起来之后要精挑细选，请走检查器里的「浏览全部音色…」。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { CheckIcon, PlusIcon } from "@heroicons/vue/24/outline";
 import { usePluginsStore } from "@/stores/plugins";
 import { useProjectStore } from "@/stores/project";
@@ -27,11 +27,28 @@ const pluginInterface = usePluginInterface();
 
 const track = computed(() => selection.track);
 
-/** 按分类分组（只保留有内容的分类）。 */
+/** 来源筛选：全部 / 内置 / 外部。 */
+type SourceFilter = "all" | "builtin" | "external";
+
+const SOURCES: { id: SourceFilter; labelKey: string }[] = [
+  { id: "all", labelKey: "common.all" },
+  { id: "builtin", labelKey: "common.builtin" },
+  { id: "external", labelKey: "plugins.sourceExternal" },
+];
+
+const source = ref<SourceFilter>("all");
+
+function matchesSource(p: PluginInfo): boolean {
+  if (source.value === "builtin") return p.builtin;
+  if (source.value === "external") return !p.builtin;
+  return true;
+}
+
+/** 按分类分组（按来源筛选后，只保留有内容的分类）。 */
 const groups = computed(() =>
   plugins.categories.map((category) => ({
     category,
-    items: plugins.all.filter((p) => p.category === category),
+    items: plugins.all.filter((p) => p.category === category && matchesSource(p)),
   })).filter((g) => g.items.length > 0),
 );
 
@@ -97,12 +114,8 @@ async function openInterface(it: PluginInfo): Promise<void> {
     return;
   }
   // 效果器不在链上就先加进去——「打开界面」本身就意味着要用它。
-  let index = fxIndex(it.id);
-  if (index < 0) {
-    await store.addEffect(t.id, it.id);
-    index = fxIndex(it.id);
-  }
-  if (index >= 0) await pluginInterface.openEffect(t.id, index, it.id);
+  if (fxIndex(it.id) < 0) await store.addEffect(t.id, it.id);
+  await pluginInterface.openEffect(t.id, it.id);
 }
 
 /** 「界面」按钮的提示文本。 */
@@ -131,10 +144,26 @@ function toggleLabel(it: PluginInfo): string {
 
 <template>
   <div class="pane">
-    <p v-if="track" class="target">
-      {{ i18n.t("plugins.loadTo") }}<strong>{{ track.name }}</strong>
-    </p>
-    <p v-else class="target muted">{{ i18n.t("plugins.selectTrackFirst") }}</p>
+    <div class="target-row">
+      <p v-if="track" class="target">
+        {{ i18n.t("plugins.loadTo") }}<strong>{{ track.name }}</strong>
+      </p>
+      <p v-else class="target muted">{{ i18n.t("plugins.selectTrackFirst") }}</p>
+
+      <!-- 来源快速筛选：全部 / 内置 / 外部 -->
+      <div class="src-chips" role="group" :aria-label="i18n.t('plugins.sourceFilter')">
+        <button
+          v-for="s in SOURCES"
+          :key="s.id"
+          class="src-chip"
+          :class="{ on: source === s.id }"
+          :aria-pressed="source === s.id"
+          @click="source = s.id"
+        >
+          {{ i18n.t(s.labelKey) }}
+        </button>
+      </div>
+    </div>
 
     <div v-for="g in groups" :key="g.category" class="group">
       <div class="group-title">{{ g.category }}</div>
@@ -187,8 +216,17 @@ function toggleLabel(it: PluginInfo): string {
   overflow-y: auto;
   padding-bottom: 12px;
 }
-.target {
+/* 「加载到：X」一行 + 右侧的来源筛选 chips（窄面板里允许换行，不挤变形） */
+.target-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin: 12px 12px 0;
+}
+.target {
+  margin: 0;
   font-size: 11.5px;
   color: rgb(var(--md-on-surface-variant));
 }
@@ -198,6 +236,35 @@ function toggleLabel(it: PluginInfo): string {
 }
 .target.muted {
   color: rgb(var(--md-on-surface-muted));
+}
+.src-chips {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.src-chip {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--md-on-surface-variant));
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+.src-chip:hover {
+  background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
+}
+.src-chip.on {
+  border-color: transparent;
+  background-color: rgb(var(--md-secondary-container));
+  color: rgb(var(--md-on-secondary-container));
+}
+.src-chip:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 1px;
 }
 .group {
   margin-top: 12px;

@@ -8,7 +8,8 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import * as api from "@/api/tauri";
 import { useI18n } from "@/i18n";
-import type { ClipPlacement, ClipRef, EffectSpec, HistoryState, Keyframe, MixerState, Note, NoteEdit, Project } from "@/api/types";
+import { useSettingsStore } from "@/stores/settings";
+import type { ClipPlacement, ClipRef, HistoryState, Keyframe, MixerState, Note, NoteEdit, Project } from "@/api/types";
 import { meterAt, meterBeatAt, tempoAt } from "@/utils/tempo";
 
 /**
@@ -27,11 +28,16 @@ const STARTER_TRACK_KEYS = [
 
 export const useProjectStore = defineStore("project", () => {
   const i18n = useI18n();
+  const settings = useSettingsStore();
   const project = ref<Project | null>(null);
   const loading = ref(false);
   const loadError = ref<string | null>(null);
   const undoDepth = ref(0);
   const redoDepth = ref(0);
+  /** 是否有未保存的改动。 */
+  const dirty = ref(false);
+  /** 当前工程对应的文件路径；尚未保存过时为 null。 */
+  const currentPath = ref<string | null>(null);
 
   /** 按当前语言生成默认分轨名（顺序与引擎模板一致）。 */
   function starterTrackNames(): string[] {
@@ -44,6 +50,7 @@ export const useProjectStore = defineStore("project", () => {
       const d = await api.historyDepths();
       undoDepth.value = d.undo;
       redoDepth.value = d.redo;
+      dirty.value = d.dirty;
     } catch {
       // 深度只影响按钮状态，查询失败不值得打断用户。
     }
@@ -53,6 +60,7 @@ export const useProjectStore = defineStore("project", () => {
     project.value = state.project;
     undoDepth.value = state.undo_depth;
     redoDepth.value = state.redo_depth;
+    dirty.value = state.dirty;
   }
 
   /** 执行一条返回完整工程快照的编辑命令。 */
@@ -112,22 +120,6 @@ export const useProjectStore = defineStore("project", () => {
     );
     if (Object.keys(finite).length === 0) return Promise.resolve();
     return edit(() => api.setParams(track, finite));
-  }
-
-  /**
-   * 应用一条预设：整组参数 + 整条效果链，**一次事务**（只占一个撤销步骤）。
-   *
-   * 效果链是替换而不是叠加，见 `api.applyPreset`。
-   */
-  function applyPreset(
-    track: number,
-    params: Record<string, number>,
-    effects: EffectSpec[],
-  ): Promise<void> {
-    const finite = Object.fromEntries(
-      Object.entries(params).filter(([, value]) => Number.isFinite(value)),
-    );
-    return edit(() => api.applyPreset(track, finite, effects));
   }
 
   // ---- 效果链 ----
@@ -198,8 +190,14 @@ export const useProjectStore = defineStore("project", () => {
     length: number,
     path: string,
     offsetFrames: number,
+    frames?: number,
   ): Promise<void> {
-    return edit(() => api.addAudioClip(track, start, length, path, offsetFrames));
+    return edit(() => api.addAudioClip(track, start, length, path, offsetFrames, frames));
+  }
+
+  /** 在第 `beat` 拍切分片段（razor）：左半段沿用原 id，右半段是新片段。 */
+  function splitClip(track: number, clip: number, beat: number): Promise<void> {
+    return edit(() => api.splitClip(track, clip, beat));
   }
 
   /** 删除片段。 */
@@ -362,9 +360,18 @@ export const useProjectStore = defineStore("project", () => {
 
   // ---- 工程 ----
 
-  /** 新建工程（铺默认分轨模板；分轨名按当前语言生成，之后固定）。 */
+  /** 新建工程（铺默认分轨模板；分轨名按当前语言生成，之后固定；速度取设置里的默认 BPM）。 */
   async function newProject(): Promise<void> {
-    project.value = await api.newProject(starterTrackNames());
+    project.value = await api.newProject(starterTrackNames(), settings.defaultTempo);
+    currentPath.value = null;
+    await refreshDepths();
+  }
+
+  /** 重命名当前工程；空名字忽略。 */
+  async function renameProject(name: string): Promise<void> {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    project.value = await api.renameProject(trimmed);
     await refreshDepths();
   }
 
@@ -378,15 +385,33 @@ export const useProjectStore = defineStore("project", () => {
     project.value = await api.localizeStarterTracks(starterTrackNames());
   }
 
-  /** 从文件导入工程（会清空历史）。 */
+  /** 从文件导入工程（会清空历史），并记下它的路径。 */
   async function openFrom(path: string): Promise<void> {
     project.value = await api.openProject(path);
+    currentPath.value = path;
     await refreshDepths();
   }
 
-  /** 把当前工程保存到文件，返回写入路径。 */
-  function saveTo(path: string): Promise<string> {
-    return api.saveProject(path);
+  /** 把当前工程保存到文件，返回写入路径；成功后不再是 dirty。 */
+  async function saveTo(target: string): Promise<string> {
+    const written = await api.saveProject(target);
+    currentPath.value = written;
+    await refreshDepths();
+    return written;
+  }
+
+  /** 读取后端记住的工程路径（启动还原会话时用）。 */
+  async function loadPath(): Promise<void> {
+    try {
+      currentPath.value = await api.currentProjectPath();
+    } catch {
+      // 拿不到路径不影响编辑，忽略。
+    }
+  }
+
+  /** 把当前工程写入会话缓存（退出前 / 编辑过程中定期调用）。 */
+  function cacheSession(): Promise<void> {
+    return api.cacheSession(currentPath.value);
   }
 
   /** 撤销；没有可撤销内容时返回 false。 */
@@ -409,6 +434,8 @@ export const useProjectStore = defineStore("project", () => {
     loadError,
     undoDepth,
     redoDepth,
+    dirty,
+    currentPath,
     reload,
     addTrack,
     removeTrack,
@@ -416,7 +443,6 @@ export const useProjectStore = defineStore("project", () => {
     setTrackInstrument,
     setParam,
     setParams,
-    applyPreset,
     addEffect,
     removeEffect,
     moveEffect,
@@ -429,6 +455,7 @@ export const useProjectStore = defineStore("project", () => {
     moveClip,
     moveClips,
     resizeClip,
+    splitClip,
     addNote,
     setNote,
     setNotes,
@@ -450,9 +477,12 @@ export const useProjectStore = defineStore("project", () => {
     applyTempoAt,
     applyMeterAt,
     newProject,
+    renameProject,
     localizeStarterTracks,
     openFrom,
     saveTo,
+    loadPath,
+    cacheSession,
     undo,
     redo,
     refreshDepths,

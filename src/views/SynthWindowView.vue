@@ -6,11 +6,10 @@
  * 它和主窗口是两个独立的 Vue 实例，靠同一份后端工程状态 + `engine://event` 广播保持一致
  * （在主窗口拖旋钮，这里也会跟着动）。
  */
-import { computed, onMounted } from "vue";
+import { computed } from "vue";
 import { useRoute } from "vue-router";
 
 import SynthPanel from "@/components/workspace/panes/SynthPanel.vue";
-import type { EffectSpec } from "@/api/types";
 import { canonicalPluginId, effectiveParams, SYNTH_ID } from "@/data/plugins";
 import { useI18n } from "@/i18n";
 import { useProjectStore } from "@/stores/project";
@@ -55,25 +54,17 @@ async function commitMany(params: Record<string, number>): Promise<void> {
   await store.setParams(t.id, params);
 }
 
-/** 切换预设：整组参数 + 自带的效果链，**一次事务**（只占一个撤销步骤）。 */
-async function applyPreset(
-  values: Record<string, number>,
-  effects: EffectSpec[],
-): Promise<void> {
+/**
+ * 切换预设：整组**乐器参数**一次写回（只占一个撤销步骤）。
+ *
+ * **不碰效果链**——音色与效果是解耦的，切音色不该动轨道上用户自己搭的效果器。
+ */
+async function applyPreset(values: Record<string, number>): Promise<void> {
   const t = track.value;
   if (!t) return;
-  await store.applyPreset(t.id, values, effects);
+  await store.setParams(t.id, values);
 }
 
-/**
- * 自己确保工程已经载入。
- *
- * 这个窗口和主窗口各自跑一份应用：主窗口那个 `onMounted` 里的装载链一旦哪一步失败，
- * 这里就会永远停在「没有内置合成器」。所以二级窗口不指望别人，自己再要一次。
- */
-onMounted(() => {
-  if (!store.project) void store.reload();
-});
 </script>
 
 <template>
@@ -90,7 +81,6 @@ onMounted(() => {
       <SynthPanel
         :params="params"
         :track="track.id"
-        :effects="track.effects"
         @commit="commit"
         @commit-many="commitMany"
         @apply-preset="applyPreset"

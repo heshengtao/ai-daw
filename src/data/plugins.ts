@@ -7,8 +7,6 @@
  * 内置合成器的「预设」是同一套 DSP 配不同包络，但它们是各自独立的插件 id
  * （见 `crates/engine/src/registry.rs` 的 `BUILTIN_PRESETS`）——所以这里就是一条条真实的音色。
  */
-import type { EffectSpec } from "@/api/types";
-
 export type PluginKind = "instrument" | "effect";
 
 export interface PluginInfo {
@@ -38,6 +36,12 @@ export const SYNTH_ID = "builtin.synth";
 export const DELAY_ID = "builtin.delay";
 /** 内置混响的插件 id（与引擎 `BUILTIN_REVERB` 一致）。 */
 export const REVERB_ID = "builtin.reverb";
+/** 内置合唱的插件 id（与引擎 `BUILTIN_CHORUS` 一致）。 */
+export const CHORUS_ID = "builtin.chorus";
+/** 内置过载/失真的插件 id（与引擎 `BUILTIN_DRIVE` 一致）。 */
+export const DRIVE_ID = "builtin.drive";
+/** 内置两段 EQ 的插件 id（与引擎 `BUILTIN_EQ` 一致）。 */
+export const EQ_ID = "builtin.eq";
 
 /**
  * 内置合成器的**出厂预设**。
@@ -57,13 +61,6 @@ export interface FactoryPreset {
   /** 类别 slug：8bit | guitar | bass | drums | strings | winds | pad | fx（映射为 i18n 键 presetCategory.<slug>）。 */
   category: string;
   params: Record<string, number>;
-  /**
-   * 预设自带的**效果链**（可选）。
-   *
-   * 切预设会**整体替换**轨道效果链——「预设 = 整套音色」，与旋钮微调一样，效果微调也会被覆盖。
-   * 没写这个字段的预设等于「效果链为空」，所以从一条带混响的铺底切到干声预设会清掉效果链。
-   */
-  effects?: EffectSpec[];
 }
 
 /**
@@ -72,13 +69,12 @@ export interface FactoryPreset {
  * 每条都是**补丁**（只列改过的参数），未列出的取 `SYNTH_DEFAULTS`；`wave` 一律显式写出，
  * 免得将来改默认波形时听感跟着漂。
  *
- * `effects` 是预设**自带的效果链**（`builtin.reverb` / `builtin.delay`）。切预设会**整体替换**
- * 轨道效果链——「预设 = 整套音色」，跟旋钮微调一样，效果微调也会被覆盖。
+ * **预设只改乐器参数，绝不碰效果链**：音色与效果是两件独立的事，切音色不该动用户自己搭的效果。
+ * （早先版本会让预设「自带效果链」并在切换时整体替换轨道效果链——那会把用户的效果冲掉，已废弃。）
  *
  * 其中 5 条（8-bit 主音 / 低音 / 底鼓 / 弦乐 / 铺底）在引擎注册表里有同名条目，供**默认分轨模板**
- * 直接挂上；它们的 id 与数值必须与 `crates/engine/src/registry.rs::BUILTIN_PRESETS` 完全一致，
- * 而且**不能带效果链**（注册表补丁只能带参数）——所以这 5 条刻意都是干声，
- * 各类的湿版本是第 2..4 条。其余 27 条只活在界面层：轨道始终挂在 `builtin.synth` 上，只记参数差异。
+ * 直接挂上；它们的 id 与数值必须与 `crates/engine/src/registry.rs::BUILTIN_PRESETS` 完全一致。
+ * 其余 27 条只活在界面层：轨道始终挂在 `builtin.synth` 上，只记参数差异。
  */
 export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
   // ---- 8-bit 键盘（第一类）----
@@ -188,7 +184,6 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
       release: 0.4, cutoff: 0.9, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.3,
       fm: 0.35, fmRatio: 1.0,
     },
-    effects: [{ plugin_id: "builtin.reverb", params: { size: 0.5, damp: 0.25, mix: 0.22 } }],
   },
   {
     id: "builtin.synth.ep.dx",
@@ -215,7 +210,6 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
       cutoff: 0.72, resonance: 0.1, filterEnv: 0.4, keyFollow: 0.35, noise: 0.15,
       pitchEnv: 0.08, pitchDecay: 0.05,
     },
-    effects: [{ plugin_id: "builtin.reverb", params: { size: 0.45, damp: 0.45, mix: 0.2 } }],
   },
   {
     id: "builtin.synth.guitar.electric",
@@ -227,7 +221,6 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
       gain: 0.62, wave: 0, attack: 0.002, decay: 0.8, sustain: 0.3, release: 0.35,
       cutoff: 0.65, resonance: 0.28, filterEnv: 0.3, keyFollow: 0.3, noise: 0.08,
     },
-    effects: [{ plugin_id: "builtin.delay", params: { time: 0.3, feedback: 0.25, mix: 0.18 } }],
   },
   {
     id: "builtin.synth.guitar.mute",
@@ -469,7 +462,6 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
       gain: 0.5, wave: 0, detune: 0.5, attack: 0.5, decay: 2.0, sustain: 0.85, release: 1.2,
       cutoff: 0.65, resonance: 0.08, filterEnv: 0.1, keyFollow: 0.25,
     },
-    effects: [{ plugin_id: "builtin.reverb", params: { size: 0.85, damp: 0.4, mix: 0.32 } }],
   },
   {
     id: "builtin.synth.pad.choir",
@@ -482,7 +474,6 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
       release: 1.0, cutoff: 0.68, resonance: 0.1, filterEnv: 0.1, keyFollow: 0.25,
       lfoRate: 0.3, lfoFilter: 0.2,
     },
-    effects: [{ plugin_id: "builtin.reverb", params: { size: 0.8, damp: 0.35, mix: 0.3 } }],
   },
   {
     id: "builtin.synth.pad.glass",
@@ -494,7 +485,6 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
       cutoff: 0.85, resonance: 0.0, filterEnv: 0.05, keyFollow: 0.3,
       fm: 0.2, fmRatio: 3.0,
     },
-    effects: [{ plugin_id: "builtin.reverb", params: { size: 0.9, damp: 0.3, mix: 0.35 } }],
   },
 
   // ---- 音效 ----
@@ -533,7 +523,6 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
       lfoRate: 0.6, lfoFilter: 0.4,
       pitchEnv: 0.5, pitchDecay: 1.0,
     },
-    effects: [{ plugin_id: "builtin.reverb", params: { size: 0.8, damp: 0.4, mix: 0.3 } }],
   },
   {
     id: "builtin.synth.fx.wobble",
@@ -546,7 +535,6 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
       cutoff: 0.55, resonance: 0.6, filterEnv: 0.3, keyFollow: 0.2,
       lfoRate: 0.55, lfoFilter: 0.6,
     },
-    effects: [{ plugin_id: "builtin.delay", params: { time: 0.18, feedback: 0.5, mix: 0.3 } }],
   },
 ];
 
@@ -621,6 +609,36 @@ export const BUILTIN_PLUGINS: PluginInfo[] = [
     loadable: true,
     tags: ["reverb", "hall", "room", "混响", "空间"],
     note: "reverb.note",
+  },
+  {
+    id: CHORUS_ID,
+    name: "chorus.name",
+    kind: "effect",
+    category: "pluginCategory.builtinEffect",
+    builtin: true,
+    loadable: true,
+    tags: ["chorus", "modulation", "width", "合唱", "调制", "加宽"],
+    note: "chorus.note",
+  },
+  {
+    id: DRIVE_ID,
+    name: "drive.name",
+    kind: "effect",
+    category: "pluginCategory.builtinEffect",
+    builtin: true,
+    loadable: true,
+    tags: ["drive", "distortion", "overdrive", "saturation", "过载", "失真", "饱和"],
+    note: "drive.note",
+  },
+  {
+    id: EQ_ID,
+    name: "eq.name",
+    kind: "effect",
+    category: "pluginCategory.builtinEffect",
+    builtin: true,
+    loadable: true,
+    tags: ["eq", "tone", "bass", "treble", "均衡", "音色", "低频", "高频"],
+    note: "eq.note",
   },
 ];
 
@@ -707,11 +725,35 @@ export const REVERB_PARAMS: ParamSpec[] = [
   { id: "mix", name: "混合", min: 0, max: 1, step: 0.01, default: 0.3, digits: 2 },
 ];
 
+/** 内置合唱的参数表（与 `crates/effects` 的 `chorus.rs` 一一对应）。 */
+export const CHORUS_PARAMS: ParamSpec[] = [
+  { id: "rate", name: "速率", min: 0, max: 1, step: 0.01, default: 0.35, digits: 2 },
+  { id: "depth", name: "深度", min: 0, max: 1, step: 0.01, default: 0.5, digits: 2 },
+  { id: "mix", name: "混合", min: 0, max: 1, step: 0.01, default: 0.5, digits: 2 },
+];
+
+/** 内置过载/失真的参数表（与 `crates/effects` 的 `drive.rs` 一一对应）。 */
+export const DRIVE_PARAMS: ParamSpec[] = [
+  { id: "drive", name: "驱动", min: 0, max: 1, step: 0.01, default: 0.3, digits: 2 },
+  { id: "tone", name: "音色", min: 0, max: 1, step: 0.01, default: 0.6, digits: 2 },
+  { id: "mix", name: "混合", min: 0, max: 1, step: 0.01, default: 1, digits: 2 },
+];
+
+/** 内置两段 EQ 的参数表（与 `crates/effects` 的 `eq.rs` 一一对应；低频/高频可正可负）。 */
+export const EQ_PARAMS: ParamSpec[] = [
+  { id: "bass", name: "低频", min: -1, max: 1, step: 0.01, default: 0, digits: 2 },
+  { id: "treble", name: "高频", min: -1, max: 1, step: 0.01, default: 0, digits: 2 },
+  { id: "mix", name: "混合", min: 0, max: 1, step: 0.01, default: 1, digits: 2 },
+];
+
 /** 内置插件的参数表（音源 + 效果器都要预填，界面的通用参数列表按 id 取）。 */
 export const BUILTIN_PARAMS: Record<string, ParamSpec[]> = {
   [SYNTH_ID]: SYNTH_PARAMS,
   [DELAY_ID]: DELAY_PARAMS,
   [REVERB_ID]: REVERB_PARAMS,
+  [CHORUS_ID]: CHORUS_PARAMS,
+  [DRIVE_ID]: DRIVE_PARAMS,
+  [EQ_ID]: EQ_PARAMS,
 };
 
 /**
@@ -721,7 +763,7 @@ export const BUILTIN_PARAMS: Record<string, ParamSpec[]> = {
  * 所以「命中哪条预设」不能拿实例里存的残缺参数去比，要先补齐成这一份完整参数集。
  */
 export const EFFECT_DEFAULTS: Record<string, Record<string, number>> = Object.fromEntries(
-  [DELAY_ID, REVERB_ID].map((id) => [
+  [DELAY_ID, REVERB_ID, CHORUS_ID, DRIVE_ID, EQ_ID].map((id) => [
     id,
     Object.fromEntries((BUILTIN_PARAMS[id] ?? []).map((p) => [p.id, p.default])),
   ]),
@@ -805,6 +847,75 @@ export const EFFECT_FACTORY_PRESETS: Record<string, EffectFactoryPreset[]> = {
       note: "preset.reverb.cathedral.note",
       // 教堂：最长、最暗，铺底与音效的尾巴。
       params: { size: 0.95, damp: 0.62, mix: 0.4 },
+    },
+  ],
+  [CHORUS_ID]: [
+    {
+      id: "builtin.chorus.subtle",
+      name: "preset.chorus.subtle.name",
+      note: "preset.chorus.subtle.note",
+      // 轻微加宽：慢速、浅调制，几乎听不出「颤」，只把单声道音色撑开。
+      params: { rate: 0.3, depth: 0.3, mix: 0.28 },
+    },
+    {
+      id: "builtin.chorus.lush",
+      name: "preset.chorus.lush.name",
+      note: "preset.chorus.lush.note",
+      // 经典合唱：中速、较深，80 年代那种「一片」的合唱。
+      params: { rate: 0.35, depth: 0.65, mix: 0.5 },
+    },
+    {
+      id: "builtin.chorus.vibrato",
+      name: "preset.chorus.vibrato.name",
+      note: "preset.chorus.vibrato.note",
+      // 颤音：又快又深，接近纯延迟（全湿）→ 明显的音高晃动。
+      params: { rate: 0.75, depth: 1.0, mix: 0.7 },
+    },
+  ],
+  [DRIVE_ID]: [
+    {
+      id: "builtin.drive.warm",
+      name: "preset.drive.warm.name",
+      note: "preset.drive.warm.note",
+      // 温暖：轻驱动 + 偏暗的音色，只添一点谐波。
+      params: { drive: 0.25, tone: 0.45, mix: 1 },
+    },
+    {
+      id: "builtin.drive.crunch",
+      name: "preset.drive.crunch.name",
+      note: "preset.drive.crunch.note",
+      // 破音：中等驱动，适合贝斯/吉他的节奏声部。
+      params: { drive: 0.6, tone: 0.6, mix: 1 },
+    },
+    {
+      id: "builtin.drive.fuzz",
+      name: "preset.drive.fuzz.name",
+      note: "preset.drive.fuzz.note",
+      // 法兹：驱动拉满，音色偏暗一点免得刺耳。
+      params: { drive: 1.0, tone: 0.4, mix: 1 },
+    },
+  ],
+  [EQ_ID]: [
+    {
+      id: "builtin.eq.bass",
+      name: "preset.eq.bass.name",
+      note: "preset.eq.bass.note",
+      // 低频增强：给贝斯/底鼓加重量。
+      params: { bass: 0.6, treble: 0, mix: 1 },
+    },
+    {
+      id: "builtin.eq.bright",
+      name: "preset.eq.bright.name",
+      note: "preset.eq.bright.note",
+      // 提亮：给铺底/弦乐加空气感。
+      params: { bass: 0, treble: 0.55, mix: 1 },
+    },
+    {
+      id: "builtin.eq.telephone",
+      name: "preset.eq.telephone.name",
+      note: "preset.eq.telephone.note",
+      // 电话音：砍掉低频、留一点高频，做「复古/收音机」效果。
+      params: { bass: -1, treble: 0.6, mix: 1 },
     },
   ],
 };

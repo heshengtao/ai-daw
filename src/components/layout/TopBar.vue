@@ -15,15 +15,19 @@ import {
   Squares2X2Icon,
   PencilSquareIcon,
   AdjustmentsHorizontalIcon,
-  PencilIcon,
-  CursorArrowRaysIcon,
+  HandRaisedIcon,
   MusicalNoteIcon,
 } from "@heroicons/vue/24/outline";
 import Tooltip from "@/components/common/Tooltip.vue";
 import PanelIcon from "@/components/common/PanelIcon.vue";
 import PanelTabs from "@/components/workspace/PanelTabs.vue";
+import FloppyDiskIcon from "@/components/common/icons/FloppyDiskIcon.vue";
+import PianoIcon from "@/components/common/icons/PianoIcon.vue";
+import MarqueeIcon from "@/components/common/icons/MarqueeIcon.vue";
+import SplitIcon from "@/components/common/icons/SplitIcon.vue";
+import KeyboardIcon from "@/components/common/icons/KeyboardIcon.vue";
 import type { NavItem } from "@/components/common/nav";
-import { useLayoutStore } from "@/stores/layout";
+import { useLayoutStore, type Tool } from "@/stores/layout";
 import { useI18n } from "@/i18n";
 import { useProjectStore } from "@/stores/project";
 import { lastWorkspace } from "@/router";
@@ -35,6 +39,8 @@ const emit = defineEmits<{
   (e: "new"): void;
   (e: "save"): void;
   (e: "export"): void;
+  (e: "rename"): void;
+  (e: "shortcuts"): void;
 }>();
 
 const route = useRoute();
@@ -47,7 +53,7 @@ const isMac = isMacOS();
 
 const navItems: NavItem[] = [
   { labelKey: "topbar.view.arrange", path: "/arrange", icon: Squares2X2Icon },
-  { labelKey: "topbar.view.edit", path: "/edit", icon: PencilSquareIcon },
+  { labelKey: "topbar.view.edit", path: "/edit", icon: PianoIcon },
   { labelKey: "topbar.view.mix", path: "/mix", icon: AdjustmentsHorizontalIcon },
 ];
 
@@ -62,11 +68,15 @@ const projectName = computed(() => {
   return !name || name === "untitled" ? i18n.t("settings.untitled") : name;
 });
 
-/** 鼠标模式：拖拽（在空白处拖动 = 画片段/音符）或框选。 */
-const isDrawTool = computed(() => layout.tool === "draw");
-const toolText = computed(() =>
-  i18n.t(isDrawTool.value ? "topbar.toolDraw" : "topbar.toolSelect"),
-);
+/** 有未保存改动时在工程名旁显示一个小圆点。 */
+const dirty = computed(() => projectStore.dirty);
+
+/** 三种鼠标模式（顺序即展示顺序）：框选 / 拖拽 / 分隔。 */
+const toolOptions: { id: Tool; icon: unknown; labelKey: string }[] = [
+  { id: "select", icon: MarqueeIcon, labelKey: "topbar.toolSelect" },
+  { id: "draw", icon: HandRaisedIcon, labelKey: "topbar.toolDraw" },
+  { id: "split", icon: SplitIcon, labelKey: "topbar.toolSplit" },
+];
 
 /** 音轨栏收起（或处于设置页，侧栏本就不渲染）时，顶栏顶到窗口最左，macOS 下要给红绿灯让位。 */
 const showMacPad = computed(() => isMac && (isSettings.value || !layout.showTrackHeaders));
@@ -103,7 +113,13 @@ function onMouseDown(e: MouseEvent): void {
 
       <div class="name-block">
         <span class="name-strong">{{ projectName }}</span>
+        <span v-if="dirty" class="name-dirty" :title="i18n.t('topbar.unsaved')" aria-hidden="true" />
       </div>
+      <Tooltip :text="i18n.t('topbar.rename')">
+        <button class="bar-btn name-edit" :aria-label="i18n.t('topbar.renameLabel')" @click="emit('rename')">
+          <PencilSquareIcon class="bar-icon" />
+        </button>
+      </Tooltip>
 
       <div class="flex-1" />
 
@@ -128,6 +144,11 @@ function onMouseDown(e: MouseEvent): void {
             <ArrowUpTrayIcon class="bar-icon" />
           </button>
         </Tooltip>
+        <Tooltip :text="i18n.t('topbar.save')" align="end">
+          <button class="bar-btn" :aria-label="i18n.t('topbar.saveLabel')" @click="emit('save')">
+            <FloppyDiskIcon class="bar-icon" />
+          </button>
+        </Tooltip>
 
         <span class="bar-sep" />
 
@@ -145,21 +166,28 @@ function onMouseDown(e: MouseEvent): void {
 
         <span class="bar-sep" />
 
-        <!-- 鼠标模式：拖拽 / 框选。两者共用左键拖动，必须显式切换。 -->
-        <Tooltip :text="toolText" align="end">
-          <button
-            class="bar-btn tool-btn"
-            :class="{ on: !isDrawTool }"
-            :aria-label="toolText"
-            :aria-pressed="!isDrawTool"
-            @click="layout.toggleTool()"
-          >
-            <PencilIcon v-if="isDrawTool" class="bar-icon" />
-            <CursorArrowRaysIcon v-else class="bar-icon" />
-          </button>
-        </Tooltip>
+        <!-- 鼠标模式三选一：框选 / 拖拽 / 分隔。共用左键手势，必须显式切换。 -->
+        <div class="tool-seg" role="group" :aria-label="i18n.t('topbar.toolGroup')">
+          <Tooltip v-for="t in toolOptions" :key="t.id" :text="i18n.t(t.labelKey)" align="end">
+            <button
+              class="bar-btn tool-btn"
+              :class="{ on: layout.tool === t.id }"
+              :aria-label="i18n.t(t.labelKey)"
+              :aria-pressed="layout.tool === t.id"
+              @click="layout.setTool(t.id)"
+            >
+              <component :is="t.icon" class="bar-icon" />
+            </button>
+          </Tooltip>
+        </div>
 
         <span class="bar-sep" />
+
+        <Tooltip :text="i18n.t('shortcuts.title')" align="end">
+          <button class="bar-btn" :aria-label="i18n.t('shortcuts.title')" @click="emit('shortcuts')">
+            <KeyboardIcon class="bar-icon" />
+          </button>
+        </Tooltip>
 
         <Tooltip :text="isSettings ? i18n.t('topbar.backToWorkspace') : i18n.t('settings.title')" align="end">
           <button
@@ -261,8 +289,33 @@ function onMouseDown(e: MouseEvent): void {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 未保存标记：紧贴工程名的小圆点 */
+.name-dirty {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background-color: rgb(var(--md-primary));
+  align-self: center;
+}
+/* 重命名按钮比普通图标按钮稍小，紧跟在工程名后面（用复合选择器压过 .bar-btn 的尺寸） */
+.bar-btn.name-edit {
+  width: 28px;
+  height: 28px;
+}
+.bar-btn.name-edit .bar-icon {
+  width: 16px;
+  height: 16px;
+}
 .bar-actions {
   display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 auto;
+}
+/* 鼠标模式三选一：三个图标按钮靠成一小组合，选中项用 .on 高亮 */
+.tool-seg {
+  display: inline-flex;
   align-items: center;
   gap: 1px;
   flex: 0 0 auto;

@@ -2,12 +2,17 @@
 /** 应用根：状态初始化、工程读写、试听、快捷键与布局组合。 */
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { message } from "@tauri-apps/plugin-dialog";
 import { ExclamationTriangleIcon, ArrowPathIcon } from "@heroicons/vue/24/outline";
 import AppShell from "@/components/layout/AppShell.vue";
 import TrackHeaderList from "@/components/workspace/TrackHeaderList.vue";
 import RightPanel from "@/components/workspace/RightPanel.vue";
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import ToastHost from "@/components/common/ToastHost.vue";
+import ProjectDialog from "@/components/common/ProjectDialog.vue";
+import ShortcutsDialog from "@/components/common/ShortcutsDialog.vue";
+import { useProjectSync } from "@/composables/useProjectSync";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
 import { useEngineEventsStore } from "@/stores/engineEvents";
@@ -19,6 +24,7 @@ import { useTimelineStore } from "@/stores/timeline";
 import { useI18n } from "@/i18n";
 import { exportWav, onPluginsEvent } from "@/api/tauri";
 import { pickAudioToOpen, pickProjectToOpen, pickProjectToSave, pickWavToSave } from "@/api/dialogs";
+import { isTauri } from "@/utils/platform";
 
 const project = useProjectStore();
 const layout = useLayoutStore();
@@ -30,6 +36,11 @@ const selection = useSelectionStore();
 const timeline = useTimelineStore();
 const i18n = useI18n();
 const route = useRoute();
+
+// 每个窗口（主窗口 + 合成器/效果器等二级窗口）都订阅引擎事件、节流重拉工程。
+// 二级窗口改工程（例如合成器窗口切预设换掉整条效果链）时，主窗口也能立刻跟上——
+// 否则主窗口会拿着一条过时的效果链，按过时序号打开效果界面（见 open_effect_window）。
+useProjectSync();
 
 /** 设置页独占中栏：不显示音轨栏与右侧面板。 */
 const isSettings = computed(() => route.path.startsWith("/settings"));
@@ -59,6 +70,8 @@ const aiTracks = ref<number[]>([]);
 const exporting = ref(false);
 let pollTimer: number | null = null;
 let unlistenPlugins: (() => void) | null = null;
+let unlistenClose: (() => void) | null = null;
+let autosaveTimer: number | null = null;
 
 const loaded = computed(() => project.project !== null);
 
@@ -66,6 +79,23 @@ const loaded = computed(() => project.project !== null);
 const fileBase = computed(() => {
   const name = project.project?.name;
   return !name || name === "untitled" ? "untitled" : name;
+});
+
+/** 主窗口才管「保存/退出提示/自动缓存」；插件独立窗口不参与。 */
+const appWindow = isTauri() ? getCurrentWindow() : null;
+const isMainWindow = appWindow?.label === "main";
+
+/** 工程名对话框（重命名 / 保存共用）。 */
+const projectDialogOpen = ref(false);
+const projectDialogMode = ref<"rename" | "save">("rename");
+
+/** 快捷键速查表模态框。 */
+const shortcutsOpen = ref(false);
+
+/** 对话框的初始名：未命名工程留空，让它显示占位符。 */
+const projectBaseName = computed(() => {
+  const name = project.project?.name;
+  return !name || name === "untitled" ? "" : name;
 });
 
 function onResizeLeft(delta: number): void {
@@ -88,6 +118,7 @@ async function onImport(): Promise<void> {
     const path = await pickProjectToOpen();
     if (!path) return;
     await project.openFrom(path);
+    void project.cacheSession();
     layout.notify(i18n.t("app.imported"));
   } catch (err) {
     layout.notify(i18n.t("error.import", { error: String(err) }));
@@ -119,21 +150,76 @@ async function onNew(): Promise<void> {
   await transport.stop();
   try {
     await project.newProject();
+    void project.cacheSession();
     layout.notify(i18n.t("app.created"));
   } catch (err) {
     layout.notify(i18n.t("error.newProject", { error: String(err) }));
   }
 }
 
-async function onSave(): Promise<void> {
+/** 把工程名转成安全的文件名（去掉路径分隔符等非法字符）。 */
+function safeFilename(name: string): string {
+  const cleaned = name.replace(/[\\/:*?"<>|]/g, "-").trim();
+  return cleaned || "untitled";
+}
+
+/** 打开工程名对话框：重命名。 */
+function openRenameDialog(): void {
+  projectDialogMode.value = "rename";
+  projectDialogOpen.value = true;
+}
+
+/** 打开工程名对话框：保存（可选改名 + 选路径）。 */
+function openSaveDialog(): void {
+  projectDialogMode.value = "save";
+  projectDialogOpen.value = true;
+}
+
+/** 把工程写到指定路径；成功返回 true 并清除未保存标记。 */
+async function writeProject(path: string): Promise<boolean> {
   try {
-    const path = await pickProjectToSave(`${fileBase.value}.json`);
-    if (!path) return;
     const written = await project.saveTo(path);
     layout.notify(i18n.t("app.saved", { path: written }));
+    void project.cacheSession();
+    return true;
   } catch (err) {
     layout.notify(i18n.t("error.save", { error: String(err) }));
+    return false;
   }
+}
+
+/**
+ * 保存：已经保存过的工程直接写回原路径；从未保存过的弹出「工程名 + 选择位置」。
+ *
+ * 返回是否真的写盘成功（退出提示用它决定能不能闭合窗口）。
+ */
+async function onSave(): Promise<boolean> {
+  if (project.currentPath) return writeProject(project.currentPath);
+  openSaveDialog();
+  return false;
+}
+
+/** 工程名对话框提交：重命名模式下直接改名；保存模式下改名后继续选路径并写盘。 */
+async function onProjectDialogSubmit(name: string): Promise<void> {
+  projectDialogOpen.value = false;
+  if (projectDialogMode.value === "rename") {
+    try {
+      await project.renameProject(name);
+    } catch (err) {
+      layout.notify(i18n.t("error.rename", { error: String(err) }));
+    }
+    return;
+  }
+  // 保存模式：名字变了先改名（这样写进文件的就是新名字）。
+  try {
+    if (name !== (project.project?.name ?? "")) await project.renameProject(name);
+  } catch (err) {
+    layout.notify(i18n.t("error.rename", { error: String(err) }));
+    return;
+  }
+  const path = await pickProjectToSave(`${safeFilename(name)}.json`);
+  if (!path) return;
+  await writeProject(path);
 }
 
 async function onExport(): Promise<void> {
@@ -186,7 +272,12 @@ function onKey(e: KeyboardEvent): void {
     layout.showTrackHeaders = !layout.showTrackHeaders;
     return;
   }
-  // 顶栏不再放保存按钮，保存走快捷键。
+  // 保存：Cmd/Ctrl+S 直接写回原路径（没保存过则弹名/路径）；Cmd/Ctrl+Shift+S 另存为。
+  if (mod && e.shiftKey && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    openSaveDialog();
+    return;
+  }
   if (mod && !e.shiftKey && e.key.toLowerCase() === "s") {
     e.preventDefault();
     void onSave();
@@ -196,15 +287,31 @@ function onKey(e: KeyboardEvent): void {
     layout.devDrawer = false;
     return;
   }
-  // 鼠标模式：1 = 拖拽（画片段/音符），2 = 框选。与顶栏的模式按钮同一个动作。
+  // 鼠标模式：与顶栏的三段按钮同一顺序 —— 1 = 框选，2 = 拖拽，3 = 分隔。
   if (!mod && e.key === "1") {
     e.preventDefault();
-    layout.setTool("draw");
+    layout.setTool("select");
     return;
   }
   if (!mod && e.key === "2") {
     e.preventDefault();
-    layout.setTool("select");
+    layout.setTool("draw");
+    return;
+  }
+  if (!mod && e.key === "3") {
+    e.preventDefault();
+    layout.setTool("split");
+    return;
+  }
+  // 快捷键速查表：`?` 或 Ctrl/Cmd+/。
+  if (!mod && e.key === "?") {
+    e.preventDefault();
+    shortcutsOpen.value = true;
+    return;
+  }
+  if (mod && (e.key === "/" || e.key === "?")) {
+    e.preventDefault();
+    shortcutsOpen.value = !shortcutsOpen.value;
     return;
   }
   // 传输快捷键：空格播放/暂停，Home 回到起点。
@@ -217,6 +324,43 @@ function onKey(e: KeyboardEvent): void {
     e.preventDefault();
     void transport.rewind();
   }
+}
+
+/**
+ * 主窗口关闭守卫：有未保存改动时先问一句。
+ *
+ * 原生三选一：保存 → 写盘后关闭；不保存 → 直接关闭（此刻工作状态已进会话缓存，
+ * 下次打开照样还原）；取消 → 什么都不做。从未保存过时「保存」会先弹出工程名/路径对话框，
+ * 让用户先落盘，而不是把窗口关掉。
+ */
+async function setupCloseGuard(): Promise<(() => void) | null> {
+  const win = appWindow;
+  if (!win || !isMainWindow) return null;
+  return win.onCloseRequested(async (event) => {
+    if (!project.dirty) return;
+    event.preventDefault();
+    // 先把当前状态落进缓存，「不保存」也不会真的丢东西。
+    try {
+      await project.cacheSession();
+    } catch {
+      // 缓存失败不阻断退出。
+    }
+    const choice = await message(i18n.t("app.unsavedExit"), {
+      title: i18n.t("app.unsavedExitTitle"),
+      kind: "warning",
+      buttons: "YesNoCancel",
+    });
+    if (choice === "Cancel") return;
+    if (choice === "Yes") {
+      // 还没保存过：先让用户起名并选路径；保存完再关。
+      if (!project.currentPath) {
+        openSaveDialog();
+        return;
+      }
+      if (!(await writeProject(project.currentPath))) return;
+    }
+    await win.destroy();
+  });
 }
 
 onMounted(async () => {
@@ -238,11 +382,21 @@ onMounted(async () => {
     aiActive.value = events.agentActive();
     aiTracks.value = events.agentTracks();
   }, 300);
+  // 主窗口独有：还原上次的工程路径、装上退出守卫、定期把工作状态写进会话缓存。
+  if (isMainWindow) {
+    await project.loadPath();
+    unlistenClose = await setupCloseGuard();
+    autosaveTimer = window.setInterval(() => {
+      if (project.dirty) void project.cacheSession();
+    }, 10_000);
+  }
 });
 onUnmounted(() => {
   window.removeEventListener("keydown", onKey);
   window.removeEventListener("resize", onWindowResize);
   if (pollTimer !== null) window.clearInterval(pollTimer);
+  if (autosaveTimer !== null) window.clearInterval(autosaveTimer);
+  unlistenClose?.();
   unlistenPlugins?.();
   events.stop();
   transport.dispose();
@@ -261,6 +415,8 @@ onUnmounted(() => {
     @new="onNew"
     @save="onSave"
     @export="onExport"
+    @rename="openRenameDialog"
+    @shortcuts="shortcutsOpen = true"
   >
     <!-- 左：音轨栏（全高，与顶栏融合） -->
     <template #left>
@@ -313,6 +469,17 @@ onUnmounted(() => {
 
     <ToastHost />
   </AppShell>
+
+  <!-- 工程名对话框（重命名 / 保存共用）：Teleport 到 body，独立于窗口布局 -->
+  <ProjectDialog
+    v-model:open="projectDialogOpen"
+    :mode="projectDialogMode"
+    :initial-name="projectBaseName"
+    @submit="onProjectDialogSubmit"
+  />
+
+  <!-- 快捷键速查表：⌘ 按钮 / `?` / Ctrl+Cmd+/ 打开 -->
+  <ShortcutsDialog v-model:open="shortcutsOpen" />
 </template>
 
 <style scoped>

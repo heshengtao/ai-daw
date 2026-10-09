@@ -106,7 +106,8 @@ impl ScheduledEvents {
                     let Some(audio) = assets.get(&source.path) else { continue };
                     let total = audio.frames() as u64;
                     let offset = source.offset_frames.min(total);
-                    let window = total - offset;
+                    // 素材窗口 = 显式长度（切分/裁剪记录下来的）或「到结尾」；都要夹到可用范围。
+                    let window = source.frames.unwrap_or(total - offset).min(total - offset);
                     if window == 0 {
                         continue;
                     }

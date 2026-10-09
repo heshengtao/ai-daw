@@ -10,13 +10,17 @@ const KEY = "daw-party-layout";
 export type PaneId = "inspector" | "plugins" | "editor";
 
 /**
- * 鼠标模式（顶栏可切换）：
- * - `draw`：在空白处左键拖动 = 画出片段 / 音符（创建）；
- * - `select`：左键拖动 = 框选。
+ * 鼠标模式（顶栏三选一）：
+ * - `select`：左键拖动 = 框选；
+ * - `draw`：在空白处左键拖动 = 画出片段 / 音符（创建 / 拖动）；
+ * - `split`：左键点击片段 = 在该处切开（razor）。
  *
- * 两者共用同一个手势，只能靠模式区分，因此必须由用户显式选择。
+ * 三者共用同一个手势，只能靠模式区分，因此必须由用户显式选择。
  */
-export type Tool = "draw" | "select";
+export type Tool = "draw" | "select" | "split";
+
+/** 全部鼠标模式（顺序即顶栏里的展示顺序）。 */
+export const TOOLS: Tool[] = ["select", "draw", "split"];
 
 /** 全部可用面板的元数据（供"新建标签"选择器展示）。文案是 i18n key，渲染时翻译。 */
 export const PANES: { id: PaneId; labelKey: string; hintKey: string }[] = [
@@ -38,10 +42,10 @@ export const MAX_TRACK_WIDTH_RATIO = 0.25;
 /** 右侧面板宽度上限：扣除左侧后，剩余区域的 2/3。 */
 export const MAX_INSPECTOR_RATIO = 2 / 3;
 
-/** 左侧音轨栏宽度下限（px）。 */
-const MIN_TRACK_WIDTH = 160;
-/** 右侧面板宽度下限（px）。 */
-const MIN_INSPECTOR_WIDTH = 220;
+/** 左侧音轨栏宽度下限（px）：再窄内部元素（旋钮、按钮行）就会被压变形。 */
+const MIN_TRACK_WIDTH = 200;
+/** 右侧面板宽度下限（px）：插件行、参数字段需要的最小呼吸空间。 */
+const MIN_INSPECTOR_WIDTH = 300;
 
 interface Persisted {
   showTrackHeaders: boolean;
@@ -91,8 +95,8 @@ export const useLayoutStore = defineStore("layout", () => {
   const activeTab = ref<PaneId>(
     saved.activeTab && tabs.value.includes(saved.activeTab) ? saved.activeTab : tabs.value[0],
   );
-  // 默认「拖拽」：创建是最常用的动作，框选随时可以切（顶栏按钮 / 快捷键 2）。
-  const tool = ref<Tool>(saved.tool === "select" ? "select" : "draw");
+  // 默认「拖拽」：创建是最常用的动作，框选 / 切分随时可以切（顶栏按钮 / 快捷键 1 / 2 / 3）。
+  const tool = ref<Tool>(TOOLS.includes(saved.tool as Tool) ? (saved.tool as Tool) : "draw");
   const laneHeight = ref(clampLaneHeight(saved.laneHeight ?? 92));
   const devDrawer = ref(false);
 
@@ -123,11 +127,6 @@ export const useLayoutStore = defineStore("layout", () => {
   /** 切换鼠标模式。 */
   function setTool(next: Tool): void {
     tool.value = next;
-  }
-
-  /** 在「拖拽 / 框选」之间切换。 */
-  function toggleTool(): void {
-    tool.value = tool.value === "draw" ? "select" : "draw";
   }
 
   /** 调整控制器泳道高度（拖拽分隔线时调用）。 */
@@ -229,7 +228,6 @@ export const useLayoutStore = defineStore("layout", () => {
     tool,
     laneHeight,
     setTool,
-    toggleTool,
     resizeLane,
     resizeTrack,
     resizeInspector,

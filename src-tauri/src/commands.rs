@@ -7,7 +7,7 @@ use daw_party_engine::audio::{AudioBuffer, DecodedAudio};
 use daw_party_engine::bus::Engine;
 use daw_party_engine::command::Command;
 use daw_party_engine::event::{Actor, Event};
-use daw_party_engine::model::{AudioSource, ClipPlacement, ClipRef, Note, NoteEdit, Project, TrackId};
+use daw_party_engine::model::{AudioSource, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, Project, TrackId};
 use daw_party_engine::registry::PluginRegistry;
 use daw_party_engine::render::{render_with_assets, RenderOptions};
 use daw_party_engine::tempo::TempoMap;
@@ -27,13 +27,16 @@ pub struct HistoryState {
     pub project: Project,
     pub undo_depth: usize,
     pub redo_depth: usize,
+    /// 是否有未保存的改动。
+    pub dirty: bool,
 }
 
-/// 当前历史深度。
+/// 当前历史深度与是否未保存。
 #[derive(serde::Serialize)]
 pub struct HistoryDepths {
     pub undo: usize,
     pub redo: usize,
+    pub dirty: bool,
 }
 
 /// 读取当前工程快照。
@@ -52,9 +55,19 @@ fn run_as(
     actor: Actor,
     command: Command,
 ) -> (Project, Vec<Event>) {
+    run_all(app, state, actor, vec![command])
+}
+
+/// 执行一批命令（**合成一个撤销步骤**）：应用状态、广播事件、把变更同步到音频线程。
+fn run_all(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    actor: Actor,
+    commands: Vec<Command>,
+) -> (Project, Vec<Event>) {
     let (project, events) = {
         let mut engine = state.engine.lock().unwrap();
-        let events: Vec<Event> = engine.execute(command, actor);
+        let events: Vec<Event> = engine.execute_all(commands, actor);
         (engine.project().clone(), events)
     };
     for event in &events {
@@ -265,9 +278,10 @@ pub struct EffectSpec {
     pub params: HashMap<String, f32>,
 }
 
-/// 应用一条预设的**内核**：一次事务写回整组乐器参数 + 整条效果链。
+/// 应用一条预设的**内核**：一次事务写回整组乐器参数 + 整条效果链（**替换**效果链）。
 ///
-/// 抽出来是因为 Tauri 命令与 MCP 工具走的是同一件事，只有「谁来广播、谁来同步音频线程」不同。
+/// 这是给 **MCP 工具**用的：代理可以显式要求「连效果链一起换」。界面侧的「切音色预设」
+/// 不走这里——音色与效果已解耦，切音色只改参数（`set_params`），不碰效果链。
 pub(crate) fn apply_preset_inner(
     state: &AppState,
     track: TrackId,
@@ -327,30 +341,6 @@ pub(crate) fn apply_preset_agent(
     (project, events)
 }
 
-/// 应用一条预设：**一次事务**写回整组乐器参数 + 整条效果链。
-///
-/// 走 `execute_all`：一次应用、一次广播、**一个撤销步骤**。分两次调用（先 `set_params`
-/// 再改效果链）会变成两个撤销步骤——按一下预设要按两次 Cmd+Z 才回得去。
-///
-/// 效果链是**替换**而不是叠加：预设 = 整套音色，切预设本来就会丢掉所有旋钮微调，
-/// 丢掉效果微调是同一个契约。
-#[tauri::command]
-pub fn apply_preset(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    track: u64,
-    params: HashMap<String, f32>,
-    effects: Vec<EffectSpec>,
-) -> Project {
-    let (project, events) =
-        apply_preset_inner(&state, TrackId(track), &params, &effects, Actor::Human);
-    for event in &events {
-        let _ = app.emit(EVENT_ENGINE, event);
-    }
-    state.audio.sync_events(&project, &events);
-    project
-}
-
 /// 设置拍号；越界值由引擎归一化（分子 1..=32，分母吸附到 2 的幂）。
 #[tauri::command]
 pub fn set_time_signature(
@@ -390,12 +380,30 @@ pub fn new_project(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     track_names: Option<Vec<String>>,
+    tempo: Option<f64>,
 ) -> Project {
-    run(
-        &app,
-        &state,
-        Command::NewProject { name: "untitled".into(), track_names },
-    )
+    let mut commands = vec![Command::NewProject { name: "untitled".into(), track_names }];
+    // 设置里可配的「新工程默认速度」：与模板默认 120 不同才补一条命令（同一个撤销步骤）。
+    if let Some(bpm) = tempo {
+        if (bpm - daw_party_engine::model::Transport::default().tempo).abs() > f64::EPSILON {
+            commands.push(Command::SetTempo(bpm));
+        }
+    }
+    let project = run_all(&app, &state, Actor::Human, commands).0;
+    // 刚新建的工程没有任何未保存的改动，还没有对应的文件。
+    state.engine.lock().unwrap().mark_saved();
+    state.set_session_path(None);
+    project
+}
+
+/// 重命名当前工程。
+#[tauri::command]
+pub fn rename_project(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Project {
+    run(&app, &state, Command::RenameProject { name })
 }
 
 /// 把**启动时**铺的默认分轨名改成当前语言的名字。
@@ -647,7 +655,7 @@ pub fn monitor_track_mix(
 #[tauri::command]
 pub fn history_depths(state: State<'_, AppState>) -> HistoryDepths {
     let engine = state.engine.lock().unwrap();
-    HistoryDepths { undo: engine.undo_depth(), redo: engine.redo_depth() }
+    HistoryDepths { undo: engine.undo_depth(), redo: engine.redo_depth(), dirty: engine.is_dirty() }
 }
 
 /// 撤销最后一次命令（界面命令与 MCP 共用）。
@@ -660,6 +668,7 @@ pub(crate) fn undo_now(state: &AppState) -> HistoryState {
                 project: engine.project().clone(),
                 undo_depth: engine.undo_depth(),
                 redo_depth: engine.redo_depth(),
+                dirty: engine.is_dirty(),
             },
             engine.project().clone(),
         )
@@ -679,6 +688,7 @@ pub(crate) fn redo_now(state: &AppState) -> HistoryState {
                 project: engine.project().clone(),
                 undo_depth: engine.undo_depth(),
                 redo_depth: engine.redo_depth(),
+                dirty: engine.is_dirty(),
             },
             engine.project().clone(),
         )
@@ -758,17 +768,50 @@ pub fn transport_set_loop(state: State<'_, AppState>, on: bool) -> Result<(), St
 pub async fn save_project(state: State<'_, AppState>, path: String) -> Result<String, String> {
     let project = { state.engine.lock().unwrap().project().clone() };
     let json = serde_json::to_string_pretty(&project).map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
+    let written = tauri::async_runtime::spawn_blocking(move || {
         std::fs::write(&path, json).map_err(|e| e.to_string())?;
         Ok::<String, String>(path)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    // 写盘成功：当前工程成为新的「已保存」基线，并记下文件路径。
+    state.engine.lock().unwrap().mark_saved();
+    state.set_session_path(Some(written.clone()));
+    Ok(written)
+}
+
+/// 当前工程对应的文件路径（尚未保存过时为 `null`）。
+#[tauri::command]
+pub fn current_project_path(state: State<'_, AppState>) -> Option<String> {
+    state.session_path()
+}
+
+/// 把当前工程写入会话缓存（退出前 / 编辑过程中定期调用，供下次启动还原）。
+///
+/// 缓存同时记录工作副本与保存基线，因此带着未保存改动退出后，下次打开依旧显示「未保存」。
+#[tauri::command]
+pub fn cache_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<(), String> {
+    let Some(file) = crate::session_file(&app) else {
+        return Ok(());
+    };
+    let (project, saved) = {
+        let engine = state.engine.lock().unwrap();
+        (engine.project().clone(), engine.saved().clone())
+    };
+    let session = crate::session::SessionFile { path: path.clone(), project, saved };
+    crate::session::write_session(&file, &session)?;
+    state.set_session_path(path);
+    Ok(())
 }
 
 /// 从 JSON 文件导入工程：替换当前工程并清空历史（导入是一个新的起点）。
 #[tauri::command]
 pub async fn open_project(state: State<'_, AppState>, path: String) -> Result<Project, String> {
+    let path_for_session = path.clone();
     let text = tauri::async_runtime::spawn_blocking(move || std::fs::read_to_string(&path))
         .await
         .map_err(|e| e.to_string())?
@@ -808,6 +851,8 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> Result<Pr
         engine.project().clone()
     };
     state.audio.load(&snapshot);
+    // 打开的工程即为「已保存」状态，并记下它的文件路径。
+    state.set_session_path(Some(path_for_session));
     Ok(snapshot)
 }
 
@@ -926,7 +971,8 @@ pub async fn import_audio(
             track: TrackId(track),
             start,
             length,
-            source: AudioSource { path, offset_frames: 0 },
+            // 记下素材总帧数：切分时才知道「左半段到哪停」（否则会一路播到结尾、被拉伸）。
+            source: AudioSource { path, offset_frames: 0, frames: Some(audio.frames() as u64) },
         },
     ))
 }
@@ -944,6 +990,7 @@ pub fn add_audio_clip(
     length: f64,
     path: String,
     offset_frames: u64,
+    frames: Option<u64>,
 ) -> Project {
     run(
         &app,
@@ -952,9 +999,51 @@ pub fn add_audio_clip(
             track: TrackId(track),
             start,
             length,
-            source: AudioSource { path, offset_frames },
+            source: AudioSource { path, offset_frames, frames },
         },
     )
+}
+
+/// 在第 `beat` 拍切分片段（razor）：左半段沿用原 id，右半段是新片段。
+///
+/// 旧工程的音频片段可能没记素材窗口长度，切分需要它，所以先从素材库补上——补写与切分在
+/// **同一批命令**里执行，因此仍然只占一个撤销步骤。
+#[tauri::command]
+pub async fn split_clip(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    beat: f64,
+) -> Result<Project, String> {
+    let stale_audio = {
+        let engine = state.engine.lock().unwrap();
+        engine
+            .project()
+            .track(TrackId(track))
+            .and_then(|t| t.clips.iter().find(|c| c.id == ClipId(clip)))
+            .and_then(|c| c.audio.clone())
+            .filter(|a| a.frames.is_none())
+    };
+
+    let mut commands = Vec::new();
+    if let Some(src) = stale_audio {
+        let assets = Arc::clone(&state.assets);
+        let path = src.path.clone();
+        let audio = tauri::async_runtime::spawn_blocking(move || assets.load(&path))
+            .await
+            .map_err(|e| e.to_string())??;
+        let total = audio.frames() as u64;
+        let offset = src.offset_frames.min(total);
+        commands.push(Command::SetClipAudio {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            audio: Some(AudioSource { path: src.path, offset_frames: offset, frames: Some(total - offset) }),
+        });
+    }
+    commands.push(Command::SplitClip { track: TrackId(track), clip: ClipId(clip), beat });
+
+    Ok(run_all(&app, &state, Actor::Human, commands).0)
 }
 
 /// 取某个音频文件的波形包络（每桶 min/max 各一个值，长度 = `buckets * 2`），供界面绘制。
@@ -1351,18 +1440,62 @@ pub async fn open_synth_window(app: tauri::AppHandle, track: u64) -> Result<(), 
 #[tauri::command]
 pub async fn open_effect_window(
     app: tauri::AppHandle,
+    state: State<'_, AppState>,
     track: u64,
-    index: usize,
+    plugin_id: String,
 ) -> Result<(), String> {
+    // **以 plugin id 为准在链里现算序号**，而不是听调用方的：调用方（主窗口的检查器）
+    // 可能拿着一条**过时的效果链**——别的窗口（例如合成器窗口切预设）刚把整条链换掉，
+    // 主窗口还没刷新。这时按它给的序号开窗就会开到不存在的槽位上。
+    //
+    // 找不到就直说，而不是开出一扇「这条轨道上没有这个效果器」的空窗。
+    let position = {
+        let engine = state.engine.lock().unwrap();
+        engine
+            .project()
+            .track(TrackId(track))
+            .and_then(|t| t.effects.iter().position(|fx| fx.plugin_id == plugin_id))
+    };
+    let Some(index) = position else {
+        return Err("这个效果器已经不在效果链上了".into());
+    };
+
+    // 窗口 label 与 URL 都用 plugin id：链怎么变，同一个效果器都对应同一扇窗。
+    let plugin_arg = format!("&plugin={}", encode_query_value(&plugin_id));
+    let key = format!("{:016x}", fnv1a(&plugin_id));
     open_panel_window(
         app,
-        format!("effect-{track}-{index}"),
-        format!("index.html#/effect?track={track}&index={index}"),
+        format!("effect-{track}-{key}"),
+        format!("index.html#/effect?track={track}&index={index}{plugin_arg}"),
         "效果器",
         (560.0, 400.0),
         (460.0, 320.0),
     )
     .await
+}
+
+/// 稳定的 64 位 FNV-1a 哈希（把插件 id 压成 label 里可用的十六进制）。
+fn fnv1a(value: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in value.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// 把字符串安全地放进 URL 查询参数（保留 URL 的非保留字符，其余百分号转义）。
+fn encode_query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

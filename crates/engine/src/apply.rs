@@ -122,6 +122,28 @@ pub fn apply(project: &mut Project, event: &Event) {
                 c.length = Clip::normalize_length(*length);
             }
         }
+        Event::ClipSplit { track, clip, new_clip, at_beat, left_notes, right_notes, left_audio, right_audio, .. } => {
+            if let Some(t) = project.track_mut(*track) {
+                let Some(pos) = t.clips.iter().position(|c| c.id == *clip) else { return };
+                let end = t.clips[pos].start + t.clips[pos].length;
+                {
+                    let left = &mut t.clips[pos];
+                    left.length = Clip::normalize_length(at_beat - left.start);
+                    left.notes = left_notes.clone();
+                    left.audio = left_audio.clone();
+                }
+                let right = Clip {
+                    id: *new_clip,
+                    start: Clip::normalize_start(*at_beat),
+                    length: Clip::normalize_length(end - *at_beat),
+                    notes: right_notes.clone(),
+                    audio: right_audio.clone(),
+                };
+                // 按起点有序插入，维持轨道内片段顺序稳定。
+                let at = t.clips.partition_point(|c| c.start <= right.start);
+                t.clips.insert(at, right);
+            }
+        }
         Event::NoteAdded { track, clip, note, .. } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 c.notes.push(Note::normalize(*note));
@@ -237,6 +259,7 @@ pub fn apply(project: &mut Project, event: &Event) {
                 }
             }
         }
+        Event::ProjectRenamed { name, .. } => project.name = name.clone(),
         Event::ProjectCleared { name, .. } => *project = Project::new(name.clone()),
     }
 }

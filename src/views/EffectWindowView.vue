@@ -2,50 +2,93 @@
 /**
  * 内置效果器的**独立窗口**内容。
  *
- * 窗口由后端以 `index.html#/effect?track=N&index=I` 打开；这里只渲染那一个效果器的面板。
- * 和主窗口是两个独立的 Vue 实例，靠同一份后端工程状态 + `engine://event` 广播保持一致
- * （在检查器里换顺序、在主窗口里改参数，这里都会跟着动）。
+ * 窗口由后端以 `index.html#/effect?track=N&index=I&plugin=<id>` 打开；这里只渲染那一个效果器。
+ *
+ * 关键点：效果链是**按序号**存的效果器（没有稳定实例 id），链一变（换顺序 / 被预设整条替换）
+ * 序号就可能失效。所以：
+ * 1. 每个窗口都在 `App.vue` 里订阅 `engine://event`、节流重拉工程快照（`useProjectSync`），
+ *    窗口不会停在旧状态；
+ * 2. 定位目标时**优先按 URL 里的 plugin id 在链里找回自己**（换顺序也能跟上），序号只作兜底；
+ * 3. 如果这个效果器**已经不在链上了**（被删掉 / 被预设换掉），窗口**自己关掉**，
+ *    而不是显示「这条轨道上没有这个效果器」。
  */
-import { computed, onMounted } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import EffectPanel from "@/components/workspace/panes/EffectPanel.vue";
 import { useI18n } from "@/i18n";
 import { usePluginsStore } from "@/stores/plugins";
 import { useProjectStore } from "@/stores/project";
+import { isTauri } from "@/utils/platform";
+import type { PluginInstance } from "@/api/types";
 
 const route = useRoute();
 const i18n = useI18n();
 const store = useProjectStore();
 const plugins = usePluginsStore();
 
-/** 要显示哪条轨道的第几个效果器。 */
+/** 要显示哪条轨道的效果器。 */
 const trackId = computed(() => {
   const raw = Number(route.query.track);
   const tracks = store.project?.tracks ?? [];
   return Number.isFinite(raw) && tracks.some((t) => t.id === raw) ? raw : null;
 });
 
-const index = computed(() => {
+/** URL 里带的序号（兜底用）。 */
+const urlIndex = computed(() => {
   const raw = Number(route.query.index);
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : null;
 });
 
-const track = computed(() => store.project?.tracks.find((t) => t.id === trackId.value) ?? null);
-
-/** 效果器实例：链被改动（换顺序 / 删掉）后这里的下标可能已经指向别人了，所以每次现取。 */
-const fx = computed(() => {
-  const i = index.value;
-  if (i === null) return null;
-  return track.value?.effects[i] ?? null;
+/** URL 里带的效果器 plugin id（首选定位依据）。 */
+const wantPlugin = computed(() => {
+  const raw = route.query.plugin;
+  return typeof raw === "string" && raw.length > 0 ? raw : null;
 });
 
+const track = computed(() => store.project?.tracks.find((t) => t.id === trackId.value) ?? null);
+
+/** 解析出目标效果器与它在**当前**链里的真实序号。 */
+const resolved = computed<{ fx: PluginInstance; index: number } | null>(() => {
+  const t = track.value;
+  if (!t) return null;
+  const want = wantPlugin.value;
+  if (want) {
+    // 先看原序号是否还对得上（顺序没变时最省事）。
+    const i = urlIndex.value;
+    if (i !== null && t.effects[i]?.plugin_id === want) return { fx: t.effects[i], index: i };
+    // 否则在链里按 id 找回自己（换顺序 / 前面插删过效果器）。
+    const j = t.effects.findIndex((f) => f.plugin_id === want);
+    // 带 id 却找不到 → 视为「已被移出链」，返回 null（窗口据此自行关闭），
+    // 绝不退而显示序号上碰巧存在的**另一个**效果器。
+    return j >= 0 ? { fx: t.effects[j], index: j } : null;
+  }
+  // 老 URL（没有 plugin 参数）：只能按序号定位。
+  const i = urlIndex.value;
+  return i !== null && t.effects[i] ? { fx: t.effects[i], index: i } : null;
+});
+
+const fx = computed(() => resolved.value?.fx ?? null);
 const title = computed(() => (fx.value ? plugins.name(fx.value.plugin_id) : ""));
+
+/** 是否曾经成功定位到效果器（用来区分「还没载入」与「真的没了」）。 */
+const everResolved = ref(false);
+watch(resolved, (r) => {
+  if (r) {
+    everResolved.value = true;
+    return;
+  }
+  // 曾经有、现在没了 → 效果器已被移出链（删掉 / 被预设换掉）：自己关掉窗口。
+  if (everResolved.value && store.project && isTauri()) {
+    void getCurrentWindow().close();
+  }
+});
 
 /** 参数改动只写后端工程状态：两个窗口都靠 `engine://event` 广播保持一致。 */
 async function commit(id: string, value: number): Promise<void> {
   const t = track.value;
-  const i = index.value;
+  const i = resolved.value?.index ?? null;
   if (!t || i === null) return;
   await store.setEffectParam(t.id, i, id, value);
 }
@@ -53,17 +96,10 @@ async function commit(id: string, value: number): Promise<void> {
 /** 恢复默认值：一次事务，只占一个撤销步骤。 */
 async function commitMany(params: Record<string, number>): Promise<void> {
   const t = track.value;
-  const i = index.value;
+  const i = resolved.value?.index ?? null;
   if (!t || i === null) return;
   await store.setEffectParams(t.id, i, params);
 }
-
-/**
- * 自己确保工程已经载入：二级窗口不指望主窗口的装载链成功。
- */
-onMounted(() => {
-  if (!store.project) void store.reload();
-});
 </script>
 
 <template>

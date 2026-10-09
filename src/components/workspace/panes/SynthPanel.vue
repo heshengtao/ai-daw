@@ -20,15 +20,12 @@ import PresetBar from "@/components/common/PresetBar.vue";
 import { SYNTH_DEFAULTS, SYNTH_ID, SYNTH_PARAMS, type ParamSpec } from "@/data/plugins";
 import { useI18n } from "@/i18n";
 import { usePresetsStore, type PresetOption } from "@/stores/presets";
-import type { EffectSpec } from "@/api/types";
 import type { WaveParams } from "@/utils/waveform";
 
 const props = defineProps<{
   params: Record<string, number>;
   /** 试听键盘要发给哪条轨道；不给就不显示键盘（比如侧边栏里没选中轨道时）。 */
   track?: number;
-  /** 当前轨道的效果链：用来判断命中哪条预设（预设可以自带效果链）。 */
-  effects?: EffectSpec[];
 }>();
 
 const emit = defineEmits<{
@@ -38,8 +35,8 @@ const emit = defineEmits<{
    * 分两次提交会变成**两个撤销步骤**——拖一下要按两次 Cmd+Z 才回得去，所以必须合成一次。
    */
   (e: "commitMany", params: Record<string, number>): void;
-  /** 点预设垫子 / 预设条：整组参数 + 自带的效果链一次写回（只占一个撤销步骤）。 */
-  (e: "applyPreset", params: Record<string, number>, effects: EffectSpec[]): void;
+  /** 点预设垫子 / 预设条：整组**乐器参数**一次写回（只占一个撤销步骤；不碰效果链）。 */
+  (e: "applyPreset", params: Record<string, number>): void;
 }>();
 
 const { t } = useI18n();
@@ -423,18 +420,16 @@ const coarseOptions = computed(() => {
 /** 当前类别下的垫子。 */
 const pads = computed(() => options.value.filter((o) => (o.category ?? "8bit") === coarse.value));
 
-/** 当前参数与效果链命中的那条预设（用来高亮垫子）。 */
-const activePresetId = computed(
-  () => presets.match(SYNTH_ID, props.params, props.effects ?? [])?.id ?? "",
-);
+/** 当前参数命中的那条预设（用来高亮垫子；只看参数，与效果链无关）。 */
+const activePresetId = computed(() => presets.match(SYNTH_ID, props.params)?.id ?? "");
 
-/** 切预设：把整组参数 + 自带效果链交给父组件写回当前轨道（只有它知道是哪条轨道）。 */
-function applyPreset(values: Record<string, number>, effects: EffectSpec[]): void {
-  emit("applyPreset", values, effects);
+/** 切预设：把整组乐器参数交给父组件写回当前轨道（只有它知道是哪条轨道）。 */
+function applyPreset(values: Record<string, number>): void {
+  emit("applyPreset", values);
 }
 
 function pickPad(option: PresetOption): void {
-  applyPreset(option.params, option.effects);
+  applyPreset(option.params);
 }
 </script>
 
@@ -472,12 +467,7 @@ function pickPad(option: PresetOption): void {
             </button>
           </div>
           <div class="bar">
-            <PresetBar
-              :plugin-id="SYNTH_ID"
-              :params="props.params"
-              :effects="props.effects"
-              @apply="applyPreset"
-            />
+            <PresetBar :plugin-id="SYNTH_ID" :params="props.params" @apply="applyPreset" />
           </div>
         </div>
       </section>
@@ -593,13 +583,34 @@ function pickPad(option: PresetOption): void {
           </div>
 
           <div class="foot-row">
-            <button
-              class="btn-tonal reset-params"
-              :disabled="atDefaults"
-              @click="restoreDefaults"
-            >
-              {{ t("panel.restoreDefaults") }}
-            </button>
+            <div class="foot-left">
+              <button
+                class="btn-tonal reset-params"
+                :disabled="atDefaults"
+                @click="restoreDefaults"
+              >
+                {{ t("panel.restoreDefaults") }}
+              </button>
+              <!-- 八度按钮与「恢复默认参数」同一套 `btn-tonal` 样式、同一种尺寸，挨在一起。 -->
+              <button
+                class="btn-tonal octave-btn"
+                :disabled="!canShiftDown"
+                :title="t('synth.octaveDown')"
+                :aria-label="t('synth.octaveDown')"
+                @click="shiftOctave(-1)"
+              >
+                {{ t("synth.octaveDown") }}
+              </button>
+              <button
+                class="btn-tonal octave-btn"
+                :disabled="!canShiftUp"
+                :title="t('synth.octaveUp')"
+                :aria-label="t('synth.octaveUp')"
+                @click="shiftOctave(1)"
+              >
+                {{ t("synth.octaveUp") }}
+              </button>
+            </div>
             <button
               class="btn-tonal advanced-toggle"
               :class="{ on: advanced }"
@@ -613,28 +624,10 @@ function pickPad(option: PresetOption): void {
       </section>
 
       <!-- 底部：键盘**贴死窗口边缘**（面板不留下内边距，左右负边距拉满整宽，
-           圆角由窗口本身切出来）。上面一条细杆放音域与八度按钮。 -->
+           圆角由窗口本身切出来）。上面一条细杆显示当前音域（八度按钮在动作栏里）。 -->
       <div v-if="props.track !== undefined" class="keyboard-row">
         <div class="kb-bar">
           <span class="kb-range">{{ keyboardRange }}</span>
-          <button
-            class="kb-btn"
-            :disabled="!canShiftDown"
-            :title="t('synth.octaveDown')"
-            :aria-label="t('synth.octaveDown')"
-            @click="shiftOctave(-1)"
-          >
-            −8
-          </button>
-          <button
-            class="kb-btn"
-            :disabled="!canShiftUp"
-            :title="t('synth.octaveUp')"
-            :aria-label="t('synth.octaveUp')"
-            @click="shiftOctave(1)"
-          >
-            +8
-          </button>
         </div>
         <div class="kb-keys">
           <PianoKeyboard :track="props.track" :base-note="keyboardBase" :octaves="KB_OCTAVES" />
@@ -971,9 +964,18 @@ function pickPad(option: PresetOption): void {
 .foot-row {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+/* 左侧一组：恢复默认 + 两个八度按钮（窄侧边栏里可以换行，不挤变形） */
+.foot-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 /* 「恢复默认参数」（`btn-tonal` 来自全局样式，这里只管尺寸与置灰态） */
 .reset-params {
@@ -981,9 +983,17 @@ function pickPad(option: PresetOption): void {
   padding: 0 18px;
   font-size: 12.5px;
 }
-.reset-params:disabled {
+.reset-params:disabled,
+.octave-btn:disabled {
   opacity: 0.45;
   cursor: default;
+}
+/* 八度按钮：与「恢复默认参数」同一套 `btn-tonal`，同尺寸、文字写明「降低/升高八度」 */
+.octave-btn {
+  height: 36px;
+  padding: 0 14px;
+  font-size: 12.5px;
+  white-space: nowrap;
 }
 
 /* 「高级」开关（`btn-tonal` 来自全局样式，这里只管尺寸与展开态） */
@@ -1006,13 +1016,13 @@ function pickPad(option: PresetOption): void {
   /* 抵消面板左右内边距，让键盘横跨整宽；下边不留缝，直接贴底。 */
   margin: 0 -10px;
 }
-/* 键盘上方那条细杆：左边音域，右边两个八度按钮。 */
+/* 键盘上方那条细杆：显示当前音域（八度按钮已移到动作栏里）。 */
 .kb-bar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
+  height: 22px;
   padding: 0 10px;
 }
 .kb-range {
@@ -1022,28 +1032,6 @@ function pickPad(option: PresetOption): void {
   letter-spacing: 0.4px;
   color: rgb(var(--md-on-surface-variant));
   font-variant-numeric: tabular-nums;
-}
-.kb-btn {
-  flex: 0 0 auto;
-  min-width: 30px;
-  height: 20px;
-  padding: 0 7px;
-  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
-  border-radius: 999px;
-  background: transparent;
-  color: rgb(var(--md-on-surface-variant));
-  font-size: 10.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.14s ease, color 0.14s ease;
-}
-.kb-btn:hover:not(:disabled) {
-  background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
-  color: rgb(var(--md-on-surface));
-}
-.kb-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
 }
 .kb-keys {
   flex: 0 0 auto;

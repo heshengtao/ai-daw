@@ -16,6 +16,12 @@ export interface AudioSource {
   path: string;
   /** 素材内的起始帧（crop 起点）。 */
   offset_frames: number;
+  /**
+   * 素材窗口长度（源帧）；`undefined` = 取到素材结尾（旧工程）。
+   *
+   * 切分音频片段时必须知道它，否则「左半段」会一路播到结尾、被拉伸变调。
+   */
+  frames?: number;
 }
 
 /** 片段：MIDI（`notes`）或音频（`audio`）。 */
@@ -73,13 +79,6 @@ export interface Track {
   mixer: MixerChannel;
 }
 
-/** 预设自带的一条效果器声明（写回轨道效果链时用）。 */
-export interface EffectSpec {
-  plugin_id: string;
-  /** 参数名 → 值；没列出的用插件自己的默认值。 */
-  params: Record<string, number>;
-}
-
 /** 时间轴上的一个关键点：从 `beat` 起 BPM 与拍号切换。 */
 export interface Keyframe {
   beat: number;
@@ -109,17 +108,19 @@ export interface Project {
   master: MixerChannel;
 }
 
-/** 撤销 / 重做之后的返回：工程快照 + 最新历史深度。 */
+/** 撤销 / 重做之后的返回：工程快照 + 最新历史深度 + 是否有未保存改动。 */
 export interface HistoryState {
   project: Project;
   undo_depth: number;
   redo_depth: number;
+  dirty: boolean;
 }
 
-/** 当前可撤销 / 可重做的次数。 */
+/** 当前可撤销 / 可重做的次数，以及是否有未保存改动。 */
 export interface HistoryDepths {
   undo: number;
   redo: number;
+  dirty: boolean;
 }
 
 /** 实时传输状态快照（与后端 `audio::TransportSnapshot` 一一对应）。 */

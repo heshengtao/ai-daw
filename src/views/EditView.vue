@@ -14,6 +14,7 @@
  * - 拖动音符右边缘 → 改时长（音符上**没有**删除按钮，删除走右键或 Delete）；
  * - 左键点击音符 → 选中；Ctrl/Cmd+点击 → 加入 / 移出选择；
  * - Shift/Alt + 左键拖动 → 框选（顶栏的鼠标模式也能切换默认左键行为）；
+ * - 分隔模式（顶栏 / 快捷键 3）：左键点击 → 在该拍把当前片段切成两段（razor）；
  * - 右键点击音符 → 删除；右键拖动 → 框选批量删除；
  * - Ctrl/Cmd + 滚轮 → 缩放（锚点在指针下，两个视图同步）。
  */
@@ -117,7 +118,8 @@ const scrollTop = ref(0);
 let applyingScroll = false;
 
 /** 控制器泳道当前显示的属性。 */
-const controllerProperty = ref<ControllerProperty>("volume");
+// 默认显示**力度**：它是所有音源都通用的属性（音量对不支持逐音符音量的音源会被折算进力度）。
+const controllerProperty = ref<ControllerProperty>("velocity");
 
 /** 指针位置 → (绝对拍, 音高)；`rel` 是相对片段起点的拍。 */
 function pointAt(clientX: number, clientY: number): { beat: number; pitch: number; rel: number } {
@@ -180,9 +182,30 @@ function noteStyle(note: Note): Record<string, string> {
 // 指针按下
 // ---------------------------------------------------------------------------
 
+/** 分隔模式：在指针处切分当前片段（点音符或空白都算）。 */
+async function splitCurrentAt(clientX: number, clientY: number): Promise<void> {
+  const c = clip.value;
+  const t = trackId.value;
+  if (!c || t === null) return;
+  const beat = pointAt(clientX, clientY).beat;
+  if (!(beat > c.start + 1e-6 && beat < c.start + c.length - 1e-6)) return;
+  try {
+    await store.splitClip(t, c.id, beat);
+    layout.notify(i18n.t("arrange.clipSplit"));
+  } catch (err) {
+    layout.notify(i18n.t("error.splitClip", { error: String(err) }));
+  }
+}
+
 function onNotePointerDown(e: PointerEvent, index: number): void {
   if (e.button !== 0) return;
   e.stopPropagation();
+
+  // 分隔模式：点音符也按「切开片段」处理。
+  if (layout.tool === "split") {
+    void splitCurrentAt(e.clientX, e.clientY);
+    return;
+  }
 
   if (e.metaKey || e.ctrlKey) {
     selection.toggleNote(index);
@@ -230,6 +253,12 @@ function onRollPointerDown(e: PointerEvent): void {
     return;
   }
   if (e.button !== 0) return;
+
+  // 分隔模式：在点击处切分当前片段。
+  if (layout.tool === "split") {
+    void splitCurrentAt(e.clientX, e.clientY);
+    return;
+  }
 
   // 顶栏的鼠标模式决定左键的默认含义；Shift/Alt 随时可以临时切到框选。
   const wantsMarquee = e.shiftKey || e.altKey || layout.tool === "select";

@@ -15,7 +15,9 @@ import {
 } from "@/composables/useTheme";
 import { useLayoutStore } from "@/stores/layout";
 import { useProjectStore } from "@/stores/project";
+import { useSettingsStore, MAX_DEFAULT_TEMPO, MIN_DEFAULT_TEMPO } from "@/stores/settings";
 import Md3Slider from "@/components/common/Md3Slider.vue";
+import NumberField from "@/components/common/NumberField.vue";
 import { usePluginsStore } from "@/stores/plugins";
 import { useI18n } from "@/i18n";
 import { lastWorkspace } from "@/router";
@@ -40,6 +42,7 @@ const active = ref<Section>("general");
 const { theme, accent, setTheme, setAccent } = useTheme();
 const layout = useLayoutStore();
 const project = useProjectStore();
+const settings = useSettingsStore();
 const plugins = usePluginsStore();
 const i18n = useI18n();
 
@@ -172,7 +175,13 @@ onMounted(loadMcp);
                   <span class="row-title">{{ i18n.t("settings.project.tempo") }}</span>
                   <span class="row-sub">{{ i18n.t("settings.project.tempoHint") }}</span>
                 </div>
-                <span class="row-value">120</span>
+                <NumberField
+                  v-model="settings.defaultTempo"
+                  :min="MIN_DEFAULT_TEMPO"
+                  :max="MAX_DEFAULT_TEMPO"
+                  label="BPM"
+                  input-width="48px"
+                />
               </div>
             </div>
           </div>

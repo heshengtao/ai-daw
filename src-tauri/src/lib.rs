@@ -7,6 +7,7 @@ mod main_thread;
 mod mcp;
 mod plugins;
 mod presets;
+mod session;
 mod state;
 
 use std::sync::Arc;
@@ -207,6 +208,13 @@ fn mcp_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("mcp.json"))
 }
 
+/// 会话缓存文件的位置：应用配置目录下的 `session.json`。
+///
+/// 它记录「上次退出时的工作状态」，供下次启动还原；拿不到配置目录时返回 `None`（不缓存）。
+pub(crate) fn session_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("session.json"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -220,6 +228,12 @@ pub fn run() {
             // 在主线程做，而这些调用发生在音频线程构建 Player 的时候。
             crate::main_thread::TauriMainThread::install(app.handle());
             build_main_window(app.handle())?;
+            // 会话缓存：把上次退出时的工作状态读回来（没有或损坏就保持默认新工程）。
+            if let Some(file) = session_file(app.handle()) {
+                if let Some(session) = session::read_session(&file) {
+                    app.state::<AppState>().restore_session(session);
+                }
+            }
             let state = app.state::<AppState>();
             state.init_presets(preset_file(app.handle()));
             let audio = state.audio.clone();
@@ -241,18 +255,21 @@ pub fn run() {
             commands::set_track_instrument,
             commands::set_param,
             commands::set_params,
-            commands::apply_preset,
             commands::set_tempo,
             commands::set_time_signature,
             commands::set_keyframe,
             commands::remove_keyframe,
             commands::new_project,
+            commands::rename_project,
             commands::localize_starter_tracks,
+            commands::current_project_path,
+            commands::cache_session,
             commands::add_clip,
             commands::remove_clip,
             commands::move_clip,
             commands::move_clips,
             commands::resize_clip,
+            commands::split_clip,
             commands::add_note,
             commands::set_note,
             commands::set_notes,

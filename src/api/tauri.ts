@@ -13,7 +13,6 @@ import type {
   CatalogPlugin,
   ClipPlacement,
   ClipRef,
-  EffectSpec,
   HistoryDepths,
   HistoryState,
   McpStatus,
@@ -95,9 +94,27 @@ export function removeKeyframe(beat: number): Promise<Project> {
 }
 
 /** 新建工程（铺默认分轨模板）。`trackNames` 按模板顺序给出，用于按语言命名分轨。 */
-export function newProject(trackNames?: string[]): Promise<Project> {
-  if (mockEnabled()) return Promise.resolve(mockApi.newProject(trackNames));
-  return invoke<Project>("new_project", { trackNames });
+export function newProject(trackNames?: string[], tempo?: number): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.newProject(trackNames, tempo));
+  return invoke<Project>("new_project", { trackNames, tempo });
+}
+
+/** 重命名当前工程。 */
+export function renameProject(name: string): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.renameProject(name));
+  return invoke<Project>("rename_project", { name });
+}
+
+/** 当前工程对应的文件路径（尚未保存过时为 null）。 */
+export function currentProjectPath(): Promise<string | null> {
+  if (mockEnabled()) return Promise.resolve(mockApi.currentProjectPath());
+  return invoke<string | null>("current_project_path");
+}
+
+/** 把当前工程写入会话缓存（退出前 / 编辑过程中定期调用，供下次启动还原）。 */
+export function cacheSession(path: string | null): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.cacheSession(path));
+  return invoke<void>("cache_session", { path });
 }
 
 /** 把启动时铺的默认分轨名改成当前语言的名字（仅当工程仍是默认模板）。 */
@@ -358,9 +375,16 @@ export function addAudioClip(
   length: number,
   path: string,
   offsetFrames: number,
+  frames?: number,
 ): Promise<Project> {
-  if (mockEnabled()) return Promise.resolve(mockApi.addAudioClip(track, start, length, path, offsetFrames));
-  return invoke<Project>("add_audio_clip", { track, start, length, path, offsetFrames });
+  if (mockEnabled()) return Promise.resolve(mockApi.addAudioClip(track, start, length, path, offsetFrames, frames));
+  return invoke<Project>("add_audio_clip", { track, start, length, path, offsetFrames, frames });
+}
+
+/** 在第 `beat` 拍切分片段（razor）：左半段沿用原 id，右半段是新片段。 */
+export function splitClip(track: number, clip: number, beat: number): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.splitClip(track, clip, beat));
+  return invoke<Project>("split_clip", { track, clip, beat });
 }
 
 /** 取某个音频文件的波形包络（每桶 min/max 各一个值，长度 = `buckets * 2`）。 */
@@ -501,10 +525,15 @@ export function openSynthWindow(track: number): Promise<void> {
   return invoke<void>("open_synth_window", { track });
 }
 
-/** 打开某条轨道上某个效果器的独立界面（已经开着就聚焦）。 */
-export function openEffectWindow(track: number, index: number): Promise<void> {
+/**
+ * 打开某条轨道上某个效果器的独立界面（已经开着就聚焦）。
+ *
+ * 传的是 **plugin id**，序号由后端在**权威的**效果链里现算——调用方可能拿着一条过时的链
+ * （别的窗口刚改过），按序号开窗会开到不存在的槽位上。
+ */
+export function openEffectWindow(track: number, pluginId: string): Promise<void> {
   if (mockEnabled()) return mockApi.openEffectWindow();
-  return invoke<void>("open_effect_window", { track, index });
+  return invoke<void>("open_effect_window", { track, pluginId });
 }
 
 /** 一次设置效果器的多个参数（「恢复默认值」走它：一次事务，一个撤销步骤）。 */
@@ -570,22 +599,12 @@ export function deletePreset(id: string): Promise<void> {
   return invoke<void>("delete_preset", { id });
 }
 
-/** 一次性写回一整组参数（切换预设走它：一次事务，只占一个撤销步骤）。 */
+/**
+ * 一次性写回一整组参数（切换**音色**预设走它：一次事务，只占一个撤销步骤）。
+ *
+ * 预设只改乐器参数，**不碰效果链**——音色与效果解耦。
+ */
 export function setParams(track: number, params: Record<string, number>): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.setParams(track, params));
   return invoke<Project>("set_params", { track, params });
-}
-
-/**
- * 应用一条预设：**一次事务**写回整组乐器参数 + 整条效果链（只占一个撤销步骤）。
- *
- * 效果链是**替换**而不是叠加：预设 = 整套音色，切预设本来就会丢掉旋钮微调。
- */
-export function applyPreset(
-  track: number,
-  params: Record<string, number>,
-  effects: EffectSpec[],
-): Promise<Project> {
-  if (mockEnabled()) return Promise.resolve(mockApi.applyPreset(track, params, effects));
-  return invoke<Project>("apply_preset", { track, params, effects });
 }

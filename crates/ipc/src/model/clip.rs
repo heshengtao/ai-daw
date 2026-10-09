@@ -63,6 +63,12 @@ pub struct AudioSource {
     /// 素材内的起始帧（crop 起点）。旧工程/手写 JSON 缺省时按 0 读入。
     #[serde(default)]
     pub offset_frames: u64,
+    /// 素材窗口长度（源帧）：从 `offset_frames` 起**取多少帧**铺满整个片段。
+    ///
+    /// `None` = 取到素材结尾（旧工程/手写 JSON 缺省）。切分音频片段时必须知道窗口长度，
+    /// 否则「左半段」会一路播到结尾、被拉伸变调——所以导入时会把素材总帧数写进来。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frames: Option<u64>,
 }
 
 /// 片段：MIDI（`notes`）或音频（`audio`）。
@@ -225,7 +231,7 @@ mod tests {
             start: -3.0,
             length: 0.0,
             notes: vec![Note { pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 }],
-            audio: Some(AudioSource { path: "/tmp/kick.wav".into(), offset_frames: 0 }),
+            audio: Some(AudioSource { path: "/tmp/kick.wav".into(), offset_frames: 0, frames: Some(480) }),
         };
         let back: Clip = serde_json::from_str(&serde_json::to_string(&clip).unwrap()).unwrap();
         assert_eq!(back, clip);
@@ -237,11 +243,20 @@ mod tests {
         assert_eq!(n.length, Clip::MIN_LENGTH_BEATS);
     }
 
-    /// `offset_frames` 缺省时按 0 读入（手写 JSON / 旧版本）。
+    /// `offset_frames` 缺省时按 0 读入（手写 JSON / 旧版本），`frames` 缺省为「到结尾」。
     #[test]
     fn audio_source_offset_defaults_to_zero() {
         let json = r#"{"id":1,"start":0.0,"length":1.0,"notes":[],"audio":{"path":"a.wav"}}"#;
         let clip: Clip = serde_json::from_str(json).unwrap();
-        assert_eq!(clip.audio.unwrap().offset_frames, 0);
+        let audio = clip.audio.unwrap();
+        assert_eq!(audio.offset_frames, 0);
+        assert_eq!(audio.frames, None, "旧工程没有窗口长度 → 到素材结尾");
+    }
+
+    /// 没有窗口长度时不该写进 JSON（保持旧工程形状）。
+    #[test]
+    fn audio_source_omits_frames_when_absent() {
+        let src = AudioSource { path: "a.wav".into(), offset_frames: 0, frames: None };
+        assert_eq!(serde_json::to_string(&src).unwrap(), r#"{"path":"a.wav","offset_frames":0}"#);
     }
 }

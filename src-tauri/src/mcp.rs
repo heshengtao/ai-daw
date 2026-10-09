@@ -500,7 +500,8 @@ impl DawMcpServer {
                 track: TrackId(args.track),
                 start,
                 length,
-                source: AudioSource { path: args.path.clone(), offset_frames: 0 },
+                // MCP 只给了路径：窗口长度未知（到结尾）。切分这类片段会被引擎拒绝。
+                source: AudioSource { path: args.path.clone(), offset_frames: 0, frames: None },
             },
         );
         let id = clip_added_id(&events);

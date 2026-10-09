@@ -17,6 +17,8 @@ const emit = defineEmits<{
   (e: "new"): void;
   (e: "save"): void;
   (e: "export"): void;
+  (e: "rename"): void;
+  (e: "shortcuts"): void;
 }>();
 
 /** 只有 Windows / Linux 需要自绘窗口按钮。 */
@@ -40,6 +42,8 @@ const showWindowControls = isTauri() && (isWindows() || isLinux());
           @new="emit('new')"
           @save="emit('save')"
           @export="emit('export')"
+          @rename="emit('rename')"
+          @shortcuts="emit('shortcuts')"
         />
 
         <div class="app-row">

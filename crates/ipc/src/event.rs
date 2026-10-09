@@ -40,6 +40,21 @@ pub enum Event {
     ClipAudioChanged { actor: Actor, track: TrackId, clip: ClipId, audio: Option<AudioSource> },
     /// 片段删除。
     ClipRemoved { actor: Actor, track: TrackId, clip: ClipId },
+    /// 片段被切分：左半段沿用原 `clip`，右半段是 `new_clip`（自 `at_beat` 起）。
+    ///
+    /// 两半段的内容（音符 / 音频窗口）直接带在事件里，重放无需再算——切分是确定性的，
+    /// 但把结果写进事件能让重放与实时编辑**逐字一致**。
+    ClipSplit {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        new_clip: ClipId,
+        at_beat: f64,
+        left_notes: Vec<Note>,
+        right_notes: Vec<Note>,
+        left_audio: Option<AudioSource>,
+        right_audio: Option<AudioSource>,
+    },
     /// 片段被移动到新的起始拍。
     ClipMoved { actor: Actor, track: TrackId, clip: ClipId, start: f64 },
     /// 多个片段被移动（多选拖动）。
@@ -78,6 +93,8 @@ pub enum Event {
     EffectMoved { actor: Actor, track: TrackId, from: usize, to: usize },
     /// 效果器参数改变（按链内序号定位）。
     EffectParamChanged { actor: Actor, track: TrackId, index: usize, param: String, value: f32 },
+    /// 工程被重命名。
+    ProjectRenamed { actor: Actor, name: String },
     /// 工程被重置为空。`actor` 为发起者。
     ProjectCleared { actor: Actor, name: String },
 }
@@ -99,6 +116,7 @@ impl Event {
             | Event::AudioClipAdded { actor, .. }
             | Event::ClipAudioChanged { actor, .. }
             | Event::ClipRemoved { actor, .. }
+            | Event::ClipSplit { actor, .. }
             | Event::ClipMoved { actor, .. }
             | Event::ClipsMoved { actor, .. }
             | Event::ClipResized { actor, .. }
@@ -118,6 +136,7 @@ impl Event {
             | Event::EffectRemoved { actor, .. }
             | Event::EffectMoved { actor, .. }
             | Event::EffectParamChanged { actor, .. }
+            | Event::ProjectRenamed { actor, .. }
             | Event::ProjectCleared { actor, .. } => actor,
         }
     }

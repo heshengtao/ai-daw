@@ -70,6 +70,13 @@ pub enum Command {
     MoveEffect { track: TrackId, from: usize, to: usize },
     /// 设置轨道效果器的某个参数（按链内序号定位）。
     SetEffectParam { track: TrackId, index: usize, param: String, value: f32 },
+    /// 在第 `beat` 拍切分一个片段（razor）。
+    ///
+    /// 左半段沿用原 `clip`（id 不变），右半段是新片段。`beat` 必须落在片段内部，否则安静忽略。
+    /// 音频片段需要有素材窗口长度（`AudioSource::frames`）才能切分——否则无法确定「左半段到哪里停」。
+    SplitClip { track: TrackId, clip: ClipId, beat: f64 },
+    /// 重命名整个工程。
+    RenameProject { name: String },
     /// 新建工程：清空并铺上默认分轨模板（引擎里的 `STARTER_TRACKS`）。
     ///
     /// `track_names` 是**按模板顺序**给出的分轨名（界面按当前语言生成）。

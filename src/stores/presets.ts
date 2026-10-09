@@ -8,7 +8,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 
 import { deletePreset, listPresets, savePreset, updatePreset } from "@/api/tauri";
-import type { EffectSpec, Preset } from "@/api/types";
+import type { Preset } from "@/api/types";
 import {
   EFFECT_FACTORY_PRESETS,
   SYNTH_FACTORY_PRESETS,
@@ -26,8 +26,6 @@ export interface PresetOption {
   /** 出厂预设的类别 slug（`8bit|guitar|bass|drums|strings|winds|pad|fx`）；用户自存预设留空。 */
   category?: string;
   params: Record<string, number>;
-  /** 预设自带的效果链（出厂预设才有；没写 = 空链）。 */
-  effects: EffectSpec[];
   /** 出厂预设：不能删，但可以「另存为」出自己的版本。 */
   factory: boolean;
 }
@@ -37,15 +35,6 @@ function sameParams(a: Record<string, number>, b: Record<string, number>): boole
   const keys = Object.keys(a);
   if (keys.length !== Object.keys(b).length) return false;
   return keys.every((k) => a[k] === b[k]);
-}
-
-/** 两条效果链是否一致（顺序、id、参数都要一样）。 */
-function sameChain(a: EffectSpec[], b: EffectSpec[]): boolean {
-  if (a.length !== b.length) return false;
-  return a.every((spec, i) => {
-    const other = b[i];
-    return !!other && spec.plugin_id === other.plugin_id && sameParams(spec.params, other.params);
-  });
 }
 
 export const usePresetsStore = defineStore("presets", () => {
@@ -78,7 +67,6 @@ export const usePresetsStore = defineStore("presets", () => {
         category: p.category,
         // 出厂预设是「补丁」，这里摊成完整参数集：切预设要一次把整台合成器设好。
         params: fullSynthParams(p.params),
-        effects: p.effects ?? [],
         factory: true,
       }));
     } else {
@@ -88,7 +76,6 @@ export const usePresetsStore = defineStore("presets", () => {
         name: t(p.name),
         note: t(p.note),
         params: p.params,
-        effects: [],
         factory: true,
       }));
     }
@@ -100,8 +87,6 @@ export const usePresetsStore = defineStore("presets", () => {
         name: p.name,
         note: i === 0 ? t("preset.mine") : "",
         params: p.params,
-        // 自存预设只存乐器参数，不带效果链。
-        effects: [],
         factory: false,
       }));
     return [...factory, ...mine];
@@ -110,8 +95,7 @@ export const usePresetsStore = defineStore("presets", () => {
   /**
    * 当前参数命中的预设（没有就返回 null）。
    *
-   * 传了 `chain` 就**连效果链一起比对**：带混响的铺底与「同一组参数 + 手动加的效果」不是同一条预设。
-   * 不传则只比参数（调用方拿不到效果链时的退路）。
+   * 只比**参数**：效果与音色是解耦的，轨道上挂了什么效果器不影响「当前是哪条音色预设」。
    *
    * 参数完全相同的可能不止一条（比如「另存为」出来的副本），此时取**最后**一条：
    * 自存预设排在出厂之后，所以用户自己刚存的那条会被选中——否则它既显示不出来也删不掉。
@@ -119,13 +103,11 @@ export const usePresetsStore = defineStore("presets", () => {
   function match(
     pluginId: string | undefined | null,
     params: Record<string, number>,
-    chain?: EffectSpec[],
   ): PresetOption | null {
     const options = forPlugin(pluginId);
     let hit: PresetOption | null = null;
     for (const option of options) {
       if (!sameParams(option.params, params)) continue;
-      if (chain && !sameChain(option.effects, chain)) continue;
       hit = option;
     }
     if (hit) return hit;
@@ -149,8 +131,6 @@ export const usePresetsStore = defineStore("presets", () => {
       name: created.name,
       note: "",
       params: created.params,
-      // 自存预设只存乐器参数，不带效果链。
-      effects: [],
       factory: false,
     };
   }

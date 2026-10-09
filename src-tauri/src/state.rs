@@ -41,6 +41,10 @@ pub struct AppState {
     pub presets: Mutex<PresetStore>,
     /// 音频素材缓存（路径 → 已解码 PCM）。音频线程与离线渲染共用。
     pub assets: Arc<AssetCache>,
+    /// 当前工程最后保存/打开的**文件路径**（尚未落盘时为 `None`）。
+    ///
+    /// 这是界面「保存」要知道的目标；它随会话缓存一起持久化，下次启动能接着用。
+    pub session_path: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -67,7 +71,18 @@ impl AppState {
             host_windows: Arc::new(Mutex::new(HashSet::new())),
             presets: Mutex::new(PresetStore::load(None)),
             assets,
+            session_path: Mutex::new(None),
         }
+    }
+
+    /// 记下当前工程对应的文件路径（保存到新路径 / 打开文件时调用）。
+    pub fn set_session_path(&self, path: Option<String>) {
+        *self.session_path.lock().unwrap() = path;
+    }
+
+    /// 当前工程对应的文件路径。
+    pub fn session_path(&self) -> Option<String> {
+        self.session_path.lock().unwrap().clone()
     }
 
     /// 装上预设文件（启动时由 `setup` 调用；拿不到配置目录时只活在内存里）。
@@ -84,6 +99,16 @@ impl AppState {
     /// 当前插件目录的快照。
     pub fn catalog_snapshot(&self) -> Vec<CatalogPlugin> {
         self.catalog.lock().unwrap().clone()
+    }
+
+    /// 用会话缓存恢复工作状态（启动时调用）。
+    ///
+    /// 工作副本与保存基线一起恢复，因此带着未保存改动退出的工程，下次打开依旧显示「未保存」。
+    pub fn restore_session(&self, session: crate::session::SessionFile) {
+        let project = session.project;
+        *self.engine.lock().unwrap() = Engine::restore(project.clone(), session.saved);
+        self.audio.load(&project);
+        *self.session_path.lock().unwrap() = session.path;
     }
 
     /// 取某条轨道当前插件实例的编辑器句柄。

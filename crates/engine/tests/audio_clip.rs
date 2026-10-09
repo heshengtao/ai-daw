@@ -62,7 +62,7 @@ fn project_with_audio(path: &str, start_beats: f64, length_beats: f64) -> Projec
             start: start_beats,
             length: length_beats,
             notes: vec![],
-            audio: Some(AudioSource { path: path.into(), offset_frames: 0 }),
+            audio: Some(AudioSource { path: path.into(), offset_frames: 0, frames: None }),
         }],
         mixer: Default::default(),
     });
