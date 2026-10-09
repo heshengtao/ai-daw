@@ -224,7 +224,38 @@
     --md-on-tertiary-container: 255 222 170;
   }
 
-  /* 默认强调色就是 base（薰衣草），无需覆盖；data-accent="lavender" 直接落到 :root。 */
+  /* 默认强调色（薰衣草紫）。与 :root / .dark 的取值一致，这里显式声明一份，
+     免得它依赖「:root 恰好就是它」这一隐式前提。 */
+  [data-accent="lavender"] {
+    --md-source: 103 80 164;
+    --md-primary: 103 80 164;
+    --md-on-primary: 255 255 255;
+    --md-primary-container: 234 221 255;
+    --md-on-primary-container: 33 0 93;
+    --md-secondary: 98 91 113;
+    --md-on-secondary: 255 255 255;
+    --md-secondary-container: 232 222 248;
+    --md-on-secondary-container: 29 25 43;
+    --md-tertiary: 125 82 96;
+    --md-on-tertiary: 255 255 255;
+    --md-tertiary-container: 255 216 228;
+    --md-on-tertiary-container: 49 17 29;
+  }
+  .dark[data-accent="lavender"], [data-accent="lavender"].dark {
+    --md-primary: 208 188 255;
+    --md-on-primary: 56 30 114;
+    --md-primary-container: 79 55 139;
+    --md-on-primary-container: 234 221 255;
+    --md-secondary: 204 194 220;
+    --md-on-secondary: 51 45 65;
+    --md-secondary-container: 74 68 88;
+    --md-on-secondary-container: 232 222 248;
+    --md-tertiary: 239 184 200;
+    --md-on-tertiary: 73 37 50;
+    --md-tertiary-container: 99 59 72;
+    --md-on-tertiary-container: 255 216 228;
+  }
+
   [data-accent="blue"] {
     --md-source: 26 108 255;
     --md-primary: 26 108 255;
@@ -443,63 +474,25 @@
 
   /* ---- Input Fields ---- */
 
-  /* Filled Text Field */
-  .input-filled {
-    @apply w-full px-4 pt-6 pb-2
-           bg-[rgb(var(--md-surface-container-highest))]
-           text-[rgb(var(--md-on-surface))]
-           placeholder:text-[rgb(var(--md-on-surface-muted))]
-           rounded-t-lg border-b border-[rgb(var(--md-on-surface-variant))]
-           text-base outline-none
-           transition-all duration-200 ease-out;
-    /* rounded top corners only, flat bottom with border */
-    border-radius: 8px 8px 0 0;
+  /* 统一的 MD3 输入/下拉外观：与 Md3Select 的触发框同尺寸同形状。
+     五处输入框（轨道名 / 预设名 / 数值 / 搜索）都复用它，防止再次漂移。 */
+  .md3-field {
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid rgb(var(--md-outline) / 0.7);
+    border-radius: 999px;
+    background-color: rgb(var(--md-surface-container-high));
+    color: rgb(var(--md-on-surface));
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
-
-  .input-filled:focus {
-    border-bottom-width: 2px;
-    border-bottom-color: rgb(var(--md-primary));
-    background-color: rgba(var(--md-primary) / 0.05);
+  .md3-field::placeholder {
+    color: rgb(var(--md-on-surface-muted));
   }
-
-  .input-filled:hover:not(:focus) {
-    background-color: rgba(var(--md-on-surface) / 0.06);
-  }
-
-  /* Outlined Text Field */
-  .input-outlined {
-    @apply w-full px-4 py-3.5
-           bg-transparent
-           border border-[rgb(var(--md-outline))]
-           text-[rgb(var(--md-on-surface))]
-           placeholder:text-[rgb(--md-on-surface-muted)]
-           rounded-lg text-base outline-none
-           transition-all duration-200 ease-out;
-    border-radius: 8px;
-  }
-
-  .input-outlined:focus {
-    border-width: 2px;
+  .md3-field:focus {
     border-color: rgb(var(--md-primary));
-    padding-top: calc(1rem - 1px);
-    padding-bottom: calc(1rem - 1px);
-    padding-left: calc(1rem - 1px);
-    padding-right: calc(1rem - 1px);
-  }
-
-  .input-outlined:hover:not(:focus) {
-    border-color: rgb(var(--md-on-surface));
-  }
-
-  .no-spinner::-webkit-outer-spin-button,
-  .no-spinner::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-  }
-
-  .no-spinner {
-    -moz-appearance: textfield;
-    appearance: textfield;
+    box-shadow: 0 0 0 2px rgb(var(--md-primary) / 0.22);
   }
 
   /* ---- Chips ---- */

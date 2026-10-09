@@ -233,7 +233,7 @@ async function toggleSolo(): Promise<void> {
             <span class="row-label">{{ i18n.t("inspector.name") }}</span>
             <input
               v-model="nameDraft"
-              class="name-input"
+              class="name-input md3-field"
               type="text"
               spellcheck="false"
               :aria-label="i18n.t('inspector.trackName')"
@@ -484,19 +484,6 @@ async function toggleSolo(): Promise<void> {
 .name-input {
   flex: 1 1 auto;
   min-width: 0;
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid rgb(var(--md-outline-variant) / 0.6);
-  border-radius: 999px;
-  background-color: rgb(var(--md-surface-container-high));
-  color: rgb(var(--md-on-surface));
-  font-size: 12px;
-  outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.name-input:focus {
-  border-color: rgb(var(--md-primary));
-  box-shadow: 0 0 0 2px rgb(var(--md-primary) / 0.22);
 }
 .strip-buttons {
   display: flex;

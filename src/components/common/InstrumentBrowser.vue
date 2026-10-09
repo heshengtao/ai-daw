@@ -266,7 +266,7 @@ watch(
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 40px;
+  height: 34px;
   padding: 0 10px 0 12px;
   border: 1px solid rgb(var(--md-outline-variant) / 0.6);
   border-radius: 999px;

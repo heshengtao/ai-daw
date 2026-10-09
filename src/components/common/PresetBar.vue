@@ -115,7 +115,7 @@ watch(
       <input
         ref="nameEl"
         v-model="draftName"
-        class="name-input"
+        class="name-input md3-field"
         type="text"
         spellcheck="false"
         :placeholder="t('preset.namePlaceholder')"
@@ -167,14 +167,6 @@ watch(
 .name-input {
   flex: 1 1 auto;
   min-width: 0;
-  height: 28px;
-  padding: 0 8px;
-  border: 1px solid rgb(var(--md-primary) / 0.7);
-  border-radius: 8px;
-  background-color: rgb(var(--md-surface-container-high));
-  color: rgb(var(--md-on-surface));
-  font-size: 11.5px;
-  outline: none;
 }
 .btn {
   flex: 0 0 auto;

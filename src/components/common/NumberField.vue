@@ -96,7 +96,7 @@ function bump(delta: number): void {
   display: inline-flex;
   align-items: center;
   gap: 1px;
-  height: 26px;
+  height: 34px;
   padding: 0 3px;
   border-radius: 999px;
   background-color: rgb(var(--md-surface-container-highest));
@@ -122,7 +122,7 @@ function bump(delta: number): void {
 }
 .step-btn {
   width: 20px;
-  height: 20px;
+  height: 26px;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -146,7 +146,7 @@ function bump(delta: number): void {
   outline-offset: 1px;
 }
 .step-input {
-  height: 20px;
+  height: 26px;
   padding: 0;
   border: 0;
   outline: none;
