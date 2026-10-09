@@ -7,8 +7,8 @@ use thiserror::Error;
 use crate::command_queue::{command_queue, CommandSender};
 use crate::player::Player;
 use crate::registry::PluginRegistry;
-use crate::scope::ScopeBuffer;
 use crate::schedule::ScheduledEvents;
+use crate::scope::ScopeBuffer;
 use crate::transport::TransportCommand;
 
 /// 实时宿主选项。
@@ -45,6 +45,93 @@ pub enum RealtimeError {
     /// 底层 cpal 流错误。
     #[error("cpal error: {0}")]
     Cpal(String),
+}
+
+/// 我们关心的输出采样格式（把 cpal 的 `SampleFormat` 缩到支持面）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// 32 位浮点：唯一被支持的格式。
+    F32,
+    /// 其它格式（i16/u16/…）：不支持。
+    Other,
+}
+
+/// 设备报告的一段可支持配置（纯数据投影，便于单测）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputFormatRange {
+    /// 采样格式。
+    pub format: OutputFormat,
+    /// 声道数。
+    pub channels: u16,
+    /// 该段覆盖的最低采样率（Hz）。
+    pub min_rate: u32,
+    /// 该段覆盖的最高采样率（Hz）。
+    pub max_rate: u32,
+}
+
+impl OutputFormatRange {
+    /// 该段内最接近 `rate` 的采样率（夹在 `[min_rate, max_rate]` 内）。
+    pub fn nearest_rate(&self, rate: u32) -> u32 {
+        rate.clamp(self.min_rate, self.max_rate)
+    }
+
+    /// 该段是否覆盖给定采样率。
+    pub fn covers(&self, rate: u32) -> bool {
+        self.min_rate <= rate && rate <= self.max_rate
+    }
+}
+
+/// 从设备报告的配置里挑一段可用配置。
+///
+/// 只接受 F32；优先覆盖 `preferred_rate` 的段，否则选 `nearest_rate` 离它最近的段；
+/// 仍并列时优先声道数 ≥ 2。全都不支持时返回 `None`。
+pub fn choose_output_format(
+    ranges: &[OutputFormatRange],
+    preferred_rate: u32,
+) -> Option<OutputFormatRange> {
+    let f32_only = || {
+        ranges
+            .iter()
+            .copied()
+            .filter(|r| r.format == OutputFormat::F32)
+    };
+    f32_only()
+        .filter(|r| r.covers(preferred_rate))
+        .max_by_key(|r| (r.channels >= 2, r.channels))
+        .or_else(|| {
+            f32_only().min_by_key(|r| {
+                let delta = r.nearest_rate(preferred_rate).abs_diff(preferred_rate);
+                (delta, !(r.channels >= 2), u16::MAX - r.channels)
+            })
+        })
+}
+
+/// 默认输出设备的身份：名字 + 默认采样率。用于判断「设备换了没有」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceSignature {
+    /// 设备名（系统显示名）。
+    pub name: String,
+    /// 设备默认输出采样率（Hz）。
+    pub sample_rate: u32,
+}
+
+/// 读取当前默认输出设备的身份；无设备（或查询失败）时 `None`。
+pub fn default_output_signature() -> Option<DeviceSignature> {
+    let host = cpal::default_host();
+    let device = host.default_output_device()?;
+    // cpal 0.18 起 `DeviceTrait::name()` 被 `description()` 取代（返回结构化描述）。
+    let name = device.description().ok()?.name().to_owned();
+    let sample_rate = device.default_output_config().ok()?.sample_rate();
+    Some(DeviceSignature { name, sample_rate })
+}
+
+/// 设备是否发生变化：身份（名字或采样率）不同、或一侧有一侧无设备都算变化；
+/// 两边都没有设备时不算（真要有问题，调用方还会靠「宿主为空」触发重试）。
+pub fn device_changed(
+    previous: Option<&DeviceSignature>,
+    current: Option<&DeviceSignature>,
+) -> bool {
+    previous != current
 }
 
 /// 把交错立体声 `staging`（`frames*2`）映射到设备的 `channels` 路交错 `data`（`frames*channels`）。
@@ -136,7 +223,9 @@ impl AudioHost {
         shared: SharedTransport,
     ) -> Result<Self, RealtimeError> {
         let host = cpal::default_host();
-        let device = host.default_output_device().ok_or(RealtimeError::NoDevice)?;
+        let device = host
+            .default_output_device()
+            .ok_or(RealtimeError::NoDevice)?;
         let supported = device
             .default_output_config()
             .map_err(|e| RealtimeError::UnsupportedConfig(e.to_string()))?;
@@ -216,9 +305,15 @@ impl AudioHost {
             )
             .map_err(|e| RealtimeError::Cpal(e.to_string()))?;
 
-        stream.play().map_err(|e| RealtimeError::Cpal(e.to_string()))?;
+        stream
+            .play()
+            .map_err(|e| RealtimeError::Cpal(e.to_string()))?;
 
-        Ok(AudioHost { stream, commands: tx, shared })
+        Ok(AudioHost {
+            stream,
+            commands: tx,
+            shared,
+        })
     }
 
     /// 发送任意传输命令，返回是否成功入队（队列满时不阻塞地返回 `false`）。
@@ -274,12 +369,30 @@ mod tests {
     use super::*;
     use crate::model::{Clip, ClipId, Note, PluginInstance, Project, Track, TrackId};
 
+    fn range(
+        format: OutputFormat,
+        channels: u16,
+        min_rate: u32,
+        max_rate: u32,
+    ) -> OutputFormatRange {
+        OutputFormatRange {
+            format,
+            channels,
+            min_rate,
+            max_rate,
+        }
+    }
+
     fn schedule() -> ScheduledEvents {
         let mut p = Project::new("rt");
         let mut track = Track {
             id: TrackId(1),
             name: "Lead".into(),
-            instrument: Some(PluginInstance { plugin_id: "builtin.synth".into(), params: Default::default(), state: vec![] }),
+            instrument: Some(PluginInstance {
+                plugin_id: "builtin.synth".into(),
+                params: Default::default(),
+                state: vec![],
+            }),
             effects: vec![],
             clips: vec![],
             mixer: Default::default(),
@@ -288,7 +401,13 @@ mod tests {
             id: ClipId(1),
             start: 0.0,
             length: 1.0,
-            notes: vec![Note { pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
+            notes: vec![Note {
+                pitch: 69,
+                start: 0.0,
+                duration: 0.5,
+                velocity: 100,
+                volume: 127,
+            }],
         });
         p.tracks.push(track);
         ScheduledEvents::from_project(&p, 48_000.0)
@@ -360,5 +479,78 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn choose_format_rejects_non_f32() {
+        let ranges = [range(OutputFormat::Other, 2, 44_100, 44_100)];
+        assert!(choose_output_format(&ranges, 48_000).is_none());
+    }
+
+    #[test]
+    fn choose_format_prefers_a_range_covering_the_preferred_rate() {
+        let ranges = [
+            range(OutputFormat::F32, 2, 44_100, 44_100),
+            range(OutputFormat::F32, 2, 48_000, 96_000),
+        ];
+        let picked = choose_output_format(&ranges, 48_000).unwrap();
+        assert_eq!((picked.min_rate, picked.max_rate), (48_000, 96_000));
+    }
+
+    #[test]
+    fn choose_format_falls_back_to_the_nearest_range() {
+        let ranges = [
+            range(OutputFormat::F32, 2, 44_100, 44_100),
+            range(OutputFormat::F32, 2, 96_000, 96_000),
+        ];
+        // 偏好 48k：44.1k 比 96k 近。
+        let picked = choose_output_format(&ranges, 48_000).unwrap();
+        assert_eq!(picked.min_rate, 44_100);
+    }
+
+    #[test]
+    fn choose_format_prefers_stereo_when_tied() {
+        let ranges = [
+            range(OutputFormat::F32, 1, 48_000, 48_000),
+            range(OutputFormat::F32, 2, 48_000, 48_000),
+        ];
+        assert_eq!(choose_output_format(&ranges, 48_000).unwrap().channels, 2);
+    }
+
+    #[test]
+    fn range_clamps_the_rate_into_its_span() {
+        assert_eq!(
+            range(OutputFormat::F32, 2, 44_100, 48_000).nearest_rate(96_000),
+            48_000
+        );
+        assert_eq!(
+            range(OutputFormat::F32, 2, 44_100, 48_000).nearest_rate(8_000),
+            44_100
+        );
+    }
+
+    #[test]
+    fn device_changed_flags_any_presence_or_identity_change() {
+        let a = DeviceSignature {
+            name: "A".into(),
+            sample_rate: 48_000,
+        };
+        let a2 = DeviceSignature {
+            name: "A".into(),
+            sample_rate: 48_000,
+        };
+        let b = DeviceSignature {
+            name: "B".into(),
+            sample_rate: 48_000,
+        };
+        let a44 = DeviceSignature {
+            name: "A".into(),
+            sample_rate: 44_100,
+        };
+        assert!(device_changed(None, Some(&a)));
+        assert!(device_changed(Some(&a), None));
+        assert!(!device_changed(Some(&a), Some(&a2)));
+        assert!(device_changed(Some(&a), Some(&b)));
+        assert!(device_changed(Some(&a), Some(&a44)));
     }
 }
