@@ -20,6 +20,7 @@ import NumberField from "@/components/common/NumberField.vue";
 import TimeSignatureField from "@/components/common/TimeSignatureField.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
 import { retryAudio } from "@/api/tauri";
+import { useEngineEventsStore } from "@/stores/engineEvents";
 import { useProjectStore } from "@/stores/project";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
@@ -32,6 +33,7 @@ const store = useProjectStore();
 const transport = useTransportStore();
 const timeline = useTimelineStore();
 const i18n = useI18n();
+const aiEvents = useEngineEventsStore();
 
 /** 当前工程的传输设置（分段换算用）。 */
 const settings = computed(
@@ -92,6 +94,25 @@ const rateText = computed(() => {
 const isPlaying = computed(() => transport.playing);
 const isAiActive = computed(() => props.aiActive);
 const isPreview = computed(() => transport.mode === "preview");
+
+/** AI 胶囊文案：代理在写时带上代理名，否则是空闲态。 */
+const aiText = computed(() => {
+  if (!isAiActive.value) return i18n.t("bottom.aiIdle");
+  const agent = aiEvents.activeAgent();
+  return agent ? i18n.t("bottom.aiBusyNamed", { agent }) : i18n.t("bottom.aiBusy");
+});
+
+/** AI 胶囊 tooltip：最近由代理改动的处数与涉及的轨道。 */
+const aiHint = computed(() => {
+  const actions = aiEvents.agentActions;
+  if (actions.length === 0) return i18n.t("bottom.aiNone");
+  const agent = actions[actions.length - 1].agent;
+  const tracks = [...new Set(actions.map((a) => a.track).filter((t): t is number => t !== null))].sort(
+    (a, b) => a - b,
+  );
+  const base = i18n.t("bottom.aiRecent", { agent, n: actions.length });
+  return tracks.length > 0 ? `${base} · ${i18n.t("bottom.aiTracks", { tracks: tracks.join(", ") })}` : base;
+});
 
 /** 离线提示：把后端给出的原因（可能缺失）拼成「原因 + 点击重试」。 */
 const offlineHint = computed(() =>
@@ -207,10 +228,12 @@ function onRetryAudio(): void {
         <span class="readout-label">{{ i18n.t("bottom.bar") }}</span>
       </span>
 
-      <span class="ai-pill" :class="{ live: isAiActive }">
-        <span class="dot" />
-        <span class="ai-text">{{ isAiActive ? i18n.t("bottom.aiBusy") : i18n.t("bottom.aiIdle") }}</span>
-      </span>
+      <Tooltip :text="aiHint" place="above" align="end">
+        <span class="ai-pill" :class="{ live: isAiActive }">
+          <span class="dot" />
+          <span class="ai-text">{{ aiText }}</span>
+        </span>
+      </Tooltip>
       <!-- 实时可用：纯指示（与之前一致）；离线：变成可点的重试按钮，并把原因放进 tooltip。 -->
       <span v-if="isPreview" class="engine fallback">
         <Tooltip :text="offlineHint" place="above" align="center">

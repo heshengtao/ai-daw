@@ -38,6 +38,8 @@ const isBareWindow = computed(
 );
 
 const aiActive = ref(false);
+/** 最近被 AI 代理改动过的轨道（用于音轨栏高亮）。 */
+const aiTracks = ref<number[]>([]);
 const exporting = ref(false);
 let pollTimer: number | null = null;
 let unlistenPlugins: (() => void) | null = null;
@@ -195,7 +197,9 @@ onMounted(async () => {
   await plugins.refresh().catch(() => {});
   unlistenPlugins = await onPluginsEvent(() => void plugins.refresh());
   pollTimer = window.setInterval(() => {
-    aiActive.value = events.recentlyActive();
+    // 只统计**代理**发起的事件：人类自己的编辑不该点亮「AI 正在写」。
+    aiActive.value = events.agentActive();
+    aiTracks.value = events.agentTracks();
   }, 300);
 });
 onUnmounted(() => {
@@ -225,6 +229,7 @@ onUnmounted(() => {
       <template v-if="!isSettings">
         <TrackHeaderList
           v-if="layout.showTrackHeaders"
+          :agent-tracks="aiTracks"
           :style="{ width: `${layout.trackWidth}px`, flex: '0 0 auto' }"
         />
         <PanelResizer v-if="layout.showTrackHeaders" side="left" @resize="onResizeLeft" />

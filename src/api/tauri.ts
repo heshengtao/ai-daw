@@ -343,10 +343,20 @@ export function setMcpConfig(enabled: boolean, port: number): Promise<McpStatus>
 // 订阅
 // ---------------------------------------------------------------------------
 
-/** 订阅引擎事件流（原始 payload，仅供开发者抽屉消费）。 */
+/** 订阅引擎事件流（原始 payload，供开发者抽屉与 AI 可视化消费）。 */
 export function onEngineEvent(handler: (payload: unknown) => void): Promise<UnlistenFn> {
   if (mockEnabled()) {
-    const onMock = (): void => handler({ TrackAdded: { actor: "Human", id: 4, name: "轨道 4" } });
+    // 预览里轮流放几种**代理**动作，用于演示 AI 胶囊与轨道高亮。
+    const samples: unknown[] = [
+      { ClipAdded: { actor: { Agent: "mcp" }, track: 1, clip: 1, start: 0, length: 2 } },
+      { GainChanged: { actor: { Agent: "mcp" }, track: 2, gain_db: -3 } },
+      { NoteAdded: { actor: { Agent: "mcp" }, track: 1, clip: 1, note: { pitch: 60, start: 0, duration: 1, velocity: 100, volume: 127 } } },
+    ];
+    let i = 0;
+    const onMock = (): void => {
+      handler(samples[i % samples.length]);
+      i += 1;
+    };
     window.addEventListener("daw-party-mock-event", onMock);
     const off = mockApi.onEngineEvent();
     return Promise.resolve(() => {

@@ -26,6 +26,9 @@ const selection = useSelectionStore();
 const plugins = usePluginsStore();
 const i18n = useI18n();
 
+/** 最近被 AI 代理改动过的轨道 id：这些行会短暂高亮，让代理的动作看得见。 */
+defineProps<{ agentTracks?: number[] }>();
+
 const listEl = ref<HTMLElement | null>(null);
 let applying = false;
 
@@ -112,7 +115,11 @@ watch(laneScrollTop, (v) => {
         v-for="(track, ti) in store.project?.tracks ?? []"
         :key="track.id"
         class="track-row"
-        :class="{ selected: track.id === selection.trackId, dimmed: track.mixer.mute }"
+        :class="{
+          selected: track.id === selection.trackId,
+          dimmed: track.mixer.mute,
+          'agent-touched': agentTracks?.includes(track.id),
+        }"
         :style="{ '--track-hue': String(trackHue(ti)) }"
         @click="selection.selectTrack(track.id)"
       >
@@ -268,6 +275,12 @@ watch(laneScrollTop, (v) => {
 }
 .track-row.selected::before {
   background-color: rgb(var(--md-secondary-container));
+}
+/* 被 AI 代理改动过：左侧色条 + 向右淡出的底色。用行自身的背景/内阴影，
+   不占用 ::before（悬停/选中仍归它），文字也始终压在色条之上。 */
+.track-row.agent-touched {
+  background-image: linear-gradient(90deg, rgb(var(--md-primary) / 0.16), transparent 62%);
+  box-shadow: inset 3px 0 0 0 rgb(var(--md-primary));
 }
 .grip {
   position: relative;
