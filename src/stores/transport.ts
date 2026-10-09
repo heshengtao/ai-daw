@@ -13,6 +13,7 @@ import type { TransportSnapshot } from "@/api/types";
 import { useLayoutStore } from "@/stores/layout";
 import { useProjectStore } from "@/stores/project";
 import { useI18n } from "@/i18n";
+import { beatsToSeconds, secondsToBeats } from "@/utils/tempo";
 
 /** 离线试听的渲染采样率。 */
 const PREVIEW_SAMPLE_RATE = 44_100;
@@ -47,17 +48,20 @@ export const useTransportStore = defineStore("transport", () => {
     mode.value === "preview" ? PREVIEW_SAMPLE_RATE : sampleRate.value || FALLBACK_SAMPLE_RATE,
   );
 
-  const tempo = computed(() => project.project?.transport.tempo ?? 120);
+  /** 当前工程的传输设置（分段换算用）。 */
+  const transportSettings = computed(
+    () => project.project?.transport ?? { tempo: 120, time_sig_num: 4, time_sig_den: 4, keyframes: [] },
+  );
 
   /** 播放位置（拍）。 */
   const positionBeats = computed(() =>
-    (positionFrames.value / effectiveSampleRate.value) * (tempo.value / 60),
+    secondsToBeats(positionFrames.value / effectiveSampleRate.value, transportSettings.value),
   );
 
-  /** 拍 → 帧（与后端 `beats_to_seconds` 同一换算）。 */
+  /** 拍 → 帧（与后端分段换算同一套）。 */
   function beatsToFrames(beats: number): number {
     if (!Number.isFinite(beats) || beats <= 0) return 0;
-    return Math.round(((beats * 60) / tempo.value) * effectiveSampleRate.value);
+    return Math.round(beatsToSeconds(beats, transportSettings.value) * effectiveSampleRate.value);
   }
 
   function applySnapshot(snapshot: TransportSnapshot): void {
