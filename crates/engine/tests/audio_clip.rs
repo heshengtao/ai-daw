@@ -19,11 +19,6 @@ use daw_party_engine::transport::TransportCommand;
 const SR: f64 = 48_000.0;
 /// 120 BPM 下 1 拍 = 0.5 s = 24000 帧。
 const FRAMES_PER_BEAT: u64 = 24_000;
-/// 居中的轨道与居中的 master **各**套一次等功率声像（各 ×√0.5），整条链路因此是 ×0.5。
-///
-/// 这是引擎**既有**的增益结构（MIDI 与音频片段一视同仁），不是本轮引入的；写成显式常量是为了
-/// 让断言里不出现魔法数字。`master.pan` 是否该套声像律，见计划的「已知遗留」。
-const CENTER_GAIN: f32 = 0.5;
 
 type Assets = HashMap<String, Arc<DecodedAudio>>;
 
@@ -110,16 +105,11 @@ fn audio_clip_renders_at_natural_pitch_and_level() {
         peak_hz(&report)
     );
     let peak = report.loudness.sample_peak_dbfs;
-    // 满幅素材 − 链路 ×0.5 → −6.02 dBFS。
-    let expected_peak = 20.0 * (CENTER_GAIN as f64).log10();
+    // 推子归零 + 声像居中 + master 居中 = **单位增益**，所以满幅素材出来还是 0 dBFS。
+    assert!(peak.abs() < 0.5, "采样峰值应当≈ 0 dBFS，实际 {peak}");
     assert!(
-        (peak - expected_peak).abs() < 0.5,
-        "采样峰值应当≈ {expected_peak:.2} dBFS，实际 {peak}"
-    );
-    let expected_rms = -3.01 + expected_peak;
-    assert!(
-        (report.rms_dbfs - expected_rms).abs() < 0.3,
-        "RMS 应当≈ {expected_rms:.2} dBFS，实际 {}",
+        (report.rms_dbfs + 3.01).abs() < 0.3,
+        "RMS 应当≈ -3.01 dBFS，实际 {}",
         report.rms_dbfs
     );
 }
@@ -134,11 +124,7 @@ fn audio_clip_starts_exactly_at_its_start_beat() {
     let data = buffer.data();
     let start = (4.0 * FRAMES_PER_BEAT as f64) as usize * 2;
     assert_eq!(max_abs(&data[..start]), 0.0, "片段起点之前必须是纯静音");
-    assert!(
-        max_abs(&data[start..]) > 0.9 * CENTER_GAIN,
-        "片段起点之后必须出声（满幅素材经链路后约 {:.2}）",
-        0.9 * CENTER_GAIN
-    );
+    assert!(max_abs(&data[start..]) > 0.9, "片段起点之后必须出声");
 }
 
 #[test]
@@ -171,13 +157,12 @@ fn seek_realigns_the_audio_cursor() {
     let mut out = vec![0.0f32; 64 * 2];
     player.process_block(&mut out, 64);
 
-    let expected = 0.5 * CENTER_GAIN;
     assert!(
-        (out[0] - expected).abs() < 1e-3,
-        "定位后第一帧应当取自素材 0.5 s 处（经链路后 {expected}），实际 {}",
+        (out[0] - 0.5).abs() < 1e-3,
+        "定位后第一帧应当取自素材 0.5 s 处，实际 {}",
         out[0]
     );
-    assert!((out[1] - expected).abs() < 1e-3, "单声道素材应当复制到左右两声道");
+    assert!((out[1] - 0.5).abs() < 1e-3, "单声道素材应当复制到左右两声道");
 }
 
 #[test]

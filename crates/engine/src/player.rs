@@ -12,10 +12,16 @@ pub(crate) fn db_to_linear(db: f32) -> f32 {
     10f32.powf(db / 20.0)
 }
 
-/// 等功率声像：返回 (左, 右) 增益系数。
+/// 声像 → (左, 右) 增益。
+///
+/// 用**线性 balance**：居中 = 单位增益，向一侧偏则衰减另一侧（±1 时该侧为 0）。
+///
+/// 刻意**不用**等功率（`sqrt((1∓pan)/2)`）：引擎内部恒为立体声，等功率律会让「推子归零、
+/// 声像居中」的信号凭空掉 3 dB；轨道与 master 各套一次就是 **−6 dB**——导入一段满幅素材
+/// 会明显变轻。线性 balance 保证「0 dB 推子 + 居中声像 + 居中 master」= 单位增益。
 fn pan_gains(pan: f32) -> (f32, f32) {
     let pan = MixerChannel::normalize_pan(pan);
-    (((1.0 - pan) * 0.5).sqrt(), ((1.0 + pan) * 0.5).sqrt())
+    ((1.0 - pan).clamp(0.0, 1.0), (1.0 + pan).clamp(0.0, 1.0))
 }
 
 /// 每块最多送几个试听音。
@@ -378,6 +384,25 @@ impl Player {
         self.master_right = master * r;
     }
 
+    /// 让所有音源立刻停止发声（等价于 all-notes-off）。
+    ///
+    /// 重置乐器**与效果链**（延迟/混响不清的话同样会继续响），并丢掉还没送达的试听音。
+    /// 插件实例本身**不销毁**：界面上的键盘、插件自己的界面预览都还要靠它出声。
+    ///
+    /// 这里也是「暂停即静音」的实现：不这么做的话，暂停时那个音的 NoteOff 永远送不到，
+    /// 插件会一直挂着它。
+    fn silence(&mut self) {
+        for track in self.tracks.iter_mut() {
+            if let Some(plugin) = track.plugin.as_mut() {
+                plugin.reset();
+            }
+            for fx in track.effects.iter_mut() {
+                fx.reset();
+            }
+        }
+        self.audition.clear();
+    }
+
     /// 应用一条传输命令。
     pub fn apply_command(&mut self, command: TransportCommand) {
         match command {
@@ -389,10 +414,16 @@ impl Player {
                 }
                 self.playing = true;
             }
-            TransportCommand::Pause => self.playing = false,
+            // 暂停 = **静音**。只把 `playing` 置 false 是不够的：长音的 NoteOff 再也送不到，
+            // 插件会一直挂着那个音——听上去就是「暂停了还在响」。所以顺手把音收掉。
+            TransportCommand::Pause => {
+                self.playing = false;
+                self.silence();
+            }
             TransportCommand::Stop => {
                 self.playing = false;
                 self.seek(0);
+                self.silence();
             }
             TransportCommand::Seek { frame } => self.seek(frame),
             TransportCommand::SetTrackMix { track, gain_db, pan, mute, solo } => {
@@ -940,6 +971,57 @@ mod tests {
         player.apply_command(TransportCommand::Play);
         player.process_block(&mut out, 512);
         assert!(peak(&out) > 0.01, "unmuted track must sound again");
+    }
+
+    /// 暂停 = **静音**：挂着的长音必须立刻停掉。
+    ///
+    /// 只把 `playing` 置 false 的话，那个音的 NoteOff 永远送不到，插件会一直挂着它——
+    /// 听上去就是「暂停了还在响」。
+    #[test]
+    fn pause_silences_sustained_notes() {
+        let registry = PluginRegistry::with_builtins();
+        let mut player = Player::new(schedule(), &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+        assert!(peak(&out) > 0.01, "播放中必须出声（否则这条测试没有意义）");
+
+        player.apply_command(TransportCommand::Pause);
+        assert!(!player.is_playing());
+        out.fill(1.0);
+        player.process_block(&mut out, 512);
+        assert_eq!(peak(&out), 0.0, "暂停之后必须完全静音");
+    }
+
+    /// 「0 dB 推子 + 声像居中 + master 居中」= **单位增益**。
+    ///
+    /// 曾经的等功率律会让轨道与 master 各掉 3 dB，整链 −6 dB：导入一段满幅素材会明显变轻。
+    #[test]
+    fn centered_pan_and_zero_fader_are_unity_gain() {
+        let registry = PluginRegistry::with_builtins();
+        let player = Player::new(schedule(), &registry, 48_000.0, 512);
+        let track = &player.tracks[0];
+        assert!((track.left_gain - 1.0).abs() < 1e-6, "左增益应为 1，实际 {}", track.left_gain);
+        assert!((track.right_gain - 1.0).abs() < 1e-6, "右增益应为 1，实际 {}", track.right_gain);
+        assert!((player.master_left - 1.0).abs() < 1e-6, "master 左应为 1，实际 {}", player.master_left);
+        assert!((player.master_right - 1.0).abs() < 1e-6, "master 右应为 1，实际 {}", player.master_right);
+    }
+
+    /// 声像硬偏（线性 balance）：一侧保留、另一侧归零。
+    #[test]
+    fn hard_pan_keeps_one_side_and_mutes_the_other() {
+        let registry = PluginRegistry::with_builtins();
+        let mut player = Player::new(schedule(), &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::SetTrackMix {
+            track: TrackId(1),
+            gain_db: 0.0,
+            pan: 1.0,
+            mute: false,
+            solo: false,
+        });
+        assert_eq!(player.tracks[0].left_gain, 0.0, "硬右应当把左声道清零");
+        assert!((player.tracks[0].right_gain - 1.0).abs() < 1e-6);
     }
 
     #[test]

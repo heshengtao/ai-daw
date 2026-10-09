@@ -114,7 +114,8 @@ src/api/*、src/views/*、src/i18n/*            前端（任务 7）
 | 4 | `DecodedAudio` / `SampleProvider` / `ScheduledAudioClip` / `Option<plugin>` / 混音 / seek / `render_with_assets` |
 
 **验证**：
-- `cargo test --workspace` → **154 通过**（改动前 146）。
+- `cargo test --workspace` → **157 通过**（改动前 146；含本轮新增的 11 条：7 条音频片段量化断言 +
+  3 条播放器断言 + 1 条 asset 空输入）。
 - `cargo test -p daw-party-engine --features realtime` → 全绿；`--test realtime_safety` 的
   **零分配门禁仍然通过**（这是音频路径进实时回调的硬条件）。
 - `cargo check --manifest-path src-tauri/Cargo.toml` → 通过。
@@ -127,10 +128,18 @@ src/api/*、src/views/*、src/i18n/*            前端（任务 7）
   逐包解码必须自己追加，否则只能拿到最后一个包。
 - 0.6 的 `Packet.track_id` 是**字段**不是方法；`FormatReader::next_packet` 返回 `Result<Option<Packet>>`。
 
-**已知遗留（不阻塞，但需拍板）**：
-- **整链 ×0.5（−6 dB）**：居中的轨道与居中的 master **各**套一次等功率声像。这是**既有**行为
-  （MIDI 同样如此），不是音频片段引入的；测试用显式常量 `CENTER_GAIN` 写实。是否要让 master 不再套
-  声像律（或对立体声源改用 balance 语义）需要单独决策——它会改变所有既有输出，**故不在本轮改**。
+**已完成的两处顺带修正（用户要求）**：
+- **整链 −6 dB → 单位增益**：`pan_gains` 由等功率改为**线性 balance**（居中 = 1）。
+  新增 `centered_pan_and_zero_fader_are_unity_gain`、`hard_pan_keeps_one_side_and_mutes_the_other`；
+  `audio_clip.rs` 的绝对电平断言随之变成「峰值 ≈ 0 dBFS / RMS ≈ −3.01 dBFS」。
+- **暂停 = 静音**：`TransportCommand::Pause` / `Stop` 新增 `Player::silence()`
+  （重置乐器**与效果链** + 清掉待送试听音）。原实现只置 `playing = false`，长音的 NoteOff
+  永远送不到 → 插件一直挂着该音（就是用户听到的「暂停了还在响」）。
+  新增 `pause_silences_sustained_notes`。
+
+**已知遗留（不阻塞，但需知）**：
+- 工程**播完**（未开循环）时同样走 `Pause` → all-notes-off，插件内部的混响尾音会被切掉。
+  与「停止即静音」一致；**离线导出不受影响**（`render` 按 `tail_seconds` 继续渲染尾音）。
 - 解码忽略 `Packet::trim_start/trim_end`（mp3 编码器延迟未裁剪）。
 - `crates/asset` 的依赖图里带上了 `daw-party-engine`（只为一个类型）。
 
