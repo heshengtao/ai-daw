@@ -21,6 +21,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
+import { useClipboardStore } from "@/stores/clipboard";
 import { useLayoutStore } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
@@ -35,6 +36,7 @@ import type { Note, NoteEdit } from "@/api/types";
 const store = useProjectStore();
 const i18n = useI18n();
 const selection = useSelectionStore();
+const clipboard = useClipboardStore();
 const layout = useLayoutStore();
 const timeline = useTimelineStore();
 const transport = useTransportStore();
@@ -624,11 +626,44 @@ watch(() => `${selection.trackId}:${selection.clipId}`, () => {
 // ---------------------------------------------------------------------------
 
 function onKey(e: KeyboardEvent): void {
-  if (e.key !== "Delete" && e.key !== "Backspace") return;
   if (e.target instanceof HTMLInputElement) return;
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key.toLowerCase() === "c") {
+    const c = clip.value;
+    const idx = selection.noteIndices;
+    if (!c || idx.length !== 1) return;
+    const note = c.notes[idx[0]!];
+    if (note) {
+      e.preventDefault();
+      clipboard.copyNote(note);
+    }
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "v") {
+    e.preventDefault();
+    void pasteNote();
+    return;
+  }
+  if (e.key !== "Delete" && e.key !== "Backspace") return;
   if (selection.noteIndices.length === 0) return;
   e.preventDefault();
   void deleteNotes([...selection.noteIndices]);
+}
+
+/** 粘贴：副本落在该片段最后一个音符之后。 */
+async function pasteNote(): Promise<void> {
+  const p = clipboard.payload;
+  const c = clip.value;
+  const t = trackId.value;
+  if (!p || p.kind !== "note" || !c || t === null) return;
+  const start = c.notes.reduce((m, n) => Math.max(m, n.start + n.duration), 0);
+  try {
+    const index = c.notes.length;
+    await store.addNote(t, c.id, { ...p.note, start });
+    selection.selectNote(index);
+  } catch (err) {
+    layout.notify(i18n.t("error.addNote", { error: String(err) }));
+  }
 }
 
 /** 切换片段后清空音符选择（序号属于旧片段）。 */

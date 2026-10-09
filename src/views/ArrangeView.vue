@@ -20,6 +20,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore, type ClipSel } from "@/stores/selection";
+import { useClipboardStore } from "@/stores/clipboard";
 import { useTransportStore } from "@/stores/transport";
 import { useLayoutStore } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
@@ -33,6 +34,7 @@ import type { Clip, ClipPlacement, Note, Track } from "@/api/types";
 const store = useProjectStore();
 const i18n = useI18n();
 const selection = useSelectionStore();
+const clipboard = useClipboardStore();
 const transport = useTransportStore();
 const layout = useLayoutStore();
 const timeline = useTimelineStore();
@@ -518,10 +520,49 @@ function onClipDoubleClick(track: Track, clip: Clip): void {
   void router.push("/edit");
 }
 
-/** Delete / Backspace 删除所选片段。 */
+/** 粘贴：副本落在该轨道最后一个片段之后。 */
+async function pasteClip(): Promise<void> {
+  const p = clipboard.payload;
+  if (!p || p.kind !== "clip") return;
+  const ref = selection.clipRefs;
+  const trackId = ref.length > 0 ? ref[0]!.track : selection.trackId;
+  if (trackId === null) return;
+  const t = tracks.value.find((x) => x.id === trackId);
+  const start = (t?.clips ?? []).reduce((m, c) => Math.max(m, c.start + c.length), 0);
+  try {
+    await store.addClip(trackId, start, p.length);
+    const track = store.project?.tracks.find((x) => x.id === trackId);
+    const created = track?.clips[track.clips.length - 1];
+    if (!created) return;
+    for (const n of p.notes) await store.addNote(trackId, created.id, { ...n });
+    selection.selectClip(trackId, created.id);
+  } catch (err) {
+    layout.notify(i18n.t("error.addClip", { error: String(err) }));
+  }
+}
+
+/** Delete / Backspace 删除所选片段；Ctrl/Cmd+C / V 复制粘贴。 */
 function onKey(e: KeyboardEvent): void {
-  if (e.key !== "Delete" && e.key !== "Backspace") return;
   if (e.target instanceof HTMLInputElement) return;
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key.toLowerCase() === "c") {
+    const ref = selection.clipRefs;
+    if (ref.length !== 1) return;
+    const only = ref[0]!;
+    const t = tracks.value.find((x) => x.id === only.track);
+    const c = t?.clips.find((x) => x.id === only.clip);
+    if (c) {
+      e.preventDefault();
+      clipboard.copyClip(c);
+    }
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "v") {
+    e.preventDefault();
+    void pasteClip();
+    return;
+  }
+  if (e.key !== "Delete" && e.key !== "Backspace") return;
   const items = selection.clipRefs;
   if (items.length === 0) return;
   e.preventDefault();
