@@ -60,9 +60,8 @@
     --app-inset: rgb(var(--md-surface-container-low));
 
     /* 网格线：亮色用深描边色，保证在浅底上看得见。
-       分三级：细分（吸附网格）/ 拍线 / 小节线——最细的一级必须很淡，
-       否则 1/16 网格在 56px 每拍时会变成一片密纹。 */
-    --grid-line-fine:   rgb(var(--md-outline-variant) / 0.34);
+       只画两级：拍线 / 小节线。细分（`snap`）的吸附线不画——在 56px 每拍时
+       会变成一片密纹，而且会让一个小节看起来有很多格。 */
     --grid-line:        rgb(var(--md-outline-variant) / 0.72);
     --grid-line-strong: rgb(var(--md-outline) / 0.75);
     --grid-bar:         rgb(var(--md-on-surface) / 0.34);
@@ -148,7 +147,6 @@
     --app-inset: rgb(var(--md-surface-container));
 
     /* 深色下描边色本身很暗，网格线改用浅色的 outline 才看得见 */
-    --grid-line-fine:   rgb(var(--md-outline) / 0.24);
     --grid-line:        rgb(var(--md-outline) / 0.46);
     --grid-line-strong: rgb(var(--md-outline) / 0.62);
     --grid-bar:         rgb(var(--md-outline) / 0.82);
