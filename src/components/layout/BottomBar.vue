@@ -50,20 +50,26 @@ function onTimeSignature(num: number, den: number): void {
   void store.setTimeSignature(num, den);
 }
 
+/** 一小节多少拍（四分音符数）：分子 × 4/分母。与网格/标尺的 barBeats 同一算法。 */
+const barBeats = computed(() => timeSigNum.value * (4 / Math.max(1, timeSigDen.value)));
+
+/** 拍号里那一「拍」等于多少四分音符。 */
+const meterBeat = computed(() => 4 / Math.max(1, timeSigDen.value));
+
 /** 工程内容长度（小节）。 */
 const bars = computed(() => {
   const clips = (store.project?.tracks ?? []).flatMap((t) => t.clips);
   const beats = clips.reduce((m, c) => Math.max(m, c.start + c.length), 0);
-  const num = timeSigNum.value;
-  return beats > 0 ? Math.ceil(beats / num) : 0;
+  if (beats <= 0) return 0;
+  const bar = barBeats.value;
+  return Math.max(1, Math.ceil(beats / bar));
 });
 
 /** 当前位置（小节.拍），随实时位置推进。 */
 const positionText = computed(() => {
   const beats = transport.positionBeats;
-  const num = timeSigNum.value;
-  const bar = Math.floor(beats / num) + 1;
-  const beat = Math.floor(beats % num) + 1;
+  const bar = Math.floor(beats / barBeats.value) + 1;
+  const beat = Math.floor((beats % barBeats.value) / meterBeat.value) + 1;
   return `${bar}.${beat}`;
 });
 
