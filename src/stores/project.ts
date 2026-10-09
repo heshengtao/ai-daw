@@ -8,7 +8,8 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import * as api from "@/api/tauri";
 import { useI18n } from "@/i18n";
-import type { ClipPlacement, ClipRef, HistoryState, MixerState, Note, NoteEdit, Project } from "@/api/types";
+import type { ClipPlacement, ClipRef, HistoryState, Keyframe, MixerState, Note, NoteEdit, Project } from "@/api/types";
+import { meterAt, meterBeatAt, tempoAt } from "@/utils/tempo";
 
 /**
  * 默认分轨名的 i18n key，**顺序必须与引擎的 `STARTER_TRACKS` 一致**。
@@ -261,6 +262,51 @@ export const useProjectStore = defineStore("project", () => {
     await refreshDepths();
   }
 
+  // ---- 速度/拍号关键点 ----
+
+  /** 第 `beat` 拍处是否「对准」某个关键点（半格容差）。 */
+  function keyframeAt(beat: number): Keyframe | null {
+    const t = project.value?.transport;
+    if (!t) return null;
+    const half = meterBeatAt(beat, t) / 8; // 半个 1/16 格
+    return (t.keyframes ?? []).find((k) => Math.abs(k.beat - beat) < half) ?? null;
+  }
+
+  /** 按所在分段的 1/16 拍吸附。 */
+  function snapBeat(beat: number): number {
+    const t = project.value?.transport;
+    if (!t) return beat;
+    const s = meterBeatAt(beat, t) / 4;
+    return Math.round(beat / s) * s;
+  }
+
+  /** 插入/更新关键点；未给的值继承该处的生效值。 */
+  function setKeyframeAt(beat: number, v: { tempo?: number; num?: number; den?: number }): Promise<void> {
+    const t = project.value?.transport;
+    if (!t) return Promise.resolve();
+    const cur = meterAt(beat, t);
+    return edit(() => api.setKeyframe(beat, v.tempo ?? tempoAt(beat, t), v.num ?? cur.num, v.den ?? cur.den));
+  }
+
+  function removeKeyframeAt(beat: number): Promise<void> {
+    return edit(() => api.removeKeyframe(beat));
+  }
+
+  /** 改 BPM：对准关键点 → 改该关键点；否则 → 改基准（第 0 拍）。 */
+  function applyTempoAt(beat: number, bpm: number): Promise<void> {
+    if (!Number.isFinite(bpm) || bpm < 20 || bpm > 300) return Promise.resolve();
+    const kf = keyframeAt(beat);
+    if (kf) return setKeyframeAt(kf.beat, { tempo: bpm });
+    return setTempo(bpm);
+  }
+
+  /** 改拍号：对准关键点 → 改该关键点；否则 → 改基准（第 0 拍）。 */
+  function applyMeterAt(beat: number, num: number, den: number): Promise<void> {
+    const kf = keyframeAt(beat);
+    if (kf) return setKeyframeAt(kf.beat, { num, den });
+    return setTimeSignature(num, den);
+  }
+
   // ---- 工程 ----
 
   /** 新建工程（铺默认分轨模板；分轨名按当前语言生成，之后固定）。 */
@@ -340,6 +386,12 @@ export const useProjectStore = defineStore("project", () => {
     monitorMix,
     setTempo,
     setTimeSignature,
+    keyframeAt,
+    snapBeat,
+    setKeyframeAt,
+    removeKeyframeAt,
+    applyTempoAt,
+    applyMeterAt,
     newProject,
     localizeStarterTracks,
     openFrom,
