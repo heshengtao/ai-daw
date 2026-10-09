@@ -1583,6 +1583,27 @@ git commit -m "feat(tempo): edit view and readouts follow meter segments"
 
 ### 待办
 
-- Task 2–13（`TempoMap`、`schedule`/`render`/`player` 接入、关键点命令/事件、前端镜像 `tempo.ts`、网格分段叠层、标尺徽标与增删交互）。
+- 无（Task 2–13 已全部完成）。
+
+### Task 2–13 完成记录
+
+- **Task 2 — 完成**（commit `a46d040`）。`crates/engine/src/tempo.rs`：`Segment`/`TempoMap::from_transport` + `tempo_at`/`meter_at`/`segments`/`beats_to_seconds`/`seconds_to_beats`；`lib.rs` 加 `pub mod tempo;`。
+- **Task 3 — 完成**（commit `24fd324`）。`schedule.rs` 产出 `tempo_points`（首项 `(0, tempo_at(0))`）；`render.rs` 时长走 `TempoMap`；`player.rs` 逐块游标取当前 BPM 填入 `ProcessContext`，`seek` 重定位游标。
+- **Task 4 — 完成**（commit `5c86cb1`）。`Command::SetKeyframe`/`RemoveKeyframe`、`Event::KeyframeSet`/`KeyframeRemoved`（结构性，`is_mix_only == false`）；`apply`/`translate` 归一化与增删。
+- **Task 5 — 完成**（commit `c71acb1`）。`set_keyframe`/`remove_keyframe` Tauri 命令并注册。
+- **Task 6 — 完成**（commit `548a763`）。`Keyframe` 类型、`Transport.keyframes?`、`api.setKeyframe`/`removeKeyframe`、mock 同语义。
+- **Task 7 — 完成**（commit `166d655`）。`src/utils/tempo.ts` 分段换算镜像（逐位对齐 Rust）。
+- **Task 8 — 完成**（commit `a8f87c8`）。`transport.ts` 定位/换算改用 `beatsToSeconds`/`secondsToBeats`。
+- **Task 9 — 完成**（commit `efb082c`）。`project.ts`：`keyframeAt`/`snapBeat`/`setKeyframeAt`/`removeKeyframeAt`/`applyTempoAt`/`applyMeterAt`。
+- **Task 10 — 完成**（commit `1fe8a72`）。`BottomBar.vue` 显示播放头处生效的 BPM/拍号、改动写在对准的关键点或基准、对准时显示徽标；i18n 中英各一条。
+- **Task 11 — 完成**（commit `9fd93df`）。`timeline.ts` 加 `meterSegments`/`barMarks`/`barBeatsAt`/`snapAt`，`snapBeats` 改按所在分段吸附；`TimelineRuler.vue` 分段刻度 + 关键点徽标（双击加、右键删）。
+- **Task 12 — 完成**（commit `a0f11aa`）。`timeline.ts` 加 `gridStyle` 分段叠层，`ArrangeView`/`EditView`/`ControllerLane` 改用内联样式，删除 `gridBackground`。
+- **Task 13 — 完成**（commit `a0f11aa`）。`EditView` 的 `beatsPerBar`/`gridLabel`/拖动吸附按所在分段；`BottomBar` 的 `bars`/`positionText` 按分段读数。
+
+**验证**：`cargo test -p daw-party-engine --features realtime` → 120 通过；`cargo check --manifest-path src-tauri/Cargo.toml` 通过；`npm run build`（`vue-tsc` + `vite build`）通过。
+
+**与计划的实现差异（供后续参考）**：
+- `BottomBar` 的 BPM 自触发防护未用计划里的 `syncing` 标志（该写法在「同步值未变化、watcher 不触发」时会残留标志位、吞掉下一次真实编辑），改为「新值等于该处生效值则视为同步、不回写」。
+- 前端 `segmentAt` 在每次调用时重建分段数组（计划已知的粗糙处，先正确后优化）。
 
 **已知粗糙处（不阻塞，但实现者需知）**：`src/utils/tempo.ts` 的 `segmentAt` 每次调用都重建 `segments`（正确但重复分配）；若性能敏感，先缓存再优化。`barBeatAt` 对「段长方能整除小节」做了取整近似，仅用于人读的读数，不参与计时。
