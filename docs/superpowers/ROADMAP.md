@@ -17,7 +17,7 @@
 | Plan 6 | 音频片段 / 采样器 | ⬜ 未开始 | 模型只有 MIDI `Clip`，无 `AudioClip` |
 | Plan 7 | AI 接口（MCP + skills + 可视化） | ⬜ 未开始 | 无 MCP；但事件流已带 `actor` 标签（`Engine::execute`） |
 | 新增 | `crates/ipc`（Command/Event schema） | ⬜ 未开始 | 设计文档 §5 已列出，实际未建 |
-| 新增 | `crates/analysis`（响度/频谱） | ⬜ 未开始 | 设计文档 §5 已列出，实际未建 |
+| 新增 | `crates/analysis`（响度/频谱） | ✅ 完成 | `crates/analysis`（ebur128 + rustfft）：LUFS/LRA/真峰值 + RMS + 平均幅度谱；`analyze_project` 命令 |
 | 新增 | 插件商店 | ⬜ 未开始 | — |
 | 品牌 | 应用图标 / favicon | ✅ 完成 | `src-tauri/app-icon.svg`（薰衣草紫，与 `common/Logo.vue` 同图形）→ `tauri icon` 生成 `src-tauri/icons/*`；`public/logo.svg` 作网页 favicon |
 
@@ -139,10 +139,10 @@
 | 内置合成器 DSP | 手写正弦 + 线性 ADSR | ✅ |
 | WAV 读写 | `hound` | ✅ |
 | 插件 ABI | 自研 `Plugin` trait（就地平面缓冲） | ✅ |
-| VST3 / CLAP 宿主 | **`truce-rack`** | ⬜ 待建 |
+| VST3 / CLAP 宿主 | **`vst3-host`** + **`clack-host`**（见 §2） | ✅ |
 | MIDI 输入 | `midir` | ⬜ 待建 |
 | 音频解码/重采样 | `symphonia` / `rubato` | ⬜ 待建 |
-| 响度/频谱分析 | `ebur128` / `rustfft` | ⬜ 待建 |
+| 响度/频谱分析 | `ebur128` / `rustfft` | ✅ |
 | 插件商店 | `@open-audio-stack/core`（前端搜索）+ Rust 侧安装 | ⬜ 待建 |
 
 ## 5. 剩余路线
@@ -172,10 +172,10 @@
 
 ### Stage D — AI 层（P1，项目定位所在）
 
-- **D1 · `crates/analysis`**：渲染 → LUFS / 频谱 / 峰值（用 `ebur128` / `rustfft`），构成 AI 的「听感」闭环。
-- **D2 · `src-tauri` 内嵌 MCP 服务器**：把 transport / 编曲 / 插件参数 / 渲染导出 / analysis 暴露为工具；AI 与人类共用 `Engine::execute`（`actor = Agent(..)`），天然共享撤销与可视化。
-- **D3 · skills 文档包 + 本地 HTTP/WS**（设计文档 §9）。
-- **D4 · 前端 AI 可视化**：事件流已带 `actor`，UI 高亮被改动的轨道 / 音符 / 旋钮。
+- **D1 · `crates/analysis`**：✅ 完成。渲染 → 响度（EBU R128：LUFS / LRA / 采样峰值 / 真峰值）+ RMS + 平均幅度谱（Hann 窗 + 50% 交叠 FFT）。对上层是 `analyze_project` IPC 命令；这是 AI 的「听感」闭环。
+- **D2 · `src-tauri` 内嵌 MCP 服务器**：⬜ 未开始。把 transport / 编曲 / 插件参数 / 渲染导出 / analysis 暴露为工具；AI 与人类共用 `Engine::execute`（`actor = Agent(..)`），天然共享撤销与可视化。
+- **D3 · skills 文档包 + 本地 HTTP/WS**（设计文档 §9）：⬜ 未开始。
+- **D4 · 前端 AI 可视化**：⬜ 未开始。事件流已带 `actor`，UI 高亮被改动的轨道 / 音符 / 旋钮。
 
 ### Stage E — 生态与隔离（P2）
 
