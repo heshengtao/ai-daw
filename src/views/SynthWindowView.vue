@@ -13,12 +13,10 @@ import SynthPanel from "@/components/workspace/panes/SynthPanel.vue";
 import { canonicalPluginId, effectiveParams, SYNTH_ID } from "@/data/plugins";
 import { useI18n } from "@/i18n";
 import { useProjectStore } from "@/stores/project";
-import { useSelectionStore } from "@/stores/selection";
 
 const route = useRoute();
 const i18n = useI18n();
 const store = useProjectStore();
-const selection = useSelectionStore();
 
 /**
  * 要显示哪条轨道的合成器。
@@ -42,7 +40,7 @@ const params = computed(() =>
   effectiveParams(track.value?.instrument?.plugin_id, track.value?.instrument?.params ?? {}),
 );
 
-/** 在这个窗口里改参数，也会同步选中主窗口的那条轨道（两边状态一致更不容易懵）。 */
+/** 参数改动只写后端工程状态：两个窗口都靠 `engine://event` 广播保持一致。 */
 async function commit(id: string, value: number): Promise<void> {
   const t = track.value;
   if (!t) return;
@@ -53,10 +51,6 @@ async function applyPreset(values: Record<string, number>): Promise<void> {
   const t = track.value;
   if (!t) return;
   await store.setParams(t.id, values);
-}
-
-function selectTrack(): void {
-  if (trackId.value !== null) selection.selectTrack(trackId.value);
 }
 
 /**
@@ -77,7 +71,6 @@ onMounted(() => {
         <h1 class="title">{{ track ? track.name : i18n.t("synth.windowTitle") }}</h1>
         <span class="subtitle">{{ i18n.t("synth.windowSubtitle") }}</span>
       </div>
-      <button v-if="track" class="focus-btn" @click="selectTrack">在主窗口选中这条轨道</button>
     </header>
 
     <div v-if="track" class="body">
@@ -127,20 +120,6 @@ onMounted(() => {
 .subtitle {
   font-size: 11px;
   color: rgb(var(--md-on-surface-variant));
-}
-.focus-btn {
-  flex: 0 0 auto;
-  height: 30px;
-  padding: 0 12px;
-  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
-  border-radius: 999px;
-  background: transparent;
-  color: rgb(var(--md-primary));
-  font-size: 11px;
-  cursor: pointer;
-}
-.focus-btn:hover {
-  background-color: rgb(var(--md-primary) / 0.08);
 }
 /* 窗口是固定尺寸的（后端 `resizable(false)`），内容按固定尺寸排，不再需要纵向滚动。 */
 .body {
