@@ -1566,4 +1566,23 @@ git commit -m "feat(tempo): edit view and readouts follow meter segments"
 
 **类型一致性**：`Segment`（Rust `tempo.rs` / TS `tempo.ts`）字段一致；`tempo_points` 在 Task 3 定义并在同任务 `player.rs` 使用；`meterSegments`/`barMarks`/`barBeatsAt`/`snapAt` 在 Task 11 定义、Task 12/13 使用；`applyTempoAt`/`applyMeterAt`/`keyframeAt`/`snapBeat` 在 Task 9 定义、Task 10 使用。
 
+---
+
+## 执行记录（随进度更新）
+
+### 已完成
+
+- **Task 1 — 完成**（commit `d1ad221`，复审通过无 Critical/Important）。`Keyframe { beat, tempo, time_sig_num, time_sig_den }` + `Transport.keyframes`（`#[serde(default, skip_serializing_if = "Vec::is_empty")]`）+ `normalize_keyframe` / `upsert_keyframe`（同 beat 覆盖）/ `remove_keyframe`（按 beat）。`cargo test -p daw-party-engine --features realtime` → 113 通过。
+
+### 后续任务必须注意（来自 Task 1 的复审）
+
+- **`Transport` 不再实现 `Copy`**（`Vec<Keyframe>` 不能 `Copy`）。仓库内已确认没有任何地方依赖它，但后续任务取用时要用 `.clone()`。
+- **`keyframes` 在 IPC 上是可选的**：空列表时 Rust 不会序列化该字段，前端读到的是 `undefined`。Task 6 的类型已改成 `keyframes?: Keyframe[]`，Task 9 的 `keyframeAt` 已加 `?? []`——后续所有读取处都要同样处理。
+- `MIN_KEYFRAME_BEAT`（`1e-6`）同时充当「最小合法 beat」和「去重/吸附容差」；`upsert_keyframe` 会**静默丢弃**非法关键点，命令层要自己校验。
+- 反序列化不会重排/去重（只有 `upsert_keyframe` 会）；Task 2 的 `TempoMap::from_transport` 做了防御性重排。
+
+### 待办
+
+- Task 2–13（`TempoMap`、`schedule`/`render`/`player` 接入、关键点命令/事件、前端镜像 `tempo.ts`、网格分段叠层、标尺徽标与增删交互）。
+
 **已知粗糙处（不阻塞，但实现者需知）**：`src/utils/tempo.ts` 的 `segmentAt` 每次调用都重建 `segments`（正确但重复分配）；若性能敏感，先缓存再优化。`barBeatAt` 对「段长方能整除小节」做了取整近似，仅用于人读的读数，不参与计时。
