@@ -12,6 +12,7 @@ realtime = ["dep:cpal"]
 daw-party-ipc = { path = "../ipc" }
 daw-party-plugin-api = { path = "../plugin-api" }
 daw-party-synth = { path = "../synth" }
+daw-party-effects = { path = "../effects" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
 hound = "3"

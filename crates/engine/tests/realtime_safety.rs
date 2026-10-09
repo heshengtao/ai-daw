@@ -54,7 +54,20 @@ fn schedule() -> ScheduledEvents {
             params: Default::default(),
             state: vec![],
         }),
-        effects: vec![],
+        // 效果器链**也必须在零分配门禁的覆盖范围内**：内置延迟/混响都在音频回调里跑，
+        // 参数给非默认值是为了让湿声路径真的执行（干声路径太容易「碰巧不分配」）。
+        effects: vec![
+            PluginInstance {
+                plugin_id: daw_party_engine::registry::BUILTIN_REVERB.into(),
+                params: [("size".to_string(), 0.8), ("mix".to_string(), 0.5)].into_iter().collect(),
+                state: vec![],
+            },
+            PluginInstance {
+                plugin_id: daw_party_engine::registry::BUILTIN_DELAY.into(),
+                params: [("time".to_string(), 0.3), ("mix".to_string(), 0.4)].into_iter().collect(),
+                state: vec![],
+            },
+        ],
         clips: vec![Clip {
             id: ClipId(1),
             start: 0.0,

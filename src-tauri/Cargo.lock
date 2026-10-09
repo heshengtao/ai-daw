@@ -753,10 +753,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "daw-party-effects"
+version = "0.1.0"
+dependencies = [
+ "daw-party-plugin-api",
+]
+
+[[package]]
 name = "daw-party-engine"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "daw-party-effects",
  "daw-party-ipc",
  "daw-party-plugin-api",
  "daw-party-synth",

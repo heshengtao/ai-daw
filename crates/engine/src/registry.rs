@@ -12,6 +12,11 @@ use crate::model::TrackId;
 /// 抽成常量是因为「新建工程的默认分轨」要挂乐器，而引擎不该散落魔法字符串。
 pub const BUILTIN_SYNTH: &str = "builtin.synth";
 
+/// 内置延迟的插件 id。
+pub const BUILTIN_DELAY: &str = daw_party_effects::DELAY_ID;
+/// 内置混响的插件 id。
+pub const BUILTIN_REVERB: &str = daw_party_effects::REVERB_ID;
+
 /// 内置合成器的**出厂预设**：同一套信号链，不同的参数补丁。
 ///
 /// 为什么把预设做成独立的注册项，而不是一个 `preset` 参数？
@@ -163,7 +168,7 @@ impl PluginRegistry {
         PluginRegistry { factories: HashMap::new() }
     }
 
-    /// 内置插件：合成器本体 + 全部预设音色。
+    /// 内置插件：合成器本体 + 全部预设音色 + 内置效果器。
     pub fn with_builtins() -> Self {
         let mut r = PluginRegistry::new();
         for p in BUILTIN_PRESETS {
@@ -171,6 +176,9 @@ impl PluginRegistry {
                 Box::new(daw_party_synth::SynthPlugin::preset(p.id, p.name, p.patch))
             });
         }
+        // 内置效果器：以前空间感只能靠外部 VST3，铺底/弦乐/管乐只能干着听。
+        r.register(BUILTIN_DELAY, |_track| Box::new(daw_party_effects::Delay::new()));
+        r.register(BUILTIN_REVERB, |_track| Box::new(daw_party_effects::Reverb::new()));
         r
     }
 
@@ -214,6 +222,19 @@ mod tests {
     fn builtins_include_synth() {
         let r = PluginRegistry::with_builtins();
         assert!(r.ids().contains(&"builtin.synth".to_string()));
+    }
+
+    /// 内置效果器必须在注册表里，而且是 `Effect` 类型（否则不会出现在效果器选择列表里）。
+    #[test]
+    fn builtins_include_the_effects() {
+        let r = PluginRegistry::with_builtins();
+        for id in [BUILTIN_DELAY, BUILTIN_REVERB] {
+            let p = r.create(id, TrackId(1)).unwrap_or_else(|| panic!("{id} 未注册"));
+            let d = p.descriptor();
+            assert_eq!(d.kind, PluginKind::Effect, "{id} 应当是效果器");
+            assert_eq!(d.io.inputs, 2, "{id} 需要立体声输入");
+            assert!(!p.params().is_empty(), "{id} 应当有参数");
+        }
     }
 
     #[test]

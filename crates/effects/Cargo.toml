@@ -1,0 +1,8 @@
+[package]
+name = "daw-party-effects"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+daw-party-plugin-api = { path = "../plugin-api" }

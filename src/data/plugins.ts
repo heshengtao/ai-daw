@@ -32,6 +32,10 @@ export interface PluginInfo {
 
 /** 内置合成器的插件 id（与引擎 `daw_party_engine::BUILTIN_SYNTH` 一致）。 */
 export const SYNTH_ID = "builtin.synth";
+/** 内置延迟的插件 id（与引擎 `BUILTIN_DELAY` 一致）。 */
+export const DELAY_ID = "builtin.delay";
+/** 内置混响的插件 id（与引擎 `BUILTIN_REVERB` 一致）。 */
+export const REVERB_ID = "builtin.reverb";
 
 /**
  * 内置合成器的**出厂预设**。
@@ -357,6 +361,26 @@ export const BUILTIN_PLUGINS: PluginInfo[] = [
     tags: ["synth", "sine", "正弦", "基础", "默认", "合成器"],
     note: "synth.note",
   },
+  {
+    id: DELAY_ID,
+    name: "delay.name",
+    kind: "effect",
+    category: "pluginCategory.builtinEffect",
+    builtin: true,
+    loadable: true,
+    tags: ["delay", "echo", "延迟", "回声"],
+    note: "delay.note",
+  },
+  {
+    id: REVERB_ID,
+    name: "reverb.name",
+    kind: "effect",
+    category: "pluginCategory.builtinEffect",
+    builtin: true,
+    loadable: true,
+    tags: ["reverb", "hall", "room", "混响", "空间"],
+    note: "reverb.note",
+  },
 ];
 
 /** 参数元信息（与 `plugin-api` 的 `ParamInfo` 同构，另加界面用的步长与单位）。 */
@@ -428,7 +452,23 @@ export function fullSynthParams(
   return { ...SYNTH_DEFAULTS, ...patch, ...overrides };
 }
 
-/** 内置插件的参数表（外部插件的参数表由后端提供）。 */
-export const BUILTIN_PARAMS: Record<string, ParamSpec[]> = Object.fromEntries(
-  BUILTIN_PLUGINS.filter((p) => p.kind === "instrument").map((p) => [p.id, SYNTH_PARAMS]),
-);
+/** 内置延迟的参数表（与 `crates/effects` 的 `delay.rs` 一一对应）。 */
+export const DELAY_PARAMS: ParamSpec[] = [
+  { id: "time", name: "时间", min: 0, max: 1, step: 0.01, default: 0.35, digits: 2 },
+  { id: "feedback", name: "反馈", min: 0, max: 0.95, step: 0.01, default: 0.35, digits: 2 },
+  { id: "mix", name: "混合", min: 0, max: 1, step: 0.01, default: 0.35, digits: 2 },
+];
+
+/** 内置混响的参数表（与 `crates/effects` 的 `reverb.rs` 一一对应）。 */
+export const REVERB_PARAMS: ParamSpec[] = [
+  { id: "size", name: "房间大小", min: 0, max: 1, step: 0.01, default: 0.6, digits: 2 },
+  { id: "damp", name: "阻尼", min: 0, max: 1, step: 0.01, default: 0.4, digits: 2 },
+  { id: "mix", name: "混合", min: 0, max: 1, step: 0.01, default: 0.3, digits: 2 },
+];
+
+/** 内置插件的参数表（音源 + 效果器都要预填，界面的通用参数列表按 id 取）。 */
+export const BUILTIN_PARAMS: Record<string, ParamSpec[]> = {
+  [SYNTH_ID]: SYNTH_PARAMS,
+  [DELAY_ID]: DELAY_PARAMS,
+  [REVERB_ID]: REVERB_PARAMS,
+};
