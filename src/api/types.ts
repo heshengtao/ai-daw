@@ -62,10 +62,26 @@ export interface Track {
   mixer: MixerChannel;
 }
 
+/** 时间轴上的一个关键点：从 `beat` 起 BPM 与拍号切换。 */
+export interface Keyframe {
+  beat: number;
+  tempo: number;
+  time_sig_num: number;
+  time_sig_den: number;
+}
+
 export interface Transport {
   tempo: number;
   time_sig_num: number;
   time_sig_den: number;
+  /**
+   * 速度/拍号关键点（按 beat 升序）。空表示整首恒定。
+   *
+   * **可选**：Rust 侧用了 `#[serde(default, skip_serializing_if = "Vec::is_empty")]`，
+   * 没有任何关键点时这个字段**不会出现在 IPC 载荷里**（这也是老工程零改动的原因），
+   * 所以前端读到的可能是 `undefined`——所有读取处都要 `?? []`。
+   */
+  keyframes?: Keyframe[];
 }
 
 export interface Project {

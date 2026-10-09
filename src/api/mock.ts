@@ -52,7 +52,7 @@ function bass(): Note[] {
 function sample(): Project {
   return {
     name: "示例工程",
-    transport: { tempo: 110, time_sig_num: 4, time_sig_den: 4 },
+    transport: { tempo: 110, time_sig_num: 4, time_sig_den: 4, keyframes: [] },
     master: { gain_db: 0, pan: 0, mute: false, solo: false },
     tracks: [
       {
@@ -93,7 +93,7 @@ function sample(): Project {
 function empty(): Project {
   return {
     name: "untitled",
-    transport: { tempo: 120, time_sig_num: 4, time_sig_den: 4 },
+    transport: { tempo: 120, time_sig_num: 4, time_sig_den: 4, keyframes: [] },
     tracks: [],
     master: { gain_db: 0, pan: 0, mute: false, solo: false },
   };
@@ -445,6 +445,22 @@ export const mockApi = {
     commit(() => {
       state.transport.time_sig_num = num;
       state.transport.time_sig_den = den;
+    }),
+
+  setKeyframe: (beat: number, tempo: number, num: number, den: number): Project =>
+    commit(() => {
+      const kf = { beat, tempo: Math.min(1000, Math.max(1, tempo)), time_sig_num: num, time_sig_den: den };
+      state.transport.keyframes = (state.transport.keyframes ?? [])
+        .filter((k) => Math.abs(k.beat - beat) > 1e-6)
+        .concat(kf)
+        .sort((a, b) => a.beat - b.beat);
+    }),
+
+  removeKeyframe: (beat: number): Project =>
+    commit(() => {
+      state.transport.keyframes = (state.transport.keyframes ?? []).filter(
+        (k) => Math.abs(k.beat - beat) > 1e-6,
+      );
     }),
 
   newProject: (trackNames?: string[]): Project => {

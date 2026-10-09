@@ -79,6 +79,18 @@ export function setTimeSignature(num: number, den: number): Promise<Project> {
   return invoke<Project>("set_time_signature", { num, den });
 }
 
+/** 在第 beat 拍插入/更新关键点。 */
+export function setKeyframe(beat: number, tempo: number, num: number, den: number): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setKeyframe(beat, tempo, num, den));
+  return invoke<Project>("set_keyframe", { beat, tempo, num, den });
+}
+
+/** 删除第 beat 拍的关键点。 */
+export function removeKeyframe(beat: number): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.removeKeyframe(beat));
+  return invoke<Project>("remove_keyframe", { beat });
+}
+
 /** 新建工程（铺默认分轨模板）。`trackNames` 按模板顺序给出，用于按语言命名分轨。 */
 export function newProject(trackNames?: string[]): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.newProject(trackNames));
