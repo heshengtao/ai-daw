@@ -36,6 +36,7 @@
 - `src/stores/clipboard.ts`（新）、`src/stores/selection.ts` — 剪贴板与记忆长度。
 - `src/views/ArrangeView.vue`、`src/views/EditView.vue` — 复制粘贴、点击创建、默认属性、去提示。
 - `src/i18n/zh.ts`、`src/i18n/en.ts` — 文案。
+- `src/views/SynthWindowView.vue` — 删除无效的「在主窗口选中这条轨道」按钮（Task 10）。
 
 ---
 
@@ -618,6 +619,63 @@ git commit -m "feat: click-to-create uses the last selected clip/note length"
 
 ---
 
+### Task 10: 删除合成器窗口里无效的「在主窗口选中这条轨道」按钮
+
+**Files:**
+- Modify: `src/views/SynthWindowView.vue`
+
+**背景（已核实）**：这个按钮是**空操作**。`SynthWindowView.vue:80` 的按钮调用 `selectTrack()`（`:58-60`），后者只改**本窗口自己的** Pinia `selection`（`:21`）。合成器窗口是**独立的 Vue 实例**（`SynthWindowView.vue:5-7` 自己写了这一点），它自己的 store 没有任何渲染依赖，也影响不到主窗口（跨窗口只有后端广播 `engine://event` / `engine://transport`）。既不发命令、也不发事件、也不抢焦点——所以点了什么都不会发生。而且每个能打开它的入口传入的都是主窗口**已经选中**的那条轨道，`SynthWindowView.vue:33-36` 那条「退回第一台内置合成器轨道」的兜底也救不了这个按钮。
+
+**Interfaces:**
+- Produces: 该窗口不再渲染按钮，且不留下任何孤立代码。
+
+- [ ] **Step 1: 删按钮**
+
+删除模板里的这一行（及其上方可能存在的容器/分隔元素）：
+
+```html
+        <button v-if="track" class="focus-btn" @click="selectTrack">在主窗口选中这条轨道</button>
+```
+
+- [ ] **Step 2: 删孤立代码**
+
+删除现在只被它使用的：
+
+```ts
+import { useSelectionStore } from "@/stores/selection";
+```
+```ts
+const selection = useSelectionStore();
+```
+```ts
+function selectTrack(): void {
+  if (trackId.value !== null) selection.selectTrack(trackId.value);
+}
+```
+
+以及 `<style scoped>` 里的 `.focus-btn` / `.focus-btn:hover` 规则（`:131-144` 附近）。
+
+Run: `grep -n "selection\|focus-btn\|selectTrack" src/views/SynthWindowView.vue`
+Expected: 无输出
+
+- [ ] **Step 3: 修正过时注释**
+
+同文件 `:45` 附近的注释声称「在这个窗口里改参数，也会同步选中主窗口的那条轨道（两边状态一致更不容易懵）」，但 `commit()`（`:46-50`）只调用 `store.setParam`，从不选轨道。把这句改成真实行为（参数改动只写后端工程状态，两个窗口靠 `engine://` 广播保持一致）。
+
+- [ ] **Step 4: 验证**
+
+Run: `npm run build`
+Run: `npm run dev`，打开内置合成器窗口：标题/轨道名/面板/键盘都正常，只是不再有那个按钮。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/views/SynthWindowView.vue
+git commit -m "fix(synth): drop the no-op 'select this track' button from the synth window"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage（对照 `2026-10-08-ux-clipboard-and-md3-controls-design.md`）**
@@ -626,6 +684,7 @@ git commit -m "feat: click-to-create uses the last selected clip/note length"
 - 3.3 复制粘贴 → Task 8。
 - 3.4 记忆长度点击创建 → Task 9。
 - 3.5 去空片段提示 / 控制器默认音量 / 标签自动跳转 / logo 与默认色 → Task 5、6、7。
+- 合成器窗口的死按钮（来自 `2026-10-09-audio-device-resilience-design.md` §4.6）→ Task 10。
 
 **Placeholder 扫描**：无 TBD/TODO；代码与类名均为具体值。
 
