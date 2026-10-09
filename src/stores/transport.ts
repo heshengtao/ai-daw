@@ -7,7 +7,7 @@
  *   位置由音频元素推进。两条路径对外暴露同一组状态，界面无需分支。
  */
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import * as api from "@/api/tauri";
 import type { TransportSnapshot } from "@/api/types";
 import { useLayoutStore } from "@/stores/layout";
@@ -126,6 +126,15 @@ export const useTransportStore = defineStore("transport", () => {
       layout.notify(i18n.t("error.audition", { error: String(err) }));
     }
   }
+
+  // 设备插回后实时会自动恢复（音频线程每秒轮询重建）。此时必须把离线试听收干净，
+  // 否则 <audio> 与实时流会同时出声、并且 rAF 时钟会把播放位置覆盖掉。
+  // `mode` 目前只由 `available` 决定（只有 realtime / preview），所以该条件等价于
+  // 「回到 realtime」；写成 `next !== "preview"` 是为了将来再引入别的模式时依旧能收干净。
+  // `teardownPreview()` 幂等（无试听时只是自增 token 并空转），没有试听时触发也安全。
+  watch(mode, (next, prev) => {
+    if (prev === "preview" && next !== "preview") teardownPreview();
+  });
 
   // ---- 对外动作 ----
 
