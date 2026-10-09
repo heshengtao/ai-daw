@@ -60,6 +60,16 @@ const keys = computed<Key[]>(() => {
 const whiteKeys = computed(() => keys.value.filter((k) => !k.black));
 const blackKeys = computed(() => keys.value.filter((k) => k.black));
 
+/** 黑键宽度：白键宽度的 62%（白键宽度 = 100% / 白键数）。 */
+const blackWidthPct = computed(() => (100 / Math.max(1, whiteKeys.value.length)) * 0.62);
+
+/** 黑键压在两白键的交线上：左移半个黑键宽。 */
+function blackStyle(k: Key): Record<string, string> {
+  const whites = Math.max(1, whiteKeys.value.length);
+  const left = ((k.whiteIndex + 1) / whites) * 100 - blackWidthPct.value / 2;
+  return { left: `${left}%`, width: `${blackWidthPct.value}%` };
+}
+
 function isHeld(note: number): boolean {
   return held.value.has(note);
 }
@@ -158,7 +168,7 @@ onUnmounted(() => {
         :key="k.note"
         class="black"
         :class="{ on: isHeld(k.note) }"
-        :style="{ left: `calc(${((k.whiteIndex + 1) / whiteKeys.length) * 100}% - 1.4%)` }"
+        :style="blackStyle(k)"
         :aria-label="i18n.t('keyboard.audition', { note: k.note })"
         @pointerdown="onDown(k.note, $event)"
         @pointerenter="onEnter(k.note)"
@@ -170,12 +180,12 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* 键盘**自带没有托盘**：不铺底色、不留内边距，直接贴在宿主的下边缘上
+   （合成器面板把它贴到设备底边，由设备的大圆角切出形状）。 */
 .keyboard {
   position: relative;
-  height: 108px;
-  padding: 8px 8px 10px;
-  border-radius: 18px;
-  background-color: var(--app-inset);
+  height: 100%;
+  min-height: 84px;
   user-select: none;
   touch-action: none;
 }
@@ -188,7 +198,7 @@ onUnmounted(() => {
   flex: 1 1 0;
   min-width: 0;
   border: 0;
-  border-radius: 3px 3px 5px 5px;
+  border-radius: 2px 2px 4px 4px;
   background-color: rgb(var(--md-surface-container-highest));
   cursor: pointer;
   transition: background-color 0.06s ease;
@@ -201,14 +211,13 @@ onUnmounted(() => {
 }
 .blacks {
   position: absolute;
-  inset: 8px 8px auto 8px;
+  inset: 0 0 auto 0;
   height: 62%;
   pointer-events: none;
 }
 .black {
   position: absolute;
   top: 0;
-  width: 2.8%;
   height: 100%;
   border: 0;
   border-radius: 0 0 4px 4px;

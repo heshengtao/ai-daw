@@ -105,6 +105,17 @@ async function commitInstrument(id: string, value: number): Promise<void> {
   }
 }
 
+/** 包络控制点这类「一次改多个参数」的提交：必须合成**一个**撤销步骤。 */
+async function commitInstrumentMany(params: Record<string, number>): Promise<void> {
+  const t = track.value;
+  if (!t) return;
+  try {
+    await store.setParams(t.id, params);
+  } catch (err) {
+    layout.notify(i18n.t("error.setParam", { error: String(err) }));
+  }
+}
+
 /** 切换预设：整组参数一次写回（只占一个撤销步骤）。 */
 async function applyPreset(params: Record<string, number>): Promise<void> {
   const t = track.value;
@@ -166,6 +177,7 @@ async function commitEffect(index: number, id: string, value: number): Promise<v
             :params="instrumentParams"
             :track="track.id"
             @commit="commitInstrument"
+            @commit-many="commitInstrumentMany"
             @apply-preset="applyPreset"
           />
           <PluginParamList

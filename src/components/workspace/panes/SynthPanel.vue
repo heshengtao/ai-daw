@@ -38,6 +38,11 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "commit", id: string, value: number): void;
+  /**
+   * 一次提交**多个**参数。包络控制点就会同时改两个（衰减点 = 衰减 + 延音），
+   * 分两次提交会变成**两个撤销步骤**——拖一下要按两次 Cmd+Z 才回得去，所以必须合成一次。
+   */
+  (e: "commitMany", params: Record<string, number>): void;
   /** 点预设垫子 / 预设条：整组参数一次写回（只占一个撤销步骤）。 */
   (e: "applyPreset", params: Record<string, number>): void;
 }>();
@@ -234,28 +239,107 @@ const scopeParams = computed<WaveParams>(() => ({
 }));
 
 /**
- * ADSR 包络曲线。
+ * ADSR 包络：**三个可直接拖动的控制点**（起音 / 衰减+延音 / 释音）。
  *
- * 时间轴用平方根压缩，否则长释音会把起音压成一条竖线。延音段画一个固定的示意长度。
+ * 横轴刻意用**固定分段**（起音 0–28%、衰减 28–50%、延音 50–64%、释音 64–100%），而不是按当前
+ * 时长归一化——归一化的话拖一个点会让整条曲线跟着重排，手感是「点从鼠标底下逃走」。固定分段里每个点
+ * 只在自己那一段内移动，拖起来可预测、也好抓。纵轴就是包络值（上 = 1，下 = 0）。
  */
-const envelope = computed(() => {
-  const a = Math.sqrt(shown("attack") / 1);
-  const d = Math.sqrt(shown("decay") / 2);
-  const s = shown("sustain");
-  const r = Math.sqrt(shown("release") / 4);
-  const hold = 0.35;
-  const total = a + d + hold + r || 1;
-  const x = (v: number) => (v / total) * 100;
-  const y = (v: number) => 30 - v * 26;
-  const points = [
-    [0, y(0)],
-    [x(a), y(1)],
-    [x(a + d), y(s)],
-    [x(a + d + hold), y(s)],
-    [x(a + d + hold + r), y(0)],
-  ];
-  return points.map(([px, py]) => `${px.toFixed(2)},${py.toFixed(2)}`).join(" ");
+const ENV = { attackMax: 1, decayMax: 2, releaseMax: 4, ax: 28, dx: 22, hx: 64, rx: 36 };
+
+/** 控制点在百分比坐标里的位置（y 向下为正，与 CSS 一致）。 */
+const envPoints = computed(() => {
+  const yS = (1 - shown("sustain")) * 100;
+  return {
+    attack: { x: ENV.ax * (shown("attack") / ENV.attackMax), y: 0 },
+    decay: { x: ENV.ax + ENV.dx * (shown("decay") / ENV.decayMax), y: yS },
+    release: { x: ENV.hx + ENV.rx * (shown("release") / ENV.releaseMax), y: 100 },
+    hold: { x: ENV.hx, y: yS },
+  };
 });
+
+const envPolyline = computed(() => {
+  const p = envPoints.value;
+  const pts: [number, number][] = [
+    [0, 100],
+    [p.attack.x, p.attack.y],
+    [p.decay.x, p.decay.y],
+    [p.hold.x, p.hold.y],
+    [p.release.x, p.release.y],
+  ];
+  return pts.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ");
+});
+
+/** 可拖动的三个控制点。 */
+const ENV_HANDLES = ["attack", "decay", "release"] as const;
+
+const envEl = ref<HTMLElement | null>(null);
+/** 正在拖哪个控制点（null = 没在拖）。 */
+const envDrag = ref<"attack" | "decay" | "release" | null>(null);
+/** 拖动中的最新值，松手时一次性提交（整段拖动只占一个撤销步骤）。 */
+const envCommit = ref<Record<string, number>>({});
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
+/** 指针位置 → 百分比坐标。 */
+function envAt(e: PointerEvent): { px: number; py: number } | null {
+  const el = envEl.value;
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return null;
+  return {
+    px: ((e.clientX - r.left) / r.width) * 100,
+    py: ((e.clientY - r.top) / r.height) * 100,
+  };
+}
+
+function envMove(e: PointerEvent): void {
+  const which = envDrag.value;
+  const at = which ? envAt(e) : null;
+  if (!which || !at) return;
+  if (which === "attack") {
+    const v = clamp01(at.px / ENV.ax) * ENV.attackMax;
+    onLive("attack", v);
+    envCommit.value = { attack: v };
+  } else if (which === "decay") {
+    // 这一个点同时管两个参数：横向 = 衰减时长，纵向 = 延音量。
+    const d = clamp01((at.px - ENV.ax) / ENV.dx) * ENV.decayMax;
+    const s = clamp01(1 - at.py / 100);
+    onLive("decay", d);
+    onLive("sustain", s);
+    envCommit.value = { decay: d, sustain: s };
+  } else {
+    const v = clamp01((at.px - ENV.hx) / ENV.rx) * ENV.releaseMax;
+    onLive("release", v);
+    envCommit.value = { release: v };
+  }
+}
+
+function envStart(which: "attack" | "decay" | "release", e: PointerEvent): void {
+  envDrag.value = which;
+  (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  envMove(e);
+}
+
+function envEnd(e: PointerEvent): void {
+  if (!envDrag.value) return;
+  (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+  envDrag.value = null;
+  const changes = envCommit.value;
+  envCommit.value = {};
+  // 一次拖动 = 一个撤销步骤（哪怕这个点同时改了衰减与延音）。
+  if (Object.keys(changes).length > 0) emit("commitMany", changes);
+}
+
+/** 控制点的提示文本：带上当前值，拖的时候能直接看到数字。 */
+function envTitle(id: "attack" | "decay" | "release"): string {
+  if (id === "decay") {
+    return `${t("synth.decay")} ${display("decay", shown("decay"))} · ${t("synth.sustain")} ${display("sustain", shown("sustain"))}`;
+  }
+  return `${t(`synth.${id}`)} ${display(id, shown(id))}`;
+}
 
 // ---- 预设垫子 ----
 const presets = usePresetsStore();
@@ -328,17 +412,39 @@ function pickPad(option: PresetOption): void {
         </div>
       </section>
 
-      <!-- 中部：左边屏幕（一个周期示波器 + ADSR），右边基础旋钮 + 「高级」 -->
+      <!-- 中部：左边屏幕（示波器 + 可拖动的 ADSR，两块等大），右边基础旋钮 + 「高级」 -->
       <section class="middle">
         <div class="screen">
-          <Oscilloscope :params="scopeParams" :height="170" />
-          <div class="env">
-            <svg class="env-svg" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true">
-              <polyline :points="envelope" />
+          <Oscilloscope :params="scopeParams" />
+
+          <div
+            ref="envEl"
+            class="env"
+            :class="{ dragging: envDrag !== null }"
+            role="group"
+            :aria-label="t('synth.envelope')"
+            @pointermove="envMove"
+            @pointerup="envEnd"
+            @pointercancel="envEnd"
+          >
+            <svg class="env-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <polyline :points="envPolyline" />
             </svg>
+            <button
+              v-for="id in ENV_HANDLES"
+              :key="id"
+              class="env-point"
+              :class="{ on: envDrag === id }"
+              :style="{ left: `${envPoints[id].x}%`, top: `${envPoints[id].y}%` }"
+              :aria-label="envTitle(id)"
+              :title="envTitle(id)"
+              @pointerdown="envStart(id, $event)"
+              @pointermove="envMove"
+              @pointerup="envEnd"
+              @pointercancel="envEnd"
+            />
             <span class="env-label">{{ t("synth.envelope") }}</span>
           </div>
-          <span class="voice-count">{{ t("synth.voiceCount", { count: 16 }) }}</span>
         </div>
 
         <div class="controls">
@@ -411,9 +517,10 @@ function pickPad(option: PresetOption): void {
         </div>
       </section>
 
-      <!-- 底部：固定高度键盘（`flex: 0 0 auto`，不参与压缩，比例永不变形） -->
+      <!-- 底部：键盘**贴到设备下边缘**（设备不留下内边距，左右负边距拉满整宽，
+           圆角由设备本身的 `overflow: hidden` 切出来）。 -->
       <div v-if="props.track !== undefined" class="keyboard-row">
-        <PianoKeyboard :track="props.track" />
+        <PianoKeyboard :track="props.track" :octaves="4" />
       </div>
     </div>
   </div>
@@ -439,6 +546,14 @@ function pickPad(option: PresetOption): void {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  box-sizing: border-box;
+  /* 面板底色贴近界面本身，外圈一圈**主题色的大圆角**（键盘由它切出底边形状）。
+     下内边距为 0：键盘要直接贴到设备下边缘，不再套一层托盘。 */
+  background-color: var(--app-card);
+  border: 1px solid rgb(var(--md-primary) / 0.45);
+  border-radius: 28px;
+  padding: 16px 16px 0;
+  overflow: hidden;
 }
 
 /* ---- 顶部：预设垫子 ---- */
@@ -548,37 +663,70 @@ function pickPad(option: PresetOption): void {
   flex-direction: column;
   gap: 8px;
 }
+/* 示波器与包络图**等大**：都按剩余高度等分。 */
+.screen > * {
+  flex: 1 1 0;
+  min-height: 0;
+}
+/* 包络图：一块可拖动的「屏幕」，控制点用绝对定位的按钮画（与 polyline 共用百分比坐标）。 */
 .env {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  position: relative;
+  border-radius: 20px;
+  background-color: rgb(var(--md-scrim) / 0.35);
+  border: 1px solid rgb(var(--md-outline-variant) / 0.45);
+  overflow: hidden;
+  touch-action: none;
+}
+.env.dragging {
+  cursor: grabbing;
 }
 .env-svg {
   width: 100%;
-  height: 44px;
-  /* 和上面的示波器同一套圆角，两块「屏幕」看起来是一体的 */
-  border-radius: 20px;
-  background-color: rgb(var(--md-scrim) / 0.35);
+  height: 100%;
 }
 .env-svg polyline {
   fill: none;
   stroke: rgb(var(--md-primary));
   stroke-width: 2;
+  /* `preserveAspectRatio="none"` 会把描边一起拉伸，这条让描边宽度保持常量 */
   vector-effect: non-scaling-stroke;
   stroke-linejoin: round;
   stroke-linecap: round;
 }
-.env-label {
-  font-size: 9.5px;
-  letter-spacing: 0.4px;
-  color: rgb(var(--md-on-surface-muted));
+/* 控制点的命中区比视觉圆点大一圈（视觉 10px、命中 18px），小屏幕上也好抓。 */
+.env-point {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: grab;
+  touch-action: none;
 }
-.voice-count {
-  margin-top: auto;
-  text-align: right;
+.env-point::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 2px solid rgb(var(--md-surface));
+  background-color: rgb(var(--md-primary));
+  transition: transform 0.12s ease;
+}
+.env-point:hover::before,
+.env-point.on::before {
+  transform: scale(1.3);
+}
+.env-label {
+  position: absolute;
+  left: 12px;
+  top: 8px;
   font-size: 9.5px;
   letter-spacing: 0.4px;
   color: rgb(var(--md-on-surface-muted));
+  pointer-events: none;
 }
 
 .controls {
@@ -724,14 +872,18 @@ function pickPad(option: PresetOption): void {
   color: rgb(var(--md-on-primary));
 }
 
-/* ---- 底部：键盘 ---- */
+/* ---- 底部：键盘（贴死设备下边缘） ---- */
 .keyboard-row {
   flex: 0 0 auto;
+  height: 96px;
+  /* 抵消设备左右内边距，让键盘横跨整宽；下边不留缝，直接贴底。 */
+  margin: 0 -16px;
 }
 
 .pad:focus-visible,
 .chip:focus-visible,
-.seg:focus-visible {
+.seg:focus-visible,
+.env-point:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 1px;
 }

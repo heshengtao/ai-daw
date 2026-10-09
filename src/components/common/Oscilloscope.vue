@@ -8,7 +8,7 @@ import { sampleOnePeriod, type WaveParams } from "@/utils/waveform";
 
 const props = withDefaults(
   defineProps<{ params: WaveParams; points?: number; height?: number }>(),
-  { points: 256, height: 150 },
+  { points: 256 },
 );
 
 const canvasEl = ref<HTMLCanvasElement | null>(null);
@@ -77,7 +77,8 @@ watch(() => JSON.stringify(props.params), draw);
 </script>
 
 <template>
-  <div class="scope" :style="{ height: `${height}px` }">
+  <!-- 不给 `height` 就填满父容器（合成器面板里与包络图等分屏幕区）。 -->
+  <div class="scope" :style="height !== undefined ? { height: `${height}px` } : undefined">
     <canvas ref="canvasEl" aria-label="一个周期的波形" />
   </div>
 </template>
@@ -86,6 +87,7 @@ watch(() => JSON.stringify(props.params), draw);
 .scope {
   position: relative;
   width: 100%;
+  height: 100%;
   border-radius: 20px;
   background-color: rgb(var(--md-scrim) / 0.55);
   border: 1px solid rgb(var(--md-outline-variant) / 0.45);

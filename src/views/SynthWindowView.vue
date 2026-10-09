@@ -47,6 +47,13 @@ async function commit(id: string, value: number): Promise<void> {
   await store.setParam(t.id, id, value);
 }
 
+/** 包络控制点这类「一次改多个参数」的提交：必须合成**一个**撤销步骤。 */
+async function commitMany(params: Record<string, number>): Promise<void> {
+  const t = track.value;
+  if (!t) return;
+  await store.setParams(t.id, params);
+}
+
 async function applyPreset(values: Record<string, number>): Promise<void> {
   const t = track.value;
   if (!t) return;
@@ -75,7 +82,13 @@ onMounted(() => {
 
     <div v-if="track" class="body">
       <!-- 预设控件由 SynthPanel 自带（垫子 + 预设条），这里不再单独渲染，避免出现两个预设条。 -->
-      <SynthPanel :params="params" :track="track.id" @commit="commit" @apply-preset="applyPreset" />
+      <SynthPanel
+        :params="params"
+        :track="track.id"
+        @commit="commit"
+        @commit-many="commitMany"
+        @apply-preset="applyPreset"
+      />
     </div>
 
     <p v-else-if="store.loadError" class="empty">
