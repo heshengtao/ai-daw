@@ -15,7 +15,7 @@
 | Plan 3 | VST3 / CLAP 宿主 | ✅ 完成（栈有变） | `crates/host-vst3`（VST3 用 `vst3-host`、CLAP 用 `clack-host`，**未用 truce-rack**）；`src-tauri/src/plugins.rs` 装配注册表 + 原生窗口 |
 | Plan 5 | 录音 | ⬜ 未开始 | — |
 | Plan 6 | 音频片段 / 采样器 | ⬜ 未开始 | 模型只有 MIDI `Clip`，无 `AudioClip` |
-| Plan 7 | AI 接口（MCP + skills + 可视化） | 🟡 进行中 | MCP 已完成（`src-tauri/src/mcp.rs`，27 工具）；skills 包与前端 AI 可视化未做 |
+| Plan 7 | AI 接口（MCP + skills + 可视化） | 🟡 进行中 | MCP ✅（`src-tauri/src/mcp.rs`，27 工具）+ 前端 AI 可视化 ✅（D4）；skills 文档包（D3）未做 |
 | 新增 | `crates/ipc`（Command/Event schema） | ⬜ 未开始 | 设计文档 §5 已列出，实际未建 |
 | 新增 | `crates/analysis`（响度/频谱） | ✅ 完成 | `crates/analysis`（ebur128 + rustfft）：LUFS/LRA/真峰值 + RMS + 平均幅度谱；`analyze_project` 命令 |
 | 新增 | 插件商店 | ⬜ 未开始 | — |
@@ -177,7 +177,7 @@
   - **配置**：设置页「AI / MCP」一节可开关、改端口（0 = 临时端口），即时启停；配置落在应用配置目录的 `mcp.json`。
   - 安全：只绑回环；rmcp 默认只放行回环 `Host`（防 DNS rebinding）。**当前不鉴权**——同机任意进程都能连，后续可加 token。
 - **D3 · skills 文档包 + 本地 HTTP/WS**（设计文档 §9）：⬜ 未开始。
-- **D4 · 前端 AI 可视化**：⬜ 未开始。事件流已带 `actor`（代理走 `Actor::Agent("mcp")`），UI 高亮被改动的轨道 / 音符 / 旋钮。
+- **D4 · 前端 AI 可视化**：✅ 完成。`stores/engineEvents.ts` 解析事件里的 `Actor`，把**代理**发起的变更单独记账（代理名、事件类型、涉及轨道）；底栏胶囊只在代理动手时点亮并显示代理名（tooltip 给出最近改动处数与轨道），音轨栏对被代理改动的行短暂高亮（900ms 胶囊窗 / 1600ms 轨道窗）。人类自己的编辑不再误点亮 AI 指示。浏览器预览的 mock 会轮播代理事件，便于无后端演示。
 
 ### Stage E — 生态与隔离（P2）
 
