@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/ipc", "crates/plugin-api", "crates/synth", "crates/engine", "crates/host-vst3", "crates/analysis"]
+members = ["crates/ipc", "crates/plugin-api", "crates/synth", "crates/engine", "crates/asset", "crates/host-vst3", "crates/analysis"]
 
 [workspace.package]
 version = "0.1.0"

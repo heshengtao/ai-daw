@@ -21,6 +21,8 @@ cpal = { version = "0.18", optional = true }
 [dev-dependencies]
 serde_json = "1"
 tempfile = "3"
+# 「听感」断言用：把渲染结果做频谱/峰值/RMS 的量化核对，而不是「>0 就算过」。
+daw-party-analysis = { path = "../analysis" }
 
 [[example]]
 name = "play_demo"

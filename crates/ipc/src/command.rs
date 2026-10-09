@@ -1,4 +1,4 @@
-use crate::model::{ClipId, ClipPlacement, ClipRef, Note, NoteEdit, TrackId};
+use crate::model::{AudioSource, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, TrackId};
 
 /// 命令：期望的状态变更请求。
 ///
@@ -24,6 +24,12 @@ pub enum Command {
     SetTrackInstrument { track: TrackId, plugin_id: String },
     /// 在轨道上新增一个 MIDI 片段。
     AddClip { track: TrackId, start: f64, length: f64 },
+    /// 在轨道上新增一个**音频片段**（素材由 `source.path` 指向）。
+    ///
+    /// `length`（拍）决定时间轴跨度；素材会**铺满**该跨度（缩放/改速度 → 按比例重采样，会变调）。
+    AddAudioClip { track: TrackId, start: f64, length: f64, source: AudioSource },
+    /// 改写片段的音频素材。`None` 表示把它**变回 MIDI 片段**（同时清空音符）。
+    SetClipAudio { track: TrackId, clip: ClipId, audio: Option<AudioSource> },
     /// 从轨道上删除一个片段。
     RemoveClip { track: TrackId, clip: ClipId },
     /// 把片段移动到新的起始拍。

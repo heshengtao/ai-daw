@@ -259,6 +259,25 @@ impl Engine {
                     length: crate::model::Clip::normalize_length(*length),
                 }]
             }
+            Command::AddAudioClip { track, start, length, source } => {
+                let clip = self.alloc_clip_id();
+                vec![Event::AudioClipAdded {
+                    actor: actor.clone(),
+                    track: *track,
+                    clip,
+                    start: crate::model::Clip::normalize_start(*start),
+                    length: crate::model::Clip::normalize_length(*length),
+                    source: source.clone(),
+                }]
+            }
+            Command::SetClipAudio { track, clip, audio } => {
+                vec![Event::ClipAudioChanged {
+                    actor: actor.clone(),
+                    track: *track,
+                    clip: *clip,
+                    audio: audio.clone(),
+                }]
+            }
             Command::RemoveClip { track, clip } => {
                 vec![Event::ClipRemoved { actor: actor.clone(), track: *track, clip: *clip }]
             }
@@ -506,6 +525,66 @@ mod tests {
     }
 
     #[test]
+    fn add_audio_clip_is_normalized_and_undoable() {
+        use crate::model::AudioSource;
+        let mut e = Engine::new("demo");
+        let ev = e.execute(Command::AddTrack { name: "Audio".into() }, Actor::Human);
+        let track = match ev[0] { crate::event::Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        let ev = e.execute(
+            Command::AddAudioClip {
+                track,
+                start: -5.0,
+                length: 1e9,
+                source: AudioSource { path: "/tmp/a.wav".into(), offset_frames: 0 },
+            },
+            Actor::Human,
+        );
+        let clip = match ev[0] { crate::event::Event::AudioClipAdded { clip, .. } => clip, _ => unreachable!() };
+
+        let stored = &e.project().track(track).unwrap().clips[0];
+        assert!(stored.is_audio(), "存进去的必须是音频片段");
+        assert_eq!(stored.id, clip);
+        assert_eq!(stored.start, 0.0, "负起点必须被夹到 0");
+        assert_eq!(stored.length, crate::model::Clip::MAX_LENGTH_BEATS, "超长必须被夹紧");
+
+        assert!(e.undo());
+        assert!(e.project().track(track).unwrap().clips.is_empty());
+        assert!(e.redo());
+        assert!(e.project().track(track).unwrap().clips[0].is_audio());
+    }
+
+    #[test]
+    fn set_clip_audio_switches_between_midi_and_audio() {
+        use crate::model::{AudioSource, Note};
+        let mut e = Engine::new("demo");
+        let (track, clip) = seeded(&mut e);
+        e.execute(
+            Command::AddNote {
+                track,
+                clip,
+                note: Note { pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 },
+            },
+            Actor::Human,
+        );
+        assert_eq!(e.project().track(track).unwrap().clips[0].notes.len(), 1);
+
+        e.execute(
+            Command::SetClipAudio {
+                track,
+                clip,
+                audio: Some(AudioSource { path: "x.wav".into(), offset_frames: 0 }),
+            },
+            Actor::Human,
+        );
+        let c = &e.project().track(track).unwrap().clips[0];
+        assert!(c.is_audio());
+        assert!(c.notes.is_empty(), "转成音频片段必须清空音符");
+
+        e.execute(Command::SetClipAudio { track, clip, audio: None }, Actor::Human);
+        assert!(!e.project().track(track).unwrap().clips[0].is_audio(), "去掉素材应当变回 MIDI 片段");
+    }
+
+    #[test]
     fn set_time_signature_is_normalized_and_undoable() {
         let mut e = Engine::new("demo");
         e.execute(Command::SetTimeSignature { num: 7, den: 8 }, Actor::Human);
@@ -649,6 +728,7 @@ mod tests {
                 start: 0.0,
                 length: 4.0,
                 notes: vec![Note { pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 }],
+                audio: None,
             }],
             mixer: Default::default(),
         });

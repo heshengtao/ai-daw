@@ -62,7 +62,28 @@ pub fn apply(project: &mut Project, event: &Event) {
                     start: Clip::normalize_start(*start),
                     length: Clip::normalize_length(*length),
                     notes: vec![],
+                    audio: None,
                 });
+            }
+        }
+        Event::AudioClipAdded { track, clip, start, length, source, .. } => {
+            if let Some(t) = project.track_mut(*track) {
+                t.clips.push(Clip {
+                    id: *clip,
+                    start: Clip::normalize_start(*start),
+                    length: Clip::normalize_length(*length),
+                    notes: vec![],
+                    audio: Some(source.clone()),
+                });
+            }
+        }
+        Event::ClipAudioChanged { track, clip, audio, .. } => {
+            if let Some(c) = find_clip_mut(project, *track, *clip) {
+                c.audio = audio.clone();
+                // 变成音频片段时音符必须清空（两者不能共存）；变回 MIDI 片段时音符本来就是空的。
+                if c.audio.is_some() {
+                    c.notes.clear();
+                }
             }
         }
         Event::ClipRemoved { track, clip, .. } => {

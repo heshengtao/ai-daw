@@ -60,6 +60,7 @@ fn schedule() -> ScheduledEvents {
             start: 0.0,
             length: 4.0,
             notes: vec![Note { pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
+            audio: None,
         }],
         mixer: Default::default(),
     });

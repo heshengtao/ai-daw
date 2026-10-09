@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use daw_party_plugin_api::MidiEvent;
 
+use crate::audio::{DecodedAudio, SampleProvider};
 use crate::model::{MixerChannel, Note, PluginInstance, Project, TrackId};
 use crate::tempo::TempoMap;
 
@@ -10,6 +13,25 @@ pub struct ScheduledMidi {
     pub frame: u64,
     /// 该帧时刻发出的 MIDI 事件。
     pub event: MidiEvent,
+}
+
+/// 一条已定绝对帧、且已接上素材的音频片段。
+///
+/// 语义（见 `specs/2026-10-09-audio-clip-design.md`）：片段的 `length`（拍）决定时间轴跨度，
+/// 素材**铺满**该跨度（`ratio = source_window_frames / span_frames`）——缩放或改速度会按比例
+/// 重采样，因此会变调（v1 不做保音高变速）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScheduledAudioClip {
+    /// 片段起始的绝对帧（含）。
+    pub start_frame: u64,
+    /// 片段结束的绝对帧（不含）。
+    pub end_frame: u64,
+    /// 素材内的起始帧（crop 起点，已按素材长度夹紧）。
+    pub offset_frames: u64,
+    /// 本次要铺开的源帧数（= 素材总帧数 − `offset_frames`）。
+    pub source_window_frames: u64,
+    /// 已解码素材（构造播放器前加载完毕，播放路径只读）。
+    pub audio: Arc<DecodedAudio>,
 }
 
 /// 单轨的定帧事件表与播放所需信息（自带插件引用与混音参数，使 `Player` 不依赖 `Project`）。
@@ -25,6 +47,8 @@ pub struct ScheduledTrack {
     pub mixer: MixerChannel,
     /// 按帧稳定排序的事件列表。
     pub events: Vec<ScheduledMidi>,
+    /// 音频片段（可能为空）。素材缺失的片段不会出现在这里（按静音处理）。
+    pub audio_clips: Vec<ScheduledAudioClip>,
 }
 
 /// 整首工程的定帧事件表：离线渲染与实时播放共用。
@@ -48,7 +72,23 @@ pub struct ScheduledEvents {
 
 impl ScheduledEvents {
     /// 从工程构建定帧事件表。事件按帧稳定排序；同帧时保持（clip 顺序 → note 顺序 → NoteOn 先于 NoteOff）的原有次序，以保证与 Plan 1 的渲染一致。
+    ///
+    /// **不含音频素材**：工程里的音频片段一律按静音处理。要真正出声请用
+    /// [`ScheduledEvents::from_project_with_assets`]。
     pub fn from_project(project: &Project, sample_rate: f64) -> Self {
+        Self::from_project_with_assets(project, sample_rate, &crate::audio::no_assets())
+    }
+
+    /// 同 [`ScheduledEvents::from_project`]，但把音频片段接到真实素材上。
+    ///
+    /// 音频片段的绝对帧用与 MIDI **同一个** `to_frame` 闭包算出，保证两者严格对齐。
+    /// 素材缺失（`assets.get` 返回 `None`）或窗口为空时该片段被跳过——与「缺失插件用静音占位」
+    /// 同一策略：绝不让一段坏素材拖垮整首曲子。
+    pub fn from_project_with_assets(
+        project: &Project,
+        sample_rate: f64,
+        assets: &dyn SampleProvider,
+    ) -> Self {
         let map = TempoMap::from_transport(&project.transport);
         let to_frame = |beats: f64| (map.beats_to_seconds(beats) * sample_rate) as u64;
         let mut tempo_points: Vec<(u64, f64)> = vec![(0, map.tempo_at(0.0))];
@@ -59,7 +99,31 @@ impl ScheduledEvents {
         let mut tracks = Vec::with_capacity(project.tracks.len());
         for track in &project.tracks {
             let mut events = Vec::new();
+            let mut audio_clips = Vec::new();
             for clip in &track.clips {
+                // 音频片段：接素材、定绝对帧。素材缺失 → 整段静音（跳过）。
+                if let Some(source) = &clip.audio {
+                    let Some(audio) = assets.get(&source.path) else { continue };
+                    let total = audio.frames() as u64;
+                    let offset = source.offset_frames.min(total);
+                    let window = total - offset;
+                    if window == 0 {
+                        continue;
+                    }
+                    let start_frame = to_frame(clip.start);
+                    let end_frame = to_frame(clip.start + clip.length);
+                    if end_frame <= start_frame {
+                        continue;
+                    }
+                    audio_clips.push(ScheduledAudioClip {
+                        start_frame,
+                        end_frame,
+                        offset_frames: offset,
+                        source_window_frames: window,
+                        audio,
+                    });
+                    continue;
+                }
                 for note in &clip.notes {
                     let on = clip.start + note.start;
                     let off = on + note.duration;
@@ -89,6 +153,7 @@ impl ScheduledEvents {
                 effects: track.effects.clone(),
                 mixer: track.mixer,
                 events,
+                audio_clips,
             });
         }
 
@@ -121,6 +186,7 @@ mod tests {
                 start: 0.0,
                 length: 4.0,
                 notes: vec![Note { pitch: 60, start: 1.0, duration: 1.0, velocity: 100, volume: 127 }],
+                audio: None,
             }],
             mixer: Default::default(),
         });
@@ -210,6 +276,7 @@ mod tests {
                 start: 0.0,
                 length: 4.0,
                 notes: vec![Note { pitch: 60, start: 3.0, duration: 0.5, velocity: 100, volume: 127 }],
+                audio: None,
             }],
             mixer: Default::default(),
         });

@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 /// 交错（interleaved）音频缓冲。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioBuffer {
@@ -46,6 +49,47 @@ impl AudioBuffer {
     pub fn peak(&self) -> f32 {
         self.data.iter().fold(0.0f32, |a, b| a.max(b.abs()))
     }
+}
+
+/// 已解码的音频素材：交错 f32，自带源采样率与通道数。
+///
+/// 与 [`AudioBuffer::data`] 同形（交错 f32）。**必须在构造播放器之前一次性加载**：
+/// 音频线程只读它，`process_block` 里不解码、不分配（见 `tests/realtime_safety.rs`）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecodedAudio {
+    /// 交错采样数据（长度 = `channels * frames`）。
+    pub samples: Arc<[f32]>,
+    /// 通道数（1 = 单声道，2 = 立体声；解码侧保证落在这个范围）。
+    pub channels: usize,
+    /// 素材自身的采样率（Hz）。与工程采样率不同由播放侧按比值换算。
+    pub sample_rate: f64,
+}
+
+impl DecodedAudio {
+    /// 帧数（每通道的采样数）。
+    pub fn frames(&self) -> usize {
+        if self.channels == 0 { 0 } else { self.samples.len() / self.channels }
+    }
+}
+
+/// 按路径提供已解码素材。
+///
+/// 调度（[`crate::schedule::ScheduledEvents`]）只认这个 trait，不认识文件系统——
+/// 解码（IO）留在宿主/`daw-party-asset`，引擎保持纯计算。
+pub trait SampleProvider {
+    /// 取某条路径的素材；缺失返回 `None`（该片段按静音处理）。
+    fn get(&self, path: &str) -> Option<Arc<DecodedAudio>>;
+}
+
+impl SampleProvider for HashMap<String, Arc<DecodedAudio>> {
+    fn get(&self, path: &str) -> Option<Arc<DecodedAudio>> {
+        HashMap::get(self, path).cloned()
+    }
+}
+
+/// 空素材表：所有音频片段按静音处理（`from_project` 的默认行为）。
+pub fn no_assets() -> HashMap<String, Arc<DecodedAudio>> {
+    HashMap::new()
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::{ClipId, ClipPlacement, ClipRef, Note, NoteEdit, TrackId};
+use crate::model::{AudioSource, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, TrackId};
 
 /// 变更来源。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +34,10 @@ pub enum Event {
     TrackInstrumentCleared { actor: Actor, track: TrackId },
     /// 片段新增。
     ClipAdded { actor: Actor, track: TrackId, clip: ClipId, start: f64, length: f64 },
+    /// 音频片段新增（事件自带素材引用，重放无需另查）。
+    AudioClipAdded { actor: Actor, track: TrackId, clip: ClipId, start: f64, length: f64, source: AudioSource },
+    /// 片段的音频素材被改写；`audio` 为 `None` 表示变回 MIDI 片段。
+    ClipAudioChanged { actor: Actor, track: TrackId, clip: ClipId, audio: Option<AudioSource> },
     /// 片段删除。
     ClipRemoved { actor: Actor, track: TrackId, clip: ClipId },
     /// 片段被移动到新的起始拍。
@@ -92,6 +96,8 @@ impl Event {
             | Event::TrackInstrumentSet { actor, .. }
             | Event::TrackInstrumentCleared { actor, .. }
             | Event::ClipAdded { actor, .. }
+            | Event::AudioClipAdded { actor, .. }
+            | Event::ClipAudioChanged { actor, .. }
             | Event::ClipRemoved { actor, .. }
             | Event::ClipMoved { actor, .. }
             | Event::ClipsMoved { actor, .. }

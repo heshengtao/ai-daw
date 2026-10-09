@@ -14,7 +14,7 @@
 | Plan 4b | 把原生实时传输接进 UI | ✅ 完成 | `src-tauri/src/audio.rs`（专用音频线程）+ `engine://transport` 事件 + `stores/transport.ts`；界面全部改为真实操作（见下） |
 | Plan 3 | VST3 / CLAP 宿主 | ✅ 完成（栈有变） | `crates/host-vst3`（VST3 用 `vst3-host`、CLAP 用 `clack-host`，**未用 truce-rack**）；`src-tauri/src/plugins.rs` 装配注册表 + 原生窗口 |
 | Plan 5 | 录音 | ⬜ 未开始 | — |
-| Plan 6 | 音频片段 / 采样器 | ⬜ 未开始 | 模型只有 MIDI `Clip`，无 `AudioClip` |
+| Plan 6 | 音频片段 / 采样器 | 🟡 引擎侧完成 | `crates/asset` + `Clip.audio` + 播放路径 + 7 条量化测试；宿主接线与前端未做 |
 | Plan 7 | AI 接口（MCP + skills + 可视化） | 🟡 进行中 | MCP ✅（`src-tauri/src/mcp.rs`，27 工具）+ 前端 AI 可视化 ✅（D4）；skills 文档包（D3）未做 |
 | 新增 | `crates/ipc`（Command/Event schema） | ✅ 完成 | `crates/ipc`（`daw-party-ipc`）：工程/命令/事件 schema 的**唯一来源**；engine 用 `pub use` 薄壳保持既有路径不变（零行为变化） |
 | 新增 | `crates/analysis`（响度/频谱） | ✅ 完成 | `crates/analysis`（ebur128 + rustfft）：LUFS/LRA/真峰值 + RMS + 平均幅度谱；`analyze_project` 命令 |
@@ -118,6 +118,8 @@
 | VST3 宿主实装 | （承上）预期用 truce-rack | **实际改用 `vst3-host` + `clack-host`**（见 `crates/host-vst3/Cargo.toml` 注释）：truce-rack 的 VST3 后端托管不了「无音频输入总线的音源」，其 CLAP 后端加载 KR-106 会段错误。两者同为宽松许可，不破坏 Apache-2.0 分发。 |
 | 低延迟（Windows） | （外部建议）启用 cpal 的 ASIO 后端 | **不启用 ASIO**：ASIO SDK 为 GPLv3 / 专有，会破坏纯 Apache-2.0 分发。走 WASAPI |
 | AI 听感引擎 | （外部建议）Dhwani | **不用**：Dhwani 是 **GPL-3.0-only**，链接即传染。改用 `ebur128` / `rustfft` |
+| 音频解码 | `symphonia` / `rubato`（拟定） | **symphonia 已采用**（wav/flac/mp3/ogg/aac/m4a）。它是 **MPL-2.0**，原先不在允许清单里 → 2026-10-09 把 MPL-2.0 加入 §3（**仅限未修改依赖**，见 `NOTICE`/`deny.toml`）。`rubato`（保音高变速）暂未引入。 |
+| 音频片段时间语义 | （未指定） | **片段拍长是唯一真相，素材铺满跨度**：缩放/改速度按比例重采样 → **会变调**（v1 不做保音高变速）。理由：模型与 MIDI 片段一致、时间轴/吸附/长度全部复用、实现最简。 |
 | 插件宿主（外部建议首选） | UAPMD | 仅作 **MCP / 能力参考**：UAPMD 是 **C++/CMake** 工程，接入需 FFI，与引擎 `#![forbid(unsafe_code)]` 相悖 |
 
 ## 3. 许可证护栏（强制）
@@ -175,7 +177,12 @@
 
 ### Stage C — 音频能力（P1）
 
-- **C1 · Plan 6**：`AudioClip` 模型 + 采样器插件 + 波形显示。
+- **C1 · Plan 6**：`AudioClip` 模型 + 采样器 + 波形显示。🟡 **引擎侧已完成（2026-10-09）**：
+  `crates/asset`（symphonia 解码 + `peaks`）、`Clip.audio`/`AudioSource`、`AddAudioClip`/`SetClipAudio` 与对应事件、
+  `SampleProvider` + `ScheduledAudioClip` + `Player` 混音路径（含 `seek`/暂停语义）、`crates/engine/tests/audio_clip.rs`
+  的 7 条**量化**断言。**待办**：宿主 `AssetCache`、`import_audio`/`audio_waveform` 命令 + MCP 工具、前端波形与导入入口。
+  设计与计划：`specs/2026-10-09-audio-clip-design.md`、`plans/2026-10-09-audio-clip.md`。
+  语义决策：**片段拍长是唯一真相，素材铺满跨度 → 缩放/改速度会变调**（v1 不做保音高变速）。
 - **C2 · Plan 5**：录音（cpal 输入流 → 写入 `AudioClip`）。
 - **C3 · 混音完善**：`AutomationLane`、send / bus（设计文档 §6 已列，模型尚未实现）。
 

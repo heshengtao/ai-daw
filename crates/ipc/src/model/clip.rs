@@ -53,13 +53,31 @@ impl Note {
     }
 }
 
-/// MIDI 片段。
+/// 音频素材引用：片段指向一段外部音频文件。
+///
+/// v1 存**绝对路径**（录音落在应用数据目录、导入的文件沿用原位置）；素材库/相对路径留后续。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioSource {
+    /// 素材文件路径。
+    pub path: String,
+    /// 素材内的起始帧（crop 起点）。旧工程/手写 JSON 缺省时按 0 读入。
+    #[serde(default)]
+    pub offset_frames: u64,
+}
+
+/// 片段：MIDI（`notes`）或音频（`audio`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Clip {
     pub id: ClipId,
     pub start: f64,
     pub length: f64,
     pub notes: Vec<Note>,
+    /// 音频素材；`Some` 表示这是**音频片段**（此时 `notes` 必为空）。
+    ///
+    /// 旧工程没有这个字段 → `None`（MIDI 片段）；`skip_serializing_if` 保证 MIDI 片段的
+    /// 输出形状与从前**逐字一致**（`src/api/types.ts` 与 wire-shape 测试都依赖这一点）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioSource>,
 }
 
 /// 片段引用（轨道 + 片段）：批量操作（多选框选后删除）需要跨轨道寻址。
@@ -107,6 +125,22 @@ impl Clip {
     /// 归一化起始位置。
     pub fn normalize_start(start: f64) -> f64 {
         clamp_beats(start, Self::MAX_START_BEATS)
+    }
+
+    /// 这是不是音频片段。
+    pub fn is_audio(&self) -> bool {
+        self.audio.is_some()
+    }
+
+    /// 归一化整个片段：夹紧起点/长度；音频片段的 `notes` 必须为空
+    /// （两种内容不能共存，否则播放与界面会各画一半）。
+    pub fn normalize(mut clip: Clip) -> Clip {
+        clip.start = Self::normalize_start(clip.start);
+        clip.length = Self::normalize_length(clip.length);
+        if clip.audio.is_some() {
+            clip.notes.clear();
+        }
+        clip
     }
 }
 
@@ -165,5 +199,49 @@ mod tests {
         assert_eq!(Clip::normalize_length(f64::NAN), Clip::MIN_LENGTH_BEATS);
         assert_eq!(Clip::normalize_start(-5.0), 0.0);
         assert_eq!(Clip::normalize_start(f64::NAN), 0.0);
+    }
+
+    /// MIDI 片段的输出形状必须与「没有 `audio` 字段」的时代**逐字一致**。
+    #[test]
+    fn midi_clip_omits_the_audio_key() {
+        let clip = Clip { id: ClipId(1), start: 0.0, length: 1.0, notes: vec![], audio: None };
+        let json = serde_json::to_string(&clip).unwrap();
+        assert!(!json.contains("audio"), "MIDI 片段不该写出 audio：{json}");
+    }
+
+    /// 旧工程（没有 `audio` 字段）必须照旧可读。
+    #[test]
+    fn clips_without_audio_load_as_midi() {
+        let json = r#"{"id":1,"start":0.0,"length":1.0,"notes":[]}"#;
+        let clip: Clip = serde_json::from_str(json).unwrap();
+        assert!(!clip.is_audio());
+        assert_eq!(clip.audio, None);
+    }
+
+    #[test]
+    fn audio_clip_roundtrips_and_normalizes_notes_away() {
+        let clip = Clip {
+            id: ClipId(2),
+            start: -3.0,
+            length: 0.0,
+            notes: vec![Note { pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 }],
+            audio: Some(AudioSource { path: "/tmp/kick.wav".into(), offset_frames: 0 }),
+        };
+        let back: Clip = serde_json::from_str(&serde_json::to_string(&clip).unwrap()).unwrap();
+        assert_eq!(back, clip);
+
+        let n = Clip::normalize(clip);
+        assert!(n.is_audio());
+        assert!(n.notes.is_empty(), "音频片段不得同时带音符");
+        assert_eq!(n.start, 0.0);
+        assert_eq!(n.length, Clip::MIN_LENGTH_BEATS);
+    }
+
+    /// `offset_frames` 缺省时按 0 读入（手写 JSON / 旧版本）。
+    #[test]
+    fn audio_source_offset_defaults_to_zero() {
+        let json = r#"{"id":1,"start":0.0,"length":1.0,"notes":[],"audio":{"path":"a.wav"}}"#;
+        let clip: Clip = serde_json::from_str(json).unwrap();
+        assert_eq!(clip.audio.unwrap().offset_frames, 0);
     }
 }

@@ -1,0 +1,265 @@
+#![forbid(unsafe_code)]
+
+//! 音频素材的**解码与波形包络**。
+//!
+//! 只做「文件 → 交错 f32」这一件事：解码成 [`daw_party_engine::audio::DecodedAudio`]，
+//! 或算出画波形用的 min/max 包络。**不认识 UI / Tauri**，也不碰播放路径——引擎只认已经
+//! 解码好的数据（播放回调里绝不解码，见 `crates/engine/tests/realtime_safety.rs`）。
+//!
+//! 解码用 `symphonia`（wav / flac / mp3 / ogg-vorbis / aac / m4a）。注意它是 **MPL-2.0**：
+//! 仅作为**未修改**的依赖使用，见 `NOTICE` 与 ROADMAP §3。
+
+use std::path::Path;
+
+use daw_party_engine::audio::DecodedAudio;
+use symphonia::core::codecs::audio::AudioDecoderOptions;
+use symphonia::core::codecs::CodecParameters;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, TrackType};
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+
+/// 解码失败的原因。
+#[derive(Debug, thiserror::Error)]
+pub enum AssetError {
+    /// 打不开文件（不存在 / 无权限）。
+    #[error("打不开音频文件：{0}")]
+    Io(#[from] std::io::Error),
+    /// 容器格式无法识别。
+    #[error("无法识别音频格式：{0}")]
+    Probe(String),
+    /// 文件里没有音频轨道。
+    #[error("文件里没有音频轨道")]
+    NoAudioTrack,
+    /// 缺少解码必需的信息（采样率或声道未知）。
+    #[error("缺少解码参数（采样率/声道未知）")]
+    MissingParams,
+    /// 解码过程中出错。
+    #[error("解码失败：{0}")]
+    Decode(String),
+}
+
+/// 解码一个音频文件为交错 f32 素材。
+///
+/// - 声道数收敛到 1 或 2：多声道（5.1 等）取前两个声道当 L/R（v1 不做真正的下混）。
+/// - 采样率**保持素材自身的**：调用方按需换算，绝不在这里重采样。
+/// - 单个坏帧会被跳过（`DecodeError`）；只有致命错误才让整段素材失败。
+pub fn decode(path: impl AsRef<Path>) -> Result<DecodedAudio, AssetError> {
+    let path = path.as_ref();
+    let file = std::fs::File::open(path)?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    // 扩展名只是**提示**：真正的判定靠探测（很多文件后缀不可靠）。
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    let mut format = symphonia::default::get_probe()
+        .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
+        .map_err(|e| AssetError::Probe(e.to_string()))?;
+
+    let track = format.default_track(TrackType::Audio).ok_or(AssetError::NoAudioTrack)?;
+    let track_id = track.id;
+    let params = match track.codec_params.as_ref() {
+        Some(CodecParameters::Audio(p)) => p.clone(),
+        _ => return Err(AssetError::MissingParams),
+    };
+    let source_rate = params.sample_rate.ok_or(AssetError::MissingParams)? as f64;
+
+    let mut decoder = symphonia::default::get_codecs()
+        .make_audio_decoder(&params, &AudioDecoderOptions::default())
+        .map_err(|e| AssetError::Decode(e.to_string()))?;
+
+    let mut samples: Vec<f32> = Vec::new();
+    // `copy_to_vec_interleaved` 是**覆盖**语义（会把目标 resize 成本次的长度），
+    // 所以每个包先拷进这个临时缓冲，再追加到总缓冲。
+    let mut packet_samples: Vec<f32> = Vec::new();
+    let mut channels = params.channels.as_ref().map(|c| c.count()).unwrap_or(0);
+    loop {
+        let packet = match format.next_packet() {
+            Ok(Some(packet)) => packet,
+            Ok(None) => break,
+            Err(e) => return Err(AssetError::Decode(e.to_string())),
+        };
+        if packet.track_id != track_id {
+            continue;
+        }
+        match decoder.decode(&packet) {
+            Ok(decoded) => {
+                channels = decoded.spec().channels().count();
+                packet_samples.clear();
+                decoded.copy_to_vec_interleaved(&mut packet_samples);
+                samples.extend_from_slice(&packet_samples);
+            }
+            // 坏帧跳过：宁可缺一小段，也不要整段素材报废。
+            Err(symphonia::core::errors::Error::DecodeError(_)) => continue,
+            Err(e) => return Err(AssetError::Decode(e.to_string())),
+        }
+    }
+
+    if samples.is_empty() {
+        return Err(AssetError::Decode("没有解出任何采样".into()));
+    }
+    let channels = channels.max(1);
+    let frames = samples.len() / channels;
+    let (out_channels, out_samples) = if channels <= 2 {
+        (channels, samples)
+    } else {
+        let mut stereo = Vec::with_capacity(frames * 2);
+        for f in 0..frames {
+            stereo.push(samples[f * channels]);
+            stereo.push(samples[f * channels + 1]);
+        }
+        (2, stereo)
+    };
+
+    Ok(DecodedAudio {
+        samples: out_samples.into(),
+        channels: out_channels,
+        sample_rate: source_rate,
+    })
+}
+
+/// 波形的 min/max 包络：每个桶两个值（先 min 后 max），长度 = `buckets * 2`。
+///
+/// 直接给画波形用：每个像素列取该列覆盖帧范围内最低与最高的采样。多声道先按帧取平均，
+/// 得到一条包络。空素材或 `buckets == 0` 时返回全 0。
+pub fn peaks(audio: &DecodedAudio, buckets: usize) -> Vec<f32> {
+    if buckets == 0 {
+        return Vec::new();
+    }
+    let frames = audio.frames();
+    let channels = audio.channels.max(1);
+    if frames == 0 {
+        return vec![0.0; buckets * 2];
+    }
+    let mut out = Vec::with_capacity(buckets * 2);
+    for b in 0..buckets {
+        let start = b * frames / buckets;
+        if start >= frames {
+            out.push(0.0);
+            out.push(0.0);
+            continue;
+        }
+        let end = (((b + 1) * frames) / buckets).clamp(start + 1, frames);
+        let mut lo = f32::INFINITY;
+        let mut hi = f32::NEG_INFINITY;
+        for f in start..end {
+            let base = f * channels;
+            let mut sum = 0.0f32;
+            for c in 0..channels {
+                sum += audio.samples.get(base + c).copied().unwrap_or(0.0);
+            }
+            let v = sum / channels as f32;
+            if v < lo {
+                lo = v;
+            }
+            if v > hi {
+                hi = v;
+            }
+        }
+        out.push(lo);
+        out.push(hi);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    /// 生成一段 WAV 素材（16-bit PCM，供测试解码）。
+    fn write_wav(dir: &std::path::Path, name: &str, rate: u32, channels: u16, seconds: f64, freq: f64) -> PathBuf {
+        let path = dir.join(name);
+        let spec = hound::WavSpec {
+            channels,
+            sample_rate: rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let frames = (seconds * rate as f64) as u32;
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        for f in 0..frames {
+            let v = (std::f64::consts::TAU * freq * f as f64 / rate as f64).sin()
+                * 0.9
+                * i16::MAX as f64;
+            let v = v as i16;
+            for _ in 0..channels {
+                writer.write_sample(v).unwrap();
+            }
+        }
+        writer.finalize().unwrap();
+        path
+    }
+
+    #[test]
+    fn decodes_a_mono_wav_with_its_own_sample_rate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_wav(dir.path(), "mono.wav", 44_100, 1, 0.25, 1_000.0);
+
+        let audio = decode(&path).unwrap();
+        assert_eq!(audio.channels, 1);
+        assert_eq!(audio.sample_rate, 44_100.0);
+        assert_eq!(audio.frames(), 11_025, "0.25 s @ 44.1 kHz");
+        let peak = audio.samples.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(peak > 0.85 && peak <= 1.0, "满幅素材的峰值应当接近 0.9，实际 {peak}");
+    }
+
+    #[test]
+    fn decodes_a_stereo_wav_with_two_channels() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_wav(dir.path(), "stereo.wav", 48_000, 2, 0.1, 1_000.0);
+
+        let audio = decode(&path).unwrap();
+        assert_eq!(audio.channels, 2);
+        assert_eq!(audio.sample_rate, 48_000.0);
+        assert_eq!(audio.frames(), 4_800);
+        assert_eq!(audio.samples.len(), 9_600, "交错：帧数 × 声道数");
+    }
+
+    #[test]
+    fn peaks_bracket_the_signal_in_every_bucket() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_wav(dir.path(), "peaks.wav", 48_000, 1, 0.5, 1_000.0);
+        let audio = decode(&path).unwrap();
+
+        let buckets = 16;
+        let env = peaks(&audio, buckets);
+        assert_eq!(env.len(), buckets * 2, "每桶 min/max 两个值");
+        // 0.5 s 里有 500 个 1 kHz 周期，每个桶都跨了整周期 → min≈-峰值、max≈+峰值。
+        for b in 0..buckets {
+            let lo = env[b * 2];
+            let hi = env[b * 2 + 1];
+            assert!(lo < -0.8, "第 {b} 桶的 min 应当接近负峰，实际 {lo}");
+            assert!(hi > 0.8, "第 {b} 桶的 max 应当接近正峰，实际 {hi}");
+        }
+    }
+
+    #[test]
+    fn peaks_handle_empty_input_without_panicking() {
+        let empty = DecodedAudio { samples: Arc::from(Vec::<f32>::new()), channels: 2, sample_rate: 48_000.0 };
+        assert_eq!(peaks(&empty, 4), vec![0.0; 8]);
+        assert!(peaks(&empty, 0).is_empty());
+    }
+
+    #[test]
+    fn missing_file_is_an_error() {
+        let err = decode("/definitely/not/here.wav").unwrap_err();
+        assert!(matches!(err, AssetError::Io(_)), "应当是 IO 错误，实际 {err}");
+    }
+
+    #[test]
+    fn non_audio_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-audio.txt");
+        std::fs::write(&path, b"hello, this is definitely not audio").unwrap();
+        let err = decode(&path).unwrap_err();
+        assert!(
+            matches!(err, AssetError::Probe(_) | AssetError::NoAudioTrack | AssetError::Decode(_)),
+            "应当是「认不出格式」类错误，实际 {err}"
+        );
+    }
+}

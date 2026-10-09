@@ -615,6 +615,7 @@ mod tests {
                 velocity: 100,
                 volume: 127,
             }],
+            audio: None,
         });
         p.tracks.push(track);
         ScheduledEvents::from_project(&p, 48_000.0)

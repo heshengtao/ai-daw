@@ -4,7 +4,7 @@ use daw_party_plugin_api::{MidiEvent, ParamId, Plugin, PluginKind, ProcessContex
 
 use crate::model::MixerChannel;
 use crate::registry::PluginRegistry;
-use crate::schedule::{ScheduledEvents, ScheduledMidi};
+use crate::schedule::{ScheduledAudioClip, ScheduledEvents, ScheduledMidi};
 use crate::transport::TransportCommand;
 
 /// dB → 线性增益。
@@ -61,13 +61,104 @@ fn fold_note_volume(events: &mut Vec<ScheduledMidi>) {
     *events = out;
 }
 
+/// 一条音频片段的运行期状态。
+struct AudioPlayback {
+    clip: ScheduledAudioClip,
+    /// 素材内的当前帧位置。用 `f64` 按比值累加，避免长片段上的整数漂移。
+    cursor: f64,
+}
+
+/// 片段在 `position` 帧时，素材内的播放位置（源帧）。
+///
+/// 语义：素材从 `offset_frames` 起**铺满**整段跨度，因此每过一个输出帧前进
+/// `source_window_frames / span_frames` 个源帧。缩放片段或改工程速度都会改变这个比值，
+/// 于是音频被按比例重采样（**会变调**——v1 不做保音高变速）。
+fn audio_cursor(clip: &ScheduledAudioClip, position: u64) -> f64 {
+    let offset = clip.offset_frames as f64;
+    let span = clip.end_frame.saturating_sub(clip.start_frame);
+    if span == 0 || position <= clip.start_frame {
+        return offset;
+    }
+    if position >= clip.end_frame {
+        return offset + clip.source_window_frames as f64;
+    }
+    let ratio = clip.source_window_frames as f64 / span as f64;
+    offset + (position - clip.start_frame) as f64 * ratio
+}
+
+/// 线性插值取一帧（交错 f32；`channels` 为 1 或 2）。
+///
+/// 实时安全：纯乘加，不分配。越界读按 0 处理——素材末尾自然衰减，而不是爆音。
+#[inline]
+fn lerp_frame(samples: &[f32], channels: usize, pos: f64) -> (f32, f32) {
+    let base = pos.floor();
+    let t = (pos - base) as f32;
+    let i0 = base as usize;
+    let read = |i: usize| -> (f32, f32) {
+        let at = i * channels;
+        if channels <= 1 {
+            let v = samples.get(at).copied().unwrap_or(0.0);
+            (v, v)
+        } else {
+            (
+                samples.get(at).copied().unwrap_or(0.0),
+                samples.get(at + 1).copied().unwrap_or(0.0),
+            )
+        }
+    };
+    let (l0, r0) = read(i0);
+    let (l1, r1) = read(i0 + 1);
+    (l0 + (l1 - l0) * t, r0 + (r1 - r0) * t)
+}
+
+/// 把一条音频片段按帧**相加**进 `left/right`。
+///
+/// 调用点在「乐器之后、效果链之前」：于是音频片段与 MIDI 一样经过轨道效果链、轨道
+/// 增益/声像与 master 增益。实时安全：只做乘加与游标推进，不分配。
+fn mix_audio_clip(
+    playback: &mut AudioPlayback,
+    block_start: u64,
+    frames: usize,
+    left: &mut [f32],
+    right: &mut [f32],
+) {
+    let start_frame = playback.clip.start_frame;
+    let end_frame = playback.clip.end_frame;
+    let span = end_frame.saturating_sub(start_frame);
+    if span == 0 {
+        return;
+    }
+    let ratio = playback.clip.source_window_frames as f64 / span as f64;
+    let source_frames = playback.clip.audio.frames() as f64;
+    let channels = playback.clip.audio.channels;
+    let samples: &[f32] = &playback.clip.audio.samples;
+    let mut cursor = playback.cursor;
+    for i in 0..frames {
+        let frame = block_start + i as u64;
+        if frame < start_frame {
+            continue;
+        }
+        if frame >= end_frame || cursor >= source_frames {
+            break; // 片段结束，或素材放完（v1 不循环）
+        }
+        let (l, r) = lerp_frame(samples, channels, cursor);
+        left[i] += l;
+        right[i] += r;
+        cursor += ratio;
+    }
+    playback.cursor = cursor;
+}
+
 struct TrackVoice {
     track_id: crate::model::TrackId,
-    plugin: Box<dyn Plugin>,
+    /// 乐器。轨道没挂乐器（或插件缺失）时为空——该轨只剩音频片段，仍然要出声。
+    plugin: Option<Box<dyn Plugin>>,
     /// 效果链（乐器输出 → effects[0] → …）。构造时定长，`process_block` 内不增删。
     effects: Vec<Box<dyn Plugin>>,
     events: Vec<ScheduledMidi>,
     cursor: usize,
+    /// 音频片段（构造时定长；播放时只推进游标）。
+    audio: Vec<AudioPlayback>,
     /// 混音参数（可实时更新，不必重建事件表）。
     gain_db: f32,
     pan: f32,
@@ -141,16 +232,20 @@ impl Player {
         let max_track_events = schedule.tracks.iter().map(|t| t.events.len()).max().unwrap_or(0);
         let mut tracks = Vec::with_capacity(schedule.tracks.len());
         for st in &schedule.tracks {
-            let Some(instance) = &st.instrument else { continue };
-            let Some(mut plugin) = registry.create(&instance.plugin_id, st.track_id) else { continue };
-            plugin.prepare(sample_rate, max_block);
-            for (id, value) in &instance.params {
-                plugin.set_param(&id.clone().into(), *value);
-            }
+            // 乐器是**可选**的：没挂乐器（或插件缺失）的轨道仍然存在，只为它的音频片段出声。
+            let instrument = st.instrument.as_ref();
+            let mut plugin: Option<Box<dyn Plugin>> =
+                instrument.and_then(|i| registry.create(&i.plugin_id, st.track_id));
             // 不支持 per-note 音量的插件：把音量折进力度，保住旧听感。
             let mut events = st.events.clone();
-            if !plugin.descriptor().capabilities.per_note_volume {
-                fold_note_volume(&mut events);
+            if let (Some(p), Some(instance)) = (plugin.as_mut(), instrument) {
+                p.prepare(sample_rate, max_block);
+                for (id, value) in &instance.params {
+                    p.set_param(&id.clone().into(), *value);
+                }
+                if !p.descriptor().capabilities.per_note_volume {
+                    fold_note_volume(&mut events);
+                }
             }
             // 效果链：只收「效果」类插件。缺失或类型不符的条目直接跳过——
             // 让整条链静音比「少一个效果」糟糕得多。
@@ -166,12 +261,19 @@ impl Player {
                 }
                 effects.push(fx_plugin);
             }
+            // 音频片段：素材已在调度前加载好，这里只克隆 `Arc` 并定出初始游标。
+            let audio: Vec<AudioPlayback> = st
+                .audio_clips
+                .iter()
+                .map(|clip| AudioPlayback { clip: clip.clone(), cursor: audio_cursor(clip, 0) })
+                .collect();
             tracks.push(TrackVoice {
                 track_id: st.track_id,
                 plugin,
                 effects,
                 events,
                 cursor: 0,
+                audio,
                 gain_db: st.mixer.gain_db,
                 pan: st.mixer.pan,
                 mute: st.mixer.mute,
@@ -238,7 +340,14 @@ impl Player {
             .saturating_sub(1);
         for track in self.tracks.iter_mut() {
             track.cursor = track.events.partition_point(|e| e.frame < frame);
-            track.plugin.reset();
+            if let Some(plugin) = track.plugin.as_mut() {
+                plugin.reset();
+            }
+            // 音频片段的游标同样要跟着播放头重算，否则定位后片段会错位。
+            for playback in track.audio.iter_mut() {
+                let cursor = audio_cursor(&playback.clip, frame);
+                playback.cursor = cursor;
+            }
         }
     }
 
@@ -253,7 +362,9 @@ impl Player {
         for track in self.tracks.iter_mut() {
             let want = !track.mute && (!any_solo || track.solo);
             if track.audible && !want {
-                track.plugin.reset();
+                if let Some(plugin) = track.plugin.as_mut() {
+                    plugin.reset();
+                }
             }
             track.audible = want;
             let gain = db_to_linear(track.gain_db);
@@ -316,7 +427,11 @@ impl Player {
                 let id = ParamId(param);
                 for voice in self.tracks.iter_mut().filter(|v| v.track_id == track) {
                     match effect {
-                        None => voice.plugin.set_param(&id, value),
+                        None => {
+                            if let Some(plugin) = voice.plugin.as_mut() {
+                                plugin.set_param(&id, value);
+                            }
+                        }
                         Some(index) => {
                             if let Some(fx) = voice.effects.get_mut(index) {
                                 fx.set_param(&id, value);
@@ -411,7 +526,18 @@ impl Player {
             left.fill(0.0);
             right.fill(0.0);
 
-            track.plugin.process(&ctx, &mut [&mut left[..], &mut right[..]], scratch_events);
+            // 乐器（可选）与音频片段**相加**（缓冲此前已清零），再一起过效果链：
+            // 于是音频片段与 MIDI 一样经过轨道效果、轨道增益/声像与 master 增益。
+            if let Some(plugin) = track.plugin.as_mut() {
+                plugin.process(&ctx, &mut [&mut left[..], &mut right[..]], scratch_events);
+            }
+            // 音频片段是**时间轴内容**：暂停时不出声（与「插件仍然跑、好让界面键盘与尾音能发声」
+            // 不同——音频片段没有这种需求）。
+            if playing {
+                for playback in track.audio.iter_mut() {
+                    mix_audio_clip(playback, block_start, frames, left, right);
+                }
+            }
             // 效果链：输入就是上一级的输出（就地处理）。效果器不收 MIDI 事件。
             for fx in track.effects.iter_mut() {
                 fx.process(&ctx, &mut [&mut left[..], &mut right[..]], &[]);
@@ -499,6 +625,7 @@ mod tests {
                 start: 0.0,
                 length: 1.0,
                 notes: vec![Note { pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
+                audio: None,
             }],
             mixer: Default::default(),
         });
@@ -854,6 +981,7 @@ mod tests {
                 start: 0.0,
                 length: 1.0,
                 notes: vec![Note { pitch: 40, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
+                audio: None,
             }],
             mixer: Default::default(),
         });

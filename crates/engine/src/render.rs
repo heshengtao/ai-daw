@@ -1,4 +1,4 @@
-use crate::audio::AudioBuffer;
+use crate::audio::{AudioBuffer, SampleProvider};
 use crate::model::Project;
 use crate::player::Player;
 use crate::registry::PluginRegistry;
@@ -22,12 +22,22 @@ pub struct RenderOptions {
 /// [`Player`] 逐块推进，输出因此与实时播放逐位一致（块大小无关）。输出长度 =
 /// （工程内容时长 + `tail_seconds`）× 采样率。相同工程与选项必然产出逐位相同的结果。
 pub fn render(project: &Project, registry: &PluginRegistry, options: &RenderOptions) -> AudioBuffer {
+    render_with_assets(project, registry, options, &crate::audio::no_assets())
+}
+
+/// 同 [`render`]，但把音频片段接到真实素材上（缺失素材的片段按静音处理）。
+pub fn render_with_assets(
+    project: &Project,
+    registry: &PluginRegistry,
+    options: &RenderOptions,
+    assets: &dyn SampleProvider,
+) -> AudioBuffer {
     let sr = options.sample_rate;
     let map = TempoMap::from_transport(&project.transport);
     let body_sec = map.beats_to_seconds(project.length_beats());
     let total_frames = ((body_sec + options.tail_seconds) * sr) as usize;
 
-    let schedule = ScheduledEvents::from_project(project, sr);
+    let schedule = ScheduledEvents::from_project_with_assets(project, sr, assets);
     let mut player = Player::new(schedule, registry, sr, BLOCK_SIZE);
     player.apply_command(TransportCommand::Play);
 
@@ -156,6 +166,7 @@ mod tests {
                 start: 0.0,
                 length: 0.05,
                 notes: vec![Note { pitch: 69, start: 0.0, duration: 0.05, velocity: 100, volume: 127 }],
+                audio: None,
             }],
             mixer: Default::default(),
         });
