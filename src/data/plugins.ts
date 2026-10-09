@@ -399,6 +399,15 @@ export const SYNTH_PARAMS: ParamSpec[] = [
   { id: "lfoDelay", name: "延迟", min: 0, max: 1, step: 0.01, default: 0, digits: 2 },
   { id: "lfoPitch", name: "音高", min: 0, max: 1, step: 0.01, default: 0, digits: 2 },
   { id: "lfoFilter", name: "滤波", min: 0, max: 1, step: 0.01, default: 0, digits: 2 },
+  // ---- 扩展音源能力（与 Rust 侧同顺序，见 `crates/synth` 的 PARAM_TABLE） ----
+  { id: "noise", name: "噪声", min: 0, max: 1, step: 0.01, default: 0, digits: 2 },
+  { id: "crush", name: "位深压碎", min: 0, max: 1, step: 0.01, default: 0, digits: 2 },
+  { id: "detune", name: "失谐", min: 0, max: 1, step: 0.01, default: 0, digits: 2 },
+  { id: "fm", name: "FM 深度", min: 0, max: 1, step: 0.01, default: 0, digits: 2 },
+  { id: "fmRatio", name: "FM 比值", min: 0.5, max: 8, step: 0.05, default: 2, digits: 2 },
+  { id: "pitchEnv", name: "音高包络", min: 0, max: 1, step: 0.01, default: 0, digits: 2 },
+  { id: "pitchDecay", name: "音高扫时长", min: 0, max: 1, step: 0.01, default: 0.1, digits: 2 },
+  { id: "filterType", name: "滤波类型", min: 0, max: 2, step: 1, default: 0, digits: 0 },
 ];
 
 /** 内置合成器的参数默认值（摊平预设补丁用）。 */

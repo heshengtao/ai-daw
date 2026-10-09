@@ -33,13 +33,29 @@ pub struct Params {
     pub lfo_pitch: f32,
     pub lfo_filter: f32,
     pub gain: f32,
+    /// 白噪声混合比（0 = 纯振荡器，1 = 纯噪声）。
+    pub noise: f32,
+    /// 位深 + 采样率压碎（8-bit / 音效）。
+    pub crush: f32,
+    /// 失谐伴振的量（弦乐 / 铺底 / 宽主音）。
+    pub detune: f32,
+    /// FM 相位调制深度。
+    pub fm: f32,
+    /// FM 调制器频率比。
+    pub fm_ratio: f32,
+    /// 起音音高扫的幅度（底鼓 / 音效 / 拨弦）。
+    pub pitch_env: f32,
+    /// 音高扫的时长（0..1 → 5 ms .. 2 s）。
+    pub pitch_decay: f32,
+    /// 滤波器输出类型（0 = 低通，1 = 带通，2 = 高通）。
+    pub filter_type: f32,
 }
 
 /// 参数表：id、显示名、范围、默认值。
 ///
-/// 顺序即 `save_state` 的字节顺序，**前三个永远是 gain / attack / release**——老工程存的
-/// 12 字节状态因此仍然读得懂（见 `load_state`）。
-const PARAM_TABLE: [(&str, &str, f32, f32, f32); 18] = [
+/// 顺序即 `save_state` 的字节顺序；新增参数一律**追加在末尾**，于是「状态比当前参数表短」时
+/// 缺的那几个保持默认（见 `load_state`）。
+const PARAM_TABLE: [(&str, &str, f32, f32, f32); 26] = [
     ("gain", "Level", 0.0, 1.0, 0.8),
     ("attack", "Attack", 0.0, 1.0, 0.01),
     ("release", "Release", 0.0, 4.0, 0.3),
@@ -58,6 +74,15 @@ const PARAM_TABLE: [(&str, &str, f32, f32, f32); 18] = [
     ("lfoDelay", "LFO Delay", 0.0, 1.0, 0.0),
     ("lfoPitch", "LFO Pitch", 0.0, 1.0, 0.0),
     ("lfoFilter", "LFO Filter", 0.0, 1.0, 0.0),
+    // ---- 扩展音源能力（追加：老状态短一截时这些保持默认） ----
+    ("noise", "Noise", 0.0, 1.0, 0.0),
+    ("crush", "Crush", 0.0, 1.0, 0.0),
+    ("detune", "Detune", 0.0, 1.0, 0.0),
+    ("fm", "FM", 0.0, 1.0, 0.0),
+    ("fmRatio", "FM Ratio", 0.5, 8.0, 2.0),
+    ("pitchEnv", "Pitch Env", 0.0, 1.0, 0.0),
+    ("pitchDecay", "Pitch Decay", 0.0, 1.0, 0.1),
+    ("filterType", "Filter Type", 0.0, 2.0, 0.0),
 ];
 
 /// LFO 速率映射：0..1 → 0.05..20 Hz（指数，慢速区好调）。
@@ -176,6 +201,14 @@ impl SynthPlugin {
             self.params.lfo_delay,
             self.params.lfo_pitch,
             self.params.lfo_filter,
+            self.params.noise,
+            self.params.crush,
+            self.params.detune,
+            self.params.fm,
+            self.params.fm_ratio,
+            self.params.pitch_env,
+            self.params.pitch_decay,
+            self.params.filter_type,
         ]
     }
 }
@@ -200,6 +233,14 @@ fn default_params() -> Params {
         lfo_pitch: 0.0,
         lfo_filter: 0.0,
         gain: 0.8,
+        noise: 0.0,
+        crush: 0.0,
+        detune: 0.0,
+        fm: 0.0,
+        fm_ratio: 2.0,
+        pitch_env: 0.0,
+        pitch_decay: 0.1,
+        filter_type: 0.0,
     }
 }
 
@@ -261,6 +302,14 @@ impl Plugin for SynthPlugin {
             15 => p.lfo_delay = value,
             16 => p.lfo_pitch = value,
             17 => p.lfo_filter = value,
+            18 => p.noise = value,
+            19 => p.crush = value,
+            20 => p.detune = value,
+            21 => p.fm = value,
+            22 => p.fm_ratio = value,
+            23 => p.pitch_env = value,
+            24 => p.pitch_decay = value,
+            25 => p.filter_type = value,
             _ => {}
         }
     }
@@ -279,6 +328,9 @@ impl Plugin for SynthPlugin {
         let frames = audio.first().map_or(0, |c| c.len());
         let sr = self.sample_rate;
         let params = self.params;
+        // 与采样无关的派生常量（滤波器阻尼、脉宽、FM/压碎/音高包络的系数）算一次就够：
+        // 扩展后每采样要跑两个振荡器 + 一个调制器，能提出循环的量都要提出来。
+        let block = voice::Block::new(&params, sr);
 
         for frame in 0..frames {
             for ev in events.iter().filter(|e| e.frame as usize == frame) {
@@ -299,7 +351,7 @@ impl Plugin for SynthPlugin {
 
             let mut mix = 0.0f32;
             for v in self.voices.iter_mut() {
-                mix += v.next_sample(sr, &params, lfo);
+                mix += v.next_sample(sr, &params, &block, lfo);
             }
             mix = (mix * params.gain).clamp(-1.0, 1.0);
             for ch in audio.iter_mut() {
@@ -570,5 +622,230 @@ mod tests {
             .find(|p| p.id == ParamId::from("wave"))
             .expect("参数表里应有 wave");
         assert_eq!(info.default, 2.0);
+    }
+
+    // ---- 扩展音源能力：逐参数量化断言 ----
+
+    /// 渲染成一整段单声道样本（频谱/过零率这类分析用）。
+    fn render(params: &[(&str, f32)], events: &[TimedMidiEvent], blocks: usize) -> Vec<f32> {
+        let mut s = SynthPlugin::new();
+        for (id, value) in params {
+            s.set_param(&ParamId::from(*id), *value);
+        }
+        s.prepare(48_000.0, 256);
+        let mut out = Vec::with_capacity(blocks * 256);
+        for block in 0..blocks {
+            let mut l = [0.0f32; 256];
+            let mut r = [0.0f32; 256];
+            let evs = if block == 0 { events } else { &[] };
+            s.process(&ctx(256), &mut [&mut l, &mut r], evs);
+            out.extend_from_slice(&l);
+        }
+        out
+    }
+
+    /// 上升过零次数：基频的粗略代理（纯净单音下 ≈ 基频 × 秒数）。
+    fn crossings(data: &[f32]) -> usize {
+        data.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count()
+    }
+
+    /// 排序去重后相邻电平的**最小正间隔**：量化步长的直接度量（越小 = 越连续）。
+    fn min_level_gap(data: &[f32]) -> f64 {
+        let mut v: Vec<f64> = data.iter().map(|x| *x as f64).collect();
+        v.sort_by(|a, b| a.partial_cmp(b).expect("样本必须有限"));
+        v.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        v.windows(2).map(|w| w[1] - w[0]).fold(f64::MAX, f64::min)
+    }
+
+    /// 稳定平顶的渲染配方：起音 0、延音 1、衰减拉长 → 包络恒为 1，VCA 只是个常数。
+    fn flat() -> Vec<(&'static str, f32)> {
+        vec![
+            ("gain", 1.0),
+            ("attack", 0.0),
+            ("decay", 2.0),
+            ("sustain", 1.0),
+            ("cutoff", 1.0),
+            ("filterEnv", 0.0),
+            ("keyFollow", 0.0),
+            ("wave", 2.0),
+        ]
+    }
+
+    fn with(base: &[(&'static str, f32)], extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
+        let mut out = base.to_vec();
+        out.extend_from_slice(extra);
+        out
+    }
+
+    /// 噪声是**混合**：`noise = 1` 得到纯噪声（宽带），`noise = 0` 是干净的正弦。
+    #[test]
+    fn noise_replaces_the_oscillator_with_broadband() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let clean = render(&with(&flat(), &[("noise", 0.0)]), &note, 20);
+        let noisy = render(&with(&flat(), &[("noise", 1.0)]), &note, 20);
+        let (c, n) = (crossings(&clean), crossings(&noisy));
+        // 440 Hz、20 块 ≈ 0.107 s → 干净正弦约 47 次过零。
+        assert!(c < 60, "干净正弦不该有过多次过零：{c}");
+        assert!(n > c * 8, "纯噪声应当异常频繁地过零：{c} -> {n}");
+        // 带宽上去之后，能量不该同时崩掉。
+        let rms = |d: &[f32]| (d.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / d.len() as f64).sqrt();
+        assert!(rms(&noisy) > rms(&clean) * 0.5, "噪声不该比正弦轻太多");
+    }
+
+    /// 位深压碎真的在量化：电平的最小间隔变成 1/8（3 bit），而不是连续值。
+    #[test]
+    fn crush_quantizes_the_output() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let clean = render(&with(&flat(), &[("crush", 0.0)]), &note, 8);
+        let crushed = render(&with(&flat(), &[("crush", 1.0)]), &note, 8);
+        let (c, k) = (min_level_gap(&clean), min_level_gap(&crushed));
+        assert!(c < 0.01, "未压碎的正弦电平应当基本连续：最小间隔 {c}");
+        assert!(
+            (k - 0.125).abs() < 1e-4,
+            "拉满压碎后电平步长应当是 1/8（3 bit）：{k}"
+        );
+    }
+
+    /// 压碎 = 0 时逐样本等于改版前的输出（新算子不许悄悄改变默认音色）。
+    #[test]
+    fn defaults_are_byte_for_byte_unchanged() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } }];
+        // 只用改版前就存在的参数。
+        let old = render(&[("gain", 0.8), ("wave", 2.0), ("cutoff", 0.7), ("lfoPitch", 0.3)], &note, 6);
+        // 显式把新参数钉在默认值上，结果必须一致。
+        let pinned = render(
+            &[
+                ("gain", 0.8),
+                ("wave", 2.0),
+                ("cutoff", 0.7),
+                ("lfoPitch", 0.3),
+                ("noise", 0.0),
+                ("crush", 0.0),
+                ("detune", 0.0),
+                ("fm", 0.0),
+                ("pitchEnv", 0.0),
+            ],
+            &note,
+            6,
+        );
+        assert_eq!(old, pinned, "新参数在默认值下不得改变输出");
+    }
+
+    /// 失谐靠**拍频**验证：两个失谐的振荡器会此消彼长，窗口峰值随之起伏。
+    #[test]
+    fn detune_beats_against_the_main_oscillator() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        // 拉满失谐 = +2% ≈ 34 音分 → 440 Hz 上约 8.8 Hz 拍频（周期 114 ms）。
+        // 窗口必须**明显短于一个拍周期**，否则每个窗口的峰值都能赶上一次相长干涉，测不出起伏。
+        let spread = |detune: f32| -> f32 {
+            let data = render(&with(&flat(), &[("detune", detune)]), &note, 40);
+            let windows = 16;
+            let win = data.len() / windows;
+            let peaks: Vec<f32> = (0..windows)
+                .map(|i| data[i * win..(i + 1) * win].iter().fold(0.0f32, |a, b| a.max(b.abs())))
+                .collect();
+            let (lo, hi) = (
+                peaks.iter().cloned().fold(f32::MAX, f32::min),
+                peaks.iter().cloned().fold(0.0f32, f32::max),
+            );
+            if hi <= 0.0 { 0.0 } else { lo / hi }
+        };
+        let dry = spread(0.0);
+        let wet = spread(1.0);
+        assert!(dry > 0.9, "不失谐时各窗口峰值应当基本一致：{dry}");
+        assert!(wet < 0.5, "失谐应当产生明显的拍频起伏：{wet}");
+    }
+
+    /// FM 产生边带：同样的音高下，过零次数显著增多。
+    #[test]
+    fn fm_adds_sidebands() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let clean = render(&with(&flat(), &[("fm", 0.0)]), &note, 20);
+        let fm = render(&with(&flat(), &[("fm", 0.9), ("fmRatio", 3.0)]), &note, 20);
+        let (c, m) = (crossings(&clean), crossings(&fm));
+        assert!(m > c * 2, "FM 边带应当明显增加过零：{c} -> {m}");
+    }
+
+    /// FM 深度拉满也不许削波爆掉。
+    #[test]
+    fn extreme_fm_stays_bounded() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 45, velocity: 127 } }];
+        let data = render(
+            &with(&flat(), &[("fm", 1.0), ("fmRatio", 8.0), ("resonance", 1.0), ("noise", 0.3)]),
+            &note,
+            10,
+        );
+        assert!(data.iter().all(|x| x.is_finite()), "不得出现 NaN / Inf");
+        let peak = data.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(peak <= 1.0, "输出必须被限幅：{peak}");
+    }
+
+    /// 音高包络是**下扫**：前段过零率明显高于后段。
+    #[test]
+    fn pitch_envelope_sweeps_down() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 57, velocity: 127 } }];
+        // pitchDecay = 0.5 → 0.005 × 400^0.5 = 0.1 s 扫完（+2 八度 → 0）。
+        let data = render(&with(&flat(), &[("pitchEnv", 1.0), ("pitchDecay", 0.5)]), &note, 40);
+        let head = crossings(&data[0..4800]);
+        let tail = crossings(&data[5400..10200]);
+        assert!(head > tail * 2, "起音应当是下扫：前段 {head} vs 后段 {tail}");
+
+        // 关掉音高包络则前后一致。
+        let flat_data = render(&with(&flat(), &[("pitchEnv", 0.0)]), &note, 40);
+        let (h2, t2) = (crossings(&flat_data[0..4800]), crossings(&flat_data[5400..10200]));
+        assert!((h2 as i64 - t2 as i64).abs() <= 4, "关掉后前后应当一致：{h2} / {t2}");
+    }
+
+    /// 高通真的把低频削掉：同一颗低音用高通播会明显更轻。
+    #[test]
+    fn filter_type_high_pass_removes_the_low_end() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 40, velocity: 127 } }];
+        let rms = |data: &[f32]| {
+            (data.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / data.len() as f64).sqrt()
+        };
+        let base = with(&flat(), &[("cutoff", 0.5), ("wave", 0.0)]);
+        let lp = rms(&render(&with(&base, &[("filterType", 0.0)]), &note, 20));
+        let hp = rms(&render(&with(&base, &[("filterType", 2.0)]), &note, 20));
+        assert!(lp > 0.05, "低通下低音应当有能量：{lp}");
+        assert!(hp < lp * 0.5, "高通应当把低音压下去：{lp} -> {hp}");
+    }
+
+    /// 新增参数也要能往返。
+    #[test]
+    fn state_roundtrips_the_extended_params() {
+        let mut s = SynthPlugin::new();
+        for (id, value) in [
+            ("noise", 0.42),
+            ("crush", 0.13),
+            ("detune", 0.77),
+            ("fm", 0.31),
+            ("fmRatio", 5.5),
+            ("pitchEnv", 0.61),
+            ("pitchDecay", 0.23),
+            ("filterType", 2.0),
+        ] {
+            s.set_param(&ParamId::from(id), value);
+        }
+        let state = s.save_state();
+        let mut t = SynthPlugin::new();
+        t.load_state(&state).unwrap();
+        for (id, ..) in PARAM_TABLE.iter() {
+            assert_eq!(t.get_param(&ParamId::from(*id)), s.get_param(&ParamId::from(*id)), "{id}");
+        }
+    }
+
+    /// 状态比当前参数表短：多出来的（新增）参数保持默认，而不是报错或读到垃圾。
+    #[test]
+    fn shorter_state_keeps_new_params_at_defaults() {
+        let mut s = SynthPlugin::new();
+        s.set_param(&ParamId::from("noise"), 0.9);
+        let state = s.save_state();
+        let short = &state[..state.len() - 8]; // 砍掉最后两个（pitchDecay / filterType）
+
+        let mut t = SynthPlugin::new();
+        t.load_state(short).unwrap();
+        assert_eq!(t.get_param(&ParamId::from("pitchDecay")), Some(0.1), "缺失的参数保持默认");
+        assert_eq!(t.get_param(&ParamId::from("filterType")), Some(0.0));
+        assert_eq!(t.get_param(&ParamId::from("noise")), Some(0.9), "短的也照读");
     }
 }
