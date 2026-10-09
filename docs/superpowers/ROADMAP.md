@@ -174,6 +174,7 @@
 
 - **D1 · `crates/analysis`**：✅ 完成。渲染 → 响度（EBU R128：LUFS / LRA / 采样峰值 / 真峰值）+ RMS + 平均幅度谱（Hann 窗 + 50% 交叠 FFT）。对上层是 `analyze_project` IPC 命令；这是 AI 的「听感」闭环。
 - **D2 · `src-tauri` 内嵌 MCP 服务器**：✅ 完成。`src-tauri/src/mcp.rs`（`rmcp` 3，Streamable HTTP，绑 `127.0.0.1` 临时端口，启动时把 `http://127.0.0.1:<port>/mcp` 打到 stderr）。27 个工具：`get_project` / `get_transport` / `list_plugins` / `transport_*` / `set_tempo` / `set_time_signature` / `add_track` / `remove_track` / `rename_track` / `set_track_instrument` / `set_param` / `add_clip` / `remove_clip` / `add_note` / `set_gain` / `set_pan` / `set_mute` / `set_solo` / `set_master_gain` / `undo` / `redo` / `analyze_project` / `export_wav`。写操作全部走 `commands::run_agent`（`actor = Agent("mcp")`），与界面**同一条**管线：撤销历史、`engine://event` 事件流、音频同步、结构变更关插件窗口。
+  - **配置**：设置页「AI / MCP」一节可开关、改端口（0 = 临时端口），即时启停；配置落在应用配置目录的 `mcp.json`。
   - 安全：只绑回环；rmcp 默认只放行回环 `Host`（防 DNS rebinding）。**当前不鉴权**——同机任意进程都能连，后续可加 token。
 - **D3 · skills 文档包 + 本地 HTTP/WS**（设计文档 §9）：⬜ 未开始。
 - **D4 · 前端 AI 可视化**：⬜ 未开始。事件流已带 `actor`（代理走 `Actor::Agent("mcp")`），UI 高亮被改动的轨道 / 音符 / 旋钮。
