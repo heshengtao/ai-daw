@@ -241,6 +241,7 @@ pub fn run() {
             commands::set_track_instrument,
             commands::set_param,
             commands::set_params,
+            commands::apply_preset,
             commands::set_tempo,
             commands::set_time_signature,
             commands::set_keyframe,

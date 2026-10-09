@@ -48,9 +48,9 @@ pub struct StarterTrack {
 /// （见 `Command::NewProject::track_names`），落进工程后就不再随语言变化。
 pub const STARTER_TRACKS: [StarterTrack; 5] = [
     StarterTrack { name: "主旋律", plugin_id: "builtin.synth.lead" },
-    StarterTrack { name: "和弦", plugin_id: "builtin.synth.pad" },
+    StarterTrack { name: "和弦", plugin_id: "builtin.synth.strings" },
     StarterTrack { name: "低音", plugin_id: "builtin.synth.bass" },
-    StarterTrack { name: "鼓组", plugin_id: "builtin.synth.pluck" },
+    StarterTrack { name: "鼓组", plugin_id: "builtin.synth.drums" },
     StarterTrack { name: "铺底", plugin_id: "builtin.synth.pad" },
 ];
 

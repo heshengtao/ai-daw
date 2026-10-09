@@ -13,6 +13,7 @@ import type {
   CatalogPlugin,
   ClipPlacement,
   ClipRef,
+  EffectSpec,
   HistoryDepths,
   HistoryState,
   McpStatus,
@@ -540,4 +541,18 @@ export function deletePreset(id: string): Promise<void> {
 export function setParams(track: number, params: Record<string, number>): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.setParams(track, params));
   return invoke<Project>("set_params", { track, params });
+}
+
+/**
+ * 应用一条预设：**一次事务**写回整组乐器参数 + 整条效果链（只占一个撤销步骤）。
+ *
+ * 效果链是**替换**而不是叠加：预设 = 整套音色，切预设本来就会丢掉旋钮微调。
+ */
+export function applyPreset(
+  track: number,
+  params: Record<string, number>,
+  effects: EffectSpec[],
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.applyPreset(track, params, effects));
+  return invoke<Project>("apply_preset", { track, params, effects });
 }

@@ -24,6 +24,7 @@ import PresetBar from "@/components/common/PresetBar.vue";
 import { SYNTH_ID, SYNTH_PARAMS, type ParamSpec } from "@/data/plugins";
 import { useI18n } from "@/i18n";
 import { usePresetsStore, type PresetOption } from "@/stores/presets";
+import type { EffectSpec } from "@/api/types";
 import type { WaveParams } from "@/utils/waveform";
 
 /** 设计尺寸（px）：固定不变，Task 9 的等比缩放按这两个常量算。 */
@@ -34,6 +35,8 @@ const props = defineProps<{
   params: Record<string, number>;
   /** 试听键盘要发给哪条轨道；不给就不显示键盘（比如侧边栏里没选中轨道时）。 */
   track?: number;
+  /** 当前轨道的效果链：用来判断命中哪条预设（预设可以自带效果链）。 */
+  effects?: EffectSpec[];
 }>();
 
 const emit = defineEmits<{
@@ -43,8 +46,8 @@ const emit = defineEmits<{
    * 分两次提交会变成**两个撤销步骤**——拖一下要按两次 Cmd+Z 才回得去，所以必须合成一次。
    */
   (e: "commitMany", params: Record<string, number>): void;
-  /** 点预设垫子 / 预设条：整组参数一次写回（只占一个撤销步骤）。 */
-  (e: "applyPreset", params: Record<string, number>): void;
+  /** 点预设垫子 / 预设条：整组参数 + 自带的效果链一次写回（只占一个撤销步骤）。 */
+  (e: "applyPreset", params: Record<string, number>, effects: EffectSpec[]): void;
 }>();
 
 const { t } = useI18n();
@@ -137,6 +140,15 @@ const LABELS: Record<string, string> = {
   lfoPitch: "synth.lfoPitch",
   lfoFilter: "synth.lfoFilter",
   gain: "synth.gain",
+  // 扩展音源能力
+  noise: "synth.noise",
+  crush: "synth.crush",
+  detune: "synth.detune",
+  fm: "synth.fm",
+  fmRatio: "synth.fmRatio",
+  pitchEnv: "synth.pitchEnv",
+  pitchDecay: "synth.pitchDecay",
+  filterType: "synth.filterType",
 };
 
 /** 一个旋钮需要的全部信息（模板只遍历这份数据，不手写 18 份旋钮）。 */
@@ -164,12 +176,25 @@ function knob(id: string, size?: number): KnobDef {
 /** 基础面板：只有这 8 个参数常驻（波形单独用分段按钮渲染）。 */
 const BASIC_IDS = ["wave", "cutoff", "resonance", "attack", "decay", "sustain", "release", "gain"];
 
-/** 高级区：按老式减法合成器的分区组织（DCO / HPF / VCF / LFO）。 */
+/** 高级区：按合成器信号链的顺序分区（振荡器 → FM → 噪声/位深 → 音高包络 → 滤波 → LFO）。 */
 const ADVANCED_GROUPS: { title: string; ids: string[] }[] = [
-  { title: "synth.osc", ids: ["sub", "pwm", "glide"] },
+  { title: "synth.osc", ids: ["sub", "pwm", "glide", "detune"] },
+  { title: "synth.fm", ids: ["fm", "fmRatio"] },
+  { title: "synth.noise", ids: ["noise", "crush"] },
+  { title: "synth.pitchEnv", ids: ["pitchEnv", "pitchDecay"] },
   { title: "synth.hpf", ids: ["hpf"] },
   { title: "synth.filter", ids: ["filterEnv", "keyFollow"] },
   { title: "synth.lfo", ids: ["lfoRate", "lfoDelay", "lfoPitch", "lfoFilter"] },
+];
+
+/**
+ * 滤波类型：三选一的枚举，用旋钮很难选，所以做成分段按钮（与波形同一套样式）。
+ * 值必须与 Rust 侧 `FilterType::from_param` 一致：0/1/2 = 低通/带通/高通。
+ */
+const FILTER_TYPES = [
+  { value: 0, key: "synth.filterType.lp" },
+  { value: 1, key: "synth.filterType.bp" },
+  { value: 2, key: "synth.filterType.hp" },
 ];
 
 /** 高级区是否展开（只存组件内，不持久化）。 */
@@ -229,6 +254,13 @@ function setWave(value: number): void {
   onCommit("wave", value);
 }
 
+const filterType = computed(() => Math.round(shown("filterType")));
+
+function setFilterType(value: number): void {
+  onLive("filterType", value);
+  onCommit("filterType", value);
+}
+
 /** 屏幕上的波形由这几个参数决定（与真实 DSP 的形状对应）。 */
 const scopeParams = computed<WaveParams>(() => ({
   wave: shown("wave"),
@@ -236,6 +268,8 @@ const scopeParams = computed<WaveParams>(() => ({
   pwm: shown("pwm"),
   cutoff: shown("cutoff"),
   resonance: shown("resonance"),
+  noise: shown("noise"),
+  crush: shown("crush"),
 }));
 
 /**
@@ -343,33 +377,35 @@ function envTitle(id: "attack" | "decay" | "release"): string {
 
 // ---- 预设垫子 ----
 const presets = usePresetsStore();
-/** 当前翻看的类别（出厂预设的 slug）。自存预设没有类别，归到「主音」那一档里。 */
-const coarse = ref("lead");
+/** 当前翻看的类别（出厂预设的 slug）。自存预设没有类别，归到第一类「8-bit 键盘」里。 */
+const coarse = ref("8bit");
 const options = computed(() => presets.forPlugin(SYNTH_ID));
 
 /** 有哪几个类别（按出厂预设的顺序去重）。 */
 const coarseOptions = computed(() => {
   const out: string[] = [];
   for (const option of options.value) {
-    const slug = option.category ?? "lead";
+    const slug = option.category ?? "8bit";
     if (!out.includes(slug)) out.push(slug);
   }
   return out;
 });
 
 /** 当前类别下的垫子。 */
-const pads = computed(() => options.value.filter((o) => (o.category ?? "lead") === coarse.value));
+const pads = computed(() => options.value.filter((o) => (o.category ?? "8bit") === coarse.value));
 
-/** 当前参数命中的那条预设（用来高亮垫子）。 */
-const activePresetId = computed(() => presets.match(SYNTH_ID, props.params)?.id ?? "");
+/** 当前参数与效果链命中的那条预设（用来高亮垫子）。 */
+const activePresetId = computed(
+  () => presets.match(SYNTH_ID, props.params, props.effects ?? [])?.id ?? "",
+);
 
-/** 切预设：把整组参数交给父组件写回当前轨道（只有它知道是哪条轨道）。 */
-function applyPreset(values: Record<string, number>): void {
-  emit("applyPreset", values);
+/** 切预设：把整组参数 + 自带效果链交给父组件写回当前轨道（只有它知道是哪条轨道）。 */
+function applyPreset(values: Record<string, number>, effects: EffectSpec[]): void {
+  emit("applyPreset", values, effects);
 }
 
 function pickPad(option: PresetOption): void {
-  applyPreset(option.params);
+  applyPreset(option.params, option.effects);
 }
 </script>
 
@@ -407,7 +443,12 @@ function pickPad(option: PresetOption): void {
             </button>
           </div>
           <div class="bar">
-            <PresetBar :plugin-id="SYNTH_ID" :params="props.params" @apply="applyPreset" />
+            <PresetBar
+              :plugin-id="SYNTH_ID"
+              :params="props.params"
+              :effects="props.effects"
+              @apply="applyPreset"
+            />
           </div>
         </div>
       </section>
@@ -484,6 +525,20 @@ function pickPad(option: PresetOption): void {
             <!-- 高级区：默认收起，点「高级」才出现（弹簧动画展开） -->
             <transition name="adv">
               <div v-if="advanced" class="advanced">
+                <!-- 滤波类型：三选一的枚举，横跨整行（旋钮选不出来的东西） -->
+                <div class="waves filter-type" role="group" :aria-label="t('synth.filterType')">
+                  <button
+                    v-for="f in FILTER_TYPES"
+                    :key="f.value"
+                    class="seg"
+                    :class="{ on: filterType === f.value }"
+                    :aria-pressed="filterType === f.value"
+                    @click="setFilterType(f.value)"
+                  >
+                    <span class="seg-text">{{ t(f.key) }}</span>
+                  </button>
+                </div>
+
                 <section v-for="group in advancedGroups" :key="group.title" class="group">
                   <div class="group-title">{{ group.title }}</div>
                   <div class="knobs">
@@ -818,6 +873,11 @@ function pickPad(option: PresetOption): void {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 10px;
+}
+/* 滤波类型横跨整行（枚举做成分段按钮，不跟旋钮挤在两列里） */
+.filter-type {
+  grid-column: 1 / -1;
+  height: 30px;
 }
 /* 展开/收起：MD3 弹簧（设计稿 §4.2 的「弹簧动画」），从上方略缩略降地弹入 */
 .adv-enter-active,

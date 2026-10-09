@@ -24,71 +24,108 @@ pub const BUILTIN_REVERB: &str = daw_party_effects::REVERB_ID;
 /// - 预设立即用（挂上就有合适的声音），无需再写一遍参数；
 /// - 用户改过的参数照常保存在 `PluginInstance::params` 里，覆盖预设默认值。
 ///
-/// 前端的「出厂预设」列表（`data/plugins.ts`）必须与这里的数值保持一致。
+/// **这里只放「默认分轨模板」需要的那 5 条**（见 [`crate::STARTER_TRACKS`]），每类音色的第 1 条。
+/// 其余音色只是界面层的参数补丁（`data/plugins.ts`），不占注册表——它们挂在同一条内置合成器上，
+/// 轨道只在 `params` 里记差异。
+///
+/// 这 5 条**故意都是干声**：注册表补丁只能带参数、带不了效果链，而前端的同名条目必须与它一致
+/// （否则「默认模板的听感」和「点一下那个垫子的听感」会对不上）。带混响/延迟的湿版本是各类的第 2..4 条。
+///
+/// 前端的「出厂预设」列表（`data/plugins.ts`）里这 5 条的 id 与数值必须与这里完全一致。
 pub const BUILTIN_PRESETS: &[Preset] = &[
     Preset { id: "builtin.synth", name: "内置合成器", patch: &[] },
     Preset {
         id: "builtin.synth.lead",
-        name: "主音 Lead",
+        name: "8-bit 主音",
         patch: &[
-            ("gain", 0.75),
-            ("wave", 0.0),
-            ("attack", 0.005),
-            ("release", 0.25),
-            ("cutoff", 0.80),
-            ("resonance", 0.22),
-            ("filterEnv", 0.45),
-            ("decay", 0.35),
-            ("sustain", 0.70),
-            ("lfoRate", 0.80),
-            ("lfoDelay", 0.35),
-            ("lfoPitch", 0.10),
-        ],
-    },
-    Preset {
-        id: "builtin.synth.pluck",
-        name: "拨弦 Pluck",
-        patch: &[
-            ("gain", 0.80),
+            ("gain", 0.7),
             ("wave", 1.0),
-            ("attack", 0.001),
-            ("release", 0.08),
-            ("cutoff", 0.55),
-            ("filterEnv", 0.70),
-            ("decay", 0.12),
-            ("sustain", 0.0),
+            ("pwm", 0.25),
+            ("attack", 0.002),
+            ("decay", 0.2),
+            ("sustain", 0.7),
+            ("release", 0.06),
+            ("cutoff", 0.95),
+            ("resonance", 0.05),
+            ("filterEnv", 0.1),
+            ("keyFollow", 0.0),
+            ("crush", 0.35),
+            ("hpf", 0.15),
         ],
     },
     Preset {
         id: "builtin.synth.bass",
         name: "低音 Bass",
         patch: &[
-            ("gain", 0.85),
+            ("gain", 0.8),
             ("wave", 0.0),
-            ("attack", 0.002),
-            ("release", 0.12),
-            ("sub", 0.60),
+            ("sub", 0.5),
+            ("attack", 0.004),
+            ("decay", 0.3),
+            ("sustain", 0.5),
+            ("release", 0.1),
+            ("cutoff", 0.32),
+            ("resonance", 0.2),
+            ("filterEnv", 0.5),
+            ("keyFollow", 0.3),
+        ],
+    },
+    Preset {
+        id: "builtin.synth.drums",
+        name: "底鼓 Kick",
+        patch: &[
+            ("gain", 0.95),
+            ("wave", 2.0),
+            ("attack", 0.0),
+            ("decay", 0.18),
+            ("sustain", 0.0),
+            ("release", 0.05),
             ("cutoff", 0.35),
-            ("resonance", 0.25),
-            ("filterEnv", 0.50),
-            ("decay", 0.25),
-            ("sustain", 0.50),
+            ("resonance", 0.05),
+            ("filterEnv", 0.2),
+            ("keyFollow", 0.0),
+            ("pitchEnv", 0.55),
+            ("pitchDecay", 0.35),
+        ],
+    },
+    Preset {
+        id: "builtin.synth.strings",
+        name: "弦乐 Strings",
+        patch: &[
+            ("gain", 0.55),
+            ("wave", 0.0),
+            ("attack", 0.3),
+            ("decay", 0.8),
+            ("sustain", 0.85),
+            ("release", 0.9),
+            ("cutoff", 0.55),
+            ("resonance", 0.1),
+            ("filterEnv", 0.2),
+            ("keyFollow", 0.4),
+            ("detune", 0.6),
+            ("lfoRate", 0.5),
+            ("lfoDelay", 0.4),
+            ("lfoPitch", 0.06),
         ],
     },
     Preset {
         id: "builtin.synth.pad",
         name: "铺底 Pad",
         patch: &[
-            ("gain", 0.55),
+            ("gain", 0.5),
             ("wave", 0.0),
-            ("attack", 0.35),
-            ("release", 1.20),
-            ("cutoff", 0.50),
-            ("filterEnv", 0.30),
-            ("decay", 1.0),
-            ("sustain", 0.80),
-            ("lfoRate", 0.60),
-            ("lfoFilter", 0.15),
+            ("attack", 0.6),
+            ("decay", 1.2),
+            ("sustain", 0.9),
+            ("release", 1.6),
+            ("cutoff", 0.45),
+            ("resonance", 0.12),
+            ("filterEnv", 0.25),
+            ("keyFollow", 0.3),
+            ("detune", 0.75),
+            ("lfoRate", 0.35),
+            ("lfoDelay", 0.5),
+            ("lfoFilter", 0.25),
         ],
     },
 ];
@@ -251,10 +288,10 @@ mod tests {
         let r = PluginRegistry::with_builtins();
         let p = r.create("builtin.synth.pad", TrackId(1)).expect("pad preset exists");
         assert_eq!(p.descriptor().id, "builtin.synth.pad");
-        assert_eq!(p.get_param(&"attack".into()), Some(0.35));
+        assert_eq!(p.get_param(&"attack".into()), Some(0.6));
     }
 
-    /// 默认改成正弦后，老预设必须仍保持原来的波形，否则听感会变。
+    /// 默认波形是正弦后，注册表里的预设必须**显式钉住自己的波形**，否则听感会跟着默认值漂移。
     #[test]
     fn factory_presets_pin_their_waveform() {
         let reg = PluginRegistry::with_builtins();
@@ -263,10 +300,26 @@ mod tests {
             p.get_param(&ParamId::from("wave"))
         };
         assert_eq!(wave_of("builtin.synth"), Some(2.0), "默认音色 = 正弦");
-        assert_eq!(wave_of("builtin.synth.lead"), Some(0.0));
+        assert_eq!(wave_of("builtin.synth.lead"), Some(1.0), "8-bit 主音 = 方波");
         assert_eq!(wave_of("builtin.synth.bass"), Some(0.0));
         assert_eq!(wave_of("builtin.synth.pad"), Some(0.0));
-        assert_eq!(wave_of("builtin.synth.pluck"), Some(1.0));
+        assert_eq!(wave_of("builtin.synth.strings"), Some(0.0));
+        assert_eq!(wave_of("builtin.synth.drums"), Some(2.0), "底鼓 = 正弦");
+    }
+
+    /// 默认模板挂的每个 id 都必须真的注册过，否则那几条轨道会变成「缺失插件」占位。
+    #[test]
+    fn starter_tracks_point_at_registered_presets() {
+        let r = PluginRegistry::with_builtins();
+        let ids = r.ids();
+        for track in crate::STARTER_TRACKS {
+            assert!(
+                ids.contains(&track.plugin_id.to_string()),
+                "默认轨道 {} 挂了未注册的 {}",
+                track.name,
+                track.plugin_id
+            );
+        }
     }
 
     #[test]

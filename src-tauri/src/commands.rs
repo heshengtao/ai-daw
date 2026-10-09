@@ -251,6 +251,101 @@ pub fn set_params(
     project
 }
 
+/// 预设自带的一条效果器声明（前端 `FactoryPreset.effects` 的形状）。
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct EffectSpec {
+    pub plugin_id: String,
+    /// 参数名 → 值；缺省表示全用插件自己的默认值。
+    #[serde(default)]
+    pub params: HashMap<String, f32>,
+}
+
+/// 应用一条预设的**内核**：一次事务写回整组乐器参数 + 整条效果链。
+///
+/// 抽出来是因为 Tauri 命令与 MCP 工具走的是同一件事，只有「谁来广播、谁来同步音频线程」不同。
+pub(crate) fn apply_preset_inner(
+    state: &AppState,
+    track: TrackId,
+    params: &HashMap<String, f32>,
+    effects: &[EffectSpec],
+    actor: Actor,
+) -> (Project, Vec<Event>) {
+    let mut engine = state.engine.lock().unwrap();
+    let existing = engine
+        .project()
+        .tracks
+        .iter()
+        .find(|t| t.id == track)
+        .map_or(0, |t| t.effects.len());
+
+    let mut commands: Vec<Command> = Vec::new();
+    // 参数与效果器一起排序：`HashMap` 的遍历顺序随机，固定顺序才能让事件流与撤销历史可复现。
+    let mut pairs: Vec<(&String, &f32)> = params.iter().collect();
+    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    for (param, value) in pairs {
+        commands.push(Command::SetParam { track, param: param.clone(), value: *value });
+    }
+    // 先清空效果链（每一步都删第 0 个，链自己前移），再按顺序重建。
+    for _ in 0..existing {
+        commands.push(Command::RemoveEffect { track, index: 0 });
+    }
+    for (index, spec) in effects.iter().enumerate() {
+        commands.push(Command::AddEffect { track, plugin_id: spec.plugin_id.clone() });
+        let mut fx_pairs: Vec<(&String, &f32)> = spec.params.iter().collect();
+        fx_pairs.sort_by(|a, b| a.0.cmp(b.0));
+        for (param, value) in fx_pairs {
+            commands.push(Command::SetEffectParam {
+                track,
+                index,
+                param: param.clone(),
+                value: *value,
+            });
+        }
+    }
+    let events = engine.execute_all(commands, actor);
+    (engine.project().clone(), events)
+}
+
+/// 应用一条预设（MCP 入口）：取状态 → 执行 → 广播 → 同步音频线程。
+pub(crate) fn apply_preset_agent(
+    app: &tauri::AppHandle,
+    track: TrackId,
+    params: &HashMap<String, f32>,
+    effects: &[EffectSpec],
+) -> (Project, Vec<Event>) {
+    let state = app.state::<AppState>();
+    let (project, events) = apply_preset_inner(&state, track, params, effects, Actor::Agent("mcp".into()));
+    for event in &events {
+        let _ = app.emit(EVENT_ENGINE, event);
+    }
+    state.audio.sync_events(&project, &events);
+    (project, events)
+}
+
+/// 应用一条预设：**一次事务**写回整组乐器参数 + 整条效果链。
+///
+/// 走 `execute_all`：一次应用、一次广播、**一个撤销步骤**。分两次调用（先 `set_params`
+/// 再改效果链）会变成两个撤销步骤——按一下预设要按两次 Cmd+Z 才回得去。
+///
+/// 效果链是**替换**而不是叠加：预设 = 整套音色，切预设本来就会丢掉所有旋钮微调，
+/// 丢掉效果微调是同一个契约。
+#[tauri::command]
+pub fn apply_preset(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    params: HashMap<String, f32>,
+    effects: Vec<EffectSpec>,
+) -> Project {
+    let (project, events) =
+        apply_preset_inner(&state, TrackId(track), &params, &effects, Actor::Human);
+    for event in &events {
+        let _ = app.emit(EVENT_ENGINE, event);
+    }
+    state.audio.sync_events(&project, &events);
+    project
+}
+
 /// 设置拍号；越界值由引擎归一化（分子 1..=32，分母吸附到 2 的幂）。
 #[tauri::command]
 pub fn set_time_signature(

@@ -8,7 +8,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import * as api from "@/api/tauri";
 import { useI18n } from "@/i18n";
-import type { ClipPlacement, ClipRef, HistoryState, Keyframe, MixerState, Note, NoteEdit, Project } from "@/api/types";
+import type { ClipPlacement, ClipRef, EffectSpec, HistoryState, Keyframe, MixerState, Note, NoteEdit, Project } from "@/api/types";
 import { meterAt, meterBeatAt, tempoAt } from "@/utils/tempo";
 
 /**
@@ -112,6 +112,22 @@ export const useProjectStore = defineStore("project", () => {
     );
     if (Object.keys(finite).length === 0) return Promise.resolve();
     return edit(() => api.setParams(track, finite));
+  }
+
+  /**
+   * 应用一条预设：整组参数 + 整条效果链，**一次事务**（只占一个撤销步骤）。
+   *
+   * 效果链是替换而不是叠加，见 `api.applyPreset`。
+   */
+  function applyPreset(
+    track: number,
+    params: Record<string, number>,
+    effects: EffectSpec[],
+  ): Promise<void> {
+    const finite = Object.fromEntries(
+      Object.entries(params).filter(([, value]) => Number.isFinite(value)),
+    );
+    return edit(() => api.applyPreset(track, finite, effects));
   }
 
   // ---- 效果链 ----
@@ -372,6 +388,7 @@ export const useProjectStore = defineStore("project", () => {
     setTrackInstrument,
     setParam,
     setParams,
+    applyPreset,
     addEffect,
     removeEffect,
     moveEffect,

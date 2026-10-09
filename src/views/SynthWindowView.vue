@@ -10,6 +10,7 @@ import { computed, onMounted } from "vue";
 import { useRoute } from "vue-router";
 
 import SynthPanel from "@/components/workspace/panes/SynthPanel.vue";
+import type { EffectSpec } from "@/api/types";
 import { canonicalPluginId, effectiveParams, SYNTH_ID } from "@/data/plugins";
 import { useI18n } from "@/i18n";
 import { useProjectStore } from "@/stores/project";
@@ -54,10 +55,14 @@ async function commitMany(params: Record<string, number>): Promise<void> {
   await store.setParams(t.id, params);
 }
 
-async function applyPreset(values: Record<string, number>): Promise<void> {
+/** 切换预设：整组参数 + 自带的效果链，**一次事务**（只占一个撤销步骤）。 */
+async function applyPreset(
+  values: Record<string, number>,
+  effects: EffectSpec[],
+): Promise<void> {
   const t = track.value;
   if (!t) return;
-  await store.setParams(t.id, values);
+  await store.applyPreset(t.id, values, effects);
 }
 
 /**
@@ -85,6 +90,7 @@ onMounted(() => {
       <SynthPanel
         :params="params"
         :track="track.id"
+        :effects="track.effects"
         @commit="commit"
         @commit-many="commitMany"
         @apply-preset="applyPreset"

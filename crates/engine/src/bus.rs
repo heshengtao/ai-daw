@@ -1060,9 +1060,9 @@ mod tests {
             ids,
             [
                 "builtin.synth.lead",
-                "builtin.synth.pad",
+                "builtin.synth.strings",
                 "builtin.synth.bass",
-                "builtin.synth.pluck",
+                "builtin.synth.drums",
                 "builtin.synth.pad",
             ],
             "默认分轨按 主旋律→和弦→低音→鼓组→铺底 排列"

@@ -15,6 +15,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { BookmarkIcon, PlusIcon, TrashIcon } from "@heroicons/vue/24/outline";
 
 import Md3Select from "@/components/common/Md3Select.vue";
+import type { EffectSpec } from "@/api/types";
 import { usePresetsStore } from "@/stores/presets";
 import { useI18n } from "@/i18n";
 
@@ -22,15 +23,20 @@ const props = defineProps<{
   pluginId: string;
   /** 当前参数（用来判断命中哪个预设、以及「另存为」存什么）。 */
   params: Record<string, number>;
+  /** 当前效果链：参与「命中哪个预设」的判断（带混响的铺底 ≠ 同一组参数加个效果）。 */
+  effects?: EffectSpec[];
 }>();
 
-const emit = defineEmits<{ (e: "apply", params: Record<string, number>): void }>();
+const emit = defineEmits<{
+  /** 选了一条预设：整组参数 + 它自带的效果链（父组件一次事务写回）。 */
+  (e: "apply", params: Record<string, number>, effects: EffectSpec[]): void;
+}>();
 
 const presets = usePresetsStore();
 const { t } = useI18n();
 
 const options = computed(() => presets.forPlugin(props.pluginId));
-const active = computed(() => presets.match(props.pluginId, props.params));
+const active = computed(() => presets.match(props.pluginId, props.params, props.effects));
 
 /** 喂给 `Md3Select` 的选项：按出厂 / 自存分组（同组的项在 `options` 里已经相邻）。 */
 const selectOptions = computed(() =>
@@ -76,7 +82,7 @@ async function commitName(): Promise<void> {
 
 function pick(id: string): void {
   const option = options.value.find((p) => p.id === id);
-  if (option) emit("apply", option.params);
+  if (option) emit("apply", option.params, option.effects);
 }
 
 async function remove(): Promise<void> {

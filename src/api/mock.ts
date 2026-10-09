@@ -12,6 +12,7 @@ import type {
   CatalogPlugin,
   ClipPlacement,
   ClipRef,
+  EffectSpec,
   HistoryDepths,
   HistoryState,
   McpConfig,
@@ -428,6 +429,24 @@ export const mockApi = {
       for (const [id, value] of Object.entries(params)) {
         if (Number.isFinite(value)) inst.params[id] = value;
       }
+    }),
+
+  applyPreset: (trackId: number, params: Record<string, number>, effects: EffectSpec[]): Project =>
+    commit(() => {
+      const t = track(trackId);
+      if (!t) return;
+      const inst = t.instrument;
+      if (inst) {
+        for (const [id, value] of Object.entries(params)) {
+          if (Number.isFinite(value)) inst.params[id] = value;
+        }
+      }
+      // 与后端一致：**替换**整条效果链。
+      t.effects = effects.map((spec) => ({
+        plugin_id: spec.plugin_id,
+        params: { ...spec.params },
+        state: [],
+      }));
     }),
 
   listPresets: (): Preset[] => readPresets(),

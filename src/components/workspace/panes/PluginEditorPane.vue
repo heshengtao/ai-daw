@@ -20,6 +20,7 @@ import { useLayoutStore } from "@/stores/layout";
 import { usePluginsStore } from "@/stores/plugins";
 import { useI18n } from "@/i18n";
 import { closePluginWindow, openPluginWindow, pluginWindowOpen } from "@/api/tauri";
+import type { EffectSpec } from "@/api/types";
 
 const store = useProjectStore();
 const selection = useSelectionStore();
@@ -116,12 +117,15 @@ async function commitInstrumentMany(params: Record<string, number>): Promise<voi
   }
 }
 
-/** 切换预设：整组参数一次写回（只占一个撤销步骤）。 */
-async function applyPreset(params: Record<string, number>): Promise<void> {
+/** 切换预设：整组参数 + 自带的效果链，**一次事务**（只占一个撤销步骤）。 */
+async function applyPreset(
+  params: Record<string, number>,
+  effects: EffectSpec[],
+): Promise<void> {
   const t = track.value;
   if (!t) return;
   try {
-    await store.setParams(t.id, params);
+    await store.applyPreset(t.id, params, effects);
   } catch (err) {
     layout.notify(i18n.t("error.applyPreset", { error: String(err) }));
   }
@@ -176,6 +180,7 @@ async function commitEffect(index: number, id: string, value: number): Promise<v
             v-if="isBuiltinSynth"
             :params="instrumentParams"
             :track="track.id"
+            :effects="track.effects"
             @commit="commitInstrument"
             @commit-many="commitInstrumentMany"
             @apply-preset="applyPreset"

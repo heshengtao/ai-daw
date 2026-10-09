@@ -10,6 +10,7 @@
 //!
 //! 只读工具（`get_project` / `get_transport` / `list_plugins`）不需要这条管线，直接读共享状态。
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -230,6 +231,18 @@ struct WaveformArgs {
     path: String,
     /// 桶数（每桶给 min/max 两个值）。
     buckets: usize,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ApplyPresetArgs {
+    /// 目标轨道 id。
+    track: u64,
+    /// 整组乐器参数（参数名 → 值）。
+    #[serde(default)]
+    params: HashMap<String, f32>,
+    /// 整条效果链；**替换**轨道现有的效果链（不传 = 清空）。
+    #[serde(default)]
+    effects: Vec<commands::EffectSpec>,
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +522,35 @@ impl DawMcpServer {
             .map_err(fail)?;
         json(&values)
     }
+
+    /// 一次事务写回「整组乐器参数 + 整条效果链」＝ 界面上点一下预设做的那件事。
+    ///
+    /// 效果链是**替换**而不是叠加：预设 = 整套音色。分两次调用会变成两个撤销步骤。
+    #[tool(description = "应用一条预设：一次事务写回整组乐器参数 + 整条效果链（效果链是替换而非叠加）。")]
+    async fn apply_preset(&self, Parameters(args): Parameters<ApplyPresetArgs>) -> Result<String, ErrorData> {
+        let track = TrackId(args.track);
+        let (project, events) =
+            commands::apply_preset_agent(&self.app, track, &args.params, &args.effects);
+        let _ = events;
+        let chain = project
+            .tracks
+            .iter()
+            .find(|t| t.id == track)
+            .map(|t| {
+                t.effects
+                    .iter()
+                    .map(|e| e.plugin_id.clone())
+                    .collect::<Vec<_>>()
+                    .join(" → ")
+            })
+            .unwrap_or_default();
+        Ok(format!(
+            "已应用到轨道 {}：{} 个参数，效果链 [{}]",
+            args.track,
+            args.params.len(),
+            if chain.is_empty() { "空".into() } else { chain }
+        ))
+    }
 }
 
 /// `transport_set_loop` 的参数（没有轨道字段，但语义上仍是「开关」）。
@@ -760,6 +802,7 @@ mod tests {
             "export_wav",
             "import_audio",
             "audio_waveform",
+            "apply_preset",
         ];
         for name in expected {
             assert!(router.get(name).is_some(), "缺少工具 {name}（现有：{names:?}）");

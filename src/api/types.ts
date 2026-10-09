@@ -73,6 +73,13 @@ export interface Track {
   mixer: MixerChannel;
 }
 
+/** 预设自带的一条效果器声明（写回轨道效果链时用）。 */
+export interface EffectSpec {
+  plugin_id: string;
+  /** 参数名 → 值；没列出的用插件自己的默认值。 */
+  params: Record<string, number>;
+}
+
 /** 时间轴上的一个关键点：从 `beat` 起 BPM 与拍号切换。 */
 export interface Keyframe {
   beat: number;

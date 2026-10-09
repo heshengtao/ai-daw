@@ -5,6 +5,20 @@ export interface WaveParams {
   pwm: number;
   cutoff: number;
   resonance: number;
+  /** 白噪声混合比（与 DSP 一致：0 = 纯振荡器，1 = 纯噪声）。 */
+  noise?: number;
+  /** 位深/采样率压碎量。 */
+  crush?: number;
+}
+
+/**
+ * 确定性伪噪声：同样的下标永远得到同样的值。
+ *
+ * 屏幕是「按需重绘」的（不跑 rAF），用 `Math.random()` 会让每次重绘都变成另一团噪声，看起来在闪。
+ */
+function hashNoise(i: number): number {
+  const s = Math.sin(i * 12.9898) * 43758.5453;
+  return (s - Math.floor(s)) * 2 - 1;
 }
 
 function waveSample(wave: number, phase: number, pulseWidth: number): number {
@@ -34,8 +48,8 @@ function clamp(v: number, lo: number, hi: number): number {
 /**
  * 一个基频周期的波形采样（解析生成，不是真实音频）。
  *
- * 跟随真实 DSP 的形状：主振 + 低八度方波副振 → 一阶低通（由「亮度」定截止）
- * 再接一层共振反馈（由「尖锐度」定 Q），最后按「尖锐度」做峰值锐化。
+ * 跟随真实 DSP 的形状：主振 + 低八度方波副振 → 白噪声**混合** → 一阶低通（由「亮度」定截止）
+ * 再接一层共振反馈（由「尖锐度」定 Q）→ 位深压碎，最后按「尖锐度」做峰值锐化。
  * 于是转这些旋钮时屏幕上的波形都会真实地变形——这正是给小白看的教学意图。
  */
 export function sampleOnePeriod(params: WaveParams, points = 256): number[] {
@@ -43,6 +57,8 @@ export function sampleOnePeriod(params: WaveParams, points = 256): number[] {
   const pwm = 0.5 + (params.pwm - 0.5) * 0.9;
   const sub = clamp(params.sub, -8, 8);
   const wave = params.wave;
+  const noise = clamp(params.noise ?? 0, 0, 1);
+  const crush = clamp(params.crush ?? 0, 0, 1);
 
   // 「亮度」：截止越低越平滑。k 是低通系数，越小越暗。
   const k = clamp(0.03 + params.cutoff * 0.97, 0.02, 1);
@@ -57,21 +73,37 @@ export function sampleOnePeriod(params: WaveParams, points = 256): number[] {
   // fb = 0 退化为一阶低通；fb 越大极点越接近单位圆 → 过渡沿出现过冲/振铃。
   let y1 = 0;
   let y2 = 0;
+  // 主振 +（可选）噪声混合：与 DSP 的顺序一致（噪声在滤波**之前**混入）。
+  const source = (i: number): number => {
+    const x = oscSample(wave, sub, pwm, i, n);
+    return noise > 0 ? x * (1 - noise) + hashNoise(i) * noise : x;
+  };
   // 先环形预热一个周期，让滤波器进入「周期稳态」：这样周期接缝处的跳变
   // （例如锯齿回折）也会真实地激起共振，屏幕上才看得到接缝处的过冲。
   for (let i = 0; i < n; i += 1) {
-    const x = oscSample(wave, sub, pwm, i, n);
+    const x = source(i);
     const y = y1 + k * (x - y1 + fb * (y1 - y2));
     y2 = y1;
     y1 = y;
   }
   const data: number[] = new Array(n);
   for (let i = 0; i < n; i += 1) {
-    const x = oscSample(wave, sub, pwm, i, n);
+    const x = source(i);
     const y = y1 + k * (x - y1 + fb * (y1 - y2));
     y2 = y1;
     y1 = y;
     data[i] = y;
+  }
+
+  // 位深/采样率压碎：放在滤波**之后**（与 DSP 一致），屏幕上是肉眼可见的阶梯。
+  if (crush > 0) {
+    const step = 1 + Math.floor(crush * 31);
+    const levels = Math.pow(2, 16 - crush * 13);
+    let hold = 0;
+    for (let i = 0; i < n; i += 1) {
+      if (i % step === 0) hold = Math.round(data[i]! * levels) / levels;
+      data[i] = hold;
+    }
   }
 
   // 归一化到约 [-1,1] 并留边距。

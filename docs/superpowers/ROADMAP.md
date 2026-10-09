@@ -15,10 +15,12 @@
 | Plan 3 | VST3 / CLAP 宿主 | ✅ 完成（栈有变） | `crates/host-vst3`（VST3 用 `vst3-host`、CLAP 用 `clack-host`，**未用 truce-rack**）；`src-tauri/src/plugins.rs` 装配注册表 + 原生窗口 |
 | Plan 5 | 录音 | ⬜ 未开始 | — |
 | Plan 6 | 音频片段 / 采样器 | ✅ 完成 | `crates/asset`（symphonia）+ `Clip.audio` + 播放路径 + 宿主素材缓存 + `import_audio`/`audio_waveform` + 波形 UI；真机端到端验证 |
-| Plan 7 | AI 接口（MCP + skills + 可视化） | 🟡 进行中 | MCP ✅（`src-tauri/src/mcp.rs`，29 工具）+ 前端 AI 可视化 ✅（D4）；skills 文档包（D3）未做 |
+| Plan 7 | AI 接口（MCP + skills + 可视化） | 🟡 进行中 | MCP ✅（`src-tauri/src/mcp.rs`，30 工具）+ 前端 AI 可视化 ✅（D4）；skills 文档包（D3）未做 |
 | 新增 | `crates/ipc`（Command/Event schema） | ✅ 完成 | `crates/ipc`（`daw-party-ipc`）：工程/命令/事件 schema 的**唯一来源**；engine 用 `pub use` 薄壳保持既有路径不变（零行为变化） |
 | 新增 | `crates/analysis`（响度/频谱） | ✅ 完成 | `crates/analysis`（ebur128 + rustfft）：LUFS/LRA/真峰值 + RMS + 平均幅度谱；`analyze_project` 命令 |
 | 新增 | 插件商店 | ⬜ 未开始 | — |
+| 新增 | 内置效果器（延迟 / 混响） | ✅ 完成 | `crates/effects`（`daw-party-effects`）：施罗德混响 + 插值延迟；注册为 `builtin.delay` / `builtin.reverb`；缓冲只在 `prepare` 分配，零分配门禁已把它们纳入覆盖 |
+| 新增 | 合成器音源扩展 + 8 类 32 条预设 | ✅ 完成 | 参数 18→26（噪声/压碎/失谐/FM/音高包络/滤波类型）；预设重写为 8bit/吉他/贝斯/鼓/弦乐/管乐/铺底/音效 各 4 条，可自带效果链。设计见 `specs/2026-10-09-synth-overhaul-design.md` |
 | 品牌 | 应用图标 / favicon | ✅ 完成 | `src-tauri/app-icon.svg`（薰衣草紫，与 `common/Logo.vue` 同图形）→ `tauri icon` 生成 `src-tauri/icons/*`；`public/logo.svg` 作网页 favicon |
 
 ### Plan 4b 的实际交付（2026-10-08）
@@ -122,6 +124,9 @@
 | 音频片段时间语义 | （未指定） | **片段拍长是唯一真相，素材铺满跨度**：缩放/改速度按比例重采样 → **会变调**（v1 不做保音高变速）。理由：模型与 MIDI 片段一致、时间轴/吸附/长度全部复用、实现最简。 |
 | 声像律 | （未指定，原实现为等功率） | **改为线性 balance**（居中 = 单位增益，向一侧偏则衰减另一侧）。原因：引擎内部恒为立体声，等功率律让居中信号凭空 −3 dB，轨道与 master 各套一次 = 整链 **−6 dB**（导入满幅素材会明显变轻）。代价：硬偏不再有 +3 dB 补偿。 |
 | 暂停语义 | （原实现：暂停后插件继续跑） | **暂停 = 静音**：`Pause`/`Stop` 重置乐器与效果链（all-notes-off）。原实现只置 `playing=false`，长音的 NoteOff 再也送不到 → 插件一直挂着该音（「暂停了还在响」）。插件实例不销毁，界面键盘与插件自带界面预览仍可用。 |
+| 合成器扩展路线 | （用户提出多种合成法） | **一个合成器 + 更多原子，而不是每类一个引擎**：补齐噪声 / 位深压碎 / 失谐 / FM / 音高包络 / 滤波类型六种原子，8 类音色 = 8 组参数配方。波表/加法/物理建模/颗粒在 v1 是**近似**（见 `specs/2026-10-09-synth-overhaul-design.md` §2），真实现留后续。 |
+| 预设与效果链 | （未指定） | **预设 = 整套音色**：`FactoryPreset.effects` 可带效果链，切预设**替换**该轨整条效果链（与「切预设会丢掉旋钮微调」同一个契约）。实现上复用引擎既有的 `execute_all` 批量事务，因此**没有新增 IPC 契约**，一次事务 = 一个撤销步骤。 |
+| 默认模板的预设 | （未指定） | **刻意干声**：`STARTER_TRACKS` 的 plugin_id 必须是引擎注册过的 id（否则新建工程就是「缺失插件」占位），而注册表补丁带不了效果链。所以 8 类里 5 条第 1 位是干声版本，湿版本放第 2..4 条。 |
 | 插件宿主（外部建议首选） | UAPMD | 仅作 **MCP / 能力参考**：UAPMD 是 **C++/CMake** 工程，接入需 FFI，与引擎 `#![forbid(unsafe_code)]` 相悖 |
 
 ## 3. 许可证护栏（强制）
