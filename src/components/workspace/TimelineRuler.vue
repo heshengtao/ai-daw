@@ -10,10 +10,12 @@
  * （编辑视图里那 60px 琴键列由父容器单独占位）。
  */
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import { useProjectStore } from "@/stores/project";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
 import { capturePointer } from "@/utils/pointer";
 
+const project = useProjectStore();
 const timeline = useTimelineStore();
 const transport = useTransportStore();
 
@@ -27,6 +29,20 @@ function beatAt(clientX: number): number {
   const rect = node.getBoundingClientRect();
   return timeline.snapBeats((clientX - rect.left) / timeline.zoom);
 }
+
+/** 双击标尺非 0 位置 → 在该处插入关键点（初值继承该处生效值）。 */
+function addKeyframe(e: MouseEvent): void {
+  const beat = beatAt(e.clientX);
+  if (beat <= 0) return;
+  void project.setKeyframeAt(beat, {});
+}
+
+/** 右键关键点徽标 → 删除它。 */
+function removeKeyframe(beat: number): void {
+  void project.removeKeyframeAt(beat);
+}
+
+const keyframes = computed(() => project.project?.transport.keyframes ?? []);
 
 function onPointerDown(e: PointerEvent): void {
   if (e.button !== 0) return;
@@ -68,17 +84,31 @@ onUnmounted(() => {
     tabindex="0"
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
+    @dblclick="addKeyframe"
     @keydown.left.prevent="transport.seekBeats(Math.max(0, transport.positionBeats - timeline.snap))"
     @keydown.right.prevent="transport.seekBeats(transport.positionBeats + timeline.snap)"
   >
     <span
-      v-for="bar in timeline.totalBars"
-      :key="bar"
+      v-for="m in timeline.barMarks"
+      :key="m.bar"
       class="bar-mark"
-      :style="{ width: timeline.barPx }"
+      :style="{ width: `${m.width}px` }"
     >
-      {{ bar }}
+      {{ m.bar }}
     </span>
+
+    <button
+      v-for="kf in keyframes"
+      :key="kf.beat"
+      class="kf-mark"
+      :style="{ left: `${kf.beat * timeline.zoom}px` }"
+      :title="`${kf.tempo.toFixed(0)} BPM · ${kf.time_sig_num}/${kf.time_sig_den}`"
+      @contextmenu.prevent.stop="removeKeyframe(kf.beat)"
+    >
+      <span class="kf-badge">{{ kf.tempo.toFixed(0) }}</span>
+      <span class="kf-meter">{{ kf.time_sig_num }}/{{ kf.time_sig_den }}</span>
+    </button>
+
     <span class="ruler-playhead" :style="{ left: `${playheadPx}px` }" />
   </div>
 </template>
@@ -141,5 +171,27 @@ onUnmounted(() => {
   border-left: 5px solid transparent;
   border-right: 5px solid transparent;
   border-top: 9px solid rgb(var(--md-primary));
+}
+/* 关键点徽标：显示该点的 BPM 与拍号；右键删除。 */
+.kf-mark {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 8px;
+  background-color: rgb(var(--md-tertiary-container));
+  color: rgb(var(--md-on-tertiary-container));
+  font-size: 9.5px;
+  line-height: 1.1;
+  cursor: pointer;
+}
+.kf-mark .kf-meter {
+  font-size: 8px;
+  opacity: 0.75;
 }
 </style>

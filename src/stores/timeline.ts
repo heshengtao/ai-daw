@@ -20,6 +20,11 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 import { useProjectStore } from "@/stores/project";
+import {
+  barBeatsAt as tempoBarBeatsAt,
+  meterBeatAt,
+  segments as tempoSegments,
+} from "@/utils/tempo";
 
 const KEY = "daw-party-timeline";
 
@@ -92,34 +97,85 @@ export const useTimelineStore = defineStore("timeline", () => {
   /** 每小节像素：标尺与网格的小节宽度都用它。 */
   const barPx = computed(() => `${zoom.value * barBeats.value}px`);
 
-  /**
-   * 网格背景（编排与卷帘共用同一串）。
-   *
-   * 只画两层：**拍线**（一个小节 = 分子个格子）+ **小节线**。
-   * 不再叠细分的吸附线——那会让一个小节看起来有很多格，和「一个小节几拍」对不上。
-   * 吸附精度（`snap`）不受影响：拖动仍按 `snap = meterBeat / 4` 吸附
-   * （4/4 是十六分音符，6/8 是 32 分音符），只是格线更干净。
-   *
-   * **顺序有讲究**：CSS 把 `background-image` 里**靠前**的那层画在最上面。
-   * `barBeats = sigNum × meterBeat`，所以每条小节线都必然压在一条拍线上；
-   * 小节线必须排在前，否则会被更淡的拍线盖掉而完全看不见。
-   * （后续分段 / 多拍号网格同样依赖这个顺序。）
-   */
-  const gridBackground = computed(() => {
-    const layers: string[] = [];
-    layers.push(
-      `repeating-linear-gradient(to right, var(--grid-bar) 0 1px, transparent 1px ${zoom.value * barBeats.value}px)`,
-    );
-    layers.push(
-      `repeating-linear-gradient(to right, var(--grid-line) 0 1px, transparent 1px ${zoom.value * meterBeat.value}px)`,
-    );
-    return layers.join(", ");
+  // ---- 分段（速度/拍号关键点） ----
+
+  /** 拍号分段（用于网格与刻度）。第 0 段来自基准字段。 */
+  const meterSegments = computed(() =>
+    project.project
+      ? tempoSegments(project.project.transport)
+      : [{ startBeat: 0, endBeat: Infinity, tempo: 120, num: 4, den: 4 }],
+  );
+
+  /** 某拍处的拍号长度（一小节多少四分音符）。 */
+  function barBeatsAt(beat: number): number {
+    return project.project ? tempoBarBeatsAt(beat, project.project.transport) : 4;
+  }
+
+  /** 某拍处的吸附步长（四分音符数）。 */
+  function snapAt(beat: number): number {
+    return project.project ? meterBeatAt(beat, project.project.transport) / 4 : 0.25;
+  }
+
+  /** 小节刻度（跨分段累计小节号）。 */
+  const barMarks = computed(() => {
+    const z = zoom.value;
+    const out: { bar: number; beat: number; width: number }[] = [];
+    let bar = 1;
+    for (const s of meterSegments.value) {
+      const barBeats = s.num * (4 / Math.max(1, s.den));
+      const end = Number.isFinite(s.endBeat) ? s.endBeat : totalBeats.value;
+      let b = s.startBeat;
+      while (b < end - 1e-9) {
+        const w = Math.min(barBeats, end - b);
+        out.push({ bar, beat: b, width: w * z });
+        bar += 1;
+        b += barBeats;
+      }
+    }
+    return out;
   });
 
-  /** 吸附到网格。 */
+  /**
+   * 分段叠层的网格样式。
+   *
+   * 每段一对层：拍线格（每拍一格）+ 小节线；用 `background-size` 把 repeating 渐变限制在该段内，
+   * 于是不同拍号的段落各自成立。无关键点时只有一段，等价于「整首一套网格」。
+   *
+   * **顺序有讲究**：CSS 把 `background-image` 里**靠前**的那层画在最上面，同一段里小节线
+   * 必须排在拍线前面（小节线压在拍线上），否则会被更淡的拍线盖掉。
+   */
+  const gridStyle = computed(() => {
+    const z = zoom.value;
+    const images: string[] = [];
+    const sizes: string[] = [];
+    const positions: string[] = [];
+    const repeats: string[] = [];
+    for (const s of meterSegments.value) {
+      const startPx = s.startBeat * z;
+      const widthPx = Number.isFinite(s.endBeat) ? (s.endBeat - s.startBeat) * z : contentWidth.value;
+      const cell = Math.max(2, z * (4 / Math.max(1, s.den)));
+      const bar = Math.max(2, z * (s.num * (4 / Math.max(1, s.den))));
+      images.push(`repeating-linear-gradient(to right, var(--grid-bar) 0 1px, transparent 1px ${bar}px)`);
+      positions.push(`${startPx}px 0`);
+      sizes.push(`${Math.max(1, widthPx)}px 100%`);
+      repeats.push("no-repeat");
+      images.push(`repeating-linear-gradient(to right, var(--grid-line) 0 1px, transparent 1px ${cell}px)`);
+      positions.push(`${startPx}px 0`);
+      sizes.push(`${Math.max(1, widthPx)}px 100%`);
+      repeats.push("no-repeat");
+    }
+    return {
+      backgroundImage: images.join(", "),
+      backgroundPosition: positions.join(", "),
+      backgroundSize: sizes.join(", "),
+      backgroundRepeat: repeats.join(", "),
+    };
+  });
+
+  /** 吸附到网格（按所在分段的 1/16 拍）。 */
   function snapBeats(beat: number): number {
     if (!Number.isFinite(beat)) return 0;
-    const s = snap.value;
+    const s = snapAt(beat);
     return Math.max(0, Math.round(beat / s) * s);
   }
 
@@ -164,7 +220,11 @@ export const useTimelineStore = defineStore("timeline", () => {
     contentWidth,
     widthStyle,
     barPx,
-    gridBackground,
+    meterSegments,
+    barMarks,
+    barBeatsAt,
+    snapAt,
+    gridStyle,
     snapBeats,
     beatsAt,
     zoomAt,
