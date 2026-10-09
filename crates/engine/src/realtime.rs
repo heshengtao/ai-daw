@@ -17,7 +17,8 @@ use crate::transport::TransportCommand;
 /// 并在与 [`ScheduledEvents::sample_rate`] 不一致时报错。
 #[derive(Debug, Clone)]
 pub struct RealtimeOptions {
-    /// 音频回调请求的最大帧数：用于预分配 scratch 缓冲，并作为固定块大小请求设备。
+    /// 音频回调请求的最大帧数：用于预分配 scratch 缓冲，并作为固定块大小请求设备
+    /// （设备拒绝固定块大小时回退到它的默认块大小）。
     pub max_block: usize,
     /// 控制侧 → 音频侧命令队列容量。
     pub command_capacity: usize,
@@ -31,8 +32,8 @@ pub enum RealtimeError {
     /// 系统没有可用的默认输出设备。
     #[error("no default output device available")]
     NoDevice,
-    /// 设备不支持所需的 f32 输出配置。
-    #[error("device does not support an f32 stereo output configuration: {0}")]
+    /// 设备不支持所需的 f32 输出配置（既不报 f32 范围，默认格式也不是 f32）。
+    #[error("device does not support an f32 output configuration: {0}")]
     UnsupportedConfig(String),
     /// 调度表构建时使用的采样率与设备采样率不一致（会导致事件静默错位）。
     #[error("schedule sample rate {schedule} Hz does not match device rate {device} Hz")]
@@ -193,6 +194,43 @@ pub fn default_output_sample_rate() -> Option<u32> {
     Some(supported.sample_rate())
 }
 
+/// 归一化设备报出的一段采样率区间，保证 `min_rate <= max_rate`。
+///
+/// [`OutputFormatRange::nearest_rate`] 内部用 `Ord::clamp`，`min > max` 会 panic。
+/// cpal 的 `min/max_sample_rate` 本应总有 `min <= max`，但个别后端（或未来的 cpal）
+/// 可能报出反向的畸形区间；这里投影时兜底交换成合法区间，最多牺牲「选到理想采样率」，
+/// 绝不会崩。（Task 1 review 的遗留项。）
+fn normalise_rate_span(min_rate: u32, max_rate: u32) -> (u32, u32) {
+    (min_rate.min(max_rate), min_rate.max(max_rate))
+}
+
+/// 把设备报告的可支持配置投影成纯数据；设备不报告范围（或查询失败）时返回空表。
+///
+/// 空表会让 [`choose_output_format`] 返回 `None`，`AudioHost::start_with` 据此退回设备
+/// 默认配置——即「设备不报范围」时保持旧行为。
+fn supported_formats(device: &cpal::Device) -> Vec<OutputFormatRange> {
+    let Ok(ranges) = device.supported_output_configs() else {
+        return Vec::new();
+    };
+    ranges
+        .map(|r| {
+            // cpal 0.18 里 `SampleRate` 就是 `u32` 别名，`min/max_sample_rate()` 直接给数值。
+            let (min_rate, max_rate) =
+                normalise_rate_span(r.min_sample_rate(), r.max_sample_rate());
+            OutputFormatRange {
+                format: if r.sample_format() == cpal::SampleFormat::F32 {
+                    OutputFormat::F32
+                } else {
+                    OutputFormat::Other
+                },
+                channels: r.channels(),
+                min_rate,
+                max_rate,
+            }
+        })
+        .collect()
+}
+
 /// cpal 实时播放宿主：拥有输出流与控制侧命令发送端。
 pub struct AudioHost {
     stream: cpal::Stream,
@@ -203,7 +241,9 @@ pub struct AudioHost {
 impl AudioHost {
     /// 打开默认输出设备并开始播放工程（初始为暂停态，需调用 `play`）。
     ///
-    /// 只支持 f32 设备输出；调度表的采样率必须与设备采样率一致。
+    /// 只支持 f32 设备输出：优先按调度表采样率从设备报告的范围里挑一段 f32 配置（挑不到
+    /// 就退回设备默认配置）；调度表的采样率必须与最终配置的采样率一致。块大小先请求固定值，
+    /// 设备拒绝时回退到其默认块大小。
     pub fn start(
         schedule: ScheduledEvents,
         registry: &PluginRegistry,
@@ -226,22 +266,35 @@ impl AudioHost {
         let device = host
             .default_output_device()
             .ok_or(RealtimeError::NoDevice)?;
-        let supported = device
-            .default_output_config()
-            .map_err(|e| RealtimeError::UnsupportedConfig(e.to_string()))?;
 
-        // 只支持 f32 输出：其它采样格式需要额外的转换路径，这里明确拒绝。
-        if supported.sample_format() != cpal::SampleFormat::F32 {
-            return Err(RealtimeError::UnsupportedConfig(format!(
-                "device default output format is {:?}, only F32 is supported",
-                supported.sample_format()
-            )));
-        }
+        let preferred_rate = schedule.sample_rate.round().max(1.0) as u32;
+        let chosen = choose_output_format(&supported_formats(&device), preferred_rate);
 
-        let channels = supported.channels() as usize;
-        let mut config = supported.config();
+        // 优先用设备报告的范围挑：只要有一段 F32 就能出声（默认格式不是 F32 的设备也能救回来）。
+        // 设备不报告范围时退回默认配置，保持旧行为。
+        let mut config = match chosen {
+            Some(range) => cpal::StreamConfig {
+                channels: range.channels,
+                sample_rate: range.nearest_rate(preferred_rate),
+                buffer_size: cpal::BufferSize::Default,
+            },
+            None => {
+                let supported = device
+                    .default_output_config()
+                    .map_err(|e| RealtimeError::UnsupportedConfig(e.to_string()))?;
+                if supported.sample_format() != cpal::SampleFormat::F32 {
+                    return Err(RealtimeError::UnsupportedConfig(format!(
+                        "device default output format is {:?}, and no f32 range is offered",
+                        supported.sample_format()
+                    )));
+                }
+                supported.config()
+            }
+        };
 
         // 事件表以固定采样率定点；与设备采样率不一致会静默错位，必须拒绝。
+        // 注意：挑出来的可能是「设备支持但不是首选」的档位（`nearest_rate` 夹到的值），
+        // 这时同样拒绝；上层轮询会按新设备重新解析采样率后重试。
         if schedule.sample_rate != config.sample_rate as f64 {
             return Err(RealtimeError::SampleRateMismatch {
                 schedule: schedule.sample_rate,
@@ -252,58 +305,87 @@ impl AudioHost {
         // 请求固定块大小，使回调内 scratch 的预分配即为上界。`.max(1)` 避免块大小为 0
         // 时回调内的分块循环无法推进（防御性；正常调用方不会传 0）。
         let max_block = options.max_block.max(1);
-        config.buffer_size = cpal::BufferSize::Fixed(max_block as u32);
+        // 声道数与采样率取自最终的 `config`：回调里的交错写回必须与设备实际声道数一致
+        // （块大小回退只改 `buffer_size`，不动这两项）。
+        let channels = config.channels as usize;
+        let device_rate = config.sample_rate as f64;
 
-        let (tx, mut rx) = command_queue(options.command_capacity);
+        // 回调工厂：`build_output_stream` 按值拿走回调，构建失败时回调（连同其中的 `Player`
+        // 状态）随之释放、无法取回，所以「块大小回退」这一分支需要一份全新的回调。
+        // 正常路径只建一份；只有设备拒绝固定块大小时才会付第二次 `Player::new` 的代价。
         let position_cb = Arc::clone(&shared.position);
         let playing_cb = Arc::clone(&shared.playing);
         // 波形缓冲：回调侧只写，界面侧只读（都用原子，不加锁）。
         let scope = Arc::clone(&options.scope);
 
-        let mut player = Player::new(schedule, registry, config.sample_rate as f64, max_block);
-        let mut staging: Vec<f32> = Vec::with_capacity(max_block * 2);
+        let make_callbacks = || {
+            let (tx, mut rx) = command_queue(options.command_capacity);
+            let position_cb = Arc::clone(&position_cb);
+            let playing_cb = Arc::clone(&playing_cb);
+            let scope = Arc::clone(&scope);
 
-        let stream = device
-            .build_output_stream(
-                config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    player.drain_commands(&mut rx);
+            // `Player` 的 scratch 全部按 `max_block` 预分配：回调内不分配、不加锁。
+            let mut player = Player::new(schedule.clone(), registry, device_rate, max_block);
+            let mut staging: Vec<f32> = Vec::with_capacity(max_block * 2);
 
-                    let frames = data.len() / channels.max(1);
-                    let need = frames * 2;
-                    // 一次性增长到设备块大小属可接受的预热；此后不再分配。
-                    if staging.len() < need {
-                        staging.resize(need, 0.0);
-                    }
+            let on_data = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                player.drain_commands(&mut rx);
 
-                    // 即便后端忽略固定块大小，也按 max_block 分块，确保 `Player` 及其
-                    // scratch 不会在回调内 resize（分配）。
-                    let mut offset = 0usize;
-                    while offset < frames {
-                        let n = (frames - offset).min(max_block);
-                        player.process_block(&mut staging[offset * 2..(offset + n) * 2], n);
-                        offset += n;
-                    }
+                let frames = data.len() / channels.max(1);
+                let need = frames * 2;
+                // 一次性增长到设备块大小属可接受的预热；此后不再分配。
+                if staging.len() < need {
+                    staging.resize(need, 0.0);
+                }
 
-                    write_interleaved(&staging[..need], data, frames, channels);
+                // 即便后端忽略固定块大小，也按 max_block 分块，确保 `Player` 及其
+                // scratch 不会在回调内 resize（分配）。
+                let mut offset = 0usize;
+                while offset < frames {
+                    let n = (frames - offset).min(max_block);
+                    player.process_block(&mut staging[offset * 2..(offset + n) * 2], n);
+                    offset += n;
+                }
 
-                    // 给界面画波形：推入刚渲染好的这块（下混成单声道）。
-                    scope.push_interleaved(&staging[..need], frames);
+                write_interleaved(&staging[..need], data, frames, channels);
 
-                    // 宿主策略：播放到工程结尾即暂停（而非回卷）。这是 `Player` 不再
-                    // 自行自动停止后，「播到结尾即停」行为的归属地。
-                    if player.end_frame() > 0 && player.position_frames() >= player.end_frame() {
-                        player.apply_command(TransportCommand::Pause);
-                    }
-                    position_cb.store(player.position_frames(), Ordering::Relaxed);
-                    playing_cb.store(player.is_playing(), Ordering::Relaxed);
-                },
-                move |err| {
-                    eprintln!("audio stream error: {err}");
-                },
-                None,
-            )
-            .map_err(|e| RealtimeError::Cpal(e.to_string()))?;
+                // 给界面画波形：推入刚渲染好的这块（下混成单声道）。
+                scope.push_interleaved(&staging[..need], frames);
+
+                // 宿主策略：播放到工程结尾即暂停（而非回卷）。这是 `Player` 不再
+                // 自行自动停止后，「播到结尾即停」行为的归属地。
+                if player.end_frame() > 0 && player.position_frames() >= player.end_frame() {
+                    player.apply_command(TransportCommand::Pause);
+                }
+                position_cb.store(player.position_frames(), Ordering::Relaxed);
+                playing_cb.store(player.is_playing(), Ordering::Relaxed);
+            };
+            let on_error = move |err| {
+                eprintln!("audio stream error: {err}");
+            };
+
+            (tx, on_data, on_error)
+        };
+
+        // 先请求固定块大小（回调内 scratch 预分配即上界）；有些设备（蓝牙/聚合设备）拒绝
+        // 固定块大小，这时回退到设备默认块大小，宁可让回调内的分块循环兜底。
+        // `StreamConfig` 是 `Copy`，两次尝试各用自己的那份。
+        let build = |cfg: cpal::StreamConfig| {
+            let (tx, on_data, on_error) = make_callbacks();
+            device
+                .build_output_stream(cfg, on_data, on_error, None)
+                .map(|stream| (tx, stream))
+                .map_err(|e| RealtimeError::Cpal(e.to_string()))
+        };
+        config.buffer_size = cpal::BufferSize::Fixed(max_block as u32);
+        let (tx, stream) = match build(config) {
+            Ok(built) => built,
+            Err(first) => {
+                // 回退时保留第一次的错误（第二次的错误信息更没用：设备连默认块大小都拒绝了）。
+                config.buffer_size = cpal::BufferSize::Default;
+                build(config).map_err(|_| first)?
+            }
+        };
 
         stream
             .play()
@@ -515,6 +597,23 @@ mod tests {
             range(OutputFormat::F32, 2, 48_000, 48_000),
         ];
         assert_eq!(choose_output_format(&ranges, 48_000).unwrap().channels, 2);
+    }
+
+    #[test]
+    fn inverted_device_range_is_normalised_before_projection() {
+        // 畸形区间（min > max）：投影时交换成合法区间，`nearest_rate` 的 clamp 不会 panic。
+        let (min, max) = normalise_rate_span(48_000, 44_100);
+        assert_eq!((min, max), (44_100, 48_000));
+        assert_eq!(
+            range(OutputFormat::F32, 2, min, max).nearest_rate(96_000),
+            48_000
+        );
+    }
+
+    #[test]
+    fn no_reported_ranges_means_no_choice() {
+        // 设备不报范围 → `choose_output_format` 返回 `None` → 退回默认配置（旧行为）。
+        assert!(choose_output_format(&[], 48_000).is_none());
     }
 
     #[test]
