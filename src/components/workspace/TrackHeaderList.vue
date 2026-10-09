@@ -94,7 +94,7 @@ watch(laneScrollTop, (v) => {
           <PanelIcon side="left" :filled="true" class="brand-toggle-icon" />
         </button>
       </Tooltip>
-      <Logo class="brand-logo" />
+      <Logo filled />
       <span class="brand-name">daw-party</span>
     </div>
 
@@ -214,12 +214,6 @@ watch(laneScrollTop, (v) => {
 .brand-toggle-icon {
   width: 18px;
   height: 18px;
-}
-.brand-logo {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 auto;
-  color: rgb(var(--md-primary));
 }
 .brand-name {
   font-size: 13px;
