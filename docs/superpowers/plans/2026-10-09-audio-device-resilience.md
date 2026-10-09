@@ -664,6 +664,53 @@ git commit -m "feat(audio): manual retry for the output device"
 
 ---
 
+### Task 6: 前端：恢复实时后收起「离线试听」（F4 审查发现的集成缺陷）
+
+**Files:**
+- Modify: `src/stores/transport.ts`
+
+**背景（F4 审查发现，必做）**：Task 4 让 `available` 从 `false` **自动**变回 `true`（每秒轮询 + 重建）。在此之前 `available` 永远不会自己从 false 变回 true，所以这条路走不到；现在走得通了，于是暴露出一个缺口：
+
+- 设备被拔掉 → `snapshot().available=false` → store 切到 `preview` 模式并可能起了一个 `<audio>` 元素（`src/stores/transport.ts:104-128`、`:160`）。
+- 插回设备 → 1 秒内自动重建成功 → `available=true`，但**没人收掉那个 `<audio>`**：`teardownPreview()` 只在 `stop` / `dispose` / `startPreview` 的 catch 里被调用（`:116`、`:124`、`:184`、`:230`），而**没有任何 watcher 监听 `mode`**。
+- 结果：离线试听的 `<audio>` 还在响，它的 `requestAnimationFrame` 时钟（`:80-88`）还在覆盖 `positionFrames`，而实时流也已经恢复 → **两份声音 + 位置不对**。
+
+**Interfaces:**
+- Produces: `mode` 从 `preview` 回到 `realtime`（或 `available` 由 false 变 true）时，离线试听被收干净。
+
+- [ ] **Step 1: 加 watcher**
+
+在 `src/stores/transport.ts` 里已有的初始化位置加一个 watcher（`watch(mode, …)` 或 `watch(available, …)`，与文件里既有写法一致）：
+
+```ts
+  // 设备插回后实时会自动恢复（音频线程每秒轮询重建）。此时必须把离线试听收干净，
+  // 否则 <audio> 与实时流会同时出声、并且 rAF 时钟会把播放位置覆盖掉。
+  watch(mode, (next, prev) => {
+    if (prev === "preview" && next !== "preview") teardownPreview();
+  });
+```
+
+若文件里没有 `watch` 引入则补上（`import { computed, ref, watch } from "vue"`）。
+
+- [ ] **Step 2: 确认 rAF 时钟也停了**
+
+确认 `teardownPreview()` 会取消那个 `requestAnimationFrame`（`:80-88` 的循环）；若它只 `pause()` 了 `<audio>` 而没取消帧循环，一并取消（用文件里已有的 `cancelAnimationFrame` 句柄）。
+
+- [ ] **Step 3: 验证**
+
+Run: `npm run build`
+
+手动（**只有人工能验**）：播放中拔掉输出设备 → 观察是否退回离线试听 → 插回设备 → **只应当有一份声音**，且位置与传输一致（不再被试听时钟覆盖）。
+
+- [ ] **Step 4: 提交**
+
+```bash
+git add src/stores/transport.ts
+git commit -m "fix(transport): drop the offline preview when realtime audio recovers"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage（对照 `2026-10-09-audio-device-resilience-design.md`）**
