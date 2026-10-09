@@ -8,7 +8,7 @@
  * 菜单 Teleport 到 body 并用 fixed 定位：检查器是可滚动容器，绝对定位的面板会被裁掉。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { CheckIcon, ChevronDownIcon } from "@heroicons/vue/24/outline";
+import { ArrowRightIcon, CheckIcon, ChevronDownIcon } from "@heroicons/vue/24/outline";
 import { useI18n } from "@/i18n";
 
 export interface SelectOption {
@@ -30,6 +30,8 @@ const props = withDefaults(
     /** 候选项为空时的提示文案；不给就用通用文案。 */
     empty?: string;
     disabled?: boolean;
+    /** 菜单底部的一个动作按钮（例如「浏览全部音色」）。 */
+    action?: { label: string };
   }>(),
   { placeholder: "—" },
 );
@@ -37,6 +39,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
   (e: "select", value: string): void;
+  (e: "action"): void;
 }>();
 
 const { t } = useI18n();
@@ -101,6 +104,12 @@ function pick(id: string): void {
   if (id === props.modelValue) return;
   emit("update:modelValue", id);
   emit("select", id);
+}
+
+/** 点击菜单底部的动作行：先收起菜单，再通知父组件（例如打开「浏览全部音色」）。 */
+function runAction(): void {
+  close();
+  emit("action");
 }
 
 function onDocPointer(e: PointerEvent): void {
@@ -182,6 +191,14 @@ onUnmounted(() => {
               <span v-if="o.hint" class="item-hint">{{ o.hint }}</span>
             </span>
             <CheckIcon v-if="o.id === modelValue" class="item-check" />
+          </button>
+        </template>
+
+        <template v-if="action">
+          <span class="menu-sep" aria-hidden="true" />
+          <button class="item action" type="button" @click="runAction">
+            <span class="item-main"><span class="item-label">{{ action.label }}</span></span>
+            <ArrowRightIcon class="item-check" />
           </button>
         </template>
       </div>
@@ -298,6 +315,14 @@ onUnmounted(() => {
   width: 15px;
   height: 15px;
   flex: 0 0 auto;
+  color: rgb(var(--md-primary));
+}
+.md3-select-menu .menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background-color: rgb(var(--md-outline-variant) / 0.5);
+}
+.md3-select-menu .item.action .item-label {
   color: rgb(var(--md-primary));
 }
 .md3-select-menu .empty {
