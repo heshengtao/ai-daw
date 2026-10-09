@@ -209,6 +209,25 @@ pub fn set_time_signature(
     run(&app, &state, Command::SetTimeSignature { num, den })
 }
 
+/// 在第 `beat` 拍插入/更新关键点（BPM + 拍号）。
+#[tauri::command]
+pub fn set_keyframe(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    beat: f64,
+    tempo: f64,
+    num: u8,
+    den: u8,
+) -> Project {
+    run(&app, &state, Command::SetKeyframe { beat, tempo, num, den })
+}
+
+/// 删除第 `beat` 拍的关键点。
+#[tauri::command]
+pub fn remove_keyframe(app: tauri::AppHandle, state: State<'_, AppState>, beat: f64) -> Project {
+    run(&app, &state, Command::RemoveKeyframe { beat })
+}
+
 /// 新建工程：清空并铺上默认分轨模板。
 ///
 /// `track_names` 由界面按**当前语言**给出（按模板顺序）；不传就用引擎的兜底名。

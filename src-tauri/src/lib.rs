@@ -232,6 +232,8 @@ pub fn run() {
             commands::set_params,
             commands::set_tempo,
             commands::set_time_signature,
+            commands::set_keyframe,
+            commands::remove_keyframe,
             commands::new_project,
             commands::localize_starter_tracks,
             commands::add_clip,
