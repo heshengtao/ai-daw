@@ -2,14 +2,13 @@
 /**
  * 内置合成器的**独立窗口**内容。
  *
- * 窗口由后端以 `index.html#/synth?track=N` 打开；这里只渲染一台合成器：预设条 + 面板。
+ * 窗口由后端以 `index.html#/synth?track=N` 打开；这里只渲染一台合成器：面板（面板自带预设垫子与预设条）。
  * 它和主窗口是两个独立的 Vue 实例，靠同一份后端工程状态 + `engine://event` 广播保持一致
  * （在主窗口拖旋钮，这里也会跟着动）。
  */
 import { computed, onMounted } from "vue";
 import { useRoute } from "vue-router";
 
-import PresetBar from "@/components/common/PresetBar.vue";
 import SynthPanel from "@/components/workspace/panes/SynthPanel.vue";
 import { canonicalPluginId, effectiveParams, SYNTH_ID } from "@/data/plugins";
 import { useI18n } from "@/i18n";
@@ -82,14 +81,8 @@ onMounted(() => {
     </header>
 
     <div v-if="track" class="body">
-      <div class="preset-row">
-        <PresetBar
-          :plugin-id="track.instrument?.plugin_id ?? ''"
-          :params="params"
-          @apply="applyPreset"
-        />
-      </div>
-      <SynthPanel :params="params" :track="track.id" @commit="commit" />
+      <!-- 预设控件由 SynthPanel 自带（垫子 + 预设条），这里不再单独渲染，避免出现两个预设条。 -->
+      <SynthPanel :params="params" :track="track.id" @commit="commit" @apply-preset="applyPreset" />
     </div>
 
     <p v-else-if="store.loadError" class="empty">
@@ -149,14 +142,13 @@ onMounted(() => {
 .focus-btn:hover {
   background-color: rgb(var(--md-primary) / 0.08);
 }
+/* 窗口是固定尺寸的（后端 `resizable(false)`），内容按固定尺寸排，不再需要纵向滚动。 */
 .body {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
-  padding: 10px 14px 18px;
-}
-.preset-row {
-  margin-bottom: 4px;
+  display: flex;
+  justify-content: center;
+  padding: 10px 18px 18px;
 }
 .empty {
   margin: 40px auto;

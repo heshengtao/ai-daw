@@ -27,6 +27,7 @@ pub const BUILTIN_PRESETS: &[Preset] = &[
         name: "主音 Lead",
         patch: &[
             ("gain", 0.75),
+            ("wave", 0.0),
             ("attack", 0.005),
             ("release", 0.25),
             ("cutoff", 0.80),
@@ -58,6 +59,7 @@ pub const BUILTIN_PRESETS: &[Preset] = &[
         name: "低音 Bass",
         patch: &[
             ("gain", 0.85),
+            ("wave", 0.0),
             ("attack", 0.002),
             ("release", 0.12),
             ("sub", 0.60),
@@ -73,6 +75,7 @@ pub const BUILTIN_PRESETS: &[Preset] = &[
         name: "铺底 Pad",
         patch: &[
             ("gain", 0.55),
+            ("wave", 0.0),
             ("attack", 0.35),
             ("release", 1.20),
             ("cutoff", 0.50),
@@ -228,6 +231,21 @@ mod tests {
         let p = r.create("builtin.synth.pad", TrackId(1)).expect("pad preset exists");
         assert_eq!(p.descriptor().id, "builtin.synth.pad");
         assert_eq!(p.get_param(&"attack".into()), Some(0.35));
+    }
+
+    /// 默认改成正弦后，老预设必须仍保持原来的波形，否则听感会变。
+    #[test]
+    fn factory_presets_pin_their_waveform() {
+        let reg = PluginRegistry::with_builtins();
+        let wave_of = |id: &str| -> Option<f32> {
+            let p = reg.create(id, crate::model::TrackId(0))?;
+            p.get_param(&ParamId::from("wave"))
+        };
+        assert_eq!(wave_of("builtin.synth"), Some(2.0), "默认音色 = 正弦");
+        assert_eq!(wave_of("builtin.synth.lead"), Some(0.0));
+        assert_eq!(wave_of("builtin.synth.bass"), Some(0.0));
+        assert_eq!(wave_of("builtin.synth.pad"), Some(0.0));
+        assert_eq!(wave_of("builtin.synth.pluck"), Some(1.0));
     }
 
     #[test]

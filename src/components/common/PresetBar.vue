@@ -6,11 +6,15 @@
  * - 「另存为…」把**当前**参数存成一条新预设；
  * - 自存预设可以删除；出厂预设（内置合成器那几组）只能另存为。
  *
+ * 选择器走 MD3 下拉（`Md3Select`），不再用原生下拉框：原生控件的样式由系统接管，
+ * 和面板里其它控件对不上。预设按「出厂 / 我的」分两组，菜单里自带小字说明。
+ *
  * 应用动作交给父组件做：只有它知道这是哪条轨道。
  */
 import { computed, nextTick, ref, watch } from "vue";
 import { BookmarkIcon, PlusIcon, TrashIcon } from "@heroicons/vue/24/outline";
 
+import Md3Select from "@/components/common/Md3Select.vue";
 import { usePresetsStore } from "@/stores/presets";
 import { useI18n } from "@/i18n";
 
@@ -28,13 +32,27 @@ const { t } = useI18n();
 const options = computed(() => presets.forPlugin(props.pluginId));
 const active = computed(() => presets.match(props.pluginId, props.params));
 
+/** 喂给 `Md3Select` 的选项：按出厂 / 自存分组（同组的项在 `options` 里已经相邻）。 */
+const selectOptions = computed(() =>
+  options.value.map((p) => ({
+    id: p.id,
+    label: p.name,
+    hint: p.note || undefined,
+    group: p.factory ? t("preset.factoryGroup") : t("preset.userGroup"),
+  })),
+);
+const selectedId = computed(() => active.value?.id ?? "");
+function onSelect(id: string): void {
+  pick(id);
+}
+
 const naming = ref(false);
 const draftName = ref("");
 const nameEl = ref<HTMLInputElement | null>(null);
 const busy = ref(false);
 
 function startNaming(): void {
-  draftName.value = active.value ? `${active.value.name} 副本` : "";
+  draftName.value = active.value ? `${active.value.name} ${t("preset.copySuffix")}` : "";
   naming.value = true;
   void nextTick(() => nameEl.value?.focus());
 }
@@ -82,17 +100,16 @@ watch(
 <template>
   <div class="preset-bar">
     <BookmarkIcon class="icon" />
-    <select
-      class="select"
-      :value="active?.id ?? ''"
-      :aria-label="t('preset.choose')"
-      @change="pick(($event.target as HTMLSelectElement).value)"
-    >
-      <option value="" disabled>{{ t("preset.unsaved") }}</option>
-      <option v-for="p in options" :key="p.id" :value="p.id">
-        {{ p.name }}{{ p.factory ? ` · ${t("preset.factory")}` : "" }}
-      </option>
-    </select>
+    <!-- class 透传对多根组件无效（`Md3Select` 是 按钮 + Teleport），所以撑满由外层 div 负责。 -->
+    <div class="preset-select">
+      <Md3Select
+        :model-value="selectedId"
+        :options="selectOptions"
+        :label="t('preset.choose')"
+        :placeholder="t('preset.unsaved')"
+        @select="onSelect"
+      />
+    </div>
 
     <template v-if="naming">
       <input
@@ -142,21 +159,10 @@ watch(
   flex: 0 0 auto;
   color: rgb(var(--md-on-surface-variant));
 }
-.select {
+.preset-select {
+  display: flex;
   flex: 1 1 auto;
   min-width: 0;
-  height: 28px;
-  padding: 0 8px;
-  border: 1px solid rgb(var(--md-outline-variant) / 0.6);
-  border-radius: 8px;
-  background-color: rgb(var(--md-surface-container-high));
-  color: rgb(var(--md-on-surface));
-  font-size: 11.5px;
-  cursor: pointer;
-}
-.select:focus-visible {
-  outline: 2px solid rgb(var(--md-primary));
-  outline-offset: 1px;
 }
 .name-input {
   flex: 1 1 auto;

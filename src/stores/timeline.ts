@@ -11,6 +11,10 @@
  * - `barBeats = 分子 × meterBeat`：一小节多长。4/4 → 4，3/4 → 3，6/8 → 3，2/2 → 4；
  * - `snap = meterBeat / 4`：吸附网格。4/4 → 0.25（十六分音符），6/8 → 0.125。
  *
+ * 可见格线只画到「拍」：一个小节 = 分子个格子，小节线再叠一层。
+ * 吸附用的细分（`snap` = 拍/4，4/4 是十六分音符、6/8 是 32 分音符）细线**不画**——
+ * 画出来会让一个小节看起来有很多格，跟「一个小节几拍」对不上。
+ *
  * 所以**切换拍号会同时改变两个视图的网格格子与吸附精度**——这正是它该有的行为。
  */
 import { defineStore } from "pinia";
@@ -85,30 +89,29 @@ export const useTimelineStore = defineStore("timeline", () => {
   /** 宽度样式：至少铺满可视区，避免右侧出现空白。 */
   const widthStyle = computed(() => ({ width: `max(100%, ${contentWidth.value}px)` }));
 
-  /** CSS 背景网格用：细分线 / 拍线 / 小节线。 */
-  const snapPx = computed(() => `${zoom.value * snap.value}px`);
-  const beatPx = computed(() => `${zoom.value * meterBeat.value}px`);
+  /** 每小节像素：标尺与网格的小节宽度都用它。 */
   const barPx = computed(() => `${zoom.value * barBeats.value}px`);
 
   /**
    * 网格背景（编排与卷帘共用同一串）。
    *
-   * 细分网格太密时（小于 10px）直接不画——否则 1/16 甚至 1/32 网格会糊成一片密纹，
-   * 反而看不出拍与小节结构。拍线和小节线永远画。
+   * 只画两层：**拍线**（一个小节 = 分子个格子）+ **小节线**。
+   * 不再叠细分的吸附线——那会让一个小节看起来有很多格，和「一个小节几拍」对不上。
+   * 吸附精度（`snap`）不受影响：拖动仍按 `snap = meterBeat / 4` 吸附
+   * （4/4 是十六分音符，6/8 是 32 分音符），只是格线更干净。
+   *
+   * **顺序有讲究**：CSS 把 `background-image` 里**靠前**的那层画在最上面。
+   * `barBeats = sigNum × meterBeat`，所以每条小节线都必然压在一条拍线上；
+   * 小节线必须排在前，否则会被更淡的拍线盖掉而完全看不见。
+   * （后续分段 / 多拍号网格同样依赖这个顺序。）
    */
   const gridBackground = computed(() => {
     const layers: string[] = [];
-    const fine = zoom.value * snap.value;
-    if (fine >= 10) {
-      layers.push(
-        `repeating-linear-gradient(to right, var(--grid-line-fine) 0 1px, transparent 1px ${fine}px)`,
-      );
-    }
-    layers.push(
-      `repeating-linear-gradient(to right, var(--grid-line) 0 1px, transparent 1px ${zoom.value * meterBeat.value}px)`,
-    );
     layers.push(
       `repeating-linear-gradient(to right, var(--grid-bar) 0 1px, transparent 1px ${zoom.value * barBeats.value}px)`,
+    );
+    layers.push(
+      `repeating-linear-gradient(to right, var(--grid-line) 0 1px, transparent 1px ${zoom.value * meterBeat.value}px)`,
     );
     return layers.join(", ");
   });
@@ -160,8 +163,6 @@ export const useTimelineStore = defineStore("timeline", () => {
     totalBeats,
     contentWidth,
     widthStyle,
-    snapPx,
-    beatPx,
     barPx,
     gridBackground,
     snapBeats,

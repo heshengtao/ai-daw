@@ -610,7 +610,7 @@ onUnmounted(() => {
   <div
     ref="scroller"
     class="arrange"
-    :style="{ paddingLeft: `${TIMELINE_INSET_PX}px` }"
+    :style="{ paddingLeft: `${TIMELINE_INSET_PX}px`, '--timeline-inset': `${TIMELINE_INSET_PX}px` }"
     @scroll="onScroll"
     @pointermove="onPointerMove"
     @wheel="onWheel"
@@ -629,6 +629,18 @@ onUnmounted(() => {
         :style="{ height: `${LANE_H}px` }"
         @pointerdown="onLanePointerDown($event, track)"
       >
+        <!-- 左侧留白里的轨道色竖线：点它即选中这条音轨 -->
+        <!-- @pointerdown.stop：拦住冒泡，避免留白上的按下触发 lane 的拖拽建片段/框选删除 -->
+        <button
+          class="lane-accent"
+          type="button"
+          :style="{ '--track-hue': String(trackHue(ti)) }"
+          :aria-label="`${i18n.t('arrange.selectTrack')} · ${track.name}`"
+          :aria-pressed="selection.trackId === track.id"
+          @pointerdown.stop
+          @click.stop="selection.selectTrack(track.id)"
+        />
+
         <!-- 拖拽创建的预览 -->
         <div
           v-if="mode === 'create' && create.trackId === track.id"
@@ -736,6 +748,35 @@ onUnmounted(() => {
 }
 .lane.selected {
   background-color: rgb(var(--md-primary) / 0.05);
+}
+/* 左侧留白里的轨道色竖线：与左栏 .grip 同色，留白不再突兀 */
+.lane-accent {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--timeline-inset, 26px));
+  width: var(--timeline-inset, 26px);
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  background-color: hsl(var(--track-hue) 55% 55% / 0.1);
+}
+.lane-accent:hover {
+  background-color: hsl(var(--track-hue) 55% 55% / 0.18);
+}
+.lane-accent:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: -2px;
+}
+.lane-accent::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background-color: hsl(var(--track-hue) 55% 55%);
 }
 /* 拖拽创建预览：虚线框 + 轨道色淡填充 */
 .clip-ghost {

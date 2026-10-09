@@ -772,3 +772,17 @@ git commit -m "feat(synth): fixed-size window with scale-to-fit fallback"
 **Placeholder 扫描**：无 TBD/TODO；数据均为具体值。
 
 **类型一致性**：`WaveParams` 在 `waveform.ts` 定义、由 `SynthPanel` 的 `scopeParams` 与 `Oscilloscope` 的 props 共用；`SynthPanel` 的 emit 在 Task 8 增加 `applyPreset`，调用方在 Task 8 Step 2/3 同步接上；`FactoryPreset.category`（Task 6）与 `PresetOption.category`（Task 6 Step 4）命名一致。
+
+---
+
+## 执行后的遗留（follow-ups）
+
+Plan A 已完成全部 9 个任务，并通过最终整支复审（复审结论「with fixes」→ 一轮修复后复审干净）。以下为**非阻塞**的保留项，留作后续跟进：
+
+- `Oscilloscope.vue` 的 `.scope` 仍是硬编码 20px 圆角（不在 MD3 shape 刻度上）。
+- `SynthPanel.vue` 基础/高级两段旋钮的 `Md3Knob` 属性块重复（可抽薄封装，非必须）。
+- `synth.cutoff` / `synth.resonance` / `synth.envAmount`（及 `synth.vca` / `synth.amp` / `synth.legacyNote`）已成孤立 i18n 键。
+- 深色主题下 `.group` 以 `--md-surface-container-low` 取代 `--app-inset`，比原先略深（细微）。
+- 窄侧边栏（scale≈0.31）下预设下拉菜单最小宽度 200px，比触发器宽（仅视觉）。
+- 前端 ↔ 引擎参数表同步仍靠人工（无前端测试框架）；Rust 侧目前只断言了 5 个 `wave` 值。
+- **需人工肉眼确认**：窗口运行时确实不可缩放；侧边栏 320px 下面板整体缩到约 0.31（字很小）；窗口高度 < ~740px 时键盘会被裁掉且无滚动条。

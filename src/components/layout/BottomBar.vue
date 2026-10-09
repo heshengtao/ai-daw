@@ -19,6 +19,7 @@ import NumberField from "@/components/common/NumberField.vue";
 import TimeSignatureField from "@/components/common/TimeSignatureField.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
 import { useProjectStore } from "@/stores/project";
+import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
 import { useI18n } from "@/i18n";
 
@@ -26,6 +27,7 @@ const props = defineProps<{ aiActive: boolean }>();
 
 const store = useProjectStore();
 const transport = useTransportStore();
+const timeline = useTimelineStore();
 const i18n = useI18n();
 const tempo = ref(store.project?.transport.tempo ?? 120);
 
@@ -50,20 +52,18 @@ function onTimeSignature(num: number, den: number): void {
   void store.setTimeSignature(num, den);
 }
 
-/** 工程内容长度（小节）。 */
+/** 工程内容长度（小节）。与网格/标尺共用 timeline store 的同一个公式（spec §4.6）。 */
 const bars = computed(() => {
-  const clips = (store.project?.tracks ?? []).flatMap((t) => t.clips);
-  const beats = clips.reduce((m, c) => Math.max(m, c.start + c.length), 0);
-  const num = timeSigNum.value;
-  return beats > 0 ? Math.ceil(beats / num) : 0;
+  const beats = timeline.contentBeats;
+  if (beats <= 0) return 0;
+  return Math.ceil(beats / timeline.barBeats);
 });
 
-/** 当前位置（小节.拍），随实时位置推进。 */
+/** 当前位置（小节.拍），随实时位置推进。小节/拍长度同样取自 timeline store。 */
 const positionText = computed(() => {
   const beats = transport.positionBeats;
-  const num = timeSigNum.value;
-  const bar = Math.floor(beats / num) + 1;
-  const beat = Math.floor(beats % num) + 1;
+  const bar = Math.floor(beats / timeline.barBeats) + 1;
+  const beat = Math.floor((beats % timeline.barBeats) / timeline.meterBeat) + 1;
   return `${bar}.${beat}`;
 });
 

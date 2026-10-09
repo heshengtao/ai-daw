@@ -17,6 +17,8 @@ export interface PresetOption {
   id: string;
   name: string;
   note: string;
+  /** 出厂预设的类别 slug（`bass|lead|keys|pad|pluck|fx`）；用户自存预设留空。 */
+  category?: string;
   params: Record<string, number>;
   /** 出厂预设：不能删，但可以「另存为」出自己的版本。 */
   factory: boolean;
@@ -56,17 +58,19 @@ export const usePresetsStore = defineStore("presets", () => {
             id: p.id,
             name: t(p.name),
             note: t(p.note),
+            category: p.category,
             // 出厂预设是「补丁」，这里摊成完整参数集：切预设要一次把整台合成器设好。
             params: fullSynthParams(p.params),
             factory: true,
           }))
         : [];
+    // 用户自存预设没有类别（`category` 留空），界面按「我的预设」分组。
     const mine: PresetOption[] = user.value
       .filter((p) => canonicalPluginId(p.plugin_id) === id)
       .map((p, i) => ({
         id: p.id,
         name: p.name,
-        note: i === 0 ? "我的预设" : "",
+        note: i === 0 ? t("preset.mine") : "",
         params: p.params,
         factory: false,
       }));
