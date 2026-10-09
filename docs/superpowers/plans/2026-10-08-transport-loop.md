@@ -458,3 +458,23 @@ git commit -m "feat(transport): loop button in the bottom bar"
 **类型一致性**：Rust 侧字段名 `loop_` + serde rename `loop`（Task 3）与 TS 侧 `loop: boolean`（Task 4 Step 1）对应；`setLoop` 在 store（Task 4 Step 4）与按钮（Step 5）签名一致；`end_of_project_action` 在 Task 2 Step 4 定义、Step 5 使用。
 
 **风险提示**：`Seek { frame: 0 }` 会重置插件，循环点的长音会被截断重起（预期取舍，避免挂音）。若日后要更「无缝」，再单独引入「不重置插件的回卷」。
+
+---
+
+## 执行记录（随进度更新）
+
+### 全部完成（4/4）
+
+| 任务 | 提交 | 内容 |
+| --- | --- | --- |
+| 1 | `d127b37` | `TransportCommand::SetLoop(bool)`；`Player.looping` + `is_looping()`；命令处理 |
+| 2 | `c96fb59` | `SharedTransport.looping` + `is_looping()`；`end_of_project_action`；`start_with` 延续开关、回调按开关回卷/暂停 |
+| 3 | `a72d47a` | `TransportSnapshot.loop`（serde rename）；`transport_set_loop` 命令并注册 |
+| 4 | `56cc37a` | `loop` 类型/命令/mock（回绕）/store（预览 `audio.loop`）/底栏循环按钮 + i18n |
+
+**验证**：`cargo test -p daw-party-engine --features realtime` → 123 通过（含 `set_loop_toggles_the_flag_without_touching_playback`、`end_of_project_action_wraps_or_pauses`、`shared_transport_loop_flag`）；`cargo check --manifest-path src-tauri/Cargo.toml` 通过；`npm run build` 通过；词典中英 422 键一致。
+
+**说明**：
+- 循环开关**不写入工程、不进撤销历史、不持久化**（符合 Global Constraints）；编辑工程导致宿主重建时，`SharedTransport.looping` 会把它带回新 `Player`，界面因此不必重新订阅。
+- 实时路径下的「循环中编辑后仍保持循环」由上面的重建延续保证；离线试听路径由 `<audio>.loop` 承担。两者都需要人工肉眼/真机确认（计划 Step 8），本次未做设备级验证。
+
