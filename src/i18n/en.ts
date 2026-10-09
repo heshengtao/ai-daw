@@ -516,7 +516,7 @@ const en: Record<string, string> = {
   "preset.drum.kick.name": "Kick",
   "preset.drum.kick.note": "808-style: ~8 semitone drop over 31 ms, 350 ms decay",
   "preset.drum.snare.name": "Snare",
-  "preset.drum.snare.note": "Noise at 0.65 plus a drum-head tone · short and punchy",
+  "preset.drum.snare.note": "Triangle drum-head tone, a pitch-drop crack, noise at 0.6",
   "preset.drum.hat.name": "Closed Hat",
   "preset.drum.hat.note": "Pure noise, high-passed at ~8.5 kHz · 45 ms",
   "preset.drum.tom.name": "Tom",

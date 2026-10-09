@@ -323,9 +323,11 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
     note: "preset.drum.snare.note",
     category: "drums",
     params: {
-      // 噪声占大头（0.65），锯齿提供约 180–330 Hz 的鼓皮音；截止约 5 kHz。
-      gain: 0.8, wave: 0, noise: 0.65, attack: 0.0, decay: 0.18, sustain: 0.0, release: 0.06,
-      cutoff: 0.81, resonance: 0.1, filterEnv: 0.2, keyFollow: 0.0,
+      // 噪声占大头（0.6），三角波给出约 180–330 Hz 的鼓皮音，**音高包络**是那记「裂」：
+      // 0.2 ≈ 4.8 半音、pitchDecay 0.12 ≈ 10 ms 往下掉。低通约 4 kHz，一阶高通 53 Hz 去掉隆隆声。
+      gain: 0.8, wave: 3, noise: 0.6, attack: 0.0, decay: 0.16, sustain: 0.0, release: 0.06,
+      cutoff: 0.75, resonance: 0.15, filterEnv: 0.2, keyFollow: 0.0, hpf: 0.2,
+      pitchEnv: 0.2, pitchDecay: 0.12,
     },
   },
   {

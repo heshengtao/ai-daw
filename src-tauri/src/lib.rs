@@ -281,6 +281,7 @@ pub fn run() {
             commands::analyze_project,
             commands::export_wav,
             commands::import_audio,
+            commands::add_audio_clip,
             commands::audio_waveform,
             commands::list_plugins,
             commands::rescan_plugins,

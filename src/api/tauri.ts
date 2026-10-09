@@ -346,6 +346,23 @@ export function importAudio(path: string, track: number, start: number): Promise
   return invoke<Project>("import_audio", { path, track, start });
 }
 
+/**
+ * 把一个**已导入**的音频素材再放一份到轨道上（复制粘贴音频片段走它）。
+ *
+ * 与 `import_audio` 的区别：素材早就解码过、长度也由调用方给（粘贴要的是一模一样的副本），
+ * 所以不重新解码、也不重新按素材量长度。
+ */
+export function addAudioClip(
+  track: number,
+  start: number,
+  length: number,
+  path: string,
+  offsetFrames: number,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.addAudioClip(track, start, length, path, offsetFrames));
+  return invoke<Project>("add_audio_clip", { track, start, length, path, offsetFrames });
+}
+
 /** 取某个音频文件的波形包络（每桶 min/max 各一个值，长度 = `buckets * 2`）。 */
 export function audioWaveform(path: string, buckets: number): Promise<number[]> {
   if (mockEnabled()) return Promise.resolve(mockApi.audioWaveform(path, buckets));

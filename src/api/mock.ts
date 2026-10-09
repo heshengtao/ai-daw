@@ -724,6 +724,26 @@ export const mockApi = {
       }
     }),
 
+  addAudioClip: (
+    trackId: number,
+    start: number,
+    length: number,
+    path: string,
+    offsetFrames: number,
+  ): Project =>
+    commit(() => {
+      const t = track(trackId);
+      if (t) {
+        t.clips.push({
+          id: nextClipId++,
+          start: Math.max(0, start),
+          length,
+          notes: [],
+          audio: { path, offset_frames: offsetFrames },
+        });
+      }
+    }),
+
   audioWaveform: (_path: string, buckets: number): number[] => {
     const out: number[] = [];
     for (let i = 0; i < buckets; i += 1) {

@@ -187,6 +187,21 @@ export const useProjectStore = defineStore("project", () => {
     return edit(() => api.importAudio(path, track, start));
   }
 
+  /**
+   * 把一个已导入的音频素材再放一份到轨道上（复制粘贴音频片段走它）。
+   *
+   * 与 `importAudio` 的区别：不重新解码、不重新量长度——粘贴要的是一模一样的副本。
+   */
+  function addAudioClip(
+    track: number,
+    start: number,
+    length: number,
+    path: string,
+    offsetFrames: number,
+  ): Promise<void> {
+    return edit(() => api.addAudioClip(track, start, length, path, offsetFrames));
+  }
+
   /** 删除片段。 */
   function removeClip(track: number, clip: number): Promise<void> {
     return edit(() => api.removeClip(track, clip));
@@ -409,6 +424,7 @@ export const useProjectStore = defineStore("project", () => {
     setEffectParams,
     addClip,
     importAudio,
+    addAudioClip,
     removeClip,
     moveClip,
     moveClips,

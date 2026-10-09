@@ -515,7 +515,7 @@ const zh: Record<string, string> = {
   "preset.drum.kick.name": "底鼓",
   "preset.drum.kick.note": "808 式：约 8 半音下扫（31 ms）+ 350 ms 衰减",
   "preset.drum.snare.name": "军鼓",
-  "preset.drum.snare.note": "噪声 0.65 + 鼓皮音 · 短促有力",
+  "preset.drum.snare.note": "三角波鼓皮音 + 音高下扫的「裂」+ 噪声 0.6",
   "preset.drum.hat.name": "闭镲",
   "preset.drum.hat.note": "纯噪声 + 高通约 8.5 kHz · 45 ms",
   "preset.drum.tom.name": "通鼓",

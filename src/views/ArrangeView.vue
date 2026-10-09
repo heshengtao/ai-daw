@@ -548,6 +548,14 @@ async function pasteClip(): Promise<void> {
   const t = tracks.value.find((x) => x.id === trackId);
   const start = (t?.clips ?? []).reduce((m, c) => Math.max(m, c.start + c.length), 0);
   try {
+    // 音频片段：内容在 `audio` 上、`notes` 是空的。必须按音频建块，否则粘出来是个等长的空块。
+    if (p.audio) {
+      await store.addAudioClip(trackId, start, p.length, p.audio.path, p.audio.offset_frames);
+      const track = store.project?.tracks.find((x) => x.id === trackId);
+      const created = track?.clips[track.clips.length - 1];
+      if (created) selection.selectClip(trackId, created.id);
+      return;
+    }
     await store.addClip(trackId, start, p.length);
     const track = store.project?.tracks.find((x) => x.id === trackId);
     const created = track?.clips[track.clips.length - 1];

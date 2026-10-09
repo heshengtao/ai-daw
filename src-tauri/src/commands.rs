@@ -926,6 +926,32 @@ pub async fn import_audio(
     ))
 }
 
+/// 把一个**已导入**的音频素材再放一份到轨道上（复制粘贴音频片段走它）。
+///
+/// 与 [`import_audio`] 的区别：素材早就解码过，长度也由调用方给（粘贴要的是**一模一样**的副本），
+/// 所以这里不重新解码、也不重新按素材量长度——一次事务，一个撤销步骤。
+#[tauri::command]
+pub fn add_audio_clip(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    start: f64,
+    length: f64,
+    path: String,
+    offset_frames: u64,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::AddAudioClip {
+            track: TrackId(track),
+            start,
+            length,
+            source: AudioSource { path, offset_frames },
+        },
+    )
+}
+
 /// 取某个音频文件的波形包络（每桶 min/max 各一个值，长度 = `buckets * 2`），供界面绘制。
 #[tauri::command]
 pub async fn audio_waveform(
