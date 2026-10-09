@@ -1,8 +1,9 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tauri::{Emitter, Manager, State};
 
+use daw_party_engine::audio::AudioBuffer;
 use daw_party_engine::bus::Engine;
 use daw_party_engine::command::Command;
 use daw_party_engine::event::{Actor, Event};
@@ -11,7 +12,7 @@ use daw_party_engine::registry::PluginRegistry;
 use daw_party_engine::render::{render, RenderOptions};
 use daw_party_engine::transport::TransportCommand;
 use daw_party_engine::wav::wav_bytes;
-use daw_party_host_vst3::CatalogPlugin;
+use daw_party_host_vst3::{CatalogPlugin, EditorHandle};
 use daw_party_plugin_api::ParamInfo;
 
 use crate::audio::TransportSnapshot;
@@ -42,12 +43,17 @@ pub fn get_project(state: State<'_, AppState>) -> Project {
 
 /// 执行一条命令：应用状态、广播事件、把变更同步到音频线程。
 ///
-/// 这是**唯一**的编辑入口——界面与未来的 AI 代理都走这里，因此撤销历史、事件流与
-/// 实时播放天然保持一致。
-fn run(app: &tauri::AppHandle, state: &State<'_, AppState>, command: Command) -> Project {
+/// 这是**唯一**的编辑入口——界面与 AI 代理（MCP）都走这里，因此撤销历史、事件流与
+/// 实时播放天然保持一致。`actor` 决定事件流里的署名是人还是代理。
+fn run_as(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    actor: Actor,
+    command: Command,
+) -> (Project, Vec<Event>) {
     let (project, events) = {
         let mut engine = state.engine.lock().unwrap();
-        let events: Vec<Event> = engine.execute(command, Actor::Human);
+        let events: Vec<Event> = engine.execute(command, actor);
         (engine.project().clone(), events)
     };
     for event in &events {
@@ -59,7 +65,43 @@ fn run(app: &tauri::AppHandle, state: &State<'_, AppState>, command: Command) ->
     if events.iter().any(is_structural) {
         close_all_plugin_windows(app, state);
     }
-    project
+    (project, events)
+}
+
+/// 界面走的编辑入口（署名 `Actor::Human`）。
+fn run(app: &tauri::AppHandle, state: &State<'_, AppState>, command: Command) -> Project {
+    run_as(app, state, Actor::Human, command).0
+}
+
+/// MCP 服务器走的编辑入口：署名 `Actor::Agent`，其余管线与界面**完全一致**。
+///
+/// 返回新工程与本次产生的事件，便于工具把手边新对象的 id 回给代理。
+pub(crate) fn run_agent(app: &tauri::AppHandle, command: Command) -> (Project, Vec<Event>) {
+    let state = app.state::<AppState>();
+    run_as(app, &state, Actor::Agent("mcp".into()), command)
+}
+
+/// 渲染一份快照所需的全部输入（工程 + 插件目录 + 编辑器句柄表）。
+///
+/// 只在锁内克隆工程，绝不把 `MutexGuard` 带过 `.await`。
+pub(crate) fn render_inputs(
+    state: &AppState,
+) -> (Project, Vec<CatalogPlugin>, Arc<Mutex<HashMap<u64, EditorHandle>>>) {
+    let project = state.engine.lock().unwrap().project().clone();
+    (project, state.catalog_snapshot(), Arc::clone(&state.editor_handles))
+}
+
+/// 离线渲染一段工程快照（预览 / 导出 / 分析 / MCP 共用同一条路径）。
+pub(crate) fn render_offline(
+    project: Project,
+    catalog: Vec<CatalogPlugin>,
+    editor_handles: Arc<Mutex<HashMap<u64, EditorHandle>>>,
+    sample_rate: u32,
+    tail_seconds: f64,
+) -> AudioBuffer {
+    let registry = build_registry(&catalog, &project, editor_handles);
+    let options = RenderOptions { sample_rate: sample_rate as f64, tail_seconds };
+    render(&project, &registry, &options)
 }
 
 /// 该事件是否会导致播放器重建（混音与实时参数不会）。
@@ -497,10 +539,9 @@ pub fn history_depths(state: State<'_, AppState>) -> HistoryDepths {
     HistoryDepths { undo: engine.undo_depth(), redo: engine.redo_depth() }
 }
 
-/// 撤销最后一次命令。
-#[tauri::command]
-pub fn undo(state: State<'_, AppState>) -> HistoryState {
-    let (state_out, project) = {
+/// 撤销最后一次命令（界面命令与 MCP 共用）。
+pub(crate) fn undo_now(state: &AppState) -> HistoryState {
+    let (out, project) = {
         let mut engine = state.engine.lock().unwrap();
         engine.undo();
         (
@@ -514,13 +555,12 @@ pub fn undo(state: State<'_, AppState>) -> HistoryState {
     };
     // 撤销是"重放历史"实现的，结果可能任意偏离当前事件表，因此整表重建。
     state.audio.load(&project);
-    state_out
+    out
 }
 
-/// 重做上一次被撤销的命令。
-#[tauri::command]
-pub fn redo(state: State<'_, AppState>) -> HistoryState {
-    let (state_out, project) = {
+/// 重做上一次被撤销的命令（界面命令与 MCP 共用）。
+pub(crate) fn redo_now(state: &AppState) -> HistoryState {
+    let (out, project) = {
         let mut engine = state.engine.lock().unwrap();
         engine.redo();
         (
@@ -533,7 +573,19 @@ pub fn redo(state: State<'_, AppState>) -> HistoryState {
         )
     };
     state.audio.load(&project);
-    state_out
+    out
+}
+
+/// 撤销最后一次命令。
+#[tauri::command]
+pub fn undo(state: State<'_, AppState>) -> HistoryState {
+    undo_now(&state)
+}
+
+/// 重做上一次被撤销的命令。
+#[tauri::command]
+pub fn redo(state: State<'_, AppState>) -> HistoryState {
+    redo_now(&state)
 }
 
 // ---------------------------------------------------------------------------
@@ -666,14 +718,9 @@ pub async fn render_preview(
     sample_rate: u32,
 ) -> Result<tauri::ipc::Response, String> {
     validate_sample_rate(sample_rate)?;
-    // 只在锁内克隆工程快照，绝不把 MutexGuard 带过 `.await`。
-    let project = { state.engine.lock().unwrap().project().clone() };
-    let catalog = state.catalog_snapshot();
-    let editor_handles = Arc::clone(&state.editor_handles);
+    let (project, catalog, editor_handles) = render_inputs(&state);
     let bytes = tauri::async_runtime::spawn_blocking(move || {
-        let registry = build_registry(&catalog, &project, editor_handles);
-        let options = RenderOptions { sample_rate: sample_rate as f64, tail_seconds: 0.5 };
-        let buffer = render(&project, &registry, &options);
+        let buffer = render_offline(project, catalog, editor_handles, sample_rate, 0.5);
         wav_bytes(&buffer, sample_rate)
     })
     .await
@@ -691,14 +738,10 @@ pub async fn analyze_project(
     sample_rate: u32,
 ) -> Result<daw_party_analysis::Report, String> {
     validate_sample_rate(sample_rate)?;
-    let project = { state.engine.lock().unwrap().project().clone() };
-    let catalog = state.catalog_snapshot();
-    let editor_handles = Arc::clone(&state.editor_handles);
+    let (project, catalog, editor_handles) = render_inputs(&state);
     tauri::async_runtime::spawn_blocking(move || {
-        let registry = build_registry(&catalog, &project, editor_handles);
         // 分析只关心工程正文，不加尾音。
-        let options = RenderOptions { sample_rate: sample_rate as f64, tail_seconds: 0.0 };
-        let buffer = render(&project, &registry, &options);
+        let buffer = render_offline(project, catalog, editor_handles, sample_rate, 0.0);
         daw_party_analysis::analyze(buffer.data(), buffer.channels(), sample_rate as f64)
             .map_err(|e| e.to_string())
     })
@@ -715,13 +758,9 @@ pub async fn export_wav(
 ) -> Result<String, String> {
     validate_sample_rate(sample_rate)?;
     // 同样只在锁内克隆，渲染与写盘都放到阻塞线程池，避免卡住主线程。
-    let project = { state.engine.lock().unwrap().project().clone() };
-    let catalog = state.catalog_snapshot();
-    let editor_handles = Arc::clone(&state.editor_handles);
+    let (project, catalog, editor_handles) = render_inputs(&state);
     tauri::async_runtime::spawn_blocking(move || {
-        let registry = build_registry(&catalog, &project, editor_handles);
-        let options = RenderOptions { sample_rate: sample_rate as f64, tail_seconds: 0.5 };
-        let buffer = render(&project, &registry, &options);
+        let buffer = render_offline(project, catalog, editor_handles, sample_rate, 0.5);
         daw_party_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| e.to_string())?;
         Ok::<String, String>(path)
     })

@@ -3,6 +3,7 @@
 mod audio;
 mod commands;
 mod main_thread;
+mod mcp;
 mod plugins;
 mod presets;
 mod state;
@@ -220,6 +221,8 @@ pub fn run() {
             spawn_transport_ticker(app.handle().clone(), audio);
             spawn_plugin_scan(app.handle().clone());
             spawn_editor_ticker(app.handle().clone());
+            // 内嵌 MCP 服务器：把 DAW 能力暴露给 AI 代理（只监听回环）。
+            crate::mcp::spawn(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

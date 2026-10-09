@@ -27,6 +27,16 @@ daw-party-engine = { path = "../crates/engine", features = ["realtime"] }
 daw-party-plugin-api = { path = "../crates/plugin-api" }
 daw-party-host-vst3 = { path = "../crates/host-vst3" }
 daw-party-analysis = { path = "../crates/analysis" }
+# 内嵌 MCP 服务器（Streamable HTTP，只监听回环）。
+rmcp = { version = "3", features = [
+    "server",
+    "macros",
+    "schemars",
+    "transport-streamable-http-server",
+] }
+axum = "0.8"
+tokio = { version = "1", features = ["net"] }
+schemars = "1"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
