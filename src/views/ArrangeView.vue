@@ -635,7 +635,7 @@ onUnmounted(() => {
           class="lane-accent"
           type="button"
           :style="{ '--track-hue': String(trackHue(ti)) }"
-          :aria-label="i18n.t('arrange.selectTrack')"
+          :aria-label="`${i18n.t('arrange.selectTrack')} · ${track.name}`"
           :aria-pressed="selection.trackId === track.id"
           @pointerdown.stop
           @click.stop="selection.selectTrack(track.id)"

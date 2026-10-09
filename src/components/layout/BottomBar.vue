@@ -19,6 +19,7 @@ import NumberField from "@/components/common/NumberField.vue";
 import TimeSignatureField from "@/components/common/TimeSignatureField.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
 import { useProjectStore } from "@/stores/project";
+import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
 import { useI18n } from "@/i18n";
 
@@ -26,6 +27,7 @@ const props = defineProps<{ aiActive: boolean }>();
 
 const store = useProjectStore();
 const transport = useTransportStore();
+const timeline = useTimelineStore();
 const i18n = useI18n();
 const tempo = ref(store.project?.transport.tempo ?? 120);
 
@@ -50,26 +52,18 @@ function onTimeSignature(num: number, den: number): void {
   void store.setTimeSignature(num, den);
 }
 
-/** 一小节多少拍（四分音符数）：分子 × 4/分母。与网格/标尺的 barBeats 同一算法。 */
-const barBeats = computed(() => timeSigNum.value * (4 / Math.max(1, timeSigDen.value)));
-
-/** 拍号里那一「拍」等于多少四分音符。 */
-const meterBeat = computed(() => 4 / Math.max(1, timeSigDen.value));
-
-/** 工程内容长度（小节）。 */
+/** 工程内容长度（小节）。与网格/标尺共用 timeline store 的同一个公式（spec §4.6）。 */
 const bars = computed(() => {
-  const clips = (store.project?.tracks ?? []).flatMap((t) => t.clips);
-  const beats = clips.reduce((m, c) => Math.max(m, c.start + c.length), 0);
+  const beats = timeline.contentBeats;
   if (beats <= 0) return 0;
-  const bar = barBeats.value;
-  return Math.max(1, Math.ceil(beats / bar));
+  return Math.ceil(beats / timeline.barBeats);
 });
 
-/** 当前位置（小节.拍），随实时位置推进。 */
+/** 当前位置（小节.拍），随实时位置推进。小节/拍长度同样取自 timeline store。 */
 const positionText = computed(() => {
   const beats = transport.positionBeats;
-  const bar = Math.floor(beats / barBeats.value) + 1;
-  const beat = Math.floor((beats % barBeats.value) / meterBeat.value) + 1;
+  const bar = Math.floor(beats / timeline.barBeats) + 1;
+  const beat = Math.floor((beats % timeline.barBeats) / timeline.meterBeat) + 1;
   return `${bar}.${beat}`;
 });
 
