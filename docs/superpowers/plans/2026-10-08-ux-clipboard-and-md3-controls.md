@@ -691,3 +691,35 @@ git commit -m "fix(synth): drop the no-op 'select this track' button from the sy
 **类型一致性**：`ClipboardPayload` / `useClipboardStore` 在 Task 8 定义并使用；`lastClipLength` / `lastNoteLength` / `remember*` 在 Task 9 Step 1 定义、Step 2/3 使用；`Md3Select` 的 `action`/`@action` 在 Task 1 定义、Task 2 使用；`.md3-field` 在 Task 3 定义并在同任务四处使用。
 
 **注意**：Task 8 与 Task 9 都改 `ArrangeView.vue` / `EditView.vue`，按顺序执行即可；Task 9 依赖 Task 8 之后的文件状态。
+
+---
+
+## 执行记录（随进度更新）
+
+### 全部完成（10/10）
+
+| 任务 | 提交 | 内容 |
+| --- | --- | --- |
+| 1 | `f6afeba` | `Md3Select` 可选底部动作行（`action` prop + `@action` 事件 + `.menu-sep`） |
+| 2 | `204a12d` | 音色选择器合并进 `Md3Select`；删除 `InstrumentSelect.vue`；「浏览全部音色」用动作行打开 `InstrumentBrowser` |
+| 3 | `ea6bca2` | `.md3-field` 共享类（轨道名 / 预设名 / 数值步进器 / 搜索框）；删除死类 `.input-filled`/`.input-outlined`/`.no-spinner`；显式 `[data-accent="lavender"]` |
+| 4 | `b093d4f` | 硬编码文案 i18n 清扫（`PluginsPane`/`TrackHeaderList`/`RightPanel`/`PianoKeyboard`/`SynthWindowView`/`SettingsView`）；中英各补 12 个键 |
+| 5 | `a3f2b30` | `Logo` 新增 `filled` 形态；品牌区改用薰衣草紫药丸底 |
+| 6 | `d9f5485` | PanelTabs 的 `pick` 改为 `layout.openTab`（选中即切过去） |
+| 7 | `7d40d9f` | 控制器默认属性改「音量」；删除空片段文字提示与 `.roll-empty` |
+| 8 | `255a6f3` | `stores/clipboard.ts` + 编排/卷帘的 Ctrl/Cmd+C / V 复制粘贴 |
+| 9 | `1e34f7b` | `selection` 记忆长度；单击空白用「上次选中长度」创建片段/音符 |
+| 10 | `6e479f2` | 删除合成器窗口的无效「在主窗口选中这条轨道」按钮、孤立代码与过时注释 |
+
+**验证**：`npm run build`（`vue-tsc --noEmit` + `vite build`）每个任务后均通过；`node` 脚本校验中英词典键集一致（420 键）。
+
+**与计划的实现差异（供后续参考）**：
+- Task 2 计划里写 `i18n.t('browser.open')`，但该键不存在（`t()` 会回退成键名）。改用已有的 `instrument.browse`（「浏览全部音色…」）。
+- Task 4 计划里列的 `plugins.builtin` / `settings.showTrackBar` / `settings.trackBarWidth` 等键，实际复用了已有的 `common.builtin` / `settings.panels.tracks` / `settings.width.tracks` 等（文案本来就一致），只新增了 12 个确实缺失的键。
+- Task 4 计划列了 `ArrangeView.vue`，但该文件此前已全部走 i18n，无需改动。
+- Task 10 在本次会话开始时仍未实现（提交 `1fa4775` 的标题虽提到该按钮，但代码仍在），本次一并删除。
+
+### 已知遗留（不阻塞）
+
+- 粘贴走 `addClip` + 逐条 `addNote`，因此「粘贴一个片段」会产生多条撤销记录（v1 语义）。若要一次撤销，需要引擎侧批量命令。
+
