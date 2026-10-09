@@ -1,11 +1,12 @@
 <script setup lang="ts">
 /**
- * 音色浏览器（模态框）：音色多起来之后，光靠下拉列表就不够用了。
+ * 插件浏览器（模态框）：`kind` 决定浏览**音色**还是**效果器**。
  *
- * 提供三种找法：
- * - **搜索**：名称、分类、关键词、说明都能命中（中英文都行）；
- * - **筛选**：按分类（合成器 / 预设音色 / 外部插件）；
- * - **排序**：分类顺序 / 名称 A→Z / 内置优先。
+ * 两者找法一样——搜索（名称、分类、关键词、说明都能命中，中英文都行）、按来源筛选、排序——
+ * 但**选中语义不同**：
+ * - **音色**：一轨只有一件，所以是「换成它」（`pick`）；
+ * - **效果器**：效果链是**可多选**的，所以是「点一下加入、再点一下移出」（`toggle`），
+ *   而且同一条效果器可以在链上出现多次，所以这里显示的是**链上已有的个数**。
  *
  * 面板用 Teleport 到 body，并自己管焦点与 Escape。
  */
@@ -18,16 +19,39 @@ import { useI18n } from "@/i18n";
 const plugins = usePluginsStore();
 const i18n = useI18n();
 
-const props = defineProps<{
-  open: boolean;
-  /** 当前插件 id（用于打勾）。 */
-  current: string | null;
-}>();
+const props = withDefaults(
+  defineProps<{
+    open: boolean;
+    /** 浏览音色还是效果器。 */
+    kind?: "instrument" | "effect";
+    /** 当前插件 id（音色用它打勾）。 */
+    current?: string | null;
+    /** 当前效果链（效果器用它显示「链上有几个」并打勾）。 */
+    chain?: { plugin_id: string }[];
+  }>(),
+  { kind: "instrument", current: null, chain: () => [] },
+);
 
 const emit = defineEmits<{
   (e: "update:open", value: boolean): void;
+  /** 音色：换成它（空串 = 卸载）。 */
   (e: "pick", id: string): void;
+  /** 效果器：加入 / 移出效果链。 */
+  (e: "toggle", id: string): void;
 }>();
+
+/** 是不是效果器模式。 */
+const isEffect = computed(() => props.kind === "effect");
+
+/** 链上某个效果器出现了几次（效果链允许同一条重复）。 */
+function chainCount(pluginId: string): number {
+  return props.chain.filter((f) => f.plugin_id === pluginId).length;
+}
+
+/** 是否已作用于当前轨道：音色看「是不是当前乐器」，效果器看「在不在链上」。 */
+function isChosen(id: string): boolean {
+  return isEffect.value ? chainCount(id) > 0 : props.current === id;
+}
 
 type SortKey = "category" | "name" | "builtin";
 
@@ -46,6 +70,17 @@ const TAGS: { id: TagKey; labelKey: string }[] = [
   { id: "external", labelKey: "browser.tagExternal" },
 ];
 
+/** 效果器模式下「内置 / 外部」那两个标签换一套说法（乐器叫「内置乐器」，效果器叫「内置效果」）。 */
+const tags = computed(() =>
+  isEffect.value
+    ? [
+        { id: "all" as TagKey, labelKey: "browser.tagAll" },
+        { id: "builtin" as TagKey, labelKey: "browser.tagBuiltinFx" },
+        { id: "external" as TagKey, labelKey: "browser.tagExternalFx" },
+      ]
+    : TAGS,
+);
+
 const query = ref("");
 const tag = ref<TagKey>("all");
 const sort = ref<SortKey>("category");
@@ -53,7 +88,7 @@ const searchEl = ref<HTMLInputElement | null>(null);
 
 const results = computed<PluginInfo[]>(() => {
   const q = query.value.trim().toLowerCase();
-  let list = plugins.instruments.filter((it) => {
+  let list = (isEffect.value ? plugins.effects : plugins.instruments).filter((it) => {
     if (tag.value === "builtin" && !it.builtin) return false;
     if (tag.value === "external" && it.builtin) return false;
     if (!q) return true;
@@ -73,6 +108,11 @@ function close(): void {
 }
 
 function pick(id: string): void {
+  if (isEffect.value) {
+    // 效果器**不关窗**：多选是常态，关掉反而要反复打开。
+    emit("toggle", id);
+    return;
+  }
   emit("pick", id);
   close();
 }
@@ -105,12 +145,12 @@ watch(
           class="dialog"
           role="dialog"
           aria-modal="true"
-          :aria-label="i18n.t('browser.title')"
+          :aria-label="i18n.t(isEffect ? 'browser.titleFx' : 'browser.title')"
           tabindex="-1"
           @keydown="onKey"
         >
           <header class="head">
-            <h2 class="title">{{ i18n.t("browser.title") }}</h2>
+            <h2 class="title">{{ i18n.t(isEffect ? "browser.titleFx" : "browser.title") }}</h2>
             <button class="icon-btn" :aria-label="i18n.t('common.close')" @click="close">
               <XMarkIcon class="w-[18px] h-[18px]" />
             </button>
@@ -126,8 +166,8 @@ watch(
                 type="text"
                 spellcheck="false"
                 autocomplete="off"
-                :placeholder="i18n.t('browser.searchPlaceholder')"
-                :aria-label="i18n.t('browser.searchLabel')"
+                :placeholder="i18n.t(isEffect ? 'browser.searchPlaceholderFx' : 'browser.searchPlaceholder')"
+                :aria-label="i18n.t(isEffect ? 'browser.searchPlaceholderFx' : 'browser.searchLabel')"
               />
               <button v-if="query" class="search-clear" :aria-label="i18n.t('browser.clearSearch')" @click="query = ''">
                 <XMarkIcon class="w-[14px] h-[14px]" />
@@ -136,7 +176,7 @@ watch(
 
             <div class="chips" role="group" :aria-label="i18n.t('browser.filterBySource')">
               <button
-                v-for="c in TAGS"
+                v-for="c in tags"
                 :key="c.id"
                 class="chip"
                 :class="{ on: tag === c.id }"
@@ -167,31 +207,43 @@ watch(
           <div class="body">
             <ul v-if="results.length > 0" class="list">
               <li v-for="it in results" :key="it.id">
-                <button class="row" :class="{ on: current === it.id }" @click="pick(it.id)">
+                <button class="row" :class="{ on: isChosen(it.id) }" @click="pick(it.id)">
                   <span class="row-main">
                     <span class="row-top">
                       <span class="row-name">{{ it.name }}</span>
                       <span class="badge" :class="{ builtin: it.builtin }">{{ it.category }}</span>
+                      <!-- 效果链允许同一条重复，所以给的是**个数**而不是「已选」。 -->
+                      <span v-if="isEffect && chainCount(it.id) > 1" class="badge count">
+                        {{ i18n.t("browser.onChain", { n: chainCount(it.id) }) }}
+                      </span>
                     </span>
                     <span class="row-note">{{ it.note }}</span>
                   </span>
-                  <CheckIcon v-if="current === it.id" class="row-check" />
+                  <CheckIcon v-if="isChosen(it.id)" class="row-check" />
                 </button>
               </li>
             </ul>
 
             <div v-else class="empty">
               <NoSymbolIcon class="empty-icon" />
-              <p class="empty-text">{{ i18n.t("browser.empty") }}</p>
+              <p class="empty-text">
+                {{ i18n.t(isEffect ? "browser.emptyFx" : "browser.empty") }}
+              </p>
               <p class="empty-hint">{{ i18n.t("browser.emptyHint") }}</p>
             </div>
           </div>
 
           <footer class="foot">
             <span class="count">{{
-              i18n.t("browser.count", { shown: results.length, total: plugins.instruments.length })
+              i18n.t(isEffect ? "browser.countFx" : "browser.count", {
+                shown: results.length,
+                total: (isEffect ? plugins.effects : plugins.instruments).length,
+              })
             }}</span>
-            <button v-if="current" class="clear-btn" @click="pick('')">{{ i18n.t("browser.unload") }}</button>
+            <!-- 音色可以一键卸载；效果器的「移出」就是再点一次那一行（可多选）。 -->
+            <button v-if="!isEffect && current" class="clear-btn" @click="pick('')">
+              {{ i18n.t("browser.unload") }}
+            </button>
           </footer>
         </div>
       </div>
@@ -435,6 +487,10 @@ watch(
   background-color: rgb(var(--md-surface-container-highest));
   color: rgb(var(--md-on-surface-variant));
   white-space: nowrap;
+}
+.badge.count {
+  background-color: rgb(var(--md-primary) / 0.16);
+  color: rgb(var(--md-primary));
 }
 .badge.builtin {
   background-color: rgb(var(--md-primary) / 0.16);

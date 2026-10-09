@@ -110,7 +110,16 @@ fn exercise(format: &str) {
     assert!(d.capabilities.has_editor, "{format} 的 KR-106 自带原生界面");
 
     plugin.prepare(48_000.0, 512);
-    assert!(!plugin.params().is_empty(), "{format} 应能读到插件参数");
+    let params = plugin.params();
+    assert!(!params.is_empty(), "{format} 应能读到插件参数");
+
+    // 「恢复默认参数」就是把这批 `default` 整组写回，所以后端**必须报真实默认值**。
+    // VST3 适配器曾把它们硬写成 0.0：点一下就等于把所有参数清零，乐器当场哑掉
+    // （CLAP 后端一直报的是真实值，于是只有 VST3 中招）。
+    assert!(
+        params.iter().any(|p| p.default != 0.0),
+        "{format} 的参数默认值不应当全是 0——那说明后端没把插件的默认值传下来"
+    );
 
     let ctx = ProcessContext { sample_rate: 48_000.0, block_size: 512, tempo: 120.0, playing: true };
     let events = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } }];

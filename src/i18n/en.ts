@@ -281,6 +281,7 @@ const en: Record<string, string> = {
   "inspector.add": "Add",
   "inspector.addFx": "Add effect",
   "inspector.chooseFx": "Choose an effect…",
+  "inspector.browseFx": "Browse all effects…",
   "inspector.mix": "Mix",
   "inspector.gain": "Gain",
   "inspector.pan": "Pan",
@@ -363,6 +364,13 @@ const en: Record<string, string> = {
   "browser.emptyHint": "Try another keyword, or switch the source back to “All”",
   "browser.unload": "Unload the current instrument",
   "browser.count": "{shown} / {total} sounds",
+  "browser.titleFx": "All Effects",
+  "browser.searchPlaceholderFx": "Search effects, categories or tags…",
+  "browser.tagBuiltinFx": "Built-in effects",
+  "browser.tagExternalFx": "External effects",
+  "browser.emptyFx": "No matching effects",
+  "browser.countFx": "{shown} / {total} effects",
+  "browser.onChain": "{n} on chain",
 
   // ---- Plugin editor pane ----
   "editor.timbre": "Sound",

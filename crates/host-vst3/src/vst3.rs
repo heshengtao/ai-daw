@@ -27,6 +27,12 @@ struct ParamMeta {
     rack_id: u32,
     id: ParamId,
     name: String,
+    /// 插件自报的**归一化**默认值。
+    ///
+    /// 必须传下去：界面上的「恢复默认参数」就是把它整组写回。早先这里被硬写成 0.0，
+    /// 于是对 VST3 点一下「恢复默认」＝把**所有**参数清零，乐器当场哑掉
+    /// （CLAP 那边一直报的是真实默认值，所以只有 VST3 出事）。
+    default: f32,
     automatable: bool,
 }
 
@@ -68,6 +74,7 @@ impl Vst3HostedPlugin {
                 rack_id: p.id,
                 id: ParamId(p.id.to_string()),
                 name: p.name,
+                default: p.default as f32,
                 automatable: p.can_automate,
             })
             .collect();
@@ -129,7 +136,7 @@ impl Plugin for Vst3HostedPlugin {
                 name: p.name.clone(),
                 min: 0.0,
                 max: 1.0,
-                default: 0.0,
+                default: p.default,
                 automatable: p.automatable,
             })
             .collect()

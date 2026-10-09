@@ -93,16 +93,21 @@ pub(crate) struct RenderInputs {
     pub samples: HashMap<String, Arc<DecodedAudio>>,
 }
 
-/// 取当前状态的可渲染快照（工程 + 插件目录 + 编辑器句柄表 + 已解码素材）。
+/// 取当前状态的可渲染快照（工程 + 插件目录 + 已解码素材）。
 ///
 /// 只在锁内克隆工程，绝不把 `MutexGuard` 带过 `.await`。
+///
+/// **不带编辑器句柄表**：离线渲染（预览 / 导出 / 分析 / MCP）会为每条轨道**新建**一套插件实例，
+/// 而插件工厂在创建实例时会把句柄登记进传进来的那张表。如果传的是实时播放那张表，
+/// 刚渲染出来的**一次性实例**就会把正在发声的实例的句柄顶掉——之后「打开界面」开到的是一个
+/// 不在音频图里的实例：界面能开、旋钮能动，但**听不到任何声音**。
 pub(crate) fn render_inputs(state: &AppState) -> RenderInputs {
     let project = state.engine.lock().unwrap().project().clone();
     let samples = state.assets.snapshot_for(&project.audio_paths());
     RenderInputs {
         project,
         catalog: state.catalog_snapshot(),
-        editor_handles: Arc::clone(&state.editor_handles),
+        editor_handles: Arc::new(Mutex::new(HashMap::new())),
         samples,
     }
 }
@@ -1416,4 +1421,29 @@ pub fn update_preset(
 #[tauri::command]
 pub fn delete_preset(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.presets.lock().unwrap().remove(&id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 离线渲染**绝不能**共用实时播放的编辑器句柄表。
+    ///
+    /// 插件工厂在创建实例时会把句柄登记进传进来的那张表。离线渲染（预览 / 导出 / 分析 / MCP）
+    /// 会为每条轨道新建一套一次性实例——如果它拿的是实时那张表，就会把正在发声的实例的句柄顶掉，
+    /// 之后「打开界面」开到的是个不在音频图里的实例：界面能开、旋钮能动，**却听不到声音**。
+    #[test]
+    fn offline_render_does_not_share_the_live_editor_handles() {
+        let state = AppState::new("t");
+        let inputs = render_inputs(&state);
+
+        assert!(
+            !Arc::ptr_eq(&inputs.editor_handles, &state.editor_handles),
+            "离线渲染必须用自己的一次性句柄表"
+        );
+        assert!(
+            inputs.editor_handles.lock().unwrap().is_empty(),
+            "一次性句柄表应当是空的"
+        );
+    }
 }

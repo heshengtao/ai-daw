@@ -13,7 +13,7 @@
 import { computed, ref, watch } from "vue";
 import Md3Slider from "@/components/common/Md3Slider.vue";
 import Md3Select, { type SelectOption } from "@/components/common/Md3Select.vue";
-import InstrumentBrowser from "@/components/common/InstrumentBrowser.vue";
+import PluginBrowser from "@/components/common/PluginBrowser.vue";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
@@ -152,6 +152,29 @@ async function addFx(pluginId: string): Promise<void> {
     layout.notify(i18n.t("error.addEffect", { error: String(err) }));
   }
 }
+
+/**
+ * 浏览器里点一条效果器：**点一下加入、再点一下移出**（与「插件」面板一致）。
+ *
+ * 效果链允许同一条重复，所以这里移出的是**最后一条**同名效果器。
+ */
+async function toggleFx(pluginId: string): Promise<void> {
+  const t = track.value;
+  if (!t) return;
+  // 从后往前找（`findLastIndex` 在当前的 TS 目标库里没有）。
+  let index = -1;
+  for (let i = t.effects.length - 1; i >= 0; i -= 1) {
+    if (t.effects[i]?.plugin_id === pluginId) {
+      index = i;
+      break;
+    }
+  }
+  if (index >= 0) await removeFx(index);
+  else await addFx(pluginId);
+}
+
+/** 「浏览全部效果器…」模态框的开关。 */
+const fxBrowserOpen = ref(false);
 
 /** 效果器下拉的候选项。 */
 const fxOptions = computed(() =>
@@ -322,7 +345,9 @@ async function toggleSolo(): Promise<void> {
               :label="i18n.t('inspector.addFx')"
               :placeholder="i18n.t('inspector.chooseFx')"
               :empty="i18n.t('fx.none')"
+              :action="{ label: i18n.t('inspector.browseFx') }"
               @select="addFx"
+              @action="fxBrowserOpen = true"
             />
           </div>
         </div>
@@ -385,10 +410,18 @@ async function toggleSolo(): Promise<void> {
         </div>
       </section>
 
-      <InstrumentBrowser
+      <PluginBrowser
         v-model:open="browserOpen"
+        kind="instrument"
         :current="currentTimbre"
         @pick="onPickTimbre"
+      />
+
+      <PluginBrowser
+        v-model:open="fxBrowserOpen"
+        kind="effect"
+        :chain="track.effects"
+        @toggle="toggleFx"
       />
     </template>
 

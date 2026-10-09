@@ -280,6 +280,7 @@ const zh: Record<string, string> = {
   "inspector.add": "添加",
   "inspector.addFx": "添加效果器",
   "inspector.chooseFx": "选择效果器…",
+  "inspector.browseFx": "浏览全部效果器…",
   "inspector.mix": "混音",
   "inspector.gain": "增益",
   "inspector.pan": "声像",
@@ -362,6 +363,13 @@ const zh: Record<string, string> = {
   "browser.emptyHint": "换个关键词，或把来源切回「全部」",
   "browser.unload": "卸载当前乐器",
   "browser.count": "{shown} / {total} 个音色",
+  "browser.titleFx": "全部效果器",
+  "browser.searchPlaceholderFx": "搜索效果器、分类或关键词…",
+  "browser.tagBuiltinFx": "内置效果",
+  "browser.tagExternalFx": "外部效果",
+  "browser.emptyFx": "没有匹配的效果器",
+  "browser.countFx": "{shown} / {total} 个效果器",
+  "browser.onChain": "链上 {n} 个",
 
   // ---- 插件界面面板 ----
   "editor.timbre": "音色",
