@@ -77,13 +77,22 @@ pub struct OutputFormatRange {
 
 impl OutputFormatRange {
     /// 该段内最接近 `rate` 的采样率（夹在 `[min_rate, max_rate]` 内）。
+    ///
+    /// 字段是 `pub`，可能来自畸形外部输入：这里用 `min`/`max` 先把区间归一化，而不是直接
+    /// `Ord::clamp`——`clamp` 在 `min > max` 时会 panic，反向区间绝不能让它崩。反向时按
+    /// 交换后的合法区间处理（与 [`OutputFormatRange::covers`] 保持一致）。
     pub fn nearest_rate(&self, rate: u32) -> u32 {
-        rate.clamp(self.min_rate, self.max_rate)
+        let (min, max) = (self.min_rate.min(self.max_rate), self.min_rate.max(self.max_rate));
+        rate.clamp(min, max)
     }
 
     /// 该段是否覆盖给定采样率。
+    ///
+    /// 与 [`OutputFormatRange::nearest_rate`] 用同一套归一化：反向区间按交换后的区间判定，
+    /// 二者对畸形输入的解释因此始终一致。
     pub fn covers(&self, rate: u32) -> bool {
-        self.min_rate <= rate && rate <= self.max_rate
+        let (min, max) = (self.min_rate.min(self.max_rate), self.min_rate.max(self.max_rate));
+        min <= rate && rate <= max
     }
 }
 
@@ -192,16 +201,41 @@ impl SharedTransport {
 ///
 /// 运行期唯一写入点是 cpal 的**错误回调**（那是 cpal 自己的线程，不是实时回调），
 /// 因此这里的 `Mutex` 不会出现在音频处理路径上；`clear()` 由控制侧在重建前重置。
-#[derive(Debug, Clone, Default)]
+///
+/// 除「已死标志 + 首条原因」外还带一个**代数（epoch）**，用来作废上一代流的错误回调：
+/// 所有流代（generation）共享同一个 `SharedStatus`（`options.status` 在同一进程里始终是
+/// 同一份实例）。重建时先 `clear()` 再建新流，但刚被丢弃的旧流的错误回调仍持有同一个
+/// `Arc`，而 cpal 的 CoreAudio 后端可能在 `drop` 之后才把在途的 `DeviceNotAvailable`
+/// 投递出来。若没有代数守卫，这条「迟到的」错误会把健康的新流重新标记为死；轮询看到
+/// `dead` 又重建——于是退化成约每秒一次的重建/爆音循环（正是设备抖动场景会踩到的）。
+/// 代数让旧代回调的写入变成空操作，只有当前代才能改状态。
+#[derive(Debug, Clone)]
 pub struct SharedStatus {
     dead: Arc<AtomicBool>,
     message: Arc<Mutex<Option<String>>>,
+    /// 单调递增的代数，初值 1；`clear()` 递增它（即 retire 旧 generation）。
+    epoch: Arc<AtomicU64>,
+}
+
+impl Default for SharedStatus {
+    fn default() -> Self {
+        Self {
+            dead: Arc::new(AtomicBool::new(false)),
+            message: Arc::new(Mutex::new(None)),
+            epoch: Arc::new(AtomicU64::new(1)),
+        }
+    }
 }
 
 impl SharedStatus {
-    /// 新建一份健康状态。
+    /// 新建一份健康状态（代数从 1 开始）。
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 当前代数（epoch）。调用方在开始建流前捕获它，错误回调据此判断自己是否已过期。
+    pub fn epoch(&self) -> u64 {
+        self.epoch.load(Ordering::Relaxed)
     }
 
     /// 流是否已失效（设备被拔掉/切换后 cpal 报告的错误）。
@@ -223,8 +257,22 @@ impl SharedStatus {
         }
     }
 
+    /// 仅当调用方捕获的 `epoch` 仍是**当前代**时才标记失效，否则空操作。
+    ///
+    /// 这是防止「被 drop 的旧流的迟到错误」污染新流的关键：旧回调的代数在 `clear()`
+    /// 之后已过期，因此它的写入被丢弃。同一代内仍是「第一条原因胜出」。
+    pub fn mark_dead_if_current(&self, epoch: u64, reason: &str) {
+        if self.epoch() != epoch {
+            return;
+        }
+        self.mark_dead(reason);
+    }
+
     /// 清空状态（重建宿主前调用）。
+    ///
+    /// 先**递增代数**以 retire 旧 generation（让在途的旧错误回调失效），再重置标志与原因。
     pub fn clear(&self) {
+        self.epoch.fetch_add(1, Ordering::Relaxed);
         self.dead.store(false, Ordering::Relaxed);
         *self.message.lock().unwrap() = None;
     }
@@ -433,9 +481,12 @@ impl AudioHost {
         // cpal 在独立线程上调用错误回调，因此这里的 `Mutex` 不在音频处理路径上。
         // 注：cpal 0.18 里该回调的参数是 `cpal::Error`（旧版叫 `StreamError`）。
         let status = Arc::clone(&options.status);
+        // 在建流**之前**捕获当前代数：错误回调只在代数仍是最新时才写状态。
+        // 否则被 drop 的旧流可能在之后投递迟到错误，把健康的新流误标为死（见 `SharedStatus` 注释）。
+        let epoch = options.status.epoch();
         let on_error = move |err: cpal::Error| {
             eprintln!("audio stream error: {err}");
-            status.mark_dead(&err.to_string());
+            status.mark_dead_if_current(epoch, &err.to_string());
         };
 
         // 真正的流只建一次，用上面选定的块大小；失败原样向上抛 `RealtimeError::Cpal`。
@@ -597,6 +648,28 @@ mod tests {
     }
 
     #[test]
+    fn stale_generation_error_is_ignored_and_current_one_sticks() {
+        // 代数守卫：`clear()` 作废旧一代流的错误回调，迟到的旧错误不能把健康的新流标记为死。
+        let status = SharedStatus::new();
+        let e1 = status.epoch();
+        status.clear();
+        let e2 = status.epoch();
+        assert_ne!(e1, e2, "clear() 必须递增代数以 retire 旧 generation");
+
+        // 旧代（e1）的迟到错误：必须被忽略。
+        status.mark_dead_if_current(e1, "stale");
+        assert!(!status.dead());
+        assert_eq!(status.message(), None);
+
+        // 当前代（e2）的错误正常生效，且保留第一条。
+        status.mark_dead_if_current(e2, "fresh");
+        assert!(status.dead());
+        assert_eq!(status.message().as_deref(), Some("fresh"));
+        status.mark_dead_if_current(e2, "later");
+        assert_eq!(status.message().as_deref(), Some("fresh"));
+    }
+
+    #[test]
     fn shared_transport_starts_idle_and_survives_cloning() {
         let shared = SharedTransport::new();
         let observer = shared.clone();
@@ -681,6 +754,17 @@ mod tests {
             range(OutputFormat::F32, 2, min, max).nearest_rate(96_000),
             48_000
         );
+    }
+
+    #[test]
+    fn reversed_range_does_not_panic_and_matches_covers() {
+        // 反向区间直接喂给 `pub` 的 `nearest_rate`（不经投影归一化）：必须不 panic，
+        // 且按交换后的区间处理，与 `covers` 保持一致。
+        let r = range(OutputFormat::F32, 2, 48_000, 44_100);
+        assert_eq!(r.nearest_rate(96_000), 48_000);
+        assert_eq!(r.nearest_rate(8_000), 44_100);
+        assert!(r.covers(45_000));
+        assert!(!r.covers(44_000));
     }
 
     #[test]
