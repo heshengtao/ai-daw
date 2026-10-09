@@ -12,13 +12,14 @@
 | Plan 2 | cpal 实时播放 + 传输控制 + 离线==实时 | ✅ 完成 | `engine/src/{schedule,player,transport,command_queue,realtime}.rs`；`examples/play_demo.rs` |
 | Plan 4a | 最小桌面外壳：窗口 + 工程操作 + 试听 + 导出 | ✅ 完成（栈有变） | `src-tauri/src/commands.rs`；前端**已改用 Vue 3**（见 §2） |
 | Plan 4b | 把原生实时传输接进 UI | ✅ 完成 | `src-tauri/src/audio.rs`（专用音频线程）+ `engine://transport` 事件 + `stores/transport.ts`；界面全部改为真实操作（见下） |
-| Plan 3 | VST3 宿主 | ⬜ 未开始 | 无 `crates/host-vst3` |
+| Plan 3 | VST3 / CLAP 宿主 | ✅ 完成（栈有变） | `crates/host-vst3`（VST3 用 `vst3-host`、CLAP 用 `clack-host`，**未用 truce-rack**）；`src-tauri/src/plugins.rs` 装配注册表 + 原生窗口 |
 | Plan 5 | 录音 | ⬜ 未开始 | — |
 | Plan 6 | 音频片段 / 采样器 | ⬜ 未开始 | 模型只有 MIDI `Clip`，无 `AudioClip` |
 | Plan 7 | AI 接口（MCP + skills + 可视化） | ⬜ 未开始 | 无 MCP；但事件流已带 `actor` 标签（`Engine::execute`） |
 | 新增 | `crates/ipc`（Command/Event schema） | ⬜ 未开始 | 设计文档 §5 已列出，实际未建 |
 | 新增 | `crates/analysis`（响度/频谱） | ⬜ 未开始 | 设计文档 §5 已列出，实际未建 |
 | 新增 | 插件商店 | ⬜ 未开始 | — |
+| 品牌 | 应用图标 / favicon | ✅ 完成 | `src-tauri/app-icon.svg`（薰衣草紫，与 `common/Logo.vue` 同图形）→ `tauri icon` 生成 `src-tauri/icons/*`；`public/logo.svg` 作网页 favicon |
 
 ### Plan 4b 的实际交付（2026-10-08）
 
@@ -114,6 +115,7 @@
 | 内置合成器 DSP | `fundsp` | **手写正弦振荡器 + 线性 ADSR**，只依赖 `plugin-api` |
 | 开源许可 | 「Apache + GPL 双许可」（外部建议） | **纯 Apache-2.0**（`Cargo.toml` `license = "Apache-2.0"`、`NOTICE`），无 GPL |
 | VST3 宿主选型 | 评估 `rack`、`symdaw/audio-plugin-host` | 首选 **`truce-rack`**（MIT OR Apache-2.0、纯 Rust binding，CLAP+VST3 默认、AU/LV2 可选）；`rack` 是其前身（含 C++ glue） |
+| VST3 宿主实装 | （承上）预期用 truce-rack | **实际改用 `vst3-host` + `clack-host`**（见 `crates/host-vst3/Cargo.toml` 注释）：truce-rack 的 VST3 后端托管不了「无音频输入总线的音源」，其 CLAP 后端加载 KR-106 会段错误。两者同为宽松许可，不破坏 Apache-2.0 分发。 |
 | 低延迟（Windows） | （外部建议）启用 cpal 的 ASIO 后端 | **不启用 ASIO**：ASIO SDK 为 GPLv3 / 专有，会破坏纯 Apache-2.0 分发。走 WASAPI |
 | AI 听感引擎 | （外部建议）Dhwani | **不用**：Dhwani 是 **GPL-3.0-only**，链接即传染。改用 `ebur128` / `rustfft` |
 | 插件宿主（外部建议首选） | UAPMD | 仅作 **MCP / 能力参考**：UAPMD 是 **C++/CMake** 工程，接入需 FFI，与引擎 `#![forbid(unsafe_code)]` 相悖 |
@@ -154,13 +156,13 @@
   - 前端：`stores/transport.ts` 走实时命令；离线渲染仅保留给导出与「设备不可用时的回退试听」。
   - 验收：播放/暂停/停止/定位即时响应，无渲染等待 ✅（浏览器预览为 mock 模拟，真实设备行为需在桌面端验证）。
 
-### Stage B — 插件托管（P0，核心差异化）
+### Stage B — 插件托管（P0，核心差异化）— ✅ 基本完成（2026-10-09 核对）
 
-- **B1 · `crates/host-vst3`**：基于 `truce-rack` 实现 扫描 + 加载 + 通用参数 + 状态存取；把 VST3 实例适配成既有 `Plugin` trait（**不替换 ABI**，它是本项目的资产）。
-- **B2 · 注册表扩展**：`PluginRegistry` 支持外部插件（扫描结果 → 工厂）；缺失插件给占位与告警。
-- **B3 · 前端**：插件浏览器 + 通用参数面板（扩展 `InspectorPanel.vue`）。
-- **B4 · 测试**：用免费 VST3 插件 + VST3 官方 Validator 做集成测试。
-- 验收：能扫描本机 VST3、挂到轨道、存进工程 JSON、重开还原。
+- **B1 · `crates/host-vst3`**：✅ 已实现。VST3 后端用 `vst3-host`（能托管无输入总线的音源）、CLAP 后端用 `clack-host`（truce-rack 的 VST3/CLAP 均不可用，见 §2 修正记录）；两者都适配到既有 `Plugin` trait（未替换 ABI）。含扫描（磁盘缓存）、加载、参数、状态、原生窗口（`editor.rs`）、主线程派发（`dispatch.rs`）。
+- **B2 · 注册表扩展**：✅ 已实现（`src-tauri/src/plugins.rs`）。`build_registry` 装配外部插件工厂；缺失插件给 `missing_plugin` 静音占位；工程引用但本机没有的插件也会 `register_missing`。
+- **B3 · 前端**：✅ 已实现。插件清单 / 通用参数面板 / 效果链 / 原生界面窗口（`InspectorPanel`、`PluginsPane`、`data/plugins.ts`、`usePluginInterface`）。
+- **B4 · 测试**：🟡 部分。`crates/host-vst3/tests/kr106.rs` + `src-tauri/src/plugins.rs::renders_a_track_hosting_the_clap_kr106`（真 KR-106，未安装则跳过）。**尚未接入 VST3 官方 Validator**，也未覆盖更多免费插件。
+- 验收：能扫描本机 VST3/CLAP、挂到轨道、存进工程 JSON、重开还原 ✅。
 
 ### Stage C — 音频能力（P1）
 
@@ -186,7 +188,9 @@
 在 A1 完成前，命令面仍定义在 `src-tauri/src/commands.rs`，尚未成为「引擎 ↔ Tauri ↔ 未来 MCP」
 的唯一契约。
 
-M2（Stage B：可托管 VST3）→ M3（Stage C：可录音、有音频片段）→ M4（Stage D：可被 AI 驱动）→ M5（Stage E：插件商店 + 崩溃隔离）。
+**M2（Stage B：可托管 VST3/CLAP）**：✅ 基本达成（B1–B3 完成，B4 部分；见 Stage B）。
+
+M3（Stage C：可录音、有音频片段）→ M4（Stage D：可被 AI 驱动）→ M5（Stage E：插件商店 + 崩溃隔离）。
 
 ## 7. 文档索引
 
