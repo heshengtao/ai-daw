@@ -220,37 +220,37 @@ impl AudioEngine {
                 | Event::MuteChanged { track, .. }
                 | Event::SoloChanged { track, .. } => {
                     if let Some(t) = project.track(*track) {
-                        let _ = self.tx.send(AudioMessage::Command(TransportCommand::SetTrackMix {
+                        self.queue_if_available(TransportCommand::SetTrackMix {
                             track: *track,
                             gain_db: t.mixer.gain_db,
                             pan: t.mixer.pan,
                             mute: t.mixer.mute,
                             solo: t.mixer.solo,
-                        }));
+                        });
                     }
                 }
                 Event::MasterGainChanged { .. } => {
-                    let _ = self.tx.send(AudioMessage::Command(TransportCommand::SetMasterGain {
+                    self.queue_if_available(TransportCommand::SetMasterGain {
                         gain_db: project.master.gain_db,
-                    }));
+                    });
                 }
                 // 参数变化走实时通道：插件界面上的旋钮会高频产生它们，重建播放器会不断
                 // 重置插件状态并造成音频中断。
                 Event::ParamChanged { track, param, value, .. } => {
-                    let _ = self.tx.send(AudioMessage::Command(TransportCommand::SetParam {
+                    self.queue_if_available(TransportCommand::SetParam {
                         track: *track,
                         effect: None,
                         param: param.clone(),
                         value: *value,
-                    }));
+                    });
                 }
                 Event::EffectParamChanged { track, index, param, value, .. } => {
-                    let _ = self.tx.send(AudioMessage::Command(TransportCommand::SetParam {
+                    self.queue_if_available(TransportCommand::SetParam {
                         track: *track,
                         effect: Some(*index),
                         param: param.clone(),
                         value: *value,
-                    }));
+                    });
                 }
                 other => {
                     // 兜底：任何新增事件默认都走重建，宁可多重建也不要漏掉结构变更。
@@ -260,8 +260,21 @@ impl AudioEngine {
             }
         }
         if reload {
+            // 结构性变更**不**受可用性门控：`load` 只是让音频线程记住最新工程（`current`），
+            // 建流失败也无妨；设备恢复后重建时才会用到它。若在这里跳过，恢复后会播到旧内容。
             self.load(project);
         }
+    }
+
+    /// 与 `send`/`monitor_track_mix`/`audition_note` 一致地把命令入队，但**离线时直接丢弃**。
+    ///
+    /// `sync_events` 的混音/参数推送此前绕过可用性门控、直接写 `self.tx`；离线时没有流来
+    /// 消费这些命令，只会占满队列。这里统一走 `unavailable()` 判定，与其余入口保持对称。
+    fn queue_if_available(&self, command: TransportCommand) {
+        if self.unavailable() {
+            return;
+        }
+        let _ = self.tx.send(AudioMessage::Command(command));
     }
 
     fn unavailable_reason(&self) -> String {
@@ -365,7 +378,12 @@ fn rebuild(
 
 /// 重建后恢复位置与播放状态。
 ///
-/// 这两条命令会在第一个回调块开始前入队并被应用，因此界面不会观察到位置瞬间归零。
+/// 这两条命令会在第一个回调块开始前入队并被应用，因此界面不会观察到位置瞬间归零——
+/// 但这**依赖两个前提**：其一，`Player` 的数据回调在每个块的最开头先 `drain_commands`
+/// 收取命令（见 `crates/engine/src/realtime.rs` 的 `on_data`）；其二，重建宿主时
+/// `shared.position` 从不被重置，`snapshot()` 读到的仍是旧流最后写入的帧。若将来回调改成
+/// 「先出音频再收命令」，或重建时清零共享位置，这里的位置连续性就不再成立（界面会看到位置
+/// 短暂归零）。
 fn restore_transport(host: &mut Option<AudioHost>, frame: u64, was_playing: bool) {
     if let Some(h) = host.as_mut() {
         h.seek(frame);
