@@ -1241,7 +1241,7 @@ pub mod event;
 
 - [ ] **Step 4: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine`
+Run: `cargo test -p daw-party-engine --features realtime`
 Expected: PASS。
 
 ```bash
@@ -1442,7 +1442,7 @@ pub use bus::Engine;
 
 - [ ] **Step 4: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine`
+Run: `cargo test -p daw-party-engine --features realtime`
 Expected: PASS。
 
 ```bash
@@ -1557,7 +1557,7 @@ pub use registry::PluginRegistry;
 
 - [ ] **Step 4: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine`
+Run: `cargo test -p daw-party-engine --features realtime`
 Expected: PASS。
 
 ```bash
@@ -1690,7 +1690,7 @@ pub mod sequencer;
 
 - [ ] **Step 4: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine`
+Run: `cargo test -p daw-party-engine --features realtime`
 Expected: PASS。
 
 ```bash
@@ -1907,7 +1907,7 @@ pub mod render;
 
 - [ ] **Step 5: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine`
+Run: `cargo test -p daw-party-engine --features realtime`
 Expected: PASS。
 
 ```bash

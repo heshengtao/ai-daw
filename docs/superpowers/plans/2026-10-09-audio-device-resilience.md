@@ -741,7 +741,7 @@ git commit -m "fix(transport): drop the offline preview when realtime audio reco
 ### 必须知道的坑（第一轮踩过）
 
 - **`realtime` 模块被 feature 门控**：`crates/engine/src/lib.rs:13` 是 `#[cfg(feature = "realtime")] pub mod realtime;`，而 `default = []`。因此
-  **`cargo test -p daw-party-engine` 不会编译 `realtime.rs`**——它会报「96 passed」但实际上一个 realtime 测试都没跑。
+  **`cargo test -p daw-party-engine --features realtime` 不会编译 `realtime.rs`**——它会报「96 passed」但实际上一个 realtime 测试都没跑。
   正确命令：`cargo test -p daw-party-engine --features realtime`（当前 107 个 lib 测试，含 11 个 realtime 测试）。
   这条已同步进上面的 Global Constraints 与各任务的验证步骤。
 

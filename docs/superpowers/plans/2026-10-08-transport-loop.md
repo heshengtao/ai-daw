@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Rust 任务的验证 = `cargo test -p daw-party-engine`（`src-tauri` 是独立 workspace，构建用 `cargo build --manifest-path src-tauri/Cargo.toml`）。
+- Rust 任务的验证 = `cargo test -p daw-party-engine --features realtime`（`src-tauri` 是独立 workspace，构建用 `cargo build --manifest-path src-tauri/Cargo.toml`）。
 - 前端**没有测试框架**：验证 = `npm run build` 通过 + `npm run dev` 手动核对。
 - 循环开关**不写入工程、不进入撤销历史、不持久化**。
 - 循环范围 = 整首工程内容（第 0 拍 → `end_frame`），**不做** in/out 区间。
@@ -107,7 +107,7 @@ Expected: 编译失败（`is_looping` 不存在 / `SetLoop` 不存在）
 
 - [ ] **Step 5: 运行测试**
 
-Run: `cargo test -p daw-party-engine`
+Run: `cargo test -p daw-party-engine --features realtime`
 Expected: PASS（注意 `process_block`/`render` 的既有测试必须仍通过——`Player` 不再新增任何自动回卷）
 
 - [ ] **Step 6: 提交**
@@ -224,7 +224,7 @@ pub(crate) fn end_of_project_action(looping: bool) -> TransportCommand {
 
 - [ ] **Step 6: 运行测试**
 
-Run: `cargo test -p daw-party-engine`
+Run: `cargo test -p daw-party-engine --features realtime`
 Expected: PASS（含 `start_returns_result_without_panicking` 在无设备环境仍返回 Result）
 
 - [ ] **Step 7: 提交**

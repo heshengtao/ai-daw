@@ -10,7 +10,8 @@
 
 ## Global Constraints
 
-- Rust 验证 = `cargo test -p daw-party-engine`；`src-tauri` 构建用 `cargo build --manifest-path src-tauri/Cargo.toml`。
+- Rust 验证 = `cargo test -p daw-party-engine --features realtime`；`src-tauri` 构建用 `cargo build --manifest-path src-tauri/Cargo.toml`。
+  > ⚠️ **必须带 `--features realtime`**：`realtime` 模块被 `#[cfg(feature = "realtime")]` 门控（`crates/engine/src/lib.rs:13`），`default = []`。不带 feature 时 `realtime.rs` 根本不编译，会「全绿」但漏掉 `Player` 构造签名变化等错误（本计划的 `tempo_points` 就会改到它）。
 - 前端**没有测试框架**：验证 = `npm run build` + `npm run dev` 手动核对。
 - **向后兼容**：无关键点时，拍↔秒换算与现状**逐位一致**（`render`/`schedule` 输出不变）。这是硬性回归要求。
 - 关键点不变量：`beat` 有限且 `> 0`（第 0 拍由 `tempo`/`time_sig_*` 承载）；按 `beat` 升序去重；`tempo ∈ [1,1000]`；拍号经 `Transport::normalize_time_sig`。
@@ -536,7 +537,7 @@ Expected: 编译失败（`tempo_points` / `upsert_keyframe` 未接）
 
 - [ ] **Step 6: 运行测试**
 
-Run: `cargo test -p daw-party-engine`
+Run: `cargo test -p daw-party-engine --features realtime`
 Expected: PASS（含既有的 `render_matches_player_at_different_block_size`、`render_is_deterministic_and_audible` 等）
 
 - [ ] **Step 7: 提交**
@@ -678,7 +679,7 @@ Expected: 编译失败（Command/Event 变体不存在）
 
 - [ ] **Step 7: 运行测试**
 
-Run: `cargo test -p daw-party-engine`
+Run: `cargo test -p daw-party-engine --features realtime`
 Expected: PASS
 
 - [ ] **Step 8: 提交**

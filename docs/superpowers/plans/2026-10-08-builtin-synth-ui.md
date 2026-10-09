@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - 前端**没有测试框架**：前端任务的验证 = `npm run build`（`vue-tsc --noEmit` + `vite build`）通过 + 手动核对。不要引入 vitest/jest。
-- Rust 任务的验证 = `cargo test -p daw-party-synth` / `cargo test -p daw-party-engine`。
+- Rust 任务的验证 = `cargo test -p daw-party-synth` / `cargo test -p daw-party-engine --features realtime`。
 - 参数表必须与 `crates/synth` 的 `PARAM_TABLE` **逐项一致**（id、范围、默认值）；改动任何默认值必须两侧同步（`crates/synth/src/lib.rs` 与 `src/data/plugins.ts`）。
 - 状态序列化顺序（`PARAM_TABLE` 顺序）不可变；老工程 12 字节状态仍须可读。
 - 前端**不出现原生 `<select>`**；下拉一律用 `Md3Select`。
@@ -147,7 +147,7 @@ Expected: FAIL（lead/bass/pad 现在是 `Some(2.0)`）
 
 - [ ] **Step 4: 运行测试**
 
-Run: `cargo test -p daw-party-engine`
+Run: `cargo test -p daw-party-engine --features realtime`
 Expected: PASS
 
 - [ ] **Step 5: 提交**
