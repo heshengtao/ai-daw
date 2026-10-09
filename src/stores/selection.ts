@@ -156,6 +156,21 @@ export const useSelectionStore = defineStore("selection", () => {
     noteIndices.value = [];
   }
 
+  // ---- 记忆长度（单击空白快速创建时复用） ----
+
+  /** 上一次选中的片段长度（拍）：单击空白新建片段时用它。 */
+  const lastClipLength = ref(1);
+  /** 上一次选中的音符时长（拍）：单击空白新建音符时用它。 */
+  const lastNoteLength = ref(0.5);
+
+  function rememberClipLength(n: number): void {
+    if (Number.isFinite(n) && n > 0) lastClipLength.value = n;
+  }
+
+  function rememberNoteLength(n: number): void {
+    if (Number.isFinite(n) && n > 0) lastNoteLength.value = n;
+  }
+
   // ---- 通用 ----
 
   /**
@@ -227,6 +242,10 @@ export const useSelectionStore = defineStore("selection", () => {
     toggleNote,
     isNoteSelected,
     clearNotes,
+    lastClipLength,
+    lastNoteLength,
+    rememberClipLength,
+    rememberNoteLength,
     ensure,
     clear,
   };

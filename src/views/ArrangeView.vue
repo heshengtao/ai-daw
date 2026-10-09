@@ -412,15 +412,21 @@ async function onPointerUp(): Promise<void> {
   mode.value = null;
 
   if (current === "create") {
-    const start = Math.min(create.from, create.to);
-    const length = Math.abs(create.to - create.from);
-    if (length >= MIN_CREATE_BEATS) {
-      try {
-        await store.addClip(create.trackId, start, length);
-        layout.notify(i18n.t("arrange.clipAdded"));
-      } catch (err) {
-        layout.notify(i18n.t("error.addClip", { error: String(err) }));
+    // 原地点击 = 用「上一次选中的长度」快速建一个；拖动画出的则按拖动长度。
+    const clicked = Math.abs(create.to - create.from) < MIN_CREATE_BEATS;
+    const start = clicked ? create.from : Math.min(create.from, create.to);
+    const length = clicked ? selection.lastClipLength : Math.abs(create.to - create.from);
+    try {
+      await store.addClip(create.trackId, start, length);
+      const t = store.project?.tracks.find((x) => x.id === create.trackId);
+      const created = t?.clips[t.clips.length - 1];
+      if (created) {
+        selection.selectClip(create.trackId, created.id);
+        selection.rememberClipLength(created.length);
       }
+      layout.notify(i18n.t("arrange.clipAdded"));
+    } catch (err) {
+      layout.notify(i18n.t("error.addClip", { error: String(err) }));
     }
     return;
   }
@@ -512,6 +518,15 @@ async function deleteClips(items: { track: number; clip: number }[]): Promise<vo
 // ---------------------------------------------------------------------------
 // 其它
 // ---------------------------------------------------------------------------
+
+// 记住当前选中片段的长度：单击空白新建片段时复用它。
+watch(
+  () => selection.clip,
+  (c) => {
+    if (c) selection.rememberClipLength(c.length);
+  },
+  { immediate: true },
+);
 
 /** 双击片段：进入它的钢琴卷帘（并取消那次「单击开检查器」）。 */
 function onClipDoubleClick(track: Track, clip: Clip): void {

@@ -45,10 +45,8 @@ const router = useRouter();
 const LOW = 36; // C2
 const HIGH = 84; // C6
 const ROW_H = 14;
-/** 新音符的最短时长（拍）：低于它视为「原地点击」，只清空选择、不建音符。 */
+/** 新音符的最短时长（拍）：低于它视为「原地点击」。 */
 const MIN_CREATE_BEATS = 1 / 32;
-/** 原地点击新建音符时的默认时长（拍）。 */
-const CLICK_NOTE_BEATS = 0.5;
 
 const rows = computed(() => {
   const out: number[] = [];
@@ -380,8 +378,8 @@ async function onPointerUp(): Promise<void> {
   if (current === "create") {
     const from = Math.min(create.from, create.to);
     const span = Math.abs(create.to - create.from);
-    // 拖动距离即音符时长；原地点击给一个默认时长（不是「什么都不做」）。
-    const duration = span >= MIN_CREATE_BEATS ? span : CLICK_NOTE_BEATS;
+    // 拖动距离即音符时长；原地点击用「上一次选中的时长」。
+    const duration = span >= MIN_CREATE_BEATS ? span : selection.lastNoteLength;
     const index = c.notes.length;
     try {
       await store.addNote(t, c.id, {
@@ -392,6 +390,7 @@ async function onPointerUp(): Promise<void> {
         volume: 127,
       });
       selection.selectNote(index);
+      selection.rememberNoteLength(duration);
     } catch (err) {
       layout.notify(i18n.t("error.addNote", { error: String(err) }));
     }
@@ -670,6 +669,15 @@ async function pasteNote(): Promise<void> {
 watch(
   () => `${selection.trackId}:${selection.clipId}`,
   () => selection.clearNotes(),
+);
+
+// 记住当前选中音符的时长：单击空白新建音符时复用它。
+watch(
+  () => selection.note,
+  (n) => {
+    if (n) selection.rememberNoteLength(n.duration);
+  },
+  { immediate: true },
 );
 
 onMounted(() => {
