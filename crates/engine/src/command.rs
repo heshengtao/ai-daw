@@ -10,6 +10,10 @@ pub enum Command {
     SetTempo(f64),
     /// 设置拍号（分子 / 分母）；越界值会被归一化。
     SetTimeSignature { num: u8, den: u8 },
+    /// 在第 `beat` 拍插入/更新一个关键点（同时带 BPM 与拍号）。`beat <= 0` 会被忽略。
+    SetKeyframe { beat: f64, tempo: f64, num: u8, den: u8 },
+    /// 删除第 `beat` 拍的关键点（容差内匹配）。
+    RemoveKeyframe { beat: f64 },
     /// 新增一条轨道。
     AddTrack { name: String },
     /// 删除一条轨道。

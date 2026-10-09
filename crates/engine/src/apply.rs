@@ -14,6 +14,17 @@ pub fn apply(project: &mut Project, event: &Event) {
             project.transport.time_sig_num = num;
             project.transport.time_sig_den = den;
         }
+        Event::KeyframeSet { beat, tempo, num, den, .. } => {
+            if let Some(kf) = crate::model::Transport::normalize_keyframe(crate::model::Keyframe {
+                beat: *beat,
+                tempo: *tempo,
+                time_sig_num: *num,
+                time_sig_den: *den,
+            }) {
+                project.transport.upsert_keyframe(kf);
+            }
+        }
+        Event::KeyframeRemoved { beat, .. } => project.transport.remove_keyframe(*beat),
         Event::TrackAdded { id, name, .. } => {
             project.tracks.push(crate::model::Track {
                 id: *id,

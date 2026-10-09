@@ -18,6 +18,10 @@ pub enum Event {
     TempoChanged { actor: Actor, tempo: f64 },
     /// 拍号改变（已归一化）。
     TimeSignatureChanged { actor: Actor, num: u8, den: u8 },
+    /// 关键点被设置（已归一化）。
+    KeyframeSet { actor: Actor, beat: f64, tempo: f64, num: u8, den: u8 },
+    /// 关键点被删除。
+    KeyframeRemoved { actor: Actor, beat: f64 },
     /// 轨道新增。
     TrackAdded { actor: Actor, id: TrackId, name: String },
     /// 轨道删除。
@@ -80,6 +84,8 @@ impl Event {
         match self {
             Event::TempoChanged { actor, .. }
             | Event::TimeSignatureChanged { actor, .. }
+            | Event::KeyframeSet { actor, .. }
+            | Event::KeyframeRemoved { actor, .. }
             | Event::TrackAdded { actor, .. }
             | Event::TrackRemoved { actor, .. }
             | Event::TrackRenamed { actor, .. }
@@ -189,6 +195,8 @@ mod tests {
             Event::SoloChanged { actor: Actor::Human, track: crate::model::TrackId(1), solo: true },
             Event::MasterGainChanged { actor: Actor::Human, gain_db: -3.0 },
             Event::ParamChanged { actor: Actor::Human, track: crate::model::TrackId(1), param: "gain".into(), value: 0.5 },
+            Event::KeyframeSet { actor: Actor::Human, beat: 2.0, tempo: 90.0, num: 3, den: 4 },
+            Event::KeyframeRemoved { actor: Actor::Human, beat: 2.0 },
         ];
         for e in events {
             let json = serde_json::to_string(&e).unwrap();

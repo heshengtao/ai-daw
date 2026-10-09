@@ -217,6 +217,16 @@ impl Engine {
                 let (num, den) = crate::model::Transport::normalize_time_sig(*num, *den);
                 vec![Event::TimeSignatureChanged { actor: actor.clone(), num, den }]
             }
+            Command::SetKeyframe { beat, tempo, num, den } => vec![Event::KeyframeSet {
+                actor: actor.clone(),
+                beat: *beat,
+                tempo: if tempo.is_finite() { tempo.clamp(1.0, 1000.0) } else { 120.0 },
+                num: *num,
+                den: *den,
+            }],
+            Command::RemoveKeyframe { beat } => {
+                vec![Event::KeyframeRemoved { actor: actor.clone(), beat: *beat }]
+            }
             Command::AddTrack { name } => {
                 let id = self.alloc_track_id();
                 vec![Event::TrackAdded { actor: actor.clone(), id, name: name.clone() }]
@@ -1020,5 +1030,35 @@ mod tests {
         edited.execute(Command::AddClip { track, start: 0.0, length: 1.0 }, Actor::Human);
         assert!(!edited.localize_starter_tracks(&names));
         assert_eq!(edited.project().tracks[0].name, crate::STARTER_TRACKS[0].name);
+    }
+
+    #[test]
+    fn keyframe_commands_are_normalized_and_undoable() {
+        let mut e = Engine::new("t");
+        e.execute(Command::SetKeyframe { beat: 4.0, tempo: 90.0, num: 3, den: 4 }, Actor::Human);
+        assert_eq!(e.project().transport.keyframes.len(), 1);
+        assert_eq!(e.project().transport.keyframes[0].tempo, 90.0);
+        assert_eq!(
+            (e.project().transport.keyframes[0].time_sig_num, e.project().transport.keyframes[0].time_sig_den),
+            (3, 4)
+        );
+
+        // beat<=0 → 安静忽略（列表不变），但命令仍算一次撤销步骤。
+        e.execute(Command::SetKeyframe { beat: 0.0, tempo: 200.0, num: 4, den: 4 }, Actor::Human);
+        assert_eq!(e.project().transport.keyframes.len(), 1);
+
+        assert!(e.undo()); // 撤销 beat=0 那次
+        assert!(e.undo()); // 撤销 beat=4 那次
+        assert_eq!(e.project().transport.keyframes.len(), 0);
+
+        e.execute(Command::SetKeyframe { beat: 4.0, tempo: 90.0, num: 4, den: 4 }, Actor::Human);
+        e.execute(Command::RemoveKeyframe { beat: 4.0 }, Actor::Human);
+        assert_eq!(e.project().transport.keyframes.len(), 0);
+    }
+
+    #[test]
+    fn keyframe_events_are_structural() {
+        assert!(!Event::KeyframeSet { actor: Actor::Human, beat: 1.0, tempo: 120.0, num: 4, den: 4 }.is_mix_only());
+        assert!(!Event::KeyframeRemoved { actor: Actor::Human, beat: 1.0 }.is_mix_only());
     }
 }
