@@ -34,7 +34,7 @@
 
 **Interfaces:**
 - Consumes: 现有的 `zoom`、`meterBeat`、`barBeats` computed。
-- Produces: `gridBackground` 只含两层（拍线格 + 小节线）；`snap` / `snapBeats` / `snapPx` 语义不变。
+- Produces: `gridBackground` 只含两层（拍线格 + 小节线）；`snap` / `snapBeats` 语义不变。
 
 - [ ] **Step 1: 改 `gridBackground`**
 
@@ -45,22 +45,27 @@
    * 网格背景（编排与卷帘共用同一串）。
    *
    * 只画两层：**拍线**（一个小节 = 分子个格子）+ **小节线**。
-   * 不再叠固定的 1/16 细线——那会让一个小节看起来有很多格，和「一个小节几拍」对不上。
-   * 吸附精度（`snap`）不受影响：拖动仍按 1/16 拍吸附，只是格线更干净。
+   * 不再叠细分的吸附线——那会让一个小节看起来有很多格，和「一个小节几拍」对不上。
+   * 吸附精度（`snap`）不受影响：拖动仍按 `snap = meterBeat / 4` 吸附，只是格线更干净。
+   *
+   * **顺序有讲究**：CSS 把 `background-image` 里**靠前**的那层画在最上面。
+   * 小节线必然与拍线重合（`barBeats = sigNum × meterBeat`），所以小节线要排在前。
    */
   const gridBackground = computed(() => {
     const layers: string[] = [];
     layers.push(
-      `repeating-linear-gradient(to right, var(--grid-line) 0 1px, transparent 1px ${zoom.value * meterBeat.value}px)`,
+      `repeating-linear-gradient(to right, var(--grid-bar) 0 1px, transparent 1px ${zoom.value * barBeats.value}px)`,
     );
     layers.push(
-      `repeating-linear-gradient(to right, var(--grid-bar) 0 1px, transparent 1px ${zoom.value * barBeats.value}px)`,
+      `repeating-linear-gradient(to right, var(--grid-line) 0 1px, transparent 1px ${zoom.value * meterBeat.value}px)`,
     );
     return layers.join(", ");
   });
 ```
 
-同时把文件头注释里「`snap = meterBeat / 4`：吸附网格」那段保留，但删掉/改写任何暗示「每拍 4 格细线会画出来」的描述（注释里若提到细线网格，改成「吸附用 1/16，但格线只画到拍」）。
+同时把文件头注释里「`snap = meterBeat / 4`：吸附网格」那段保留，但删掉/改写任何暗示「细分网格线会画出来」的描述（注释里若提到细线网格，改成「吸附用 `meterBeat / 4`，但格线只画到拍」）。
+
+> 注意（执行后修正）：这里的层顺序是**小节线在前、拍线在后**。见文末「执行后的遗留 H4」——反过来会让小节线被拍线盖掉。
 
 - [ ] **Step 2: 类型检查 + 构建**
 
@@ -164,7 +169,14 @@ Expected: 成功
 - [ ] **Step 5: 手动核对**
 
 Run: `npm run dev`，编排视图：
-Expected: 每条轨道左侧留白里有一条与左栏把柄同色的竖线；悬停时略微加深；横向滚动时竖线始终贴在轨道左缘（不随内容滚动）；**点击竖线会选中该音轨**（左栏该行高亮、检查器跟随）。
+Expected: 每条轨道左侧留白里有一条与左栏把柄同色的竖线；悬停时略微加深；**点击竖线会选中该音轨**（左栏该行高亮、检查器跟随）。
+
+关于滚动：留白竖线是 lane 内 `left: calc(-1 * var(--timeline-inset))` 的绝对定位元素，也就是**滚动内容自己的左内边距**，不是固定在视口左缘的覆盖层。因此它**随内容一起横向滚动**——滚到后面时留白与竖线会移出视口左缘。这是实现后接受的既有行为（见文末「执行后的遗留 H2」），不是缺陷。
+
+手动核对清单：
+- 竖线颜色与左栏把柄同色，悬停时加深；
+- 点击竖线选中该音轨（左栏该行高亮、检查器跟随）；
+- **滚动到第 8 小节附近再检查留白**：留白与竖线应随内容一起滚出视口左缘，而不是钉在左缘。
 
 - [ ] **Step 6: 提交**
 
@@ -189,29 +201,25 @@ git commit -m "feat(arrange): per-track color accent in the left gutter"
 把 `src/components/layout/BottomBar.vue` 里的 `bars` 与 `positionText` 两个 computed 替换为：
 
 ```ts
-/** 一小节多少拍（四分音符数）：分子 × 4/分母。与网格/标尺的 barBeats 同一算法。 */
-const barBeats = computed(() => timeSigNum.value * (4 / Math.max(1, timeSigDen.value)));
-
-/** 拍号里那一「拍」等于多少四分音符。 */
-const meterBeat = computed(() => 4 / Math.max(1, timeSigDen.value));
-
-/** 工程内容长度（小节）。 */
+/** 工程内容长度（小节）。与网格/标尺共用 timeline store 的同一个公式（spec §4.6）。 */
 const bars = computed(() => {
-  const clips = (store.project?.tracks ?? []).flatMap((t) => t.clips);
-  const beats = clips.reduce((m, c) => Math.max(m, c.start + c.length), 0);
+  const beats = timeline.contentBeats;
   if (beats <= 0) return 0;
-  const bar = barBeats.value;
-  return Math.max(1, Math.ceil(beats / bar));
+  return Math.ceil(beats / timeline.barBeats);
 });
 
-/** 当前位置（小节.拍），随实时位置推进。 */
+/** 当前位置（小节.拍），随实时位置推进。小节/拍长度同样取自 timeline store。 */
 const positionText = computed(() => {
   const beats = transport.positionBeats;
-  const bar = Math.floor(beats / barBeats.value) + 1;
-  const beat = Math.floor((beats % barBeats.value) / meterBeat.value) + 1;
+  const bar = Math.floor(beats / timeline.barBeats) + 1;
+  const beat = Math.floor((beats % timeline.barBeats) / timeline.meterBeat) + 1;
   return `${bar}.${beat}`;
 });
 ```
+
+并在文件顶部加 `import { useTimelineStore } from "@/stores/timeline"` 与 `const timeline = useTimelineStore()`。
+
+> 注意（执行后修正）：**不要**在 `BottomBar.vue` 里重复定义 `barBeats` / `meterBeat`，也不要再自己扁平化所有 clip 算内容拍数——spec §4.6 要求这两处都走 timeline store（`timeline.barBeats` / `timeline.meterBeat` / `timeline.contentBeats`）。原先的 `Math.max(1, …)` 也去掉了：内容为 0 拍时显示 0 小节。依赖方向是 BottomBar → timeline/project/transport，无循环。
 
 - [ ] **Step 2: 类型检查 + 构建**
 
@@ -241,6 +249,17 @@ git commit -m "fix(bottom): bar/beat readout uses barBeats so it matches the gri
 
 **Placeholder 扫描**：无 TBD/TODO；样式与代码均为具体值。
 
-**类型一致性**：`barBeats`/`meterBeat` 是 `BottomBar.vue` 内的局部 computed，与 `timeline.ts` 中同名概念算法一致（`分子 × 4/分母`）。
+**类型一致性**：`barBeats`/`meterBeat`/`contentBeats` 由 `timeline.ts` 单一来源提供，`BottomBar.vue` 不再各算一份（见 Task 3 Step 1 的执行后修正）。
 
 **依赖提示**：本计划的 `gridBackground` 会在计划 D（动态 BPM/节拍）里被推广为**分段叠层**——届时「无拍号关键点」的情形必须仍等价于本计划的结果。
+
+---
+
+## 执行后的遗留
+
+本计划执行完、并通过最终整支复审后，记录几项**已接受**的收尾（均已落地或明确不修）：
+
+- **H1（已修）`--grid-line-fine` 死 token 已删除**：可见格线只剩拍线 / 小节线两级，`main.css` 亮色与深色块里的 `--grid-line-fine` 已移除，相关注释同步改成两级。`timeline.ts` 里无消费方的 `snapPx` / `beatPx` 两个导出也一并删掉（只留 `barPx`，由 `TimelineRuler.vue` 使用）。
+- **H2（接受）留白竖线随内容滚动**：竖线落在滚动内容的左内边距里，所以滚到后面会随内容滚出视口。固定不动的覆盖层会带来额外的层级与命中区域问题，本计划不修；Task 2 Step 5 的期望文案已按此改正，并加入「滚动到第 8 小节附近再检查留白」。
+- **H3（接受）`aria-pressed` 用单选用法**：竖线按钮用 `aria-pressed` 表达「当前选中的轨道」。多选轨道时它表达不了全貌，但当前选择模型本就是单选；等真正支持多选时再换成合适的语义。`aria-label` 现为「选中这条音轨 · <轨道名>」，便于区分同名/同色轨道。
+- **H4（已修）背景层顺序**：小节线与拍线必然重合（`barBeats = 分子 × meterBeat`），而 CSS 把 `background-image` 里靠前的一层画在最上面。原来的顺序让`--grid-bar` 被更淡的 `--grid-line` 盖住，小节线实际不可见；现改为**先 push 小节线层**，Task 1 Step 1 的代码块已同步。
