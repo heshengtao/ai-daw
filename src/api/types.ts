@@ -10,11 +10,22 @@ export interface Note {
   volume: number;
 }
 
+/** 音频素材引用：片段指向一段外部音频文件（绝对路径）。 */
+export interface AudioSource {
+  /** 素材文件路径。 */
+  path: string;
+  /** 素材内的起始帧（crop 起点）。 */
+  offset_frames: number;
+}
+
+/** 片段：MIDI（`notes`）或音频（`audio`）。 */
 export interface Clip {
   id: number;
   start: number;
   length: number;
   notes: Note[];
+  /** 音频素材；存在即表示这是**音频片段**（此时 `notes` 必为空）。MIDI 片段不带该键。 */
+  audio?: AudioSource;
 }
 
 /** 片段引用（轨道 + 片段）：框选删除需要跨轨道寻址。 */

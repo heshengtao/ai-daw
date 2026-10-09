@@ -183,6 +183,8 @@ const en: Record<string, string> = {
   "topbar.showTracks": "Show track list (Ctrl/Cmd+B)",
   "topbar.showTracksLabel": "Show track list",
   "topbar.import": "Import project…",
+  "topbar.importAudio": "Import audio…",
+  "topbar.importAudioLabel": "Import audio",
   "topbar.importLabel": "Import project",
   "topbar.new": "New project",
   "topbar.export": "Export WAV…",
@@ -386,9 +388,12 @@ const en: Record<string, string> = {
   "app.exported": "Exported to {path}",
   "dialog.projectFilter": "daw-party project",
   "dialog.wavFilter": "WAV audio",
+  "dialog.audioFilter": "Audio files",
 
   // ---- Error notices (all take {error}) ----
   "error.import": "Import failed: {error}",
+  "error.importAudio": "Importing audio failed: {error}",
+  "error.importAudioNoTrack": "No track to drop audio onto — create a track first",
   "error.newProject": "Creating the project failed: {error}",
   "error.save": "Save failed: {error}",
   "error.export": "Export failed: {error}",

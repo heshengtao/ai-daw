@@ -678,6 +678,30 @@ export const mockApi = {
     return mockMcpStatus();
   },
 
+  // 浏览器预览没有真实解码：造一段音频片段与一条假的波形包络。
+  importAudio: (path: string, trackId: number, start: number): Project =>
+    commit(() => {
+      const t = track(trackId);
+      if (t) {
+        t.clips.push({
+          id: nextClipId++,
+          start: Math.max(0, start),
+          length: 2,
+          notes: [],
+          audio: { path, offset_frames: 0 },
+        });
+      }
+    }),
+
+  audioWaveform: (_path: string, buckets: number): number[] => {
+    const out: number[] = [];
+    for (let i = 0; i < buckets; i += 1) {
+      const v = Math.abs(Math.sin((i / buckets) * Math.PI * 8)) * 0.9 + 0.05;
+      out.push(-v, v);
+    }
+    return out;
+  },
+
   // ---- 传输 ----
 
   transportStatus: (): TransportSnapshot => ({ ...transport }),

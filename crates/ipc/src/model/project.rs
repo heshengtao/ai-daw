@@ -41,6 +41,21 @@ impl Project {
             .map(|c| c.start + c.length)
             .fold(0.0f64, f64::max)
     }
+
+    /// 被音频片段引用到的素材路径（去重、升序）。
+    ///
+    /// 宿主据此在**构建调度表之前**把素材加载好（解码是 IO，绝不能发生在音频回调里）。
+    pub fn audio_paths(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .filter_map(|c| c.audio.as_ref().map(|a| a.path.clone()))
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
 }
 
 #[cfg(test)]

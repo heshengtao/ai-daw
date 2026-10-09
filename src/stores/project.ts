@@ -149,6 +149,15 @@ export const useProjectStore = defineStore("project", () => {
     return edit(() => api.addClip(track, start, length));
   }
 
+  /**
+   * 导入一个音频文件为音频片段，落在 `start` 拍。
+   *
+   * 片段的拍长由后端按素材的自然时长换算（导入时不变调）；之后拖宽窄或改速度才会变调。
+   */
+  function importAudio(path: string, track: number, start: number): Promise<void> {
+    return edit(() => api.importAudio(path, track, start));
+  }
+
   /** 删除片段。 */
   function removeClip(track: number, clip: number): Promise<void> {
     return edit(() => api.removeClip(track, clip));
@@ -368,6 +377,7 @@ export const useProjectStore = defineStore("project", () => {
     moveEffect,
     setEffectParam,
     addClip,
+    importAudio,
     removeClip,
     moveClip,
     moveClips,

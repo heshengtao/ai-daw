@@ -1,7 +1,7 @@
 # 音频片段（C1）Implementation Plan
 
-> **状态（2026-10-09）**：🟡 进行中 —— Task 1–4（引擎侧：解码、模型、命令/事件、排程与播放）✅ 完成并量化验证；
-> Task 5–7（宿主接线、Tauri/MCP、前端）⬜ 未开始。
+> **状态（2026-10-09）**：✅ 全部完成（Task 1–7）。引擎侧与宿主机端均通过；解码、导入、播放、
+> 分析与波形显示已端到端验证（见执行记录）。
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:executing-plans。
 
@@ -71,26 +71,28 @@ src/api/*、src/views/*、src/i18n/*            前端（任务 7）
 - [x] **Step 5**：`seek` 重算游标；`render_with_assets`。
 - [x] **Step 6**：`crates/engine/tests/audio_clip.rs` 7 条量化断言全部通过；零分配门禁仍通过。
 
-## Task 5: 宿主素材缓存（⬜ 未开始）
+## Task 5: 宿主素材缓存
 
 **Files:** Create `src-tauri/src/assets.rs`；Modify `src-tauri/src/{lib,state,audio,commands}.rs`、`src-tauri/Cargo.toml`。
 
-- [ ] **Step 1**：`AssetCache { map: Mutex<HashMap<String, Arc<DecodedAudio>>> }`，`load()` 带缓存（失败也缓存，避免反复重试）、`peaks()`。
-- [ ] **Step 2**：`AppState.assets`；`start_host` / `render_offline` 改用 `from_project_with_assets`/`render_with_assets`
-      （锁内 clone 出素材表快照，**不带锁过 await**）。
-- [ ] **Step 3**：缺失素材 → 静音，并把「缺失」告知界面（沿用既有 `error` 通道的同款做法）。
+- [x] **Step 1**：`AssetCache { map: Mutex<HashMap<String, Option<Arc<DecodedAudio>>>> }`，`load()` 带缓存（**失败也缓存**，避免反复重试）、`snapshot_for()`、`waveform()`。
+- [x] **Step 2**：`AppState.assets`；`start_host` 用 `from_project_with_assets`，`render_inputs`/`render_offline` 改为
+      `RenderInputs` 结构体（工程 + 目录 + 句柄表 + **已解码素材**），全部走 `render_with_assets`。
+      素材在**命令线程**加载，绝不进音频回调。
+- [x] **Step 3**：缺失素材 → 跳过该片段（静音），与「缺失插件用静音占位」同一策略。
 
-## Task 6: Tauri 命令 + MCP（⬜ 未开始）
+## Task 6: Tauri 命令 + MCP
 
-- [ ] **Step 1**：`import_audio(path, track, start)`（解码 → 按当前速度把自然时长换算成拍 → `AddAudioClip`）、
-      `audio_waveform(path, buckets)`；两者解码都在 `spawn_blocking` 里。
-- [ ] **Step 2**：注册进 `generate_handler!`；MCP 增 `import_audio`/`add_audio_clip`/`audio_waveform` 并更新工具表测试。
+- [x] **Step 1**：`import_audio(path, track, start)`（解码 → 用 `TempoMap` 把自然时长换算成该处的拍跨度 → `AddAudioClip`）、
+      `audio_waveform(path, buckets)`；解码都在 `spawn_blocking` 里。
+- [x] **Step 2**：注册进 `generate_handler!`；MCP 增 `import_audio` / `audio_waveform`（工具表测试同步到 29 个）。
 
-## Task 7: 前端（⬜ 未开始）
+## Task 7: 前端
 
-- [ ] **Step 1**：`types.ts` 的 `Clip.audio?`；`importAudio`/`audioWaveform` 两条命令 + mock 假数据。
-- [ ] **Step 2**：`ClipWaveform.vue`（canvas，照抄 `Oscilloscope.vue` 的 dpr/取色/ResizeObserver 骨架）。
-- [ ] **Step 3**：`ArrangeView` 用波形取代 MIDI 迷你卷帘；`TopBar` 加「导入音频…」；i18n 中英。
+- [x] **Step 1**：`types.ts` 的 `AudioSource` / `Clip.audio?`；`importAudio` / `audioWaveform` 两条命令 + mock。
+- [x] **Step 2**：`ClipWaveform.vue`（canvas；固定 512 桶、按路径缓存包络，拖动/缩放只重绘不重取）。
+- [x] **Step 3**：`ArrangeView` 按 `clip.audio` 切波形（音频片段双击不进钢琴卷帘）；`TopBar` 加「导入音频…」
+      （落在选中轨道 / 首轨的播放头并吸附）；i18n 中英各 447 键。
 
 ## 自检 / Self-Review
 
@@ -143,6 +145,23 @@ src/api/*、src/views/*、src/i18n/*            前端（任务 7）
 - 解码忽略 `Packet::trim_start/trim_end`（mp3 编码器延迟未裁剪）。
 - `crates/asset` 的依赖图里带上了 `daw-party-engine`（只为一个类型）。
 
-### Task 5–7 待办
+### Task 5–7 完成（宿主 / 命令 / 前端，2026-10-09）
 
-宿主素材缓存、Tauri 命令 + MCP 工具、前端波形与导入入口。
+`src-tauri/src/assets.rs`（`AssetCache`：带缓存的解码 + `snapshot_for` + `waveform`，**失败也缓存**）；
+`AudioEngine` 与 `render_inputs`/`render_offline` 全部改走 `from_project_with_assets`/`render_with_assets`；
+`import_audio`（按当前速度把自然时长换算成拍）与 `audio_waveform` 两条命令 + 同名 MCP 工具；
+前端 `ClipWaveform.vue`（canvas，按路径缓存包络）、编排视图按 `clip.audio` 切波形、顶栏「导入音频…」、
+中英 i18n（各 447 键）。
+
+**端到端验证（真机，MCP 驱动）**：用 python 生成 1 kHz / 0.9 幅度 / 48 kHz 的 WAV →
+`import_audio` 导入到第 1 轨第 0 拍 → 读回工程确认 **2.0 拍（= 1 s @120BPM，换算正确）** →
+`analyze_project @44100`：
+- 频谱峰 **990.5 Hz**（= 1000 Hz 落到的那个 bin）→ 48k→44.1k 的路径**音高正确**；
+- 采样峰 **−0.92 dBFS** = 恰好 `20log10(0.9)` → 整链**单位增益**（−6 dB 那处修复的真机复核）；
+- RMS **−3.94 dBFS**、LUFS **−0.92**，与理论值一致。
+
+**其余验证**：`cargo test --manifest-path src-tauri/Cargo.toml --lib` → 7 通过（含 MCP 工具表 29 个）；
+`npm run build` 通过；i18n 中英各 **447** 键且集合一致。
+
+**只能人工验证**：真机听感（波形绘制是否清晰、拖动是否跟手）——本次未做，不得声称已验证。
+

@@ -25,6 +25,7 @@ use daw_party_engine::transport::TransportCommand;
 use daw_party_engine::SCOPE_CAPACITY;
 use daw_party_host_vst3::{CatalogPlugin, EditorHandle};
 
+use crate::assets::AssetCache;
 use crate::plugins::build_registry;
 
 /// 「轨道 → 插件编辑器句柄」表（插件工厂在创建实例时登记）。
@@ -80,8 +81,13 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
-    /// 启动音频线程并装载初始工程（带插件目录）。
-    pub fn new(project: &Project, catalog: Vec<CatalogPlugin>, editor_handles: EditorHandles) -> Self {
+    /// 启动音频线程并装载初始工程（带插件目录与音频素材缓存）。
+    pub fn new(
+        project: &Project,
+        catalog: Vec<CatalogPlugin>,
+        editor_handles: EditorHandles,
+        assets: Arc<AssetCache>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         let shared = SharedTransport::new();
         let sample_rate = Arc::new(AtomicU32::new(0));
@@ -112,6 +118,7 @@ impl AudioEngine {
                     catalog,
                     editor_handles,
                     scope,
+                    assets,
                 )
             })
             .expect("failed to spawn audio thread");
@@ -303,6 +310,7 @@ fn start_host(
     project: &Project,
     catalog: &[CatalogPlugin],
     editor_handles: &EditorHandles,
+    assets: &Arc<AssetCache>,
     shared: &SharedTransport,
     sample_rate: &AtomicU32,
     available: &AtomicBool,
@@ -320,7 +328,10 @@ fn start_host(
     };
 
     let registry = build_registry(catalog, project, Arc::clone(editor_handles));
-    let schedule = ScheduledEvents::from_project(project, rate as f64);
+    // 素材必须在这里（**音频回调之外**）就加载好：回调里绝不解码、不分配。
+    // 缺失的素材会被跳过 → 该片段静音（与「缺失插件用静音占位」同一策略）。
+    let samples = assets.snapshot_for(&project.audio_paths());
+    let schedule = ScheduledEvents::from_project_with_assets(project, rate as f64, &samples);
     let options = RealtimeOptions {
         max_block: MAX_BLOCK,
         command_capacity: COMMAND_CAPACITY,
@@ -353,6 +364,7 @@ fn rebuild(
     current: &Option<Project>,
     catalog: &[CatalogPlugin],
     editor_handles: &EditorHandles,
+    assets: &Arc<AssetCache>,
     shared: &SharedTransport,
     status: &Arc<SharedStatus>,
     sample_rate: &AtomicU32,
@@ -371,6 +383,7 @@ fn rebuild(
         &project,
         catalog,
         editor_handles,
+        assets,
         shared,
         sample_rate,
         available,
@@ -408,6 +421,7 @@ fn run_audio_thread(
     mut catalog: Vec<CatalogPlugin>,
     editor_handles: EditorHandles,
     scope: Arc<ScopeBuffer>,
+    assets: Arc<AssetCache>,
 ) {
     /// 设备轮询间隔：够快能跟上插拔耳机，又不至于每秒多次查询 CoreAudio 太过分。
     const POLL: std::time::Duration = std::time::Duration::from_millis(1000);
@@ -437,6 +451,7 @@ fn run_audio_thread(
                     &current,
                     &catalog,
                     &editor_handles,
+                    &assets,
                     &shared,
                     &status,
                     &sample_rate,
@@ -457,6 +472,7 @@ fn run_audio_thread(
                     &current,
                     &catalog,
                     &editor_handles,
+                    &assets,
                     &shared,
                     &status,
                     &sample_rate,
@@ -479,6 +495,7 @@ fn run_audio_thread(
                     &current,
                     &catalog,
                     &editor_handles,
+                    &assets,
                     &shared,
                     &status,
                     &sample_rate,
@@ -508,6 +525,7 @@ fn run_audio_thread(
                     &current,
                     &catalog,
                     &editor_handles,
+                    &assets,
                     &shared,
                     &status,
                     &sample_rate,

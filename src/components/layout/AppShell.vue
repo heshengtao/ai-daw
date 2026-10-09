@@ -13,6 +13,7 @@ import { isLinux, isTauri, isWindows } from "@/utils/platform";
 defineProps<{ aiActive: boolean }>();
 const emit = defineEmits<{
   (e: "import"): void;
+  (e: "importAudio"): void;
   (e: "new"): void;
   (e: "save"): void;
   (e: "export"): void;
@@ -35,6 +36,7 @@ const showWindowControls = isTauri() && (isWindows() || isLinux());
       <div class="app-stack">
         <TopBar
           @import="emit('import')"
+          @import-audio="emit('importAudio')"
           @new="emit('new')"
           @save="emit('save')"
           @export="emit('export')"

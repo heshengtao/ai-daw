@@ -17,6 +17,7 @@ import {
   AdjustmentsHorizontalIcon,
   PencilIcon,
   CursorArrowRaysIcon,
+  MusicalNoteIcon,
 } from "@heroicons/vue/24/outline";
 import Tooltip from "@/components/common/Tooltip.vue";
 import PanelIcon from "@/components/common/PanelIcon.vue";
@@ -30,6 +31,7 @@ import { isMacOS, isTauri } from "@/utils/platform";
 
 const emit = defineEmits<{
   (e: "import"): void;
+  (e: "importAudio"): void;
   (e: "new"): void;
   (e: "save"): void;
   (e: "export"): void;
@@ -109,6 +111,11 @@ function onMouseDown(e: MouseEvent): void {
         <Tooltip :text="i18n.t('topbar.import')" align="end">
           <button class="bar-btn" :aria-label="i18n.t('topbar.importLabel')" @click="emit('import')">
             <FolderOpenIcon class="bar-icon" />
+          </button>
+        </Tooltip>
+        <Tooltip :text="i18n.t('topbar.importAudio')" align="end">
+          <button class="bar-btn" :aria-label="i18n.t('topbar.importAudioLabel')" @click="emit('importAudio')">
+            <MusicalNoteIcon class="bar-icon" />
           </button>
         </Tooltip>
         <Tooltip :text="i18n.t('topbar.new')" align="end">

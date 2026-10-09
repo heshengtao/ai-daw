@@ -3,13 +3,14 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{Emitter, Manager, State};
 
-use daw_party_engine::audio::AudioBuffer;
+use daw_party_engine::audio::{AudioBuffer, DecodedAudio};
 use daw_party_engine::bus::Engine;
 use daw_party_engine::command::Command;
 use daw_party_engine::event::{Actor, Event};
-use daw_party_engine::model::{ClipPlacement, ClipRef, Note, NoteEdit, Project, TrackId};
+use daw_party_engine::model::{AudioSource, ClipPlacement, ClipRef, Note, NoteEdit, Project, TrackId};
 use daw_party_engine::registry::PluginRegistry;
-use daw_party_engine::render::{render, RenderOptions};
+use daw_party_engine::render::{render_with_assets, RenderOptions};
+use daw_party_engine::tempo::TempoMap;
 use daw_party_engine::transport::TransportCommand;
 use daw_party_engine::wav::wav_bytes;
 use daw_party_host_vst3::{CatalogPlugin, EditorHandle};
@@ -81,27 +82,37 @@ pub(crate) fn run_agent(app: &tauri::AppHandle, command: Command) -> (Project, V
     run_as(app, &state, Actor::Agent("mcp".into()), command)
 }
 
-/// 渲染一份快照所需的全部输入（工程 + 插件目录 + 编辑器句柄表）。
+/// 渲染一份快照所需的全部输入。
 ///
-/// 只在锁内克隆工程，绝不把 `MutexGuard` 带过 `.await`。
-pub(crate) fn render_inputs(
-    state: &AppState,
-) -> (Project, Vec<CatalogPlugin>, Arc<Mutex<HashMap<u64, EditorHandle>>>) {
-    let project = state.engine.lock().unwrap().project().clone();
-    (project, state.catalog_snapshot(), Arc::clone(&state.editor_handles))
+/// **音频素材在这里（命令线程）就解码好**：渲染与音频回调都不做任何 IO。
+/// 缺失的素材会被跳过 → 该片段静音。
+pub(crate) struct RenderInputs {
+    pub project: Project,
+    pub catalog: Vec<CatalogPlugin>,
+    pub editor_handles: Arc<Mutex<HashMap<u64, EditorHandle>>>,
+    pub samples: HashMap<String, Arc<DecodedAudio>>,
 }
 
-/// 离线渲染一段工程快照（预览 / 导出 / 分析 / MCP 共用同一条路径）。
-pub(crate) fn render_offline(
-    project: Project,
-    catalog: Vec<CatalogPlugin>,
-    editor_handles: Arc<Mutex<HashMap<u64, EditorHandle>>>,
-    sample_rate: u32,
-    tail_seconds: f64,
-) -> AudioBuffer {
+/// 取当前状态的可渲染快照（工程 + 插件目录 + 编辑器句柄表 + 已解码素材）。
+///
+/// 只在锁内克隆工程，绝不把 `MutexGuard` 带过 `.await`。
+pub(crate) fn render_inputs(state: &AppState) -> RenderInputs {
+    let project = state.engine.lock().unwrap().project().clone();
+    let samples = state.assets.snapshot_for(&project.audio_paths());
+    RenderInputs {
+        project,
+        catalog: state.catalog_snapshot(),
+        editor_handles: Arc::clone(&state.editor_handles),
+        samples,
+    }
+}
+
+/// 离线渲染一份快照（预览 / 导出 / 分析 / MCP 共用同一条路径）。
+pub(crate) fn render_offline(inputs: RenderInputs, sample_rate: u32, tail_seconds: f64) -> AudioBuffer {
+    let RenderInputs { project, catalog, editor_handles, samples } = inputs;
     let registry = build_registry(&catalog, &project, editor_handles);
     let options = RenderOptions { sample_rate: sample_rate as f64, tail_seconds };
-    render(&project, &registry, &options)
+    render_with_assets(&project, &registry, &options, &samples)
 }
 
 /// 该事件是否会导致播放器重建（混音与实时参数不会）。
@@ -718,9 +729,9 @@ pub async fn render_preview(
     sample_rate: u32,
 ) -> Result<tauri::ipc::Response, String> {
     validate_sample_rate(sample_rate)?;
-    let (project, catalog, editor_handles) = render_inputs(&state);
+    let inputs = render_inputs(&state);
     let bytes = tauri::async_runtime::spawn_blocking(move || {
-        let buffer = render_offline(project, catalog, editor_handles, sample_rate, 0.5);
+        let buffer = render_offline(inputs, sample_rate, 0.5);
         wav_bytes(&buffer, sample_rate)
     })
     .await
@@ -738,10 +749,10 @@ pub async fn analyze_project(
     sample_rate: u32,
 ) -> Result<daw_party_analysis::Report, String> {
     validate_sample_rate(sample_rate)?;
-    let (project, catalog, editor_handles) = render_inputs(&state);
+    let inputs = render_inputs(&state);
     tauri::async_runtime::spawn_blocking(move || {
         // 分析只关心工程正文，不加尾音。
-        let buffer = render_offline(project, catalog, editor_handles, sample_rate, 0.0);
+        let buffer = render_offline(inputs, sample_rate, 0.0);
         daw_party_analysis::analyze(buffer.data(), buffer.channels(), sample_rate as f64)
             .map_err(|e| e.to_string())
     })
@@ -758,14 +769,79 @@ pub async fn export_wav(
 ) -> Result<String, String> {
     validate_sample_rate(sample_rate)?;
     // 同样只在锁内克隆，渲染与写盘都放到阻塞线程池，避免卡住主线程。
-    let (project, catalog, editor_handles) = render_inputs(&state);
+    let inputs = render_inputs(&state);
     tauri::async_runtime::spawn_blocking(move || {
-        let buffer = render_offline(project, catalog, editor_handles, sample_rate, 0.5);
+        let buffer = render_offline(inputs, sample_rate, 0.5);
         daw_party_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| e.to_string())?;
         Ok::<String, String>(path)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+// ---------------------------------------------------------------------------
+// 音频素材（导入 / 波形）
+// ---------------------------------------------------------------------------
+
+/// 把素材的**自然时长**（秒）换算成 `start` 处的拍跨度。
+///
+/// 片段的「拍长」是时间轴上的唯一真相；导入时让它正好等于自然时长，于是比值 ≈ 1（不变调）。
+/// 之后用户拖宽窄或改工程速度才会按比例重采样（变调）。
+pub(crate) fn natural_length_beats(project: &Project, start: f64, seconds: f64) -> f64 {
+    let map = TempoMap::from_transport(&project.transport);
+    let start_sec = map.beats_to_seconds(start);
+    map.seconds_to_beats(start_sec + seconds) - start
+}
+
+/// 导入一个音频文件为音频片段（wav / flac / mp3 / ogg-vorbis / aac / m4a）。
+///
+/// 解码放到阻塞线程池：它既慢又可能失败，绝不能占住命令线程。
+#[tauri::command]
+pub async fn import_audio(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    track: u64,
+    start: f64,
+) -> Result<Project, String> {
+    let assets = Arc::clone(&state.assets);
+    let path_for_load = path.clone();
+    let audio = tauri::async_runtime::spawn_blocking(move || assets.load(&path_for_load))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    let seconds = audio.frames() as f64 / audio.sample_rate;
+    if !(seconds.is_finite() && seconds > 0.0) {
+        return Err(format!("音频素材没有可用长度：{path}"));
+    }
+    let start = daw_party_engine::model::Clip::normalize_start(start);
+    let length = {
+        let engine = state.engine.lock().unwrap();
+        natural_length_beats(engine.project(), start, seconds)
+    };
+    Ok(run(
+        &app,
+        &state,
+        Command::AddAudioClip {
+            track: TrackId(track),
+            start,
+            length,
+            source: AudioSource { path, offset_frames: 0 },
+        },
+    ))
+}
+
+/// 取某个音频文件的波形包络（每桶 min/max 各一个值，长度 = `buckets * 2`），供界面绘制。
+#[tauri::command]
+pub async fn audio_waveform(
+    state: State<'_, AppState>,
+    path: String,
+    buckets: usize,
+) -> Result<Vec<f32>, String> {
+    let assets = Arc::clone(&state.assets);
+    tauri::async_runtime::spawn_blocking(move || assets.waveform(&path, buckets))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 // ---------------------------------------------------------------------------

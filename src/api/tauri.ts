@@ -339,6 +339,18 @@ export function setMcpConfig(enabled: boolean, port: number): Promise<McpStatus>
   return invoke<McpStatus>("set_mcp_config", { enabled, port });
 }
 
+/** 导入一个音频文件为音频片段（自然时长会换算成拍，落在 `start` 处）。 */
+export function importAudio(path: string, track: number, start: number): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.importAudio(path, track, start));
+  return invoke<Project>("import_audio", { path, track, start });
+}
+
+/** 取某个音频文件的波形包络（每桶 min/max 各一个值，长度 = `buckets * 2`）。 */
+export function audioWaveform(path: string, buckets: number): Promise<number[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.audioWaveform(path, buckets));
+  return invoke<number[]>("audio_waveform", { path, buckets });
+}
+
 // ---------------------------------------------------------------------------
 // 订阅
 // ---------------------------------------------------------------------------

@@ -182,6 +182,8 @@ const zh: Record<string, string> = {
   "topbar.showTracks": "展开音轨栏 (Ctrl/Cmd+B)",
   "topbar.showTracksLabel": "展开音轨栏",
   "topbar.import": "导入工程…",
+  "topbar.importAudio": "导入音频…",
+  "topbar.importAudioLabel": "导入音频",
   "topbar.importLabel": "导入工程",
   "topbar.new": "新建工程",
   "topbar.export": "导出 WAV…",
@@ -385,9 +387,12 @@ const zh: Record<string, string> = {
   "app.exported": "已导出：{path}",
   "dialog.projectFilter": "daw-party 工程",
   "dialog.wavFilter": "WAV 音频",
+  "dialog.audioFilter": "音频文件",
 
   // ---- 错误提示（统一带 {error}） ----
   "error.import": "导入失败：{error}",
+  "error.importAudio": "导入音频失败：{error}",
+  "error.importAudioNoTrack": "没有可放置音频的轨道——先新建一条轨道",
   "error.newProject": "新建失败：{error}",
   "error.save": "保存失败：{error}",
   "error.export": "导出失败：{error}",

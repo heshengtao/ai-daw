@@ -12,7 +12,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -28,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 use daw_party_engine::command::Command;
 use daw_party_engine::event::Event;
-use daw_party_engine::model::{ClipId, Note, TrackId};
+use daw_party_engine::model::{AudioSource, Clip, ClipId, Note, TrackId};
 use daw_party_engine::transport::TransportCommand;
 
 use crate::commands;
@@ -66,10 +66,10 @@ fn track_added_id(events: &[Event]) -> Option<u64> {
     })
 }
 
-/// 从事件里取出新建片段的 id。
+/// 从事件里取出新建片段的 id（MIDI 与音频片段都算）。
 fn clip_added_id(events: &[Event]) -> Option<u64> {
     events.iter().find_map(|e| match e {
-        Event::ClipAdded { clip, .. } => Some(clip.0),
+        Event::ClipAdded { clip, .. } | Event::AudioClipAdded { clip, .. } => Some(clip.0),
         _ => None,
     })
 }
@@ -212,6 +212,24 @@ struct ExportArgs {
     path: String,
     /// 采样率（Hz）；省略则用 44100。
     sample_rate: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ImportAudioArgs {
+    /// 音频文件的绝对路径（wav / flac / mp3 / ogg / m4a）。
+    path: String,
+    /// 目标轨道 id。
+    track: u64,
+    /// 片段起始拍。
+    start: f64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct WaveformArgs {
+    /// 音频文件的绝对路径。
+    path: String,
+    /// 桶数（每桶给 min/max 两个值）。
+    buckets: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -412,13 +430,13 @@ impl DawMcpServer {
     #[tool(description = "离线渲染当前工程并分析：积分响度 LUFS、响度范围 LRA、采样/真峰值、RMS 与平均幅度谱。这是「听感」入口。")]
     async fn analyze_project(&self, Parameters(args): Parameters<AnalyzeArgs>) -> Result<String, ErrorData> {
         let sample_rate = check_sample_rate(args.sample_rate.unwrap_or(FALLBACK_SAMPLE_RATE))?;
-        let (project, catalog, editor_handles) = {
+        let inputs = {
             let state = self.state();
             commands::render_inputs(&state)
         };
         let report = tauri::async_runtime::spawn_blocking(move || {
             // 只分析工程正文，不加尾音。
-            let buffer = commands::render_offline(project, catalog, editor_handles, sample_rate, 0.0);
+            let buffer = commands::render_offline(inputs, sample_rate, 0.0);
             daw_party_analysis::analyze(buffer.data(), buffer.channels(), sample_rate as f64)
         })
         .await
@@ -431,17 +449,65 @@ impl DawMcpServer {
     async fn export_wav(&self, Parameters(args): Parameters<ExportArgs>) -> Result<String, ErrorData> {
         let sample_rate = check_sample_rate(args.sample_rate.unwrap_or(FALLBACK_SAMPLE_RATE))?;
         let path = args.path.clone();
-        let (project, catalog, editor_handles) = {
+        let inputs = {
             let state = self.state();
             commands::render_inputs(&state)
         };
         tauri::async_runtime::spawn_blocking(move || {
-            let buffer = commands::render_offline(project, catalog, editor_handles, sample_rate, 0.5);
+            let buffer = commands::render_offline(inputs, sample_rate, 0.5);
             daw_party_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| fail(e.to_string()))?;
             Ok::<String, ErrorData>(format!("已导出到 {path}"))
         })
         .await
         .map_err(|e| fail(e.to_string()))?
+    }
+
+    #[tool(description = "把本机的一个音频文件导入成音频片段（wav/flac/mp3/ogg/m4a）；返回新片段 id。")]
+    async fn import_audio(&self, Parameters(args): Parameters<ImportAudioArgs>) -> Result<String, ErrorData> {
+        let assets = { Arc::clone(&self.state().assets) };
+        let path_for_load = args.path.clone();
+        let audio = tauri::async_runtime::spawn_blocking(move || assets.load(&path_for_load))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)?;
+        let seconds = audio.frames() as f64 / audio.sample_rate;
+        if !(seconds.is_finite() && seconds > 0.0) {
+            return Err(fail(format!("音频素材没有可用长度：{}", args.path)));
+        }
+        let start = Clip::normalize_start(args.start);
+        // 让片段的拍长正好等于素材的自然时长（比值 ≈ 1，导入时不变调）。
+        let length = {
+            let state = self.state();
+            let engine = state.engine.lock().unwrap();
+            commands::natural_length_beats(engine.project(), start, seconds)
+        };
+        let (_, events) = commands::run_agent(
+            &self.app,
+            Command::AddAudioClip {
+                track: TrackId(args.track),
+                start,
+                length,
+                source: AudioSource { path: args.path.clone(), offset_frames: 0 },
+            },
+        );
+        let id = clip_added_id(&events);
+        Ok(format!(
+            "已把 {} 导入到轨道 {} 的第 {} 拍{}",
+            args.path,
+            args.track,
+            start,
+            id.map(|i| format!("，片段 id={i}")).unwrap_or_default()
+        ))
+    }
+
+    #[tool(description = "取某个音频文件的波形包络（每桶 min/max 两个值），用来确认素材内容。")]
+    async fn audio_waveform(&self, Parameters(args): Parameters<WaveformArgs>) -> Result<String, ErrorData> {
+        let assets = { Arc::clone(&self.state().assets) };
+        let values = tauri::async_runtime::spawn_blocking(move || assets.waveform(&args.path, args.buckets))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)?;
+        json(&values)
     }
 }
 
@@ -692,6 +758,8 @@ mod tests {
             "redo",
             "analyze_project",
             "export_wav",
+            "import_audio",
+            "audio_waveform",
         ];
         for name in expected {
             assert!(router.get(name).is_some(), "缺少工具 {name}（现有：{names:?}）");

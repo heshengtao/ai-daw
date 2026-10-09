@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod audio;
+mod assets;
 mod commands;
 mod main_thread;
 mod mcp;
@@ -278,6 +279,8 @@ pub fn run() {
             commands::render_preview,
             commands::analyze_project,
             commands::export_wav,
+            commands::import_audio,
+            commands::audio_waveform,
             commands::list_plugins,
             commands::rescan_plugins,
             commands::plugin_params,

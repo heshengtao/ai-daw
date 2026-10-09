@@ -14,8 +14,8 @@
 | Plan 4b | 把原生实时传输接进 UI | ✅ 完成 | `src-tauri/src/audio.rs`（专用音频线程）+ `engine://transport` 事件 + `stores/transport.ts`；界面全部改为真实操作（见下） |
 | Plan 3 | VST3 / CLAP 宿主 | ✅ 完成（栈有变） | `crates/host-vst3`（VST3 用 `vst3-host`、CLAP 用 `clack-host`，**未用 truce-rack**）；`src-tauri/src/plugins.rs` 装配注册表 + 原生窗口 |
 | Plan 5 | 录音 | ⬜ 未开始 | — |
-| Plan 6 | 音频片段 / 采样器 | 🟡 引擎侧完成 | `crates/asset` + `Clip.audio` + 播放路径 + 7 条量化测试；宿主接线与前端未做 |
-| Plan 7 | AI 接口（MCP + skills + 可视化） | 🟡 进行中 | MCP ✅（`src-tauri/src/mcp.rs`，27 工具）+ 前端 AI 可视化 ✅（D4）；skills 文档包（D3）未做 |
+| Plan 6 | 音频片段 / 采样器 | ✅ 完成 | `crates/asset`（symphonia）+ `Clip.audio` + 播放路径 + 宿主素材缓存 + `import_audio`/`audio_waveform` + 波形 UI；真机端到端验证 |
+| Plan 7 | AI 接口（MCP + skills + 可视化） | 🟡 进行中 | MCP ✅（`src-tauri/src/mcp.rs`，29 工具）+ 前端 AI 可视化 ✅（D4）；skills 文档包（D3）未做 |
 | 新增 | `crates/ipc`（Command/Event schema） | ✅ 完成 | `crates/ipc`（`daw-party-ipc`）：工程/命令/事件 schema 的**唯一来源**；engine 用 `pub use` 薄壳保持既有路径不变（零行为变化） |
 | 新增 | `crates/analysis`（响度/频谱） | ✅ 完成 | `crates/analysis`（ebur128 + rustfft）：LUFS/LRA/真峰值 + RMS + 平均幅度谱；`analyze_project` 命令 |
 | 新增 | 插件商店 | ⬜ 未开始 | — |
@@ -179,10 +179,13 @@
 
 ### Stage C — 音频能力（P1）
 
-- **C1 · Plan 6**：`AudioClip` 模型 + 采样器 + 波形显示。🟡 **引擎侧已完成（2026-10-09）**：
-  `crates/asset`（symphonia 解码 + `peaks`）、`Clip.audio`/`AudioSource`、`AddAudioClip`/`SetClipAudio` 与对应事件、
-  `SampleProvider` + `ScheduledAudioClip` + `Player` 混音路径（含 `seek`/暂停语义）、`crates/engine/tests/audio_clip.rs`
-  的 7 条**量化**断言。**待办**：宿主 `AssetCache`、`import_audio`/`audio_waveform` 命令 + MCP 工具、前端波形与导入入口。
+- **C1 · Plan 6**：`AudioClip` 模型 + 采样器 + 波形显示。✅ **完成（2026-10-09）**：
+  `crates/asset`（symphonia 解码 wav/flac/mp3/ogg/aac/m4a + `peaks`）、`Clip.audio`/`AudioSource`、
+  `AddAudioClip`/`SetClipAudio` 与对应事件、`SampleProvider` + `ScheduledAudioClip` + 播放/定位/暂停语义、
+  宿主 `AssetCache`（素材在命令线程解码，绝不进音频回调）、`import_audio`/`audio_waveform` 命令 + MCP 工具、
+  前端波形（`ClipWaveform.vue`）与「导入音频…」入口。
+  测试：`audio_clip.rs` 7 条量化断言 + 播放器/解码单测，`--features realtime` 的零分配门禁仍通过；
+  **真机端到端**（MCP 导入 1 kHz WAV → 分析渲染结果）音高与单位增益均与理论值一致。
   设计与计划：`specs/2026-10-09-audio-clip-design.md`、`plans/2026-10-09-audio-clip.md`。
   语义决策：**片段拍长是唯一真相，素材铺满跨度 → 缩放/改速度会变调**（v1 不做保音高变速）。
 - **C2 · Plan 5**：录音（cpal 输入流 → 写入 `AudioClip`）。

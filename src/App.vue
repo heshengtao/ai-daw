@@ -14,9 +14,11 @@ import { useEngineEventsStore } from "@/stores/engineEvents";
 import { useTransportStore } from "@/stores/transport";
 import { usePluginsStore } from "@/stores/plugins";
 import { usePresetsStore } from "@/stores/presets";
+import { useSelectionStore } from "@/stores/selection";
+import { useTimelineStore } from "@/stores/timeline";
 import { useI18n } from "@/i18n";
 import { exportWav, onPluginsEvent } from "@/api/tauri";
-import { pickProjectToOpen, pickProjectToSave, pickWavToSave } from "@/api/dialogs";
+import { pickAudioToOpen, pickProjectToOpen, pickProjectToSave, pickWavToSave } from "@/api/dialogs";
 
 const project = useProjectStore();
 const layout = useLayoutStore();
@@ -24,6 +26,8 @@ const events = useEngineEventsStore();
 const transport = useTransportStore();
 const plugins = usePluginsStore();
 const presets = usePresetsStore();
+const selection = useSelectionStore();
+const timeline = useTimelineStore();
 const i18n = useI18n();
 const route = useRoute();
 
@@ -75,6 +79,27 @@ async function onImport(): Promise<void> {
     layout.notify(i18n.t("app.imported"));
   } catch (err) {
     layout.notify(i18n.t("error.import", { error: String(err) }));
+  }
+}
+
+/**
+ * 导入音频片段：落在**选中轨道**（没有选中就第一条）的播放头处，并对齐到网格。
+ *
+ * 片段的拍长由后端按素材自然时长换算（导入时不变调）；之后拖宽窄或改速度才会变调。
+ */
+async function onImportAudio(): Promise<void> {
+  try {
+    const path = await pickAudioToOpen();
+    if (!path) return;
+    const tracks = project.project?.tracks ?? [];
+    const track = selection.trackId ?? tracks[0]?.id;
+    if (track === undefined) {
+      layout.notify(i18n.t("error.importAudioNoTrack"));
+      return;
+    }
+    await project.importAudio(path, track, timeline.snapBeats(transport.positionBeats));
+  } catch (err) {
+    layout.notify(i18n.t("error.importAudio", { error: String(err) }));
   }
 }
 
@@ -220,6 +245,7 @@ onUnmounted(() => {
     v-else
     :ai-active="aiActive"
     @import="onImport"
+    @import-audio="onImportAudio"
     @new="onNew"
     @save="onSave"
     @export="onExport"

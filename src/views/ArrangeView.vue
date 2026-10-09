@@ -25,6 +25,7 @@ import { useTransportStore } from "@/stores/transport";
 import { useLayoutStore } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
+import ClipWaveform from "@/components/common/ClipWaveform.vue";
 import { trackHue } from "@/utils/trackColor";
 import { laneScrollTop } from "@/composables/useLaneScroll";
 import { capturePointer } from "@/utils/pointer";
@@ -532,6 +533,8 @@ watch(
 function onClipDoubleClick(track: Track, clip: Clip): void {
   cancelOpenInspector();
   selection.selectClip(track.id, clip.id);
+  // 钢琴卷帘只认 MIDI：音频片段双击不进编辑视图（音频编辑器留后续）。
+  if (clip.audio) return;
   void router.push("/edit");
 }
 
@@ -736,13 +739,16 @@ onUnmounted(() => {
             @dblclick.stop="onClipDoubleClick(track, clip)"
             @contextmenu="onClipContextMenu($event, track, clip)"
           >
-            <!-- 片段内容：迷你钢琴卷帘（横轴时间、纵轴音高） -->
-            <span
-              v-for="(n, i) in clip.notes"
-              :key="i"
-              class="note-blip"
-              :style="blipStyle(n, clip)"
-            />
+            <!-- 片段内容：音频片段画波形，MIDI 片段画迷你钢琴卷帘（横轴时间、纵轴音高） -->
+            <ClipWaveform v-if="clip.audio" class="clip-wave" :path="clip.audio.path" />
+            <template v-else>
+              <span
+                v-for="(n, i) in clip.notes"
+                :key="i"
+                class="note-blip"
+                :style="blipStyle(n, clip)"
+              />
+            </template>
             <span
               class="clip-handle"
               aria-hidden="true"
@@ -870,6 +876,13 @@ onUnmounted(() => {
   border-radius: 2px;
   background-color: hsl(var(--track-hue) 72% 88%);
   box-shadow: 0 0 0 1px hsl(var(--track-hue) 40% 22% / 0.5);
+  pointer-events: none;
+}
+/* 音频片段的波形层：铺满片段盒子，不抢指针事件（拖动/缩放仍归 .clip）。 */
+.clip-wave {
+  position: absolute;
+  inset: 0;
+  --wave-color: hsl(var(--track-hue) 78% 86%);
   pointer-events: none;
 }
 /* 右边缘的缩放热区：命中区 10px，视觉上只有一条细亮边 */

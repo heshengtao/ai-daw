@@ -15,6 +15,16 @@ function wavFilter() {
   return [{ name: useI18n().t("dialog.wavFilter"), extensions: ["wav"] }];
 }
 
+/** 可导入的音频格式（与 `crates/asset` 的解码能力一致）。 */
+function audioFilter() {
+  return [
+    {
+      name: useI18n().t("dialog.audioFilter"),
+      extensions: ["wav", "flac", "mp3", "ogg", "m4a", "aac"],
+    },
+  ];
+}
+
 /** 选择要导入的工程文件；取消返回 null。 */
 export async function pickProjectToOpen(): Promise<string | null> {
   if (!isTauri()) return "mock://demo.json";
@@ -41,4 +51,15 @@ export async function pickWavToSave(defaultPath: string): Promise<string | null>
     filters: wavFilter(),
   });
   return selected ?? null;
+}
+
+/** 选择要导入的音频文件；取消返回 null。 */
+export async function pickAudioToOpen(): Promise<string | null> {
+  if (!isTauri()) return "mock://kick.wav";
+  const selected = await openDialog({
+    multiple: false,
+    directory: false,
+    filters: audioFilter(),
+  });
+  return typeof selected === "string" ? selected : null;
 }

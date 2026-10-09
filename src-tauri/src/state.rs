@@ -7,6 +7,7 @@ use daw_party_engine::bus::Engine;
 use daw_party_host_vst3::{CatalogPlugin, EditorHandle, PluginEditorWindow};
 
 use crate::audio::AudioEngine;
+use crate::assets::AssetCache;
 use crate::presets::PresetStore;
 
 thread_local! {
@@ -38,6 +39,8 @@ pub struct AppState {
     pub host_windows: Arc<Mutex<HashSet<u64>>>,
     /// 用户预设（跨工程；文件位置由 `init_presets` 装上）。
     pub presets: Mutex<PresetStore>,
+    /// 音频素材缓存（路径 → 已解码 PCM）。音频线程与离线渲染共用。
+    pub assets: Arc<AssetCache>,
 }
 
 impl AppState {
@@ -46,11 +49,14 @@ impl AppState {
         let engine = Engine::new_project(name);
         let editor_handles: Arc<Mutex<HashMap<u64, EditorHandle>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        // 素材缓存要先于音频引擎建好：音频线程重建宿主时要靠它把音频片段接上真实 PCM。
+        let assets = Arc::new(AssetCache::new());
         // 目录稍后由后台扫描补齐；先用空目录启动，避免卡住窗口。
         let audio = Arc::new(AudioEngine::new(
             engine.project(),
             Vec::new(),
             Arc::clone(&editor_handles),
+            Arc::clone(&assets),
         ));
         AppState {
             engine: Mutex::new(engine),
@@ -60,6 +66,7 @@ impl AppState {
             open_editors: Arc::new(Mutex::new(HashSet::new())),
             host_windows: Arc::new(Mutex::new(HashSet::new())),
             presets: Mutex::new(PresetStore::load(None)),
+            assets,
         }
     }
 

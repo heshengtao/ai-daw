@@ -27,6 +27,7 @@ daw-party-engine = { path = "../crates/engine", features = ["realtime"] }
 daw-party-plugin-api = { path = "../crates/plugin-api" }
 daw-party-host-vst3 = { path = "../crates/host-vst3" }
 daw-party-analysis = { path = "../crates/analysis" }
+daw-party-asset = { path = "../crates/asset" }
 # 内嵌 MCP 服务器（Streamable HTTP，只监听回环）。
 rmcp = { version = "3", features = [
     "server",
