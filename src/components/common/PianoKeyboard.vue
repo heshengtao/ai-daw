@@ -9,6 +9,9 @@
  */
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { auditionNote } from "@/api/tauri";
+import { useI18n } from "@/i18n";
+
+const i18n = useI18n();
 
 const props = withDefaults(
   defineProps<{
@@ -135,14 +138,14 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="keyboard" role="group" aria-label="试听键盘">
+  <div class="keyboard" role="group" :aria-label="i18n.t('keyboard.group')">
     <div class="whites">
       <button
         v-for="k in whiteKeys"
         :key="k.note"
         class="white"
         :class="{ on: isHeld(k.note) }"
-        :aria-label="`试听 ${k.note}`"
+        :aria-label="i18n.t('keyboard.audition', { note: k.note })"
         @pointerdown="onDown(k.note, $event)"
         @pointerenter="onEnter(k.note)"
         @pointerup="onUp(k.note)"
@@ -156,7 +159,7 @@ onUnmounted(() => {
         class="black"
         :class="{ on: isHeld(k.note) }"
         :style="{ left: `calc(${((k.whiteIndex + 1) / whiteKeys.length) * 100}% - 1.4%)` }"
-        :aria-label="`试听 ${k.note}`"
+        :aria-label="i18n.t('keyboard.audition', { note: k.note })"
         @pointerdown="onDown(k.note, $event)"
         @pointerenter="onEnter(k.note)"
         @pointerup="onUp(k.note)"

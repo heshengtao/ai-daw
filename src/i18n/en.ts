@@ -28,6 +28,9 @@ const en: Record<string, string> = {
   "plugins.params": "Params",
   "plugins.openInterfaceTitle": "Open the interface for “{name}”",
   "plugins.loaded": "Plugin loaded onto “{track}”",
+  "plugins.loadTo": "Load to: ",
+  "plugins.loadNamed": "Load {name}",
+  "plugins.pending": "Coming soon",
 
   // ---- 面板 ----
   "panel.loadFailed": "Load failed: {error}",
@@ -74,6 +77,8 @@ const en: Record<string, string> = {
   "synth.voiceCount": "{count} voices",
   "synth.legacyNote": "The envelope of this old preset has been mapped onto the full panel.",
   "synth.windowEmpty": "This track has no built-in synth.",
+  "synth.windowTitle": "Built-in Synth",
+  "synth.windowSubtitle": "Built-in Synth",
 
   // ---- 预设 ----
   "preset.label": "Preset",
@@ -203,6 +208,8 @@ const en: Record<string, string> = {
   "panes.plugins": "Plugins",
   "panes.pluginsHint": "Instruments and effects",
   "panes.opened": "Open",
+  "right.emptyTitle": "No panel open yet",
+  "right.emptyHint": "Pick one below to get started",
 
   // ---- Inspector ----
   "inspector.overview.project": "Project",
@@ -251,6 +258,9 @@ const en: Record<string, string> = {
   "tracks.soloNamed": "Solo {name}",
   "tracks.removeNamed": "Delete track {name}",
   "tracks.removed": "Deleted track “{name}”",
+  "tracks.newName": "Track {n}",
+  "tracks.noteCount": "{n} notes",
+  "tracks.empty": "No tracks yet — click + in the top right to add one",
 
   // ---- Shared controls ----
   "preset.choose": "Choose preset",
@@ -286,6 +296,8 @@ const en: Record<string, string> = {
   "lane.volumeHint": "Per-note level; doesn't change the timbre (127 = no attenuation)",
   "lane.velocityHint": "Playing strength; the built-in synth maps it to amplitude",
   "lane.selected": "{count} selected",
+  "keyboard.group": "Audition keyboard",
+  "keyboard.audition": "Audition {note}",
 
   // ---- Sound browser ----
   "browser.title": "Choose a sound",

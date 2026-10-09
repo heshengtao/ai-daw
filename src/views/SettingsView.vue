@@ -204,7 +204,7 @@ function onAccent(a: AccentColor): void {
                   :class="{ on: layout.showTrackHeaders }"
                   role="switch"
                   :aria-checked="layout.showTrackHeaders"
-                  aria-label="显示轨道栏"
+                  :aria-label="i18n.t('settings.panels.tracks')"
                   @click="layout.showTrackHeaders = !layout.showTrackHeaders"
                 />
               </div>
@@ -218,7 +218,7 @@ function onAccent(a: AccentColor): void {
                   :class="{ on: layout.showInspector }"
                   role="switch"
                   :aria-checked="layout.showInspector"
-                  aria-label="显示检查器"
+                  :aria-label="i18n.t('settings.panels.inspector')"
                   @click="layout.showInspector = !layout.showInspector"
                 />
               </div>
@@ -238,7 +238,7 @@ function onAccent(a: AccentColor): void {
                   :min="160"
                   :max="360"
                   :step="4"
-                  label="轨道栏宽度"
+                  :label="i18n.t('settings.width.tracks')"
                 />
               </div>
               <div class="row">
@@ -252,7 +252,7 @@ function onAccent(a: AccentColor): void {
                   :min="200"
                   :max="440"
                   :step="4"
-                  label="检查器宽度"
+                  :label="i18n.t('settings.width.inspector')"
                 />
               </div>
             </div>
@@ -270,7 +270,7 @@ function onAccent(a: AccentColor): void {
                   :class="{ on: layout.devDrawer }"
                   role="switch"
                   :aria-checked="layout.devDrawer"
-                  aria-label="开发者日志"
+                  :aria-label="i18n.t('settings.dev.log')"
                   @click="layout.toggleDevDrawer()"
                 />
               </div>

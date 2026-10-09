@@ -74,8 +74,8 @@ onMounted(() => {
   <div class="synth-window">
     <header class="head">
       <div class="titles">
-        <h1 class="title">{{ track ? track.name : "内置合成器" }}</h1>
-        <span class="subtitle">内置合成器</span>
+        <h1 class="title">{{ track ? track.name : i18n.t("synth.windowTitle") }}</h1>
+        <span class="subtitle">{{ i18n.t("synth.windowSubtitle") }}</span>
       </div>
       <button v-if="track" class="focus-btn" @click="selectTrack">在主窗口选中这条轨道</button>
     </header>

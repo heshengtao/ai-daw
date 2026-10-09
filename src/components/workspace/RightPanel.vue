@@ -29,8 +29,8 @@ const ICONS: Record<PaneId, unknown> = {
     <div class="pane-body">
       <!-- 没有标签时：列出所有可以打开的面板 -->
       <div v-if="layout.tabs.length === 0" class="empty">
-        <p class="empty-title">尚未打开任何面板</p>
-        <p class="empty-sub">从下面选择一个面板开始</p>
+        <p class="empty-title">{{ i18n.t("right.emptyTitle") }}</p>
+        <p class="empty-sub">{{ i18n.t("right.emptyHint") }}</p>
         <ul class="empty-list">
           <li v-for="p in PICKABLE_PANES" :key="p.id">
             <button class="empty-item" @click="layout.openTab(p.id)">

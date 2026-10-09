@@ -77,9 +77,9 @@ function interfaceLabel(it: PluginInfo): string {
 <template>
   <div class="pane">
     <p v-if="track" class="target">
-      加载到：<strong>{{ track.name }}</strong>
+      {{ i18n.t("plugins.loadTo") }}<strong>{{ track.name }}</strong>
     </p>
-    <p v-else class="target muted">先选中一条轨道，再加载插件。</p>
+    <p v-else class="target muted">{{ i18n.t("plugins.selectTrackFirst") }}</p>
 
     <div v-for="g in groups" :key="g.category" class="group">
       <div class="group-title">{{ g.category }}</div>
@@ -90,7 +90,7 @@ function interfaceLabel(it: PluginInfo): string {
             <span class="item-note">{{ it.note }}</span>
           </div>
 
-          <span v-if="it.builtin" class="item-kind builtin">内置</span>
+          <span v-if="it.builtin" class="item-kind builtin">{{ i18n.t("common.builtin") }}</span>
 
           <button
             v-if="it.loadable"
@@ -108,13 +108,13 @@ function interfaceLabel(it: PluginInfo): string {
             class="load-btn"
             :class="{ on: isLoaded(it.id) }"
             :disabled="!track || isLoaded(it.id)"
-            :aria-label="`加载 ${it.name}`"
+            :aria-label="i18n.t('plugins.loadNamed', { name: it.name })"
             @click="load(it.id, it.loadable)"
           >
             <CheckIcon v-if="isLoaded(it.id)" class="w-[14px] h-[14px]" />
             <PlusIcon v-else class="w-[14px] h-[14px]" />
           </button>
-          <span v-else class="soon">待接入</span>
+          <span v-else class="soon">{{ i18n.t("plugins.pending") }}</span>
         </li>
       </ul>
     </div>

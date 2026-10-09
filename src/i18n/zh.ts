@@ -28,6 +28,9 @@ const zh: Record<string, string> = {
   "plugins.params": "参数",
   "plugins.openInterfaceTitle": "打开「{name}」的界面",
   "plugins.loaded": "已把插件加载到「{track}」",
+  "plugins.loadTo": "加载到：",
+  "plugins.loadNamed": "加载 {name}",
+  "plugins.pending": "待接入",
 
   // ---- 面板 ----
   "panel.loadFailed": "加载失败：{error}",
@@ -73,6 +76,8 @@ const zh: Record<string, string> = {
   "synth.voiceCount": "{count} 个声部",
   "synth.legacyNote": "这条轨道用的老预设音色已映射到完整面板上。",
   "synth.windowEmpty": "这条轨道上没有内置合成器。",
+  "synth.windowTitle": "内置合成器",
+  "synth.windowSubtitle": "内置合成器",
 
   // ---- 预设 ----
   "preset.label": "预设",
@@ -202,6 +207,8 @@ const zh: Record<string, string> = {
   "panes.plugins": "插件",
   "panes.pluginsHint": "音源与效果列表",
   "panes.opened": "已打开",
+  "right.emptyTitle": "尚未打开任何面板",
+  "right.emptyHint": "从下面选择一个面板开始",
 
   // ---- 检查器 ----
   "inspector.overview.project": "工程",
@@ -250,6 +257,9 @@ const zh: Record<string, string> = {
   "tracks.soloNamed": "{name} 独奏",
   "tracks.removeNamed": "删除轨道 {name}",
   "tracks.removed": "已删除轨道「{name}」",
+  "tracks.newName": "轨道 {n}",
+  "tracks.noteCount": "{n} 音符",
+  "tracks.empty": "还没有轨道——点右上角的 + 新增",
 
   // ---- 通用控件 ----
   "preset.choose": "选择预设",
@@ -285,6 +295,8 @@ const zh: Record<string, string> = {
   "lane.volumeHint": "单音电平，不改音色（127 = 不衰减）",
   "lane.velocityHint": "演奏强度，内置合成器把它折算成振幅",
   "lane.selected": "{count} 个已选",
+  "keyboard.group": "试听键盘",
+  "keyboard.audition": "试听 {note}",
 
   // ---- 音色浏览器 ----
   "browser.title": "选择音色",

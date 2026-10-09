@@ -38,7 +38,7 @@ function notesOf(trackId: number): number {
 
 function addTrack(): void {
   const next = (store.project?.tracks.length ?? 0) + 1;
-  void store.addTrack(`轨道 ${next}`);
+  void store.addTrack(i18n.t("tracks.newName", { n: next }));
 }
 
 async function removeTrack(id: number, name: string): Promise<void> {
@@ -120,7 +120,7 @@ watch(laneScrollTop, (v) => {
         <div class="track-meta">
           <span class="track-name text-title-sm">{{ track.name }}</span>
           <span class="track-sub text-label-sm">
-            {{ plugins.name(track.instrument?.plugin_id) }} · {{ notesOf(track.id) }} 音符
+            {{ plugins.name(track.instrument?.plugin_id) }} · {{ i18n.t("tracks.noteCount", { n: notesOf(track.id) }) }}
           </span>
         </div>
 
@@ -159,7 +159,7 @@ watch(laneScrollTop, (v) => {
         </div>
       </li>
       <li v-if="(store.project?.tracks.length ?? 0) === 0" class="heads-empty text-body-sm">
-        还没有轨道——点右上角的 + 新增
+        {{ i18n.t("tracks.empty") }}
       </li>
     </ul>
   </div>
