@@ -1,9 +1,5 @@
-pub mod clip;
-pub mod project;
-pub mod track;
-pub mod transport;
-
-pub use clip::{clamp_beats, clamp_range, Clip, ClipId, ClipPlacement, ClipRef, Note, NoteEdit};
-pub use project::Project;
-pub use track::{MixerChannel, PluginInstance, Track, TrackId};
-pub use transport::{Keyframe, Transport};
+//! 契约薄壳：领域模型的定义已下沉到 `daw-party-ipc`（引擎 ↔ Tauri ↔ MCP 唯一的 schema 来源）。
+//!
+//! 这里保留模块路径（含 `model::clip` / `model::track` 等子模块），让引擎内部既有的
+//! `crate::model::…` 与对外部的 `daw_party_engine::model::…` 全部照旧可用。
+pub use daw_party_ipc::model::*;

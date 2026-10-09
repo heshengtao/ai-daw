@@ -1,0 +1,24 @@
+# cargo-deny 配置：与 `docs/superpowers/ROADMAP.md` §3「许可证护栏（强制）」一一对应。
+#
+# 用法：`cargo install cargo-deny && cargo deny check licenses`
+# （CI 接入仍是待办；目前靠本文件 + 人工核对。）
+
+[licenses]
+# 允许清单：MIT / Apache-2.0 / BSD-2 / BSD-3 / ISC / CC0 / Zlib / Unlicense
+#           + MPL-2.0（仅限「未修改的依赖」，见 ROADMAP §3）。
+# 禁止：GPL / AGPL / SSPL / ASIO 专有件；LGPL 需单独评估。
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "CC0-1.0",
+    "Zlib",
+    "Unlicense",
+    "MPL-2.0",
+]
+# 低于该置信度的许可证判定（如文件头兜底）视为不确定 → 报错，逼人显式确认。
+confidence-threshold = 0.8

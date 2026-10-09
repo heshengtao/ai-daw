@@ -16,7 +16,7 @@
 | Plan 5 | 录音 | ⬜ 未开始 | — |
 | Plan 6 | 音频片段 / 采样器 | ⬜ 未开始 | 模型只有 MIDI `Clip`，无 `AudioClip` |
 | Plan 7 | AI 接口（MCP + skills + 可视化） | 🟡 进行中 | MCP ✅（`src-tauri/src/mcp.rs`，27 工具）+ 前端 AI 可视化 ✅（D4）；skills 文档包（D3）未做 |
-| 新增 | `crates/ipc`（Command/Event schema） | ⬜ 未开始 | 设计文档 §5 已列出，实际未建 |
+| 新增 | `crates/ipc`（Command/Event schema） | ✅ 完成 | `crates/ipc`（`daw-party-ipc`）：工程/命令/事件 schema 的**唯一来源**；engine 用 `pub use` 薄壳保持既有路径不变（零行为变化） |
 | 新增 | `crates/analysis`（响度/频谱） | ✅ 完成 | `crates/analysis`（ebur128 + rustfft）：LUFS/LRA/真峰值 + RMS + 平均幅度谱；`analyze_project` 命令 |
 | 新增 | 插件商店 | ⬜ 未开始 | — |
 | 品牌 | 应用图标 / favicon | ✅ 完成 | `src-tauri/app-icon.svg`（薰衣草紫，与 `common/Logo.vue` 同图形）→ `tauri icon` 生成 `src-tauri/icons/*`；`public/logo.svg` 作网页 favicon |
@@ -123,9 +123,13 @@
 ## 3. 许可证护栏（强制）
 
 - 本项目许可：**Apache-2.0-only**。
-- 允许的依赖许可：MIT / Apache-2.0 / BSD-2-Clause / BSD-3-Clause / ISC / CC0 / Zlib / Unlicense。
+- 允许的依赖许可：MIT / Apache-2.0 / BSD-2-Clause / BSD-3-Clause / ISC / CC0 / Zlib / Unlicense
+  / **MPL-2.0（仅限「未修改的依赖」，2026-10-09 加入）**。
 - **禁止**：GPL / AGPL / ASIO 专有件 / SSPL；LGPL 需单独评估（动态链接）。
-- 落地手段：CI 接入 `cargo-deny`，`[licenses]` 段配置 allow-list，阻断传染性依赖进入。
+- MPL-2.0 是**文件级**弱著佐权：把**未修改**的 MPL 库当依赖链接进 Apache-2.0 程序不会传染本仓库
+  代码，义务只有「保留其许可声明」+「若修改其源码则须公开该文件的修改」。首个（也是当前唯一）
+  用例是 `symphonia`（音频解码，见 `crates/asset` 与 `NOTICE`）。
+- 落地手段：仓库根已落 `deny.toml`（`cargo deny check licenses`，但本机/CI 尚未执行）；CI 接入待办。
 - `unsafe` 例外：仅 `crates/host-vst3` 允许（Plan 1 约束已声明）；其余 crate 保持 `#![forbid(unsafe_code)]`。
 
 ## 4. 技术栈（修正后）
@@ -149,7 +153,12 @@
 
 ### Stage A — v1 收尾（P0）
 
-- **A1 · `crates/ipc`**：把 `Command` / `Event` / `Project` 的 serde schema 抽成独立 crate，成为「引擎 ↔ Tauri ↔ 未来 MCP」的唯一契约。当前命令面在 `src-tauri/src/commands.rs` 里临时定义，正式化 `ipc` 是解锁后续一切接口的前置。
+- **A1 · `crates/ipc`**：✅ 完成（2026-10-09）。`crates/ipc`（`daw-party-ipc`）只依赖 `serde`，
+  持有 `model/*` / `command.rs` / `event.rs`（含 `Actor`、`Event::actor()`、`Event::is_mix_only()` 与全部
+  `normalize_*`）；`daw-party-engine` 用 `pub use` 薄壳再导出，**既有路径与行为零变化**
+  （测试通过数守恒：engine 106→90、新增 ipc 17、`--features realtime` 123→107）。
+  设计/计划：`specs/2026-10-09-ipc-contract-design.md`、`plans/2026-10-09-ipc-contract.md`。
+  顺带落 `deny.toml` 并把 MPL-2.0（仅限未修改依赖）加入 §3 允许清单。
 - **A2 · Plan 4b：原生实时传输接进 UI** ✅ 完成（2026-10-08）
   - 后端：`transport_play` / `transport_pause` / `transport_stop` / `transport_seek` / `transport_status` + `engine://transport` 位置事件（位置从音频线程的 `SharedTransport` 读取）。
   - 线程：`AudioHost` 移入专用音频线程（`src-tauri/src/audio.rs`），用 `mpsc` 与命令层通信。
@@ -186,9 +195,8 @@
 
 ## 6. 里程碑
 
-**M1（Stage A 完成：实时传输可用）**：A2 已完成 ✅；A1（`crates/ipc` 契约抽离）仍未开始——
-在 A1 完成前，命令面仍定义在 `src-tauri/src/commands.rs`，尚未成为「引擎 ↔ Tauri ↔ 未来 MCP」
-的唯一契约。
+**M1（Stage A 完成：契约单一化 + 实时传输可用）**：✅ 达成。A2 已完成；A1 于 2026-10-09 完成 ——
+`Command` / `Event` / `Project` 的 schema 现由 `crates/ipc` 单点持有，引擎 ↔ Tauri ↔ MCP 共用同一份契约。
 
 **M2（Stage B：可托管 VST3/CLAP）**：✅ 基本达成（B1–B3 完成，B4 部分；见 Stage B）。
 

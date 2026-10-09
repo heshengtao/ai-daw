@@ -22,3 +22,16 @@ the terms of the Apache License, Version 2.0:
 
 Each adapted file carries a header comment noting its origin.
 --------------------------------------------------------------------------------
+
+Third-party dependencies whose licences are not in the permissive default set:
+
+--------------------------------------------------------------------------------
+Symphonia (https://github.com/pdeljanov/Symphonia)
+Licensed under the Mozilla Public License, Version 2.0 (MPL-2.0).
+
+Used **unmodified** as a dependency (audio decoding) in `crates/asset`. MPL-2.0 is
+a file-level weak copyleft: it does not affect the licensing of this project's own
+source files, and we publish no modifications to Symphonia. The licence text is
+available at https://www.mozilla.org/en-US/MPL/2.0/ and in the crate's own source
+distribution.
+--------------------------------------------------------------------------------

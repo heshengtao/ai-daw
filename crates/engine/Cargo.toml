@@ -9,6 +9,7 @@ default = []
 realtime = ["dep:cpal"]
 
 [dependencies]
+daw-party-ipc = { path = "../ipc" }
 daw-party-plugin-api = { path = "../plugin-api" }
 daw-party-synth = { path = "../synth" }
 serde = { version = "1", features = ["derive"] }

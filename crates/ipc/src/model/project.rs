@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn project_wire_shape_is_stable() {
-        // `src/lib/types.ts` 依赖 TrackId / ClipId 序列化成裸数字、字段为 snake_case；
+        // `src/api/types.ts` 依赖 TrackId / ClipId 序列化成裸数字、字段为 snake_case；
         // 往返测试无法发现形状漂移，这里断言具体 JSON 形状。
         let mut p = Project::new("t");
         p.tracks.push(Track {

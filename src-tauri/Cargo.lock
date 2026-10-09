@@ -747,6 +747,7 @@ name = "daw-party-engine"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "daw-party-ipc",
  "daw-party-plugin-api",
  "daw-party-synth",
  "hound",
@@ -765,6 +766,13 @@ dependencies = [
  "serde",
  "thiserror 1.0.69",
  "vst3-host",
+]
+
+[[package]]
+name = "daw-party-ipc"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
