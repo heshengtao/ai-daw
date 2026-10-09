@@ -169,6 +169,15 @@ pub fn write_interleaved(staging: &[f32], data: &mut [f32], frames: usize, chann
     }
 }
 
+/// 到达工程结尾时的动作：开循环 → 无缝回到起点继续；否则 → 暂停（现状）。
+pub(crate) fn end_of_project_action(looping: bool) -> TransportCommand {
+    if looping {
+        TransportCommand::Seek { frame: 0 }
+    } else {
+        TransportCommand::Pause
+    }
+}
+
 /// 控制侧可观测的传输状态：音频线程写入，任意线程读取。
 ///
 /// 单独抽出来是因为 `cpal::Stream` 在多数平台上是 `!Send`，宿主必须被创建并持有在
@@ -178,6 +187,7 @@ pub fn write_interleaved(staging: &[f32], data: &mut [f32], frames: usize, chann
 pub struct SharedTransport {
     position: Arc<AtomicU64>,
     playing: Arc<AtomicBool>,
+    looping: Arc<AtomicBool>,
 }
 
 impl SharedTransport {
@@ -194,6 +204,11 @@ impl SharedTransport {
     /// 音频线程最近一次报告的播放状态。
     pub fn is_playing(&self) -> bool {
         self.playing.load(Ordering::Relaxed)
+    }
+
+    /// 音频线程最近一次报告的循环开关。
+    pub fn is_looping(&self) -> bool {
+        self.looping.load(Ordering::Relaxed)
     }
 }
 
@@ -436,6 +451,7 @@ impl AudioHost {
         // 因此 `Player::new`（以及它加载的每个插件）在整条路径上只跑一次。
         let position_cb = Arc::clone(&shared.position);
         let playing_cb = Arc::clone(&shared.playing);
+        let looping_cb = Arc::clone(&shared.looping);
         // 波形缓冲：回调侧只写，界面侧只读（都用原子，不加锁）。
         let scope = Arc::clone(&options.scope);
 
@@ -443,6 +459,8 @@ impl AudioHost {
         // `Player` 的 scratch 全部按 `max_block` 预分配：回调内不分配、不加锁。
         // 调度表按值移交：回调只建一份，不再需要为「可能的第二次尝试」克隆一份。
         let mut player = Player::new(schedule, registry, device_rate, max_block);
+        // 重建宿主时延续循环开关：界面不必重新订阅，用户看到的状态也不会因编辑而复位。
+        player.apply_command(TransportCommand::SetLoop(shared.is_looping()));
         let mut staging: Vec<f32> = Vec::with_capacity(max_block * 2);
 
         let on_data = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
@@ -469,13 +487,13 @@ impl AudioHost {
             // 给界面画波形：推入刚渲染好的这块（下混成单声道）。
             scope.push_interleaved(&staging[..need], frames);
 
-            // 宿主策略：播放到工程结尾即暂停（而非回卷）。这是 `Player` 不再
-            // 自行自动停止后，「播到结尾即停」行为的归属地。
+            // 宿主策略：播到工程结尾。开循环 → 无缝回起点继续；否则暂停。
             if player.end_frame() > 0 && player.position_frames() >= player.end_frame() {
-                player.apply_command(TransportCommand::Pause);
+                player.apply_command(end_of_project_action(player.is_looping()));
             }
             position_cb.store(player.position_frames(), Ordering::Relaxed);
             playing_cb.store(player.is_playing(), Ordering::Relaxed);
+            looping_cb.store(player.is_looping(), Ordering::Relaxed);
         };
         // 状态只在 cpal 的**错误回调**里写：实时数据回调（`on_data`）依旧不加锁、不分配。
         // cpal 在独立线程上调用错误回调，因此这里的 `Mutex` 不在音频处理路径上。
@@ -675,6 +693,22 @@ mod tests {
         let observer = shared.clone();
         assert_eq!(observer.position_frames(), 0);
         assert!(!observer.is_playing());
+    }
+
+    /// 到达工程结尾的动作：开循环回到起点，关循环暂停。
+    #[test]
+    fn end_of_project_action_wraps_or_pauses() {
+        assert_eq!(end_of_project_action(true), TransportCommand::Seek { frame: 0 });
+        assert_eq!(end_of_project_action(false), TransportCommand::Pause);
+    }
+
+    /// 共享状态的循环开关初始为关，且克隆共享同一份。
+    #[test]
+    fn shared_transport_loop_flag() {
+        let shared = SharedTransport::new();
+        assert!(!shared.is_looping());
+        shared.looping.store(true, Ordering::Relaxed);
+        assert!(shared.clone().is_looping());
     }
 
     // 依赖真实音频设备的冒烟测试：在无设备环境（CI）应返回错误而非 panic。
