@@ -1,7 +1,7 @@
 use daw_party_plugin_api::MidiEvent;
 
-use crate::beats_to_seconds;
 use crate::model::{MixerChannel, Note, PluginInstance, Project, TrackId};
+use crate::tempo::TempoMap;
 
 /// 一条已定绝对帧的 MIDI 事件。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -38,6 +38,9 @@ pub struct ScheduledEvents {
     pub end_frame: u64,
     /// 构建时使用的速度，供实时播放按拍推进时复用。
     pub tempo: f64,
+    /// 速度分段在时间轴上的落点（帧 → BPM，按帧升序，首项为 `(0, tempo_at(0))`）。
+    /// 供实时播放逐块取当前速度。
+    pub tempo_points: Vec<(u64, f64)>,
     /// 构建该事件表时使用的采样率（Hz）；所有 `frame` 均以此刻度定点。宿主应在
     /// 采样率不一致时拒绝播放，否则事件会被静默错误定时。
     pub sample_rate: f64,
@@ -46,8 +49,12 @@ pub struct ScheduledEvents {
 impl ScheduledEvents {
     /// 从工程构建定帧事件表。事件按帧稳定排序；同帧时保持（clip 顺序 → note 顺序 → NoteOn 先于 NoteOff）的原有次序，以保证与 Plan 1 的渲染一致。
     pub fn from_project(project: &Project, sample_rate: f64) -> Self {
-        let tempo = project.transport.tempo;
-        let to_frame = |beats: f64| (beats_to_seconds(beats, tempo) * sample_rate) as u64;
+        let map = TempoMap::from_transport(&project.transport);
+        let to_frame = |beats: f64| (map.beats_to_seconds(beats) * sample_rate) as u64;
+        let mut tempo_points: Vec<(u64, f64)> = vec![(0, map.tempo_at(0.0))];
+        for s in map.segments().iter().skip(1) {
+            tempo_points.push((to_frame(s.start_beat), s.tempo));
+        }
 
         let mut tracks = Vec::with_capacity(project.tracks.len());
         for track in &project.tracks {
@@ -89,7 +96,8 @@ impl ScheduledEvents {
             tracks,
             master: project.master,
             end_frame: to_frame(project.length_beats()),
-            tempo,
+            tempo: map.tempo_at(0.0),
+            tempo_points,
             sample_rate,
         }
     }
@@ -184,5 +192,32 @@ mod tests {
             s.tracks[0].events[1].event,
             MidiEvent::NoteVolume { note: 60, value: 0 }
         ));
+    }
+
+    #[test]
+    fn keyframe_shifts_later_event_frames() {
+        use crate::model::{Clip, ClipId, Keyframe, Note, Track, TrackId};
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        p.transport.upsert_keyframe(Keyframe { beat: 2.0, tempo: 240.0, time_sig_num: 4, time_sig_den: 4 });
+        p.tracks.push(Track {
+            id: TrackId(1),
+            name: "L".into(),
+            instrument: None,
+            effects: vec![],
+            clips: vec![Clip {
+                id: ClipId(1),
+                start: 0.0,
+                length: 4.0,
+                notes: vec![Note { pitch: 60, start: 3.0, duration: 0.5, velocity: 100, volume: 127 }],
+            }],
+            mixer: Default::default(),
+        });
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        // 3 拍 = 0..2 @120 (1s) + 2..3 @240 (0.25s) = 1.25s = 60000 帧。
+        assert_eq!(s.tracks[0].events[0].frame, 60_000);
+        // tempo_points: 帧 0 → 120；帧 48000（2 拍 @120 = 1s）→ 240。
+        assert_eq!(s.tempo_points[0], (0, 120.0));
+        assert_eq!(s.tempo_points[1], (48_000, 240.0));
     }
 }

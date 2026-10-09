@@ -87,6 +87,10 @@ pub struct Player {
     tracks: Vec<TrackVoice>,
     sample_rate: f64,
     tempo: f64,
+    /// 速度分段落点（帧 → BPM，升序）；逐块取当前速度用。
+    tempo_points: Vec<(u64, f64)>,
+    /// 当前所处速度分段的游标。
+    tempo_cursor: usize,
     position: u64,
     end_frame: u64,
     playing: bool,
@@ -128,6 +132,7 @@ impl Player {
         max_block: usize,
     ) -> Self {
         let tempo = schedule.tempo;
+        let tempo_points = schedule.tempo_points.clone();
         let end_frame = schedule.end_frame;
         let master = schedule.master;
         // 单块内某轨最多发出的事件数 = 该轨事件总数上界（游标单调前进，每块只消费一次）。
@@ -179,6 +184,8 @@ impl Player {
             tracks,
             sample_rate,
             tempo,
+            tempo_points,
+            tempo_cursor: 0,
             position: 0,
             end_frame,
             playing: false,
@@ -217,6 +224,10 @@ impl Player {
     /// 定位到指定帧：重置所有插件并重算事件游标（已在播放中的音符不会被重新触发）。
     pub fn seek(&mut self, frame: u64) {
         self.position = frame;
+        self.tempo_cursor = self
+            .tempo_points
+            .partition_point(|(f, _)| *f <= frame)
+            .saturating_sub(1);
         for track in self.tracks.iter_mut() {
             track.cursor = track.events.partition_point(|e| e.frame < frame);
             track.plugin.reset();
@@ -329,10 +340,22 @@ impl Player {
         let playing = self.playing;
         let block_start = self.position;
         let block_end = block_start + frames as u64;
+
+        while self.tempo_cursor + 1 < self.tempo_points.len()
+            && self.tempo_points[self.tempo_cursor + 1].0 <= block_start
+        {
+            self.tempo_cursor += 1;
+        }
+        let tempo = self
+            .tempo_points
+            .get(self.tempo_cursor)
+            .map(|(_, bpm)| *bpm)
+            .unwrap_or(self.tempo);
+
         let ctx = ProcessContext {
             sample_rate: self.sample_rate,
             block_size: frames,
-            tempo: self.tempo,
+            tempo,
             playing,
         };
 

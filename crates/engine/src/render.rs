@@ -1,9 +1,9 @@
 use crate::audio::AudioBuffer;
-use crate::beats_to_seconds;
 use crate::model::Project;
 use crate::player::Player;
 use crate::registry::PluginRegistry;
 use crate::schedule::ScheduledEvents;
+use crate::tempo::TempoMap;
 use crate::transport::TransportCommand;
 use crate::BLOCK_SIZE;
 
@@ -23,8 +23,8 @@ pub struct RenderOptions {
 /// （工程内容时长 + `tail_seconds`）× 采样率。相同工程与选项必然产出逐位相同的结果。
 pub fn render(project: &Project, registry: &PluginRegistry, options: &RenderOptions) -> AudioBuffer {
     let sr = options.sample_rate;
-    let tempo = project.transport.tempo;
-    let body_sec = beats_to_seconds(project.length_beats(), tempo);
+    let map = TempoMap::from_transport(&project.transport);
+    let body_sec = map.beats_to_seconds(project.length_beats());
     let total_frames = ((body_sec + options.tail_seconds) * sr) as usize;
 
     let schedule = ScheduledEvents::from_project(project, sr);
@@ -72,10 +72,26 @@ mod tests {
         let project = demo();
         let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.5 };
         let buf = render(&project, &PluginRegistry::with_builtins(), &opts);
-        let expected = (beats_to_seconds(project.length_beats(), project.transport.tempo) * 48_000.0) as usize
+        let expected = (TempoMap::from_transport(&project.transport).beats_to_seconds(project.length_beats())
+            * 48_000.0) as usize
             + (0.5 * 48_000.0) as usize;
         assert!((buf.frames() as i64 - expected as i64).abs() <= 1);
         assert_eq!(buf.channels(), 2);
+    }
+
+    /// 无关键点时，渲染结果必须与本计划之前逐位一致（回归由现有用例覆盖）。
+    /// 有关键点时，时长按分段计算。
+    #[test]
+    fn render_length_follows_tempo_keyframes() {
+        use crate::model::Keyframe;
+        let mut project = demo();
+        project.transport.upsert_keyframe(Keyframe { beat: 1.0, tempo: 240.0, time_sig_num: 4, time_sig_den: 4 });
+        let map = crate::tempo::TempoMap::from_transport(&project.transport);
+        let expected_body = map.beats_to_seconds(project.length_beats());
+        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.1 };
+        let buf = render(&project, &PluginRegistry::with_builtins(), &opts);
+        let expected = (expected_body * 48_000.0) as usize + (0.1 * 48_000.0) as usize;
+        assert!((buf.frames() as i64 - expected as i64).abs() <= 1);
     }
 
     #[test]
