@@ -39,8 +39,8 @@ function isOpen(id: PaneId): boolean {
 }
 
 function pick(id: PaneId): void {
-  // 只把标签加进来，**不抢焦点**：用户是来「开面板」的，不是来被拽走的。
-  layout.addTab(id);
+  // 用户是从列表里「选中」了这个面板——按习惯应当直接切过去。
+  layout.openTab(id);
   pickerOpen.value = false;
 }
 
