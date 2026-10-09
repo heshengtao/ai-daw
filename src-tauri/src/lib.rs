@@ -255,6 +255,7 @@ pub fn run() {
             commands::undo,
             commands::redo,
             commands::transport_status,
+            commands::retry_audio,
             commands::transport_play,
             commands::transport_pause,
             commands::transport_stop,

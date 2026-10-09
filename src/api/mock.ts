@@ -646,6 +646,9 @@ export const mockApi = {
     emitTransport();
   },
 
+  // 浏览器预览里没有真实设备可探测：重试是空操作，状态照旧。
+  retryAudio: (): Promise<void> => Promise.resolve(),
+
   onEngineEvent: (): (() => void) => {
     const t = window.setInterval(() => {
       // 模拟引擎事件，便于预览开发者抽屉与 AI 胶囊。

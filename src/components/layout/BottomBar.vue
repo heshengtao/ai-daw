@@ -14,10 +14,12 @@ import {
   BackwardIcon,
   ArrowUturnLeftIcon,
   ArrowUturnRightIcon,
+  ArrowPathIcon,
 } from "@heroicons/vue/24/outline";
 import NumberField from "@/components/common/NumberField.vue";
 import TimeSignatureField from "@/components/common/TimeSignatureField.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
+import { retryAudio } from "@/api/tauri";
 import { useProjectStore } from "@/stores/project";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
@@ -76,6 +78,18 @@ const rateText = computed(() => {
 const isPlaying = computed(() => transport.playing);
 const isAiActive = computed(() => props.aiActive);
 const isPreview = computed(() => transport.mode === "preview");
+
+/** 离线提示：把后端给出的原因（可能缺失）拼成「原因 + 点击重试」。 */
+const offlineHint = computed(() =>
+  i18n.t("bottom.audioOfflineHint", {
+    error: transport.error ?? i18n.t("bottom.audioUnavailable"),
+  }),
+);
+
+/** 重试输出设备：重新探测并重建实时宿主；结果由传输事件推回来，无需手动刷新。 */
+function onRetryAudio(): void {
+  void retryAudio();
+}
 </script>
 
 <template>
@@ -155,9 +169,20 @@ const isPreview = computed(() => transport.mode === "preview");
         <span class="dot" />
         <span class="ai-text">{{ isAiActive ? i18n.t("bottom.aiBusy") : i18n.t("bottom.aiIdle") }}</span>
       </span>
-      <span class="engine" :class="{ fallback: isPreview }">
-        {{ isPreview ? i18n.t("bottom.offline") : i18n.t("bottom.realtime") }} · {{ rateText }}
+      <!-- 实时可用：纯指示（与之前一致）；离线：变成可点的重试按钮，并把原因放进 tooltip。 -->
+      <span v-if="isPreview" class="engine fallback">
+        <Tooltip :text="offlineHint" place="above" align="center">
+          <button
+            class="audio-retry"
+            :aria-label="i18n.t('bottom.retryAudio')"
+            @click="onRetryAudio"
+          >
+            <ArrowPathIcon class="w-[13px] h-[13px]" />
+            {{ i18n.t("bottom.offline") }}
+          </button>
+        </Tooltip>
       </span>
+      <span v-else class="engine">{{ i18n.t("bottom.realtime") }} · {{ rateText }}</span>
     </div>
   </footer>
 </template>
@@ -324,6 +349,34 @@ const isPreview = computed(() => transport.mode === "preview");
   color: rgb(var(--md-tertiary));
   opacity: 0.95;
 }
+/* 离线指示本身就是重试按钮：小药丸，配色沿用 tertiary（与原来的离线色一致）。 */
+.audio-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  background-color: rgb(var(--md-tertiary) / 0.12);
+  transition:
+    background-color var(--md-ease-emphasized),
+    transform var(--md-ease-emphasized);
+}
+.audio-retry:hover {
+  background-color: rgb(var(--md-tertiary) / 0.22);
+}
+.audio-retry:active {
+  transform: scale(0.96);
+}
+.audio-retry:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 1px;
+}
 
 /* 窄屏：先丢引擎信息与读数，保持左右对称不被破坏 */
 @media (max-width: 1080px) {
@@ -344,13 +397,15 @@ const isPreview = computed(() => transport.mode === "preview");
 @media (prefers-reduced-motion: reduce) {
   .play-btn,
   .t-btn,
+  .audio-retry,
   .ai-pill,
   .ai-pill .dot {
     transition: background-color 0.15s ease;
   }
   .play-btn:hover,
   .play-btn:active,
-  .t-btn:not(:disabled):active {
+  .t-btn:not(:disabled):active,
+  .audio-retry:active {
     transform: none;
   }
 }

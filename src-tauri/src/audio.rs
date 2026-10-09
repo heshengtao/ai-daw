@@ -44,10 +44,6 @@ enum AudioMessage {
     /// 插件目录有更新（启动时后台扫描完成）：重建注册表并重新装载当前工程。
     SetCatalog(Vec<CatalogPlugin>),
     /// 立刻重新探测设备并重建宿主（界面上的「重试」，以及设备变化时的自动重建）。
-    ///
-    /// 目前只有 `AudioEngine::retry_audio` 构造它，真正的界面入口由 Task 5 的 Tauri
-    /// 命令接上，因此此刻是「未使用」。
-    #[allow(dead_code)]
     Retry,
 }
 
@@ -134,8 +130,7 @@ impl AudioEngine {
 
     /// 重新探测输出设备并重建宿主（界面上的「重试」按钮）。
     ///
-    /// Task 5 会把它暴露成 Tauri 命令；这里只提供入口，故暂标 `allow(dead_code)`。
-    #[allow(dead_code)]
+    /// 由 `retry_audio` Tauri 命令调用：设备被拔掉后再插回，用户无需重启应用。
     pub fn retry_audio(&self) {
         let _ = self.tx.send(AudioMessage::Retry);
     }

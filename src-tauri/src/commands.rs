@@ -527,6 +527,16 @@ pub fn transport_status(state: State<'_, AppState>) -> TransportSnapshot {
     state.audio.snapshot()
 }
 
+/// 重新探测输出设备并重建实时宿主（设备恢复后无需重启应用）。
+///
+/// 底栏的「离线试听」指示离线时变成按钮，点击后走这条命令；探测结果仍由
+/// `engine://transport` 事件推送回来，界面无需自己刷新。
+#[tauri::command]
+pub fn retry_audio(state: State<'_, AppState>) -> Result<(), String> {
+    state.audio.retry_audio();
+    Ok(())
+}
+
 /// 开始播放。
 #[tauri::command]
 pub fn transport_play(state: State<'_, AppState>) -> Result<(), String> {
