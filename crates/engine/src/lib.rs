@@ -14,6 +14,7 @@ pub mod render;
 pub mod realtime;
 pub mod schedule;
 pub mod scope;
+pub mod tempo;
 pub mod transport;
 pub mod wav;
 
