@@ -162,3 +162,37 @@ export interface Preset {
   /** 创建时间（Unix 毫秒），用于排序。 */
   created_at: number;
 }
+
+/**
+ * 响度与峰值（EBU R128 / ITU-R BS.1770）。
+ *
+ * 注意：静音 / 无信号时这些值是负无穷（-∞），经 JSON 会变成 `null`，所以每个字段都可能是 `null`。
+ */
+export interface AnalysisLoudness {
+  /** 积分响度（LUFS）。 */
+  integrated_lufs: number | null;
+  /** 短时（3 秒窗）响度最大值（LUFS）。 */
+  short_term_max_lufs: number | null;
+  /** 响度范围（LU）。 */
+  loudness_range_lu: number | null;
+  /** 采样峰值（dBFS）。 */
+  sample_peak_dbfs: number | null;
+  /** 真峰值（dBTP）。 */
+  true_peak_dbtp: number | null;
+}
+
+/** 平均幅度谱。 */
+export interface AnalysisSpectrum {
+  /** 每个 bin 的带宽（Hz）。 */
+  bin_hz: number;
+  /** 各 bin 的平均幅度（dB）；静音 bin 为 `null`。 */
+  magnitudes_db: (number | null)[];
+}
+
+/** 一次工程分析的完整结果（与后端 `analysis::Report` 一一对应）。 */
+export interface AnalysisReport {
+  loudness: AnalysisLoudness;
+  /** 全曲 RMS（dBFS）；静音为 `null`。 */
+  rms_dbfs: number | null;
+  spectrum: AnalysisSpectrum;
+}

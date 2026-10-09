@@ -1,0 +1,12 @@
+[package]
+name = "daw-party-analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# 响度（EBU R128 / ITU-R BS.1770）：LUFS、LRA、真峰值。
+ebur128 = "0.1"
+# 频谱：窗函数 + FFT。
+rustfft = "6"
+serde = { version = "1", features = ["derive"] }

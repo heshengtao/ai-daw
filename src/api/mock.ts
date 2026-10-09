@@ -7,6 +7,7 @@
  * 定位与传输按钮，而不需要真的打开音频设备（浏览器里没有声音是预期行为）。
  */
 import type {
+  AnalysisReport,
   BackendParam,
   CatalogPlugin,
   ClipPlacement,
@@ -637,6 +638,22 @@ export const mockApi = {
 
   renderPreview: (): Blob => new Blob([new Uint8Array(0)], { type: "audio/wav" }),
   exportWav: (path: string): string => path,
+
+  // 浏览器预览没有真实渲染：给一份「静音」报告，字段与后端对齐（非有限值 → null）。
+  analyzeProject: (): AnalysisReport => ({
+    loudness: {
+      integrated_lufs: null,
+      short_term_max_lufs: null,
+      loudness_range_lu: 0,
+      sample_peak_dbfs: null,
+      true_peak_dbtp: null,
+    },
+    rms_dbfs: null,
+    spectrum: {
+      bin_hz: 48_000 / 2_048,
+      magnitudes_db: Array.from({ length: 2_048 / 2 + 1 }, () => null),
+    },
+  }),
 
   // ---- 传输 ----
 

@@ -681,6 +681,31 @@ pub async fn render_preview(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// 对当前工程做一次离线分析：响度（LUFS/LRA/真峰值）、RMS、平均幅度谱。
+///
+/// 与预览/导出走同一条渲染路径（同样的插件实例、同样的逐块推进），所以分析的是**真实输出**。
+/// 这是 AI 层的「听感」入口：分析结果可以喂给代理做混音/母带决策，也可以给界面画频谱。
+#[tauri::command]
+pub async fn analyze_project(
+    state: State<'_, AppState>,
+    sample_rate: u32,
+) -> Result<daw_party_analysis::Report, String> {
+    validate_sample_rate(sample_rate)?;
+    let project = { state.engine.lock().unwrap().project().clone() };
+    let catalog = state.catalog_snapshot();
+    let editor_handles = Arc::clone(&state.editor_handles);
+    tauri::async_runtime::spawn_blocking(move || {
+        let registry = build_registry(&catalog, &project, editor_handles);
+        // 分析只关心工程正文，不加尾音。
+        let options = RenderOptions { sample_rate: sample_rate as f64, tail_seconds: 0.0 };
+        let buffer = render(&project, &registry, &options);
+        daw_party_analysis::analyze(buffer.data(), buffer.channels(), sample_rate as f64)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 把当前工程导出为 WAV 文件，返回写入的绝对路径。
 #[tauri::command]
 pub async fn export_wav(

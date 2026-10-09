@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { mockApi, mockEnabled } from "./mock";
 import type {
+  AnalysisReport,
   BackendParam,
   CatalogPlugin,
   ClipPlacement,
@@ -317,6 +318,12 @@ export async function renderPreview(sampleRate = 44100): Promise<Blob> {
 export function exportWav(path: string, sampleRate = 44100): Promise<string> {
   if (mockEnabled()) return Promise.resolve(mockApi.exportWav(path));
   return invoke<string>("export_wav", { path, sampleRate });
+}
+
+/** 离线分析当前工程：响度 / 频谱 / 峰值（AI 的「听感」入口）。 */
+export function analyzeProject(sampleRate = 44100): Promise<AnalysisReport> {
+  if (mockEnabled()) return Promise.resolve(mockApi.analyzeProject());
+  return invoke<AnalysisReport>("analyze_project", { sampleRate });
 }
 
 // ---------------------------------------------------------------------------

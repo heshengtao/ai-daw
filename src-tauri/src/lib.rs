@@ -266,6 +266,7 @@ pub fn run() {
             commands::save_project,
             commands::open_project,
             commands::render_preview,
+            commands::analyze_project,
             commands::export_wav,
             commands::list_plugins,
             commands::rescan_plugins,
