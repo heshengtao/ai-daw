@@ -28,6 +28,10 @@ const en: Record<string, string> = {
   "plugins.params": "Params",
   "plugins.openInterfaceTitle": "Open the interface for “{name}”",
   "plugins.loaded": "Plugin loaded onto “{track}”",
+  "plugins.fxAdd": "Add to the effect chain: {name}",
+  "plugins.fxRemove": "Remove from the effect chain: {name}",
+  "plugins.fxAdded": "Added to the effect chain: {name}",
+  "plugins.fxRemoved": "Removed from the effect chain: {name}",
   "plugins.loadTo": "Load to: ",
   "plugins.loadNamed": "Load {name}",
   "plugins.pending": "Coming soon",
@@ -37,6 +41,8 @@ const en: Record<string, string> = {
   "panel.editorUnavailable": "Can't open the plugin editor: {error}",
   "panel.openEditor": "Open editor",
   "panel.paramsInPanel": "Parameters are in the side panel",
+  "panel.restoreDefaults": "Restore defaults",
+  "effect.windowEmpty": "This track has no such effect",
 
 
   // ---- 内置合成器界面 ----

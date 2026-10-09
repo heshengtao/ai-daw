@@ -115,12 +115,12 @@ onMounted(() => {
   color: rgb(var(--md-on-surface));
 }
 .head {
+  flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 18px 10px;
-  border-bottom: 1px solid rgb(var(--md-outline-variant) / 0.4);
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px 6px;
+  min-width: 0;
 }
 .titles {
   display: flex;
@@ -130,7 +130,7 @@ onMounted(() => {
 }
 .title {
   margin: 0;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -139,14 +139,13 @@ onMounted(() => {
 .subtitle {
   font-size: 11px;
   color: rgb(var(--md-on-surface-variant));
+  white-space: nowrap;
 }
-/* 窗口是固定尺寸的（后端 `resizable(false)`），内容按固定尺寸排，不再需要纵向滚动。 */
+/* 面板自己铺满：这里**不留内边距**——键盘要贴死窗口的左、右、下三边。 */
 .body {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
-  justify-content: center;
-  padding: 10px 18px 18px;
 }
 .empty {
   margin: 40px auto;

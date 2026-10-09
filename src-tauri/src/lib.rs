@@ -293,6 +293,8 @@ pub fn run() {
             commands::close_plugin_window,
             commands::plugin_window_open,
             commands::open_synth_window,
+            commands::open_effect_window,
+            commands::set_effect_params,
             commands::scope_data,
             commands::audition_note,
             commands::list_presets,

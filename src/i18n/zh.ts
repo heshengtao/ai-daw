@@ -28,6 +28,10 @@ const zh: Record<string, string> = {
   "plugins.params": "参数",
   "plugins.openInterfaceTitle": "打开「{name}」的界面",
   "plugins.loaded": "已把插件加载到「{track}」",
+  "plugins.fxAdd": "加入效果链：{name}",
+  "plugins.fxRemove": "移出效果链：{name}",
+  "plugins.fxAdded": "已加入效果链：{name}",
+  "plugins.fxRemoved": "已移出效果链：{name}",
   "plugins.loadTo": "加载到：",
   "plugins.loadNamed": "加载 {name}",
   "plugins.pending": "待接入",
@@ -37,6 +41,8 @@ const zh: Record<string, string> = {
   "panel.editorUnavailable": "插件界面打不开：{error}",
   "panel.openEditor": "打开界面",
   "panel.paramsInPanel": "参数在侧边栏的插件界面里",
+  "panel.restoreDefaults": "恢复默认参数",
+  "effect.windowEmpty": "这条轨道上没有这个效果器",
 
   // ---- 内置合成器界面 ----
   "synth.osc": "DCO 振荡器",

@@ -94,7 +94,7 @@ export const usePluginsStore = defineStore("plugins", () => {
   }
 
   function name(pluginId: string | undefined | null): string {
-    if (!pluginId) return "无乐器";
+    if (!pluginId) return useI18n().t("instrument.none");
     return info(pluginId)?.name ?? pluginId;
   }
 

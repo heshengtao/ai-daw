@@ -124,9 +124,9 @@ function empty(): Project {
  */
 const STARTER_TRACKS: { name: string; plugin_id: string }[] = [
   { name: "主旋律", plugin_id: "builtin.synth.lead" },
-  { name: "和弦", plugin_id: "builtin.synth.pad" },
+  { name: "和弦", plugin_id: "builtin.synth.strings" },
   { name: "低音", plugin_id: "builtin.synth.bass" },
-  { name: "鼓组", plugin_id: "builtin.synth.pluck" },
+  { name: "鼓组", plugin_id: "builtin.synth.drums" },
   { name: "铺底", plugin_id: "builtin.synth.pad" },
 ];
 
@@ -407,6 +407,9 @@ export const mockApi = {
   openSynthWindow: (): Promise<void> =>
     Promise.reject(new Error("浏览器预览没有独立窗口，已改用侧边栏面板")),
 
+  openEffectWindow: (): Promise<void> =>
+    Promise.reject(new Error("浏览器预览没有独立窗口，已改用侧边栏面板")),
+
   // 预览里没有真实音频：画一段正弦，让示波器看得出在动。
   scopeData: (points: number): number[] => {
     const t = performance.now() / 1000;
@@ -447,6 +450,15 @@ export const mockApi = {
         params: { ...spec.params },
         state: [],
       }));
+    }),
+
+  setEffectParams: (trackId: number, index: number, params: Record<string, number>): Project =>
+    commit(() => {
+      const fx = track(trackId)?.effects[index];
+      if (!fx) return;
+      for (const [id, value] of Object.entries(params)) {
+        if (Number.isFinite(value)) fx.params[id] = value;
+      }
     }),
 
   listPresets: (): Preset[] => readPresets(),

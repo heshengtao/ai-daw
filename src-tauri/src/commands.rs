@@ -1032,6 +1032,36 @@ pub fn set_effect_param(
     run(&app, &state, Command::SetEffectParam { track: TrackId(track), index, param, value })
 }
 
+/// 一次设置效果器的**多个**参数（「恢复默认值」走它：一次事务，只占一个撤销步骤）。
+#[tauri::command]
+pub fn set_effect_params(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    index: usize,
+    params: HashMap<String, f32>,
+) -> Project {
+    // 按参数名排序：`HashMap` 的遍历顺序随机，固定顺序才能让事件流与撤销历史可复现。
+    let mut pairs: Vec<(String, f32)> = params.into_iter().collect();
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    let id = TrackId(track);
+    let commands: Vec<Command> = pairs
+        .into_iter()
+        .map(|(param, value)| Command::SetEffectParam { track: id, index, param, value })
+        .collect();
+
+    let (project, events) = {
+        let mut engine = state.engine.lock().unwrap();
+        let events = engine.execute_all(commands, Actor::Human);
+        (engine.project().clone(), events)
+    };
+    for event in &events {
+        let _ = app.emit(EVENT_ENGINE, event);
+    }
+    state.audio.sync_events(&project, &events);
+    project
+}
+
 // ---------------------------------------------------------------------------
 // 插件原生界面（独立窗口）
 // ---------------------------------------------------------------------------
@@ -1227,13 +1257,18 @@ pub fn plugin_window_open(state: State<'_, AppState>, track: u64) -> bool {
     state.open_editors.lock().unwrap().contains(&track)
 }
 
-/// 打开内置合成器的**独立窗口**。
+/// 开一扇「内置插件面板」窗口（已经开着就聚焦过去）。
 ///
-/// 内置合成器没有原生编辑器，但它的面板也不该只能挤在侧边栏里——给它一个自己的窗口，
-/// 「打开界面」这个动作对所有音色就都成立。已经开着就聚焦过去。
-#[tauri::command]
-pub async fn open_synth_window(app: tauri::AppHandle, track: u64) -> Result<(), String> {
-    let label = format!("synth-{track}");
+/// 两块内置面板（合成器 / 效果器）共用这条路径：同一套前端换一条路由。
+/// 面板是**流体布局**（铺满窗口），所以允许缩放——只给一个下限，免得控件被压扁变形。
+async fn open_panel_window(
+    app: tauri::AppHandle,
+    label: String,
+    url: String,
+    title: &'static str,
+    size: (f64, f64),
+    min: (f64, f64),
+) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.set_focus();
         return Ok(());
@@ -1246,14 +1281,11 @@ pub async fn open_synth_window(app: tauri::AppHandle, track: u64) -> Result<(), 
         let result = tauri::WebviewWindowBuilder::new(
             &app_for_main,
             &label,
-            // 同一个前端，换一条路由：窗口里只有合成器本体。
-            tauri::WebviewUrl::App(format!("index.html#/synth?track={track}").into()),
+            tauri::WebviewUrl::App(url.into()),
         )
-        .title("内置合成器")
-        // 面板是固定尺寸的设备（900×560），窗口按「标题栏 + 面板」留够地方，并锁死尺寸：
-        // 拖动窗口不会改变布局，键盘位置因此永远稳定。
-        .inner_size(960.0, 700.0)
-        .resizable(false)
+        .title(title)
+        .inner_size(size.0, size.1)
+        .min_inner_size(min.0, min.1)
         .build()
         .map(|_| ())
         .map_err(|e| e.to_string());
@@ -1262,6 +1294,44 @@ pub async fn open_synth_window(app: tauri::AppHandle, track: u64) -> Result<(), 
     .map_err(|e| e.to_string())?;
 
     rx.recv().map_err(|e| e.to_string())?
+}
+
+/// 打开内置合成器的**独立窗口**。
+///
+/// 内置合成器没有原生编辑器，但它的面板也不该只能挤在侧边栏里——给它一个自己的窗口，
+/// 「打开界面」这个动作对所有音色就都成立。
+#[tauri::command]
+pub async fn open_synth_window(app: tauri::AppHandle, track: u64) -> Result<(), String> {
+    open_panel_window(
+        app,
+        format!("synth-{track}"),
+        format!("index.html#/synth?track={track}"),
+        "内置合成器",
+        (960.0, 680.0),
+        (780.0, 560.0),
+    )
+    .await
+}
+
+/// 打开某条轨道上**某个效果器**的独立界面。
+///
+/// 效果器参数不在检查器里就地调：链上效果一多，检查器会被几十个滑块塞满。
+/// 与内置合成器同一个约定——检查器只给入口，编辑去它自己的界面。
+#[tauri::command]
+pub async fn open_effect_window(
+    app: tauri::AppHandle,
+    track: u64,
+    index: usize,
+) -> Result<(), String> {
+    open_panel_window(
+        app,
+        format!("effect-{track}-{index}"),
+        format!("index.html#/effect?track={track}&index={index}"),
+        "效果器",
+        (560.0, 400.0),
+        (460.0, 320.0),
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------

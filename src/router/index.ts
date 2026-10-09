@@ -12,6 +12,8 @@ const router = createRouter({
     { path: "/settings", name: "settings", component: () => import("@/views/SettingsView.vue") },
     // 内置合成器的独立窗口：由后端用 `index.html#/synth?track=N` 打开。
     { path: "/synth", name: "synth", component: () => import("@/views/SynthWindowView.vue") },
+    // 内置效果器的独立窗口：`index.html#/effect?track=N&index=I`。
+    { path: "/effect", name: "effect", component: () => import("@/views/EffectWindowView.vue") },
     // 宿主给「只能嵌入」的插件开窗时加载的空页：插件视图会盖在它上面。
     { path: "/blank", name: "blank", component: () => import("@/views/BlankView.vue") },
   ],

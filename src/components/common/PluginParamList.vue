@@ -18,9 +18,15 @@ const props = defineProps<{
   pluginId: string | undefined | null;
   /** 当前已保存的参数值（参数 id → 值）。 */
   values: Record<string, number>;
+  /** 是否显示「恢复默认值」按钮（检查器里不显示，那里只给入口）。 */
+  resettable?: boolean;
 }>();
 
-const emit = defineEmits<{ (e: "commit", id: string, value: number): void }>();
+const emit = defineEmits<{
+  (e: "commit", id: string, value: number): void;
+  /** 一次改多个参数（恢复默认值）：父组件必须合成**一个**撤销步骤。 */
+  (e: "commitMany", params: Record<string, number>): void;
+}>();
 
 const plugins = usePluginsStore();
 const i18n = useI18n();
@@ -48,6 +54,15 @@ function onCommit(id: string, value: number): void {
   draft.value = next;
   emit("commit", id, value);
 }
+
+/** 已经在默认值上就没必要再点一次。 */
+const atDefaults = computed(() => params.value.every((p) => shown(p.id, p.default) === p.default));
+
+/** 全部参数回到插件自报的默认值。 */
+function restore(): void {
+  draft.value = {};
+  emit("commitMany", Object.fromEntries(params.value.map((p) => [p.id, p.default])));
+}
 </script>
 
 <template>
@@ -70,6 +85,12 @@ function onCommit(id: string, value: number): void {
     </div>
 
     <p v-if="params.length === 0" class="hint">{{ i18n.t("params.empty") }}</p>
+
+    <div v-else-if="resettable" class="foot">
+      <button class="btn-tonal reset" :disabled="atDefaults" @click="restore">
+        {{ i18n.t("panel.restoreDefaults") }}
+      </button>
+    </div>
   </div>
 </template>
 
@@ -116,6 +137,20 @@ function onCommit(id: string, value: number): void {
   font-size: 11px;
   line-height: 1.5;
   color: rgb(var(--md-on-surface-muted));
+}
+.foot {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+.reset {
+  height: 28px;
+  padding: 0 14px;
+  font-size: 11.5px;
+}
+.reset:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 .tabular {
   font-variant-numeric: tabular-nums;

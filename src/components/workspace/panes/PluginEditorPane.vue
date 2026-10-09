@@ -140,6 +140,17 @@ async function commitEffect(index: number, id: string, value: number): Promise<v
     layout.notify(i18n.t("error.setEffectParam", { error: String(err) }));
   }
 }
+
+/** 「恢复默认值」这类一次改多个：后端合成一次事务，只占一个撤销步骤。 */
+async function commitEffectMany(index: number, params: Record<string, number>): Promise<void> {
+  const t = track.value;
+  if (!t) return;
+  try {
+    await store.setEffectParams(t.id, index, params);
+  } catch (err) {
+    layout.notify(i18n.t("error.setEffectParam", { error: String(err) }));
+  }
+}
 </script>
 
 <template>
@@ -189,7 +200,9 @@ async function commitEffect(index: number, id: string, value: number): Promise<v
             v-else
             :plugin-id="track.instrument.plugin_id"
             :values="track.instrument.params"
+            resettable
             @commit="commitInstrument"
+            @commit-many="commitInstrumentMany"
           />
         </div>
 
@@ -203,7 +216,9 @@ async function commitEffect(index: number, id: string, value: number): Promise<v
           <PluginParamList
             :plugin-id="fx.plugin_id"
             :values="fx.params"
+            resettable
             @commit="(id: string, v: number) => commitEffect(i, id, v)"
+            @commit-many="(p: Record<string, number>) => commitEffectMany(i, p)"
           />
         </div>
       </section>

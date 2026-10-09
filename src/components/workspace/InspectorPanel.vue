@@ -14,12 +14,12 @@ import { computed, ref, watch } from "vue";
 import Md3Slider from "@/components/common/Md3Slider.vue";
 import Md3Select, { type SelectOption } from "@/components/common/Md3Select.vue";
 import InstrumentBrowser from "@/components/common/InstrumentBrowser.vue";
-import PluginParamList from "@/components/common/PluginParamList.vue";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
 import { usePluginsStore } from "@/stores/plugins";
 import { usePluginInterface } from "@/composables/usePluginInterface";
+import { canonicalPluginId } from "@/data/plugins";
 import { useI18n } from "@/i18n";
 
 const store = useProjectStore();
@@ -93,22 +93,40 @@ async function setInstrument(pluginId: string): Promise<void> {
   }
 }
 
-/** 音色下拉的候选项：第一项是「无乐器」，其余按分类分组（顺序即内置 → 外部）。 */
-const timbreOptions = computed<SelectOption[]>(() => [
-  { id: "", label: i18n.t("instrument.none"), group: "" },
-  ...plugins.instruments.map((p) => ({
+/**
+ * 音色下拉的候选项：第一项是「无乐器」，其余按分类分组（顺序即内置 → 外部）。
+ *
+ * 下拉是**按 id 精确匹配**显示当前值的，所以这里必须用**归一后的 id**：默认分轨挂的是引擎
+ * 注册表里的预设 id（`builtin.synth.lead` 等），而清单里只有 `builtin.synth`——不归一就匹配不上，
+ * 触发器会退回占位符「—」，看起来像「这条轨道没有乐器」。
+ *
+ * 同理，当前乐器若根本不在清单里（插件被卸载 / 这机器扫不到），也把它补进去显示名字。
+ */
+const timbreOptions = computed<SelectOption[]>(() => {
+  const current = canonicalPluginId(track.value?.instrument?.plugin_id ?? "");
+  const list: SelectOption[] = plugins.instruments.map((p) => ({
     id: p.id,
     label: p.name,
     hint: p.note,
     group: p.category,
-  })),
-]);
+  }));
+  if (current && !list.some((o) => o.id === current)) {
+    list.unshift({ id: current, label: plugins.name(current), hint: "", group: "" });
+  }
+  return [{ id: "", label: i18n.t("instrument.none"), group: "" }, ...list];
+});
+
+/** 已归一化的当前乐器 id（下拉的选中值）。 */
+const currentTimbre = computed(() => canonicalPluginId(track.value?.instrument?.plugin_id ?? ""));
 
 /** 「浏览全部音色…」模态框的开关。 */
 const browserOpen = ref(false);
 
 /** 下拉或浏览器里选中一个音色：空串表示卸载。 */
 function onPickTimbre(id: string): void {
+  // 选中的还是当前这件乐器（只是 id 归一的差别）就别写回：那会把工程里空着的 params 固化下来，
+  // 默认分轨挂着的预设音色会被重置成「默认正弦」。
+  if (id === currentTimbre.value) return;
   void setInstrument(id);
 }
 
@@ -118,26 +136,10 @@ function onPickTimbre(id: string): void {
 // （内置合成器有完整的合成器面板，外部插件开它自己的原生窗口 / 参数面板）。
 
 // ---- 效果器链 ----
-
-/** 链上效果器的参数表同样是懒加载。 */
-watch(
-  () => (track.value?.effects ?? []).map((f) => f.plugin_id).join("|"),
-  () => {
-    for (const fx of track.value?.effects ?? []) void plugins.ensureParams(fx.plugin_id);
-  },
-  { immediate: true },
-);
-
-/** 拖动中的效果器参数草稿由 `PluginParamList` 内部管理，这里只处理提交。 */
-async function onFxCommit(index: number, id: string, value: number): Promise<void> {
-  const t = track.value;
-  if (!t) return;
-  try {
-    await store.setEffectParam(t.id, index, id, value);
-  } catch (err) {
-    layout.notify(i18n.t("error.setEffectParam", { error: String(err) }));
-  }
-}
+//
+// **参数不在这里展开**：链上效果一多，检查器会被几十个滑块塞满。这里只做「链管理」
+// （增删、换顺序）+ 一个「打开界面」入口，编辑去效果器自己的界面
+// （内置效果器有独立面板窗口；外部插件切到侧边栏的「插件界面」标签）。
 
 /** 从下拉里选中一个效果器 → 追加到链尾。 */
 async function addFx(pluginId: string): Promise<void> {
@@ -256,7 +258,7 @@ async function toggleSolo(): Promise<void> {
           <div class="row">
             <span class="row-label">{{ i18n.t("inspector.timbre") }}</span>
             <Md3Select
-              :model-value="track.instrument?.plugin_id ?? ''"
+              :model-value="currentTimbre"
               :options="timbreOptions"
               :label="i18n.t('inspector.timbre')"
               :action="{ label: i18n.t('instrument.browse') }"
@@ -288,6 +290,13 @@ async function toggleSolo(): Promise<void> {
             <div class="row">
               <span class="row-label">{{ i + 1 }}</span>
               <span class="fx-name">{{ plugins.name(fx.plugin_id) }}</span>
+              <button
+                class="open-editor small"
+                :aria-label="i18n.t('inspector.openInterface', { name: plugins.name(fx.plugin_id) })"
+                @click="pluginInterface.openEffect(track!.id, i, fx.plugin_id)"
+              >
+                {{ i18n.t("panel.openEditor") }}
+              </button>
               <div class="strip-buttons">
                 <button class="mini" :disabled="i === 0" :aria-label="i18n.t('inspector.fxUp')" @click="moveFx(i, i - 1)">
                   ↑
@@ -303,12 +312,6 @@ async function toggleSolo(): Promise<void> {
                 <button class="mini" :aria-label="i18n.t('inspector.fxRemove')" @click="removeFx(i)">×</button>
               </div>
             </div>
-
-            <PluginParamList
-              :plugin-id="fx.plugin_id"
-              :values="fx.params"
-              @commit="(id: string, v: number) => onFxCommit(i, id, v)"
-            />
           </div>
 
           <div class="row">
@@ -384,7 +387,7 @@ async function toggleSolo(): Promise<void> {
 
       <InstrumentBrowser
         v-model:open="browserOpen"
-        :current="track.instrument?.plugin_id ?? ''"
+        :current="currentTimbre"
         @pick="onPickTimbre"
       />
     </template>
@@ -564,6 +567,14 @@ async function toggleSolo(): Promise<void> {
   cursor: pointer;
   white-space: nowrap;
   transition: filter 0.14s ease;
+}
+/* 效果器行里的那颗更小：一行要放下名称 + 界面 + 三个小按钮 */
+.open-editor.small {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 10.5px;
+  background-color: rgb(var(--md-secondary-container));
+  color: rgb(var(--md-on-secondary-container));
 }
 .open-editor:hover {
   filter: brightness(1.08);

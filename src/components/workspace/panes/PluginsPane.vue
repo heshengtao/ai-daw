@@ -2,7 +2,10 @@
 /**
  * 插件面板内容：可插入的乐器与效果（与设置页的「插件管理」共用同一份清单）。
  *
- * 选中轨道后可以直接把插件加载到该轨道上——这是「右侧边栏拿插件」的那条路径。
+ * 选中轨道后，点右侧的按钮就能把它装上去——这是「右侧边栏拿插件」的那条路径：
+ * - **乐器**：互斥的「换成它」（一轨只有一件乐器）；
+ * - **效果器**：**可多选**，点一下加入该轨的效果链、再点一下移出，与乐器互不干扰。
+ *
  * 清单按分类分组；音色多起来之后要精挑细选，请走检查器里的「浏览全部音色…」。
  */
 import { computed } from "vue";
@@ -13,7 +16,7 @@ import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
 import { usePluginInterface } from "@/composables/usePluginInterface";
 import { useI18n } from "@/i18n";
-import { canonicalPluginId, SYNTH_ID, type PluginInfo } from "@/data/plugins";
+import { canonicalPluginId, type PluginInfo } from "@/data/plugins";
 
 const store = useProjectStore();
 const selection = useSelectionStore();
@@ -32,16 +35,46 @@ const groups = computed(() =>
   })).filter((g) => g.items.length > 0),
 );
 
-/** 该插件是否已挂到当前轨道上。 */
-function isLoaded(pluginId: string): boolean {
-  return track.value?.instrument?.plugin_id === pluginId;
+/** 某条轨道上这个插件在不在效果链里（返回链内序号）。 */
+function fxIndex(pluginId: string): number {
+  return track.value?.effects.findIndex((f) => f.plugin_id === pluginId) ?? -1;
 }
 
-async function load(pluginId: string, loadable: boolean): Promise<void> {
+/**
+ * 该插件是否已作用于当前轨道。
+ *
+ * **乐器**看「是不是当前乐器」（一轨只有一个，互斥）；**效果器**看「在不在效果链里」
+ * （可多选、可重复，与乐器不互斥）。
+ */
+function isLoaded(it: PluginInfo): boolean {
+  if (!track.value) return false;
+  return it.kind === "effect"
+    ? fxIndex(it.id) >= 0
+    : // 归一后比较：默认分轨挂的是注册表预设 id（builtin.synth.lead 等），清单里只有 builtin.synth。
+      canonicalPluginId(track.value.instrument?.plugin_id ?? "") === it.id;
+}
+
+/**
+ * 点一下加入 / 再点一下取消。
+ *
+ * 效果器走**效果链**（多选、不占乐器位）；乐器仍然是互斥的「换成它」。
+ */
+async function toggle(it: PluginInfo): Promise<void> {
   const t = track.value;
-  if (!t || !loadable) return;
+  if (!t || !it.loadable) return;
   try {
-    await store.setTrackInstrument(t.id, pluginId);
+    if (it.kind === "effect") {
+      const index = fxIndex(it.id);
+      if (index >= 0) {
+        await store.removeEffect(t.id, index);
+        layout.notify(i18n.t("plugins.fxRemoved", { name: it.name }));
+      } else {
+        await store.addEffect(t.id, it.id);
+        layout.notify(i18n.t("plugins.fxAdded", { name: it.name }));
+      }
+      return;
+    }
+    await store.setTrackInstrument(t.id, it.id);
     layout.notify(i18n.t("plugins.loaded", { track: t.name }));
   } catch (err) {
     layout.notify(i18n.t("error.load", { error: String(err) }));
@@ -50,7 +83,8 @@ async function load(pluginId: string, loadable: boolean): Promise<void> {
 
 /**
  * 一键打开「这个东西的界面」（共用 `usePluginInterface`）：
- * 自带原生界面的开窗口，其余（内置合成器 / 无界面插件）切到侧边栏的插件界面标签。
+ * 内置合成器与内置效果器开我们自己的窗口，外部插件开它的原生窗口，
+ * 其余（没有原生界面的）切到侧边栏的插件界面标签。
  */
 async function openInterface(it: PluginInfo): Promise<void> {
   const t = track.value;
@@ -58,19 +92,40 @@ async function openInterface(it: PluginInfo): Promise<void> {
     layout.notify(i18n.t("plugins.selectTrackFirst"));
     return;
   }
-  await pluginInterface.open(t.id, it.id, true);
+  if (it.kind !== "effect") {
+    await pluginInterface.open(t.id, it.id, true);
+    return;
+  }
+  // 效果器不在链上就先加进去——「打开界面」本身就意味着要用它。
+  let index = fxIndex(it.id);
+  if (index < 0) {
+    await store.addEffect(t.id, it.id);
+    index = fxIndex(it.id);
+  }
+  if (index >= 0) await pluginInterface.openEffect(t.id, index, it.id);
+}
+
+/** 「界面」按钮的提示文本。 */
+function interfaceTitle(it: PluginInfo): string {
+  return i18n.t("plugins.openInterfaceTitle", { name: it.name });
 }
 
 /**
  * 「界面」按钮上写什么。
  *
- * 统一叫**插件界面**：不管打开的是内置合成器的面板、外部插件自带的原生界面，还是
- * 退回参数表，对用户来说都是「这台乐器的界面」。内置合成器与外部插件不再用两套叫法。
+ * 统一叫**插件界面**：不管打开的是内置合成器/效果器的面板、外部插件自带的原生界面，
+ * 还是退回参数表，对用户来说都是「这个东西的界面」。
  */
 function interfaceLabel(it: PluginInfo): string {
-  return it.hasEditor || canonicalPluginId(it.id) === SYNTH_ID
-    ? i18n.t("plugins.pluginEditor")
-    : i18n.t("plugins.params");
+  return it.hasEditor || it.builtin ? i18n.t("plugins.pluginEditor") : i18n.t("plugins.params");
+}
+
+/** 加载按钮的提示：效果器是「加入/移出效果链」，乐器是「装到这条轨道」。 */
+function toggleLabel(it: PluginInfo): string {
+  if (it.kind !== "effect") return i18n.t("plugins.loadNamed", { name: it.name });
+  return isLoaded(it)
+    ? i18n.t("plugins.fxRemove", { name: it.name })
+    : i18n.t("plugins.fxAdd", { name: it.name });
 }
 </script>
 
@@ -95,8 +150,8 @@ function interfaceLabel(it: PluginInfo): string {
           <button
             v-if="it.loadable"
             class="iface-btn"
-            :title="i18n.t('plugins.openInterfaceTitle', { name: it.name })"
-            :aria-label="i18n.t('plugins.openInterfaceTitle', { name: it.name })"
+            :title="interfaceTitle(it)"
+            :aria-label="interfaceTitle(it)"
             :disabled="!track"
             @click="openInterface(it)"
           >
@@ -106,12 +161,14 @@ function interfaceLabel(it: PluginInfo): string {
           <button
             v-if="it.loadable"
             class="load-btn"
-            :class="{ on: isLoaded(it.id) }"
-            :disabled="!track || isLoaded(it.id)"
-            :aria-label="i18n.t('plugins.loadNamed', { name: it.name })"
-            @click="load(it.id, it.loadable)"
+            :class="{ on: isLoaded(it) }"
+            :disabled="!track || (it.kind === 'instrument' && isLoaded(it))"
+            :title="toggleLabel(it)"
+            :aria-label="toggleLabel(it)"
+            :aria-pressed="it.kind === 'effect' ? isLoaded(it) : undefined"
+            @click="toggle(it)"
           >
-            <CheckIcon v-if="isLoaded(it.id)" class="w-[14px] h-[14px]" />
+            <CheckIcon v-if="isLoaded(it)" class="w-[14px] h-[14px]" />
             <PlusIcon v-else class="w-[14px] h-[14px]" />
           </button>
           <span v-else class="soon">{{ i18n.t("plugins.pending") }}</span>

@@ -1,35 +1,27 @@
 <script setup lang="ts">
 /**
- * 内置合成器的**插件级独立界面**：一台固定尺寸（900×560）的 MD3 设备面板。
+ * 内置合成器的**面板**：预设垫子 + 屏幕（示波器 / 包络）+ 旋钮 + 试听键盘。
  *
- * 布局照硬件合成器来（AKAI MPK mini 那一类）：
- * 顶部是**预设垫子**——当前类别的几条预设排成一块块大圆角方块，点一下整组参数就切过去；
- * 中部左边是「屏幕」（一个周期示波器 + ADSR 曲线），右边是基础旋钮；
- * 底部是一条固定高度的试听键盘。设备里所有纵向区域都用固定高度 / `flex: 0 0 auto`，
- * 键盘因此永远不会被压扁变形；容器窄于 `DEVICE_W` 时面板整体等比缩小（`transform: scale`），
- * 比例照样不变。容器宽于 `DEVICE_W` 时不放大，保持 1。
+ * **面板铺满宿主容器，自己不带外框**：独立窗口里它直接贴到窗口边缘（键盘贴死底边，
+ * 圆角由窗口本身切出），嵌在侧边栏里时也是铺满。所以没有外层大圆角容器、没有留白缝隙。
  *
- * 旋钮分两层：**基础**只露 8 个最常用的，其余（副振 / 脉宽 / 滑音 / 高通 / 滤波包络 / 键跟随 / LFO）
- * 收在「高级」里，默认不打扰小白。
+ * 旋钮分两层：**基础**是两排 4×2 共 8 个最常用的，其余（副振 / 脉宽 / 滑音 / 失谐 / FM /
+ * 噪声 / 压碎 / 音高包络 / 滤波包络 / 键跟随 / LFO）收在「高级」里，默认不打扰小白。
  *
  * 参数值来自工程的 `instrument.params`（缺省回落到参数表默认值）；拖动时用本地草稿保证跟手，
  * 松手才提交给引擎。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 
 import Md3Knob from "@/components/common/Md3Knob.vue";
 import Oscilloscope from "@/components/common/Oscilloscope.vue";
 import PianoKeyboard from "@/components/common/PianoKeyboard.vue";
 import PresetBar from "@/components/common/PresetBar.vue";
-import { SYNTH_ID, SYNTH_PARAMS, type ParamSpec } from "@/data/plugins";
+import { SYNTH_DEFAULTS, SYNTH_ID, SYNTH_PARAMS, type ParamSpec } from "@/data/plugins";
 import { useI18n } from "@/i18n";
 import { usePresetsStore, type PresetOption } from "@/stores/presets";
 import type { EffectSpec } from "@/api/types";
 import type { WaveParams } from "@/utils/waveform";
-
-/** 设计尺寸（px）：固定不变，Task 9 的等比缩放按这两个常量算。 */
-const DEVICE_W = 900;
-const DEVICE_H = 560;
 
 const props = defineProps<{
   params: Record<string, number>;
@@ -51,31 +43,6 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-
-/**
- * 容器宽度不够时整体等比缩小。
- *
- * 设备永远是 900×560，缩放只做一层 `transform: scale`——所以键盘（乃至任何一块）的比例都不会变形。
- * 超过设计宽度就保持 1，不放大。`.fit` 的高度跟着缩，免得缩完在容器里留一大片空白。
- */
-const fitEl = ref<HTMLElement | null>(null);
-const scale = ref(1);
-let ro: ResizeObserver | null = null;
-
-function measure(): void {
-  const el = fitEl.value;
-  if (!el) return;
-  // 分母是常量 `DEVICE_W`，不存在为 0 的情况。
-  scale.value = Math.min(1, el.clientWidth / DEVICE_W);
-}
-
-onMounted(() => {
-  measure();
-  ro = new ResizeObserver(measure);
-  if (fitEl.value) ro.observe(fitEl.value);
-});
-
-onUnmounted(() => ro?.disconnect());
 
 const SPECS: Record<string, ParamSpec> = Object.fromEntries(SYNTH_PARAMS.map((p) => [p.id, p]));
 
@@ -173,8 +140,21 @@ function knob(id: string, size?: number): KnobDef {
   };
 }
 
-/** 基础面板：只有这 8 个参数常驻（波形单独用分段按钮渲染）。 */
-const BASIC_IDS = ["wave", "cutoff", "resonance", "attack", "decay", "sustain", "release", "gain"];
+/**
+ * 基础面板：8 个最常用的参数，排成两排 4×2（波形单独用分段按钮渲染）。
+ *
+ * 选的是「任何音色都先拧这几个」的那批：亮度 / 尖锐度 / 四个包络段 / 失谐（厚度）/ 总音量。
+ */
+const BASIC_IDS = [
+  "cutoff",
+  "resonance",
+  "attack",
+  "decay",
+  "sustain",
+  "release",
+  "detune",
+  "gain",
+];
 
 /** 高级区：按合成器信号链的顺序分区（振荡器 → FM → 噪声/位深 → 音高包络 → 滤波 → LFO）。 */
 const ADVANCED_GROUPS: { title: string; ids: string[] }[] = [
@@ -201,11 +181,25 @@ const FILTER_TYPES = [
 const advanced = ref(false);
 
 const basicKnobs = computed(() =>
-  BASIC_IDS.filter((id) => id !== "wave").map((id) =>
-    // 展开高级区时基础旋钮一并收小：设备高度固定，只能这样给高级卡片腾出整行的地方。
+  BASIC_IDS.map((id) =>
+    // 展开高级区时基础旋钮一并收小：给高级卡片腾出整行的地方。
     advanced.value ? knob(id, 46) : knob(id, id === "gain" ? 72 : 62),
   ),
 );
+
+/** 全部参数都还在插件默认值上（恢复默认按钮就没必要点）。 */
+const atDefaults = computed(() => SYNTH_PARAMS.every((p) => shown(p.id) === p.default));
+
+/**
+ * 恢复默认参数。
+ *
+ * 只动**乐器参数**，不碰效果链——效果链是音轨的东西，不是这台合成器的一部分。
+ * 走 `commitMany`：一次事务，只占一个撤销步骤。
+ */
+function restoreDefaults(): void {
+  drafts.value = {};
+  emit("commitMany", { ...SYNTH_DEFAULTS });
+}
 
 /** 高级区：按 `ADVANCED_GROUPS` 摊成「分区标题 + 旋钮」；卡里的旋钮更小，
     免得展开后把固定高度的面板撑得要滚很久。 */
@@ -410,8 +404,8 @@ function pickPad(option: PresetOption): void {
 </script>
 
 <template>
-  <div ref="fitEl" class="fit" :style="{ height: `${DEVICE_H * scale}px` }">
-    <div class="device" :style="{ transform: `scale(${scale})`, transformOrigin: 'top center' }">
+  <!-- 面板本身就是窗口内容：没有外层大圆角容器，键盘直接贴到窗口边缘。 -->
+  <div class="panel">
       <!-- 顶部：预设垫子（当前类别的几条，点一下就切）＋ 类别 chips ＋ 预设条 -->
       <section class="presets">
         <div class="pads" role="group" :aria-label="t('preset.label')">
@@ -459,7 +453,6 @@ function pickPad(option: PresetOption): void {
           <Oscilloscope :params="scopeParams" />
 
           <div
-            ref="envEl"
             class="env"
             :class="{ dragging: envDrag !== null }"
             role="group"
@@ -468,22 +461,25 @@ function pickPad(option: PresetOption): void {
             @pointerup="envEnd"
             @pointercancel="envEnd"
           >
-            <svg class="env-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-              <polyline :points="envPolyline" />
-            </svg>
-            <button
-              v-for="id in ENV_HANDLES"
-              :key="id"
-              class="env-point"
-              :class="{ on: envDrag === id }"
-              :style="{ left: `${envPoints[id].x}%`, top: `${envPoints[id].y}%` }"
-              :aria-label="envTitle(id)"
-              :title="envTitle(id)"
-              @pointerdown="envStart(id, $event)"
-              @pointermove="envMove"
-              @pointerup="envEnd"
-              @pointercancel="envEnd"
-            />
+            <!-- 绘图区**内缩一圈**：控制点在 0% / 100% 时也离边与圆角有距离，不会被裁掉。 -->
+            <div ref="envEl" class="env-plot">
+              <svg class="env-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <polyline :points="envPolyline" />
+              </svg>
+              <button
+                v-for="id in ENV_HANDLES"
+                :key="id"
+                class="env-point"
+                :class="{ on: envDrag === id }"
+                :style="{ left: `${envPoints[id].x}%`, top: `${envPoints[id].y}%` }"
+                :aria-label="envTitle(id)"
+                :title="envTitle(id)"
+                @pointerdown="envStart(id, $event)"
+                @pointermove="envMove"
+                @pointerup="envEnd"
+                @pointercancel="envEnd"
+              />
+            </div>
             <span class="env-label">{{ t("synth.envelope") }}</span>
           </div>
         </div>
@@ -561,54 +557,44 @@ function pickPad(option: PresetOption): void {
             </transition>
           </div>
 
-          <button
-            class="btn-tonal advanced-toggle"
-            :class="{ on: advanced }"
-            :aria-pressed="advanced"
-            @click="advanced = !advanced"
-          >
-            {{ t("synth.advanced") }}
-          </button>
+          <div class="foot-row">
+            <button
+              class="btn-tonal reset-params"
+              :disabled="atDefaults"
+              @click="restoreDefaults"
+            >
+              {{ t("panel.restoreDefaults") }}
+            </button>
+            <button
+              class="btn-tonal advanced-toggle"
+              :class="{ on: advanced }"
+              :aria-pressed="advanced"
+              @click="advanced = !advanced"
+            >
+              {{ t("synth.advanced") }}
+            </button>
+          </div>
         </div>
       </section>
 
-      <!-- 底部：键盘**贴到设备下边缘**（设备不留下内边距，左右负边距拉满整宽，
-           圆角由设备本身的 `overflow: hidden` 切出来）。 -->
+      <!-- 底部：键盘**贴死窗口边缘**（面板不留下内边距，左右负边距拉满整宽，
+           圆角由窗口本身切出来）。 -->
       <div v-if="props.track !== undefined" class="keyboard-row">
         <PianoKeyboard :track="props.track" :octaves="4" />
       </div>
-    </div>
   </div>
 </template>
 
 <style scoped>
-/* 外层负责居中与等比缩放：高度由内联样式跟着 `scale` 走。
-   `overflow: hidden` 兜住 `transform` 不改变布局盒子这件事——缩到一半时设备右边缘不会溢出去。 */
-.fit {
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  overflow: hidden;
-}
-
-/* 一台固定尺寸的设备面板：内部一律固定高度 / `flex: 0 0 auto`，键盘不会被压扁。
-   `flex: 0 0 auto` 是必须的——否则 `.fit` 这个 flex 容器一窄就把设备挤扁，
-   等比缩放（Task 9）要的正是「设备永远是 900×560、只整体缩放」。 */
-.device {
-  width: v-bind(DEVICE_W + 'px');
-  height: v-bind(DEVICE_H + 'px');
-  flex: 0 0 auto;
+/* 面板铺满宿主：内部纵向分区都用固定高度 / `flex: 0 0 auto`，键盘不会被压扁变形。
+   左右留 10px 呼吸，**下边距为 0**——键盘要贴死窗口底边。 */
+.panel {
+  flex: 1 1 auto;
+  min-height: 420px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  box-sizing: border-box;
-  /* 面板底色贴近界面本身，外圈一圈**主题色的大圆角**（键盘由它切出底边形状）。
-     下内边距为 0：键盘要直接贴到设备下边缘，不再套一层托盘。 */
-  background-color: var(--app-card);
-  border: 1px solid rgb(var(--md-primary) / 0.45);
-  border-radius: 28px;
-  padding: 16px 16px 0;
-  overflow: hidden;
+  gap: 10px;
+  padding: 10px 10px 0;
 }
 
 /* ---- 顶部：预设垫子 ---- */
@@ -726,7 +712,7 @@ function pickPad(option: PresetOption): void {
 /* 包络图：一块可拖动的「屏幕」，控制点用绝对定位的按钮画（与 polyline 共用百分比坐标）。 */
 .env {
   position: relative;
-  border-radius: 20px;
+  border-radius: 16px;
   background-color: rgb(var(--md-scrim) / 0.35);
   border: 1px solid rgb(var(--md-outline-variant) / 0.45);
   overflow: hidden;
@@ -734,6 +720,11 @@ function pickPad(option: PresetOption): void {
 }
 .env.dragging {
   cursor: grabbing;
+}
+/* 绘图区内缩一圈：控制点落在 0% / 100% 时也离边框与圆角有余量，不会被裁掉。 */
+.env-plot {
+  position: absolute;
+  inset: 16px 14px;
 }
 .env-svg {
   width: 100%;
@@ -859,13 +850,12 @@ function pickPad(option: PresetOption): void {
   justify-content: space-around;
   gap: 8px 4px;
 }
-/* 基础旋钮：一行 4 颗、铺两行占住固定面板的高度（最后一行的 3 颗由 space-around 居中）。
-   展开高级区时压成一行，把位置让给高级卡片——设备高度不变，所以靠这个腾地方。 */
-.basic > * {
-  flex: 0 0 128px;
-}
-.basic.compact > * {
-  flex: 1 1 0;
+/* 基础旋钮：**两排 4×2**，格子均分（展开高级区时旋钮变小，格子不变）。 */
+.basic {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  justify-items: center;
+  gap: 10px 6px;
 }
 
 /* 高级区：老式减法合成器的分区卡片 */
@@ -919,10 +909,28 @@ function pickPad(option: PresetOption): void {
   color: rgb(var(--md-primary));
 }
 
+/* 底部动作栏：「恢复默认参数」+「高级」 */
+.foot-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+/* 「恢复默认参数」（`btn-tonal` 来自全局样式，这里只管尺寸与置灰态） */
+.reset-params {
+  height: 36px;
+  padding: 0 18px;
+  font-size: 12.5px;
+}
+.reset-params:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* 「高级」开关（`btn-tonal` 来自全局样式，这里只管尺寸与展开态） */
 .advanced-toggle {
   flex: 0 0 auto;
-  align-self: flex-end;
   height: 36px;
   padding: 0 20px;
   font-size: 12.5px;
@@ -932,12 +940,12 @@ function pickPad(option: PresetOption): void {
   color: rgb(var(--md-on-primary));
 }
 
-/* ---- 底部：键盘（贴死设备下边缘） ---- */
+/* ---- 底部：键盘（贴死窗口底边） ---- */
 .keyboard-row {
   flex: 0 0 auto;
   height: 96px;
-  /* 抵消设备左右内边距，让键盘横跨整宽；下边不留缝，直接贴底。 */
-  margin: 0 -16px;
+  /* 抵消面板左右内边距，让键盘横跨整宽；下边不留缝，直接贴底。 */
+  margin: 0 -10px;
 }
 
 .pad:focus-visible,

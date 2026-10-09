@@ -484,6 +484,22 @@ export function openSynthWindow(track: number): Promise<void> {
   return invoke<void>("open_synth_window", { track });
 }
 
+/** 打开某条轨道上某个效果器的独立界面（已经开着就聚焦）。 */
+export function openEffectWindow(track: number, index: number): Promise<void> {
+  if (mockEnabled()) return mockApi.openEffectWindow();
+  return invoke<void>("open_effect_window", { track, index });
+}
+
+/** 一次设置效果器的多个参数（「恢复默认值」走它：一次事务，一个撤销步骤）。 */
+export function setEffectParams(
+  track: number,
+  index: number,
+  params: Record<string, number>,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setEffectParams(track, index, params));
+  return invoke<Project>("set_effect_params", { track, index, params });
+}
+
 /** 取最近的输出采样，供界面画实时波形。 */
 export function scopeData(points: number): Promise<number[]> {
   if (mockEnabled()) return Promise.resolve(mockApi.scopeData(points));

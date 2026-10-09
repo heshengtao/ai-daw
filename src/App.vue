@@ -35,10 +35,13 @@ const route = useRoute();
 const isSettings = computed(() => route.path.startsWith("/settings"));
 
 /**
- * 独立窗口（合成器面板 / 插件界面宿主页）：只渲染自己的内容，不套工作区外壳。
+ * 独立窗口（合成器面板 / 效果器面板 / 插件界面宿主页）：只渲染自己的内容，不套工作区外壳。
  */
 const isBareWindow = computed(
-  () => route.path.startsWith("/synth") || route.path.startsWith("/blank"),
+  () =>
+    route.path.startsWith("/synth") ||
+    route.path.startsWith("/effect") ||
+    route.path.startsWith("/blank"),
 );
 
 const aiActive = ref(false);

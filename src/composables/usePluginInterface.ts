@@ -12,8 +12,15 @@ import { usePluginsStore } from "@/stores/plugins";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
 import { useI18n } from "@/i18n";
-import { canonicalPluginId, SYNTH_ID } from "@/data/plugins";
-import { openPluginWindow, openSynthWindow } from "@/api/tauri";
+import { canonicalPluginId, DELAY_ID, REVERB_ID, SYNTH_ID } from "@/data/plugins";
+import { openEffectWindow, openPluginWindow, openSynthWindow } from "@/api/tauri";
+
+/** 有独立面板的内置效果器（点「界面」开我们自己的窗口，而不是原生窗口）。 */
+const BUILTIN_EFFECT_IDS = [DELAY_ID, REVERB_ID];
+
+export function isBuiltinEffect(pluginId: string | undefined | null): boolean {
+  return !!pluginId && BUILTIN_EFFECT_IDS.includes(canonicalPluginId(pluginId));
+}
 
 /** 开窗口的尝试次数与间隔：够覆盖一次播放器重建，又不至于让用户干等。 */
 const OPEN_ATTEMPTS = 12;
@@ -73,5 +80,24 @@ export function usePluginInterface() {
     layout.notify(t("panel.editorUnavailable", { error: lastError }));
   }
 
-  return { open };
+  /**
+   * 打开**效果器**的界面。
+   *
+   * 内置效果器有我们自己的面板窗口；外部效果器没有「按效果器开原生窗口」的通道
+   * （引擎的编辑器句柄是按**轨道**记的，一轨只有一个乐器编辑器），所以退回侧边栏的
+   * 「插件界面」标签——那里够宽，参数再多也放得下。
+   */
+  async function openEffect(trackId: number, index: number, pluginId: string): Promise<void> {
+    if (isBuiltinEffect(pluginId)) {
+      try {
+        await openEffectWindow(trackId, index);
+        return;
+      } catch {
+        // 浏览器预览 / 建窗失败：退回侧边栏面板，功能不打折。
+      }
+    }
+    layout.openTab("editor");
+  }
+
+  return { open, openEffect };
 }

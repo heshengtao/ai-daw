@@ -147,6 +147,19 @@ export const useProjectStore = defineStore("project", () => {
     return edit(() => api.moveEffect(track, from, to));
   }
 
+  /** 一次设置效果器的多个参数（「恢复默认值」走它）；一次事务，一个撤销步骤。 */
+  function setEffectParams(
+    track: number,
+    index: number,
+    params: Record<string, number>,
+  ): Promise<void> {
+    const finite = Object.fromEntries(
+      Object.entries(params).filter(([, value]) => Number.isFinite(value)),
+    );
+    if (Object.keys(finite).length === 0) return Promise.resolve();
+    return edit(() => api.setEffectParams(track, index, finite));
+  }
+
   /** 设置效果器参数。 */
   function setEffectParam(
     track: number,
@@ -393,6 +406,7 @@ export const useProjectStore = defineStore("project", () => {
     removeEffect,
     moveEffect,
     setEffectParam,
+    setEffectParams,
     addClip,
     importAudio,
     removeClip,
