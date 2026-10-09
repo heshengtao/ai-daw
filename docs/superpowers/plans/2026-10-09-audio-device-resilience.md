@@ -680,3 +680,32 @@ git commit -m "feat(audio): manual retry for the output device"
 **类型一致性**：`OutputFormat` / `OutputFormatRange` / `choose_output_format` / `DeviceSignature` / `default_output_signature` / `device_changed` / `SharedStatus` 都在 Task 1/3 定义，Task 2/4 使用；`RealtimeOptions.status` 在 Task 3 定义并被 Task 3/4 使用；`AudioMessage::Retry` 与 `AudioEngine::retry_audio` 在 Task 4 定义，Task 5 使用；`retryAudio()` 在 Task 5 定义并使用。
 
 **风险提示**：Task 4 的重构（把 `run_audio_thread` 的循环改造成 `recv_timeout` + `rebuild` 辅助）是本次改动里最容易出错的点——行为必须保持：`Load`/`SetCatalog` 之后位置与播放状态不丢；并且只能在**真的需要时**才重建（`needs` 判断），否则每秒重建会一直卡顿。
+
+---
+
+## 执行记录（随进度更新）
+
+### 已完成
+
+- **Task 1 — 完成**（commit `9f38b4f`）。纯函数 `OutputFormat` / `OutputFormatRange`（`covers` / `nearest_rate`）/ `choose_output_format` / `DeviceSignature` / `default_output_signature` / `device_changed` + 6 个单测。
+  - 实现时对计划的一处必要修正：**cpal 0.18 已移除 `DeviceTrait::name()`**，改为 `device.description().ok()?.name().to_owned()`（计划里写的 `device.name()` 编译不过）。
+  - 复审结论：Approved（无 Critical/Important）。
+
+### 必须知道的坑（第一轮踩过）
+
+- **`realtime` 模块被 feature 门控**：`crates/engine/src/lib.rs:13` 是 `#[cfg(feature = "realtime")] pub mod realtime;`，而 `default = []`。因此
+  **`cargo test -p daw-party-engine` 不会编译 `realtime.rs`**——它会报「96 passed」但实际上一个 realtime 测试都没跑。
+  正确命令：`cargo test -p daw-party-engine --features realtime`（当前 107 个 lib 测试，含 11 个 realtime 测试）。
+  这条已同步进上面的 Global Constraints 与各任务的验证步骤。
+
+### 遗留（不阻塞，但别忘）
+
+- Task 1（Minor）：
+  - `choose_output_format` 的并列取舍依赖输入顺序（覆盖分支取「最后一个最大值」，最近分支取「第一个最小值」）；影响可忽略（并列者 `nearest_rate` 相同），但没写进文档。fallback 分支的「优先立体声/更多声道」没有测试覆盖。
+  - `nearest_rate` 在 `min_rate > max_rate` 时会 panic（`Ord::clamp`）；cpal 保证不会出现，**Task 2 做投影时应顺手把范围归一化**（`min ≤ max`）。
+  - 设备描述名为空时两个不同设备会被判为同一个（未加保护）。
+- **Task 4/5 的真实设备热切换只能人工验证**：本机跑起来、播放中切输出设备。任何报告都不得声称已验证。
+
+### 待办
+
+- Task 2（建流更宽容）、Task 3（`SharedStatus` + 错误上报）、Task 4（1s 轮询 + 自动重建/重试）、Task 5（`retry_audio` + 底栏重试按钮）。
