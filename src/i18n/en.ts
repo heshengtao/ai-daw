@@ -316,6 +316,7 @@ const en: Record<string, string> = {
   "arrange.clipRemoved": "Clip deleted",
   "arrange.clipsRemoved": "Deleted {count} clips",
   "arrange.clipTitle": "Clip · starts at beat {start} / {length} beats (click to change the sound, double-click for the piano roll)",
+  "arrange.selectTrack": "Select this track",
   "edit.noteRemoved": "Note deleted",
   "edit.notesRemoved": "Deleted {count} notes",
   "edit.snapGrid": "Snap grid {grid}",

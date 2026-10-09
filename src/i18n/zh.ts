@@ -315,6 +315,7 @@ const zh: Record<string, string> = {
   "arrange.clipRemoved": "已删除片段",
   "arrange.clipsRemoved": "已删除 {count} 个片段",
   "arrange.clipTitle": "片段 · {start} 拍起 / {length} 拍（单击换音色，双击进入钢琴卷帘）",
+  "arrange.selectTrack": "选中这条音轨",
   "edit.noteRemoved": "已删除音符",
   "edit.notesRemoved": "已删除 {count} 个音符",
   "edit.snapGrid": "吸附网格 {grid}",
