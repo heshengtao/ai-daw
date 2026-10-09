@@ -256,7 +256,6 @@ async function toggleSolo(): Promise<void> {
           <div class="row">
             <span class="row-label">{{ i18n.t("inspector.timbre") }}</span>
             <Md3Select
-              class="timbre-select"
               :model-value="track.instrument?.plugin_id ?? ''"
               :options="timbreOptions"
               :label="i18n.t('inspector.timbre')"
@@ -315,7 +314,6 @@ async function toggleSolo(): Promise<void> {
           <div class="row">
             <span class="row-label">{{ i18n.t("inspector.add") }}</span>
             <Md3Select
-              class="fx-select"
               :model-value="null"
               :options="fxOptions"
               :label="i18n.t('inspector.addFx')"
@@ -544,14 +542,6 @@ async function toggleSolo(): Promise<void> {
   font-size: 12px;
   font-weight: 500;
   color: rgb(var(--md-on-surface));
-}
-.fx-select {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.timbre-select {
-  flex: 1 1 auto;
-  min-width: 0;
 }
 /* 乐器卡片里的「打开界面」：一颗药丸按钮，右对齐 */
 .plugin-name {
