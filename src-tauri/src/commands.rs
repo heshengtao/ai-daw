@@ -580,6 +580,12 @@ pub fn transport_seek(state: State<'_, AppState>, frame: u64) -> Result<(), Stri
     state.audio.send(TransportCommand::Seek { frame })
 }
 
+/// 开关循环播放：播到工程结尾无缝回到起点继续。
+#[tauri::command]
+pub fn transport_set_loop(state: State<'_, AppState>, on: bool) -> Result<(), String> {
+    state.audio.send(TransportCommand::SetLoop(on))
+}
+
 // ---------------------------------------------------------------------------
 // 文件与渲染
 // ---------------------------------------------------------------------------

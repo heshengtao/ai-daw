@@ -58,6 +58,9 @@ pub struct TransportSnapshot {
     pub position_frames: u64,
     /// 设备采样率（Hz）；不可用时为 0。
     pub sample_rate: u32,
+    /// 是否开启循环播放。
+    #[serde(rename = "loop")]
+    pub loop_: bool,
     /// 不可用时的原因。
     pub error: Option<String>,
 }
@@ -200,6 +203,7 @@ impl AudioEngine {
             playing: available && self.shared.is_playing(),
             position_frames: if available { self.shared.position_frames() } else { 0 },
             sample_rate: self.sample_rate.load(Ordering::Relaxed),
+            loop_: available && self.shared.is_looping(),
             error: if dead { self.status.message() } else { self.error.lock().unwrap().clone() },
         }
     }

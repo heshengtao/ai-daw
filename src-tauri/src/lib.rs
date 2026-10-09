@@ -262,6 +262,7 @@ pub fn run() {
             commands::transport_pause,
             commands::transport_stop,
             commands::transport_seek,
+            commands::transport_set_loop,
             commands::save_project,
             commands::open_project,
             commands::render_preview,
