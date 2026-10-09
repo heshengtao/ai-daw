@@ -188,6 +188,8 @@ const en: Record<string, string> = {
   "bottom.pauseLabel": "Pause",
   "bottom.stop": "Stop and rewind",
   "bottom.stopLabel": "Stop",
+  "bottom.loop": "Loop",
+  "bottom.loopLabel": "Toggle loop playback",
   "bottom.bar": "Bar",
   "bottom.keyframe": "Keyframe",
   "bottom.keyframeHint": "Edits apply from this keyframe onward",

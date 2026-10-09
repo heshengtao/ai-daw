@@ -182,6 +182,18 @@ function onRetryAudio(): void {
           <StopIcon class="w-[17px] h-[17px]" />
         </button>
       </Tooltip>
+
+      <Tooltip :text="i18n.t('bottom.loop')" place="above" align="center">
+        <button
+          class="t-btn"
+          :class="{ on: transport.loop }"
+          :aria-pressed="transport.loop"
+          :aria-label="i18n.t('bottom.loopLabel')"
+          @click="transport.setLoop(!transport.loop)"
+        >
+          <ArrowPathIcon class="w-[17px] h-[17px]" />
+        </button>
+      </Tooltip>
     </div>
 
     <!-- 右：BPM + 状态 -->
@@ -278,6 +290,11 @@ function onRetryAudio(): void {
 .t-btn:disabled {
   opacity: 0.35;
   cursor: default;
+}
+/* 激活态（如循环开关打开）：与选中标签同一套配色。 */
+.t-btn.on {
+  background-color: rgb(var(--md-secondary-container));
+  color: rgb(var(--md-on-secondary-container));
 }
 .t-btn:focus-visible {
   outline: 2px solid rgb(var(--md-primary));

@@ -31,6 +31,8 @@ export const useTransportStore = defineStore("transport", () => {
   const sampleRate = ref(0);
   const playing = ref(false);
   const positionFrames = ref(0);
+  /** 循环播放开关（运行时状态，不进工程）。 */
+  const loop = ref(false);
   const ready = ref(false);
 
   let unlisten: (() => void) | null = null;
@@ -70,6 +72,7 @@ export const useTransportStore = defineStore("transport", () => {
     sampleRate.value = snapshot.sample_rate;
     playing.value = snapshot.playing;
     positionFrames.value = snapshot.position_frames;
+    if (snapshot.available) loop.value = snapshot.loop;
   }
 
   // ---- 离线试听（预览模式） ----
@@ -114,6 +117,7 @@ export const useTransportStore = defineStore("transport", () => {
       url = URL.createObjectURL(blob);
       const el = new Audio(url);
       audio = el;
+      el.loop = loop.value;
       el.onended = () => {
         playing.value = false;
         positionFrames.value = 0;
@@ -227,6 +231,20 @@ export const useTransportStore = defineStore("transport", () => {
     await seekFrames(0);
   }
 
+  /** 开关循环播放。 */
+  async function setLoop(on: boolean): Promise<void> {
+    loop.value = on;
+    if (mode.value === "realtime") {
+      try {
+        await api.transportSetLoop(on);
+      } catch {
+        // 实时不可用时保持界面状态即可；下次快照会纠正。
+      }
+      return;
+    }
+    if (audio) audio.loop = on;
+  }
+
   /** 重新读取一次状态（例如音频设备在运行期间才可用）。 */
   async function refresh(): Promise<void> {
     try {
@@ -250,6 +268,7 @@ export const useTransportStore = defineStore("transport", () => {
     playing,
     positionFrames,
     positionBeats,
+    loop,
     ready,
     mode,
     effectiveSampleRate,
@@ -262,6 +281,7 @@ export const useTransportStore = defineStore("transport", () => {
     seekFrames,
     seekBeats,
     rewind,
+    setLoop,
     dispose,
   };
 });

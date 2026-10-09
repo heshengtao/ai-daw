@@ -243,6 +243,7 @@ const transport: TransportSnapshot = {
   playing: false,
   position_frames: 0,
   sample_rate: 48_000,
+  loop: false,
   error: null,
 };
 
@@ -274,8 +275,12 @@ function tick(): void {
     transport.position_frames += Math.round(dt * transport.sample_rate);
     const end = projectEndFrames();
     if (end > 0 && transport.position_frames >= end) {
-      transport.position_frames = end;
-      transport.playing = false;
+      if (transport.loop) {
+        transport.position_frames %= end;
+      } else {
+        transport.position_frames = end;
+        transport.playing = false;
+      }
     }
   }
   emitTransport();
@@ -659,6 +664,11 @@ export const mockApi = {
 
   transportSeek: (frame: number): void => {
     transport.position_frames = Math.max(0, Math.round(frame));
+    emitTransport();
+  },
+
+  transportSetLoop: (on: boolean): void => {
+    transport.loop = on;
     emitTransport();
   },
 

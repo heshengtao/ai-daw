@@ -278,6 +278,12 @@ export function transportSeek(frame: number): Promise<void> {
   return invoke<void>("transport_seek", { frame });
 }
 
+/** 开关循环播放。 */
+export function transportSetLoop(on: boolean): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.transportSetLoop(on));
+  return invoke<void>("transport_set_loop", { on });
+}
+
 /** 重新探测输出设备并重建实时宿主（设备变化后无需重启）。 */
 export function retryAudio(): Promise<void> {
   if (mockEnabled()) return mockApi.retryAudio();

@@ -113,6 +113,8 @@ export interface TransportSnapshot {
   position_frames: number;
   /** 设备采样率（Hz）；不可用时为 0。 */
   sample_rate: number;
+  /** 是否开启循环播放。 */
+  loop: boolean;
   /** 不可用时的原因。 */
   error: string | null;
 }

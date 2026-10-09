@@ -187,6 +187,8 @@ const zh: Record<string, string> = {
   "bottom.pauseLabel": "暂停",
   "bottom.stop": "停止并回到起点",
   "bottom.stopLabel": "停止",
+  "bottom.loop": "循环",
+  "bottom.loopLabel": "循环播放",
   "bottom.bar": "小节",
   "bottom.keyframe": "关键点",
   "bottom.keyframeHint": "改动只影响该关键点之后",
