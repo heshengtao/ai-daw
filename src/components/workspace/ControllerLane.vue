@@ -98,6 +98,7 @@ const canvasEl = ref<HTMLElement | null>(null);
 const canvasStyle = computed(() => ({
   width: `${timeline.contentWidth}px`,
   transform: `translateX(${-timeline.scrollLeft}px)`,
+  ...timeline.gridStyle,
 }));
 
 const marqueeStyle = computed(() => ({
@@ -433,7 +434,6 @@ onUnmounted(() => {
 .canvas {
   position: absolute;
   inset: 0;
-  background-image: v-bind("timeline.gridBackground");
 }
 /* 直角条：底部对齐的实心矩形 */
 .bar {

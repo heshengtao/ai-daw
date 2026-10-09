@@ -626,7 +626,7 @@ onUnmounted(() => {
         :key="track.id"
         class="lane"
         :class="{ selected: selection.trackId === track.id }"
-        :style="{ height: `${LANE_H}px` }"
+        :style="{ height: `${LANE_H}px`, ...timeline.gridStyle }"
         @pointerdown="onLanePointerDown($event, track)"
       >
         <!-- 左侧留白里的轨道色竖线：点它即选中这条音轨 -->
@@ -743,7 +743,6 @@ onUnmounted(() => {
   position: relative;
   flex: 0 0 auto;
   border-bottom: 1px solid var(--grid-line-row);
-  background-image: v-bind("timeline.gridBackground");
   cursor: crosshair;
 }
 .lane.selected {

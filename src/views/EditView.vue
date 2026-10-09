@@ -66,8 +66,8 @@ function noteName(p: number): string {
 const clip = computed(() => selection.clip);
 const trackId = computed(() => selection.trackId);
 const clipStart = computed(() => clip.value?.start ?? 0);
-/** 每小节拍数：新建片段时用它作为默认长度。 */
-const beatsPerBar = computed(() => timeline.barBeats);
+/** 每小节拍数：按片段起点所在的拍号分段取；新建片段时用它作为默认长度。 */
+const beatsPerBar = computed(() => timeline.barBeatsAt(clipStart.value));
 
 const rollHeight = computed(() => `${rows.value.length * ROW_H}px`);
 /** 卷帘内容宽度：与编排视图同一套时间轴。 */
@@ -81,8 +81,11 @@ const clipBand = computed(() => {
     width: `${Math.max(2, c.length * timeline.zoom)}px`,
   };
 });
-/** 网格细分标签（例如 1/16）。 */
-const gridLabel = computed(() => `1/${Math.round(4 / timeline.snap)}`);
+/** 网格细分标签（例如 1/16）：按片段起点所在段的吸附步长计算。 */
+const gridLabel = computed(() => {
+  const snap = timeline.snapAt(clipStart.value);
+  return `1/${Math.round(4 / snap)}`;
+});
 
 // ---------------------------------------------------------------------------
 // 拖拽状态机
@@ -322,8 +325,9 @@ function onPointerMove(e: PointerEvent): void {
       const d = moveDrag.value;
       if (!d) break;
       const p = pointAt(e.clientX, e.clientY);
-      // 相对拖动：起点变化量 = 绝对拍变化量（片段偏移是常量，直接抵消）。
-      const db = Math.round((p.beat - d.originBeat) / timeline.snap) * timeline.snap;
+      // 相对拖动：起点变化量 = 绝对拍变化量（片段偏移是常量，直接抵消）；按指针所在分段的步长吸附。
+      const snap = timeline.snapAt(p.beat);
+      const db = Math.round((p.beat - d.originBeat) / snap) * snap;
       const dp = p.pitch - d.originPitch;
       if (db !== d.deltaBeat || dp !== d.deltaPitch) {
         d.deltaBeat = db;
@@ -688,7 +692,7 @@ onUnmounted(() => {
         <div
           ref="rollEl"
           class="roll"
-          :style="{ width: rollWidth, height: rollHeight }"
+          :style="{ width: rollWidth, height: rollHeight, ...timeline.gridStyle }"
           @pointerdown="onRollPointerDown"
           @pointermove="onPointerMove"
           @contextmenu="onRollContextMenu"
@@ -907,7 +911,6 @@ onUnmounted(() => {
   position: relative;
   min-width: 100%;
   cursor: crosshair;
-  background-image: v-bind("timeline.gridBackground");
 }
 .roll-row {
   height: 14px;
