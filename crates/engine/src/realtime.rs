@@ -13,8 +13,10 @@ use crate::transport::TransportCommand;
 
 /// 实时宿主选项。
 ///
-/// 采样率不在选项中：设备默认输出采样率才是权威来源，[`AudioHost::start`] 会用它，
-/// 并在与 [`ScheduledEvents::sample_rate`] 不一致时报错。
+/// 采样率不在选项中：它按 [`ScheduledEvents::sample_rate`] 从设备报告的支持范围里**挑**
+/// （`nearest_rate` 夹到最近的一档），设备不报范围时才退回设备默认输出采样率；最终仍会校验
+/// 与 [`ScheduledEvents::sample_rate`] 是否一致，不一致时报错。所以设备默认采样率不是唯一
+/// 权威来源——它只是「设备不报范围」时的兜底。
 #[derive(Debug, Clone)]
 pub struct RealtimeOptions {
     /// 音频回调请求的最大帧数：用于预分配 scratch 缓冲，并作为固定块大小请求设备
@@ -40,7 +42,8 @@ pub enum RealtimeError {
     SampleRateMismatch {
         /// 构建调度表时使用的采样率（Hz）。
         schedule: f64,
-        /// 设备默认输出采样率（Hz）。
+        /// 最终选定配置的采样率（Hz）：来自所选设备范围的 `nearest_rate`，设备不报范围时
+        /// 才是设备默认输出采样率。不一定是设备默认值。
         device: f64,
     },
     /// 底层 cpal 流错误。
@@ -305,87 +308,91 @@ impl AudioHost {
         // 请求固定块大小，使回调内 scratch 的预分配即为上界。`.max(1)` 避免块大小为 0
         // 时回调内的分块循环无法推进（防御性；正常调用方不会传 0）。
         let max_block = options.max_block.max(1);
+
+        // 探测一次是为了避免「失败后重建」把插件实例化两遍：先拿一份 no-op 回调的**临时探针流**
+        // 去试固定块大小，探针里没有 `Player`、不加载任何插件，所以无论成败都不会有副作用。
+        // 有些设备（蓝牙/聚合设备）拒绝固定块大小，这时改用设备默认块大小，宁可让回调内的
+        // 分块循环兜底。
+        //
+        // 探针流从不 `play()`（不会出声），且必须在建真正的流之前**丢弃**：它的 `Drop` 会释放
+        // 自己占用的音频单元，否则同一设备上会同时挂着两条流。
+        let probe_config = cpal::StreamConfig {
+            buffer_size: cpal::BufferSize::Fixed(max_block as u32),
+            ..config
+        };
+        let buffer_size = match device.build_output_stream(
+            probe_config,
+            |_data: &mut [f32], _info: &cpal::OutputCallbackInfo| {},
+            |_err: cpal::Error| {},
+            None,
+        ) {
+            Ok(probe) => {
+                // 立刻丢弃探针：真正的流要独占设备。
+                drop(probe);
+                cpal::BufferSize::Fixed(max_block as u32)
+            }
+            Err(_) => cpal::BufferSize::Default,
+        };
+        config.buffer_size = buffer_size;
+
         // 声道数与采样率取自最终的 `config`：回调里的交错写回必须与设备实际声道数一致
-        // （块大小回退只改 `buffer_size`，不动这两项）。
+        // （块大小选择只改 `buffer_size`，不动这两项）。
         let channels = config.channels as usize;
         let device_rate = config.sample_rate as f64;
 
-        // 回调工厂：`build_output_stream` 按值拿走回调，构建失败时回调（连同其中的 `Player`
-        // 状态）随之释放、无法取回，所以「块大小回退」这一分支需要一份全新的回调。
-        // 正常路径只建一份；只有设备拒绝固定块大小时才会付第二次 `Player::new` 的代价。
+        // 回调只构造一次：固定块大小是否可用已经由上面的探针判定过，这里不再有「失败后重建」，
+        // 因此 `Player::new`（以及它加载的每个插件）在整条路径上只跑一次。
         let position_cb = Arc::clone(&shared.position);
         let playing_cb = Arc::clone(&shared.playing);
         // 波形缓冲：回调侧只写，界面侧只读（都用原子，不加锁）。
         let scope = Arc::clone(&options.scope);
 
-        let make_callbacks = || {
-            let (tx, mut rx) = command_queue(options.command_capacity);
-            let position_cb = Arc::clone(&position_cb);
-            let playing_cb = Arc::clone(&playing_cb);
-            let scope = Arc::clone(&scope);
+        let (tx, mut rx) = command_queue(options.command_capacity);
+        // `Player` 的 scratch 全部按 `max_block` 预分配：回调内不分配、不加锁。
+        // 调度表按值移交：回调只建一份，不再需要为「可能的第二次尝试」克隆一份。
+        let mut player = Player::new(schedule, registry, device_rate, max_block);
+        let mut staging: Vec<f32> = Vec::with_capacity(max_block * 2);
 
-            // `Player` 的 scratch 全部按 `max_block` 预分配：回调内不分配、不加锁。
-            let mut player = Player::new(schedule.clone(), registry, device_rate, max_block);
-            let mut staging: Vec<f32> = Vec::with_capacity(max_block * 2);
+        let on_data = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            player.drain_commands(&mut rx);
 
-            let on_data = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                player.drain_commands(&mut rx);
-
-                let frames = data.len() / channels.max(1);
-                let need = frames * 2;
-                // 一次性增长到设备块大小属可接受的预热；此后不再分配。
-                if staging.len() < need {
-                    staging.resize(need, 0.0);
-                }
-
-                // 即便后端忽略固定块大小，也按 max_block 分块，确保 `Player` 及其
-                // scratch 不会在回调内 resize（分配）。
-                let mut offset = 0usize;
-                while offset < frames {
-                    let n = (frames - offset).min(max_block);
-                    player.process_block(&mut staging[offset * 2..(offset + n) * 2], n);
-                    offset += n;
-                }
-
-                write_interleaved(&staging[..need], data, frames, channels);
-
-                // 给界面画波形：推入刚渲染好的这块（下混成单声道）。
-                scope.push_interleaved(&staging[..need], frames);
-
-                // 宿主策略：播放到工程结尾即暂停（而非回卷）。这是 `Player` 不再
-                // 自行自动停止后，「播到结尾即停」行为的归属地。
-                if player.end_frame() > 0 && player.position_frames() >= player.end_frame() {
-                    player.apply_command(TransportCommand::Pause);
-                }
-                position_cb.store(player.position_frames(), Ordering::Relaxed);
-                playing_cb.store(player.is_playing(), Ordering::Relaxed);
-            };
-            let on_error = move |err| {
-                eprintln!("audio stream error: {err}");
-            };
-
-            (tx, on_data, on_error)
-        };
-
-        // 先请求固定块大小（回调内 scratch 预分配即上界）；有些设备（蓝牙/聚合设备）拒绝
-        // 固定块大小，这时回退到设备默认块大小，宁可让回调内的分块循环兜底。
-        // `StreamConfig` 是 `Copy`，两次尝试各用自己的那份。
-        let build = |cfg: cpal::StreamConfig| {
-            let (tx, on_data, on_error) = make_callbacks();
-            device
-                .build_output_stream(cfg, on_data, on_error, None)
-                .map(|stream| (tx, stream))
-                .map_err(|e| RealtimeError::Cpal(e.to_string()))
-        };
-        config.buffer_size = cpal::BufferSize::Fixed(max_block as u32);
-        let (tx, stream) = match build(config) {
-            Ok(built) => built,
-            Err(first) => {
-                // 回退时保留第一次的错误（第二次的错误信息更没用：设备连默认块大小都拒绝了）。
-                config.buffer_size = cpal::BufferSize::Default;
-                build(config).map_err(|_| first)?
+            let frames = data.len() / channels.max(1);
+            let need = frames * 2;
+            // 一次性增长到设备块大小属可接受的预热；此后不再分配。
+            if staging.len() < need {
+                staging.resize(need, 0.0);
             }
+
+            // 即便后端忽略固定块大小，也按 max_block 分块，确保 `Player` 及其
+            // scratch 不会在回调内 resize（分配）。
+            let mut offset = 0usize;
+            while offset < frames {
+                let n = (frames - offset).min(max_block);
+                player.process_block(&mut staging[offset * 2..(offset + n) * 2], n);
+                offset += n;
+            }
+
+            write_interleaved(&staging[..need], data, frames, channels);
+
+            // 给界面画波形：推入刚渲染好的这块（下混成单声道）。
+            scope.push_interleaved(&staging[..need], frames);
+
+            // 宿主策略：播放到工程结尾即暂停（而非回卷）。这是 `Player` 不再
+            // 自行自动停止后，「播到结尾即停」行为的归属地。
+            if player.end_frame() > 0 && player.position_frames() >= player.end_frame() {
+                player.apply_command(TransportCommand::Pause);
+            }
+            position_cb.store(player.position_frames(), Ordering::Relaxed);
+            playing_cb.store(player.is_playing(), Ordering::Relaxed);
         };
+        let on_error = move |err| {
+            eprintln!("audio stream error: {err}");
+        };
+
+        // 真正的流只建一次，用上面选定的块大小；失败原样向上抛 `RealtimeError::Cpal`。
+        let stream = device
+            .build_output_stream(config, on_data, on_error, None)
+            .map_err(|e| RealtimeError::Cpal(e.to_string()))?;
 
         stream
             .play()
@@ -608,12 +615,6 @@ mod tests {
             range(OutputFormat::F32, 2, min, max).nearest_rate(96_000),
             48_000
         );
-    }
-
-    #[test]
-    fn no_reported_ranges_means_no_choice() {
-        // 设备不报范围 → `choose_output_format` 返回 `None` → 退回默认配置（旧行为）。
-        assert!(choose_output_format(&[], 48_000).is_none());
     }
 
     #[test]
