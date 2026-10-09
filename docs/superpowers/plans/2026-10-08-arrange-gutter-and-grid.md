@@ -85,14 +85,14 @@ git commit -m "feat(timeline): one grid cell per beat, drop the fixed 16th line 
 
 ---
 
-### Task 2: 编排左侧留白放轨道色竖线
+### Task 2: 编排左侧留白放轨道色竖线（可点选该音轨）
 
 **Files:**
 - Modify: `src/views/ArrangeView.vue`（模板里的 `.lane`、`.arrange` 内联样式、`<style scoped>`）
 
 **Interfaces:**
-- Consumes: `trackHue(index)`（已 import）、`TIMELINE_INSET_PX`（本文件常量）、`tracks` 的 `ti` 索引。
-- Produces: 每条 lane 在左侧留白区有一条 `--track-hue` 竖线 + 一层同色淡底。
+- Consumes: `trackHue(index)`（已 import）、`TIMELINE_INSET_PX`（本文件常量）、`tracks` 的 `ti` 索引、`selection.selectTrack(id)`、`i18n.t(...)`。
+- Produces: 每条 lane 在左侧留白区有一条 `--track-hue` 竖线 + 一层同色淡底；**点击这条竖线即选中该音轨**。
 
 - [ ] **Step 1: 暴露留白宽度为 CSS 变量**
 
@@ -102,13 +102,22 @@ git commit -m "feat(timeline): one grid cell per beat, drop the fixed 16th line 
     :style="{ paddingLeft: `${TIMELINE_INSET_PX}px`, '--timeline-inset': `${TIMELINE_INSET_PX}px` }"
 ```
 
-- [ ] **Step 2: lane 里加竖线元素**
+- [ ] **Step 2: lane 里加竖线元素（可点击选中音轨）**
 
 在 `.lane` 模板内、**第一个子元素位置**（`.clip-ghost` 之前）加：
 
 ```html
-        <span class="lane-accent" :style="{ '--track-hue': String(trackHue(ti)) }" aria-hidden="true" />
+        <button
+          class="lane-accent"
+          type="button"
+          :style="{ '--track-hue': String(trackHue(ti)) }"
+          :aria-label="i18n.t('arrange.selectTrack')"
+          :aria-pressed="selection.trackId === track.id"
+          @click.stop="selection.selectTrack(track.id)"
+        />
 ```
+
+并在 `src/i18n/zh.ts` / `src/i18n/en.ts` 各加一个键 `arrange.selectTrack`（zh：`选中这条音轨`，en：`Select this track`）。
 
 - [ ] **Step 3: 加样式**
 
@@ -122,8 +131,18 @@ git commit -m "feat(timeline): one grid cell per beat, drop the fixed 16th line 
   bottom: 0;
   left: calc(-1 * var(--timeline-inset, 26px));
   width: var(--timeline-inset, 26px);
-  pointer-events: none;
+  padding: 0;
+  border: 0;
+  pointer-events: auto;
+  cursor: pointer;
   background-color: hsl(var(--track-hue) 55% 55% / 0.1);
+}
+.lane-accent:hover {
+  background-color: hsl(var(--track-hue) 55% 55% / 0.18);
+}
+.lane-accent:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: -2px;
 }
 .lane-accent::before {
   content: "";
@@ -145,7 +164,7 @@ Expected: 成功
 - [ ] **Step 5: 手动核对**
 
 Run: `npm run dev`，编排视图：
-Expected: 每条轨道左侧留白里有一条与左栏把柄同色的竖线；轨道被选中/悬停时不影响竖线；横向滚动时竖线始终贴在轨道左缘（不随内容滚动）。
+Expected: 每条轨道左侧留白里有一条与左栏把柄同色的竖线；悬停时略微加深；横向滚动时竖线始终贴在轨道左缘（不随内容滚动）；**点击竖线会选中该音轨**（左栏该行高亮、检查器跟随）。
 
 - [ ] **Step 6: 提交**
 
@@ -216,7 +235,7 @@ git commit -m "fix(bottom): bar/beat readout uses barBeats so it matches the gri
 ## Self-Review
 
 **Spec coverage（对照 `2026-10-08-builtin-synth-ui-redesign-design.md`）**
-- 4.5 编排左侧留白竖线 → Task 2。
+- 4.5 编排左侧留白竖线（含点击选中音轨）→ Task 2。
 - 4.6 网格每拍一格 → Task 1。
 - 4.6（底栏读数修正）→ Task 3。
 
