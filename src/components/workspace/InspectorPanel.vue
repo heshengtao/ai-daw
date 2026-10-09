@@ -12,8 +12,8 @@
  */
 import { computed, ref, watch } from "vue";
 import Md3Slider from "@/components/common/Md3Slider.vue";
-import InstrumentSelect from "@/components/common/InstrumentSelect.vue";
-import Md3Select from "@/components/common/Md3Select.vue";
+import Md3Select, { type SelectOption } from "@/components/common/Md3Select.vue";
+import InstrumentBrowser from "@/components/common/InstrumentBrowser.vue";
 import PluginParamList from "@/components/common/PluginParamList.vue";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
@@ -91,6 +91,25 @@ async function setInstrument(pluginId: string): Promise<void> {
   } catch (err) {
     layout.notify(i18n.t("error.loadInstrument", { error: String(err) }));
   }
+}
+
+/** 音色下拉的候选项：第一项是「无乐器」，其余按分类分组（顺序即内置 → 外部）。 */
+const timbreOptions = computed<SelectOption[]>(() => [
+  { id: "", label: i18n.t("instrument.none"), group: "" },
+  ...plugins.instruments.map((p) => ({
+    id: p.id,
+    label: p.name,
+    hint: p.note,
+    group: p.category,
+  })),
+]);
+
+/** 「浏览全部音色…」模态框的开关。 */
+const browserOpen = ref(false);
+
+/** 下拉或浏览器里选中一个音色：空串表示卸载。 */
+function onPickTimbre(id: string): void {
+  void setInstrument(id);
 }
 
 // ---- 参数 ----
@@ -236,9 +255,14 @@ async function toggleSolo(): Promise<void> {
         <div class="card">
           <div class="row">
             <span class="row-label">{{ i18n.t("inspector.timbre") }}</span>
-            <InstrumentSelect
+            <Md3Select
+              class="timbre-select"
               :model-value="track.instrument?.plugin_id ?? ''"
-              @update:model-value="setInstrument"
+              :options="timbreOptions"
+              :label="i18n.t('inspector.timbre')"
+              :action="{ label: i18n.t('instrument.browse') }"
+              @select="onPickTimbre"
+              @action="browserOpen = true"
             />
           </div>
 
@@ -359,6 +383,12 @@ async function toggleSolo(): Promise<void> {
           </div>
         </div>
       </section>
+
+      <InstrumentBrowser
+        v-model:open="browserOpen"
+        :current="track.instrument?.plugin_id ?? ''"
+        @pick="onPickTimbre"
+      />
     </template>
 
     <template v-else>
@@ -529,6 +559,10 @@ async function toggleSolo(): Promise<void> {
   color: rgb(var(--md-on-surface));
 }
 .fx-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.timbre-select {
   flex: 1 1 auto;
   min-width: 0;
 }
