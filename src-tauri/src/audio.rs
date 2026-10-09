@@ -16,7 +16,8 @@ use std::thread;
 use daw_party_engine::event::Event;
 use daw_party_engine::model::{Project, TrackId};
 use daw_party_engine::realtime::{
-    default_output_sample_rate, AudioHost, RealtimeOptions, SharedStatus, SharedTransport,
+    default_output_sample_rate, default_output_signature, device_changed, AudioHost,
+    RealtimeOptions, SharedStatus, SharedTransport,
 };
 use daw_party_engine::schedule::ScheduledEvents;
 use daw_party_engine::scope::ScopeBuffer;
@@ -42,6 +43,12 @@ enum AudioMessage {
     Command(TransportCommand),
     /// 插件目录有更新（启动时后台扫描完成）：重建注册表并重新装载当前工程。
     SetCatalog(Vec<CatalogPlugin>),
+    /// 立刻重新探测设备并重建宿主（界面上的「重试」，以及设备变化时的自动重建）。
+    ///
+    /// 目前只有 `AudioEngine::retry_audio` 构造它，真正的界面入口由 Task 5 的 Tauri
+    /// 命令接上，因此此刻是「未使用」。
+    #[allow(dead_code)]
+    Retry,
 }
 
 /// 传输状态快照：界面轮询与事件推送共用。
@@ -66,7 +73,8 @@ pub struct AudioEngine {
     sample_rate: Arc<AtomicU32>,
     available: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
-    /// 流的运行期状态：错误回调写入（设备被拔/切换），`snapshot()` 据此把实时播放判为不可用。
+    /// 流的运行期状态：错误回调写为「已死」（设备被拔/切换）；控制侧在每次重建前
+    /// `clear()`，`snapshot()` 据此把实时播放判为不可用。
     status: Arc<SharedStatus>,
     /// 实时波形缓冲（音频线程写、界面读）。播放器重建时沿用同一个，界面不必重新拿。
     scope: Arc<ScopeBuffer>,
@@ -124,9 +132,25 @@ impl AudioEngine {
         let _ = self.tx.send(AudioMessage::Load(Box::new(project.clone())));
     }
 
+    /// 重新探测输出设备并重建宿主（界面上的「重试」按钮）。
+    ///
+    /// Task 5 会把它暴露成 Tauri 命令；这里只提供入口，故暂标 `allow(dead_code)`。
+    #[allow(dead_code)]
+    pub fn retry_audio(&self) {
+        let _ = self.tx.send(AudioMessage::Retry);
+    }
+
+    /// 实时播放当前是否不可用：设备未打开，**或**运行期的流已死（设备被拔/切换）。
+    ///
+    /// 流死亡后不再是「可控」状态：此时入队的传输命令没有流来消费，只会堆积，
+    /// 因此与「打开失败」一视同仁，交由轮询路径自动重建。
+    fn unavailable(&self) -> bool {
+        !self.available.load(Ordering::Relaxed) || self.status.dead()
+    }
+
     /// 发送一条传输/混音命令；实时播放不可用时返回原因（界面据此回退到离线试听）。
     pub fn send(&self, command: TransportCommand) -> Result<(), String> {
-        if !self.available.load(Ordering::Relaxed) {
+        if self.unavailable() {
             return Err(self.unavailable_reason());
         }
         self.tx
@@ -138,7 +162,7 @@ impl AudioEngine {
     ///
     /// 拖动推子时以每秒数十次的频率调用；松手时界面才发出一条真正的 `SetGain` 命令。
     pub fn monitor_track_mix(&self, track: TrackId, gain_db: f32, pan: f32, mute: bool, solo: bool) {
-        if !self.available.load(Ordering::Relaxed) {
+        if self.unavailable() {
             return;
         }
         let _ = self.tx.send(AudioMessage::Command(TransportCommand::SetTrackMix {
@@ -159,7 +183,7 @@ impl AudioEngine {
 
     /// 试听一个音（合成器界面里的键盘）：不写工程、不进撤销历史、不等传输。
     pub fn audition_note(&self, track: TrackId, note: u8, velocity: u8, on: bool) {
-        if !self.available.load(Ordering::Relaxed) {
+        if self.unavailable() {
             return;
         }
         let _ = self.tx.send(AudioMessage::Command(TransportCommand::Audition {
@@ -246,6 +270,12 @@ impl AudioEngine {
     }
 
     fn unavailable_reason(&self) -> String {
+        // 流死亡时原因在 `status` 里（与 `snapshot()` 一致），否则用打开失败的原因。
+        if self.status.dead() {
+            if let Some(reason) = self.status.message() {
+                return reason;
+            }
+        }
         self.error
             .lock()
             .unwrap()
@@ -301,7 +331,56 @@ fn start_host(
     }
 }
 
-/// 音频线程主体：独占宿主，按消息重建播放器或转发传输命令。
+/// 用当前工程与插件目录重建宿主；`reset_rate` 为真时先清采样率缓存（设备可能换了）。
+///
+/// **重建前必须 `status.clear()`**：否则上一根流留下的「已死」标记会一直粘滞，
+/// 连健康的新流也会被 `snapshot()` 判为离线（Task 3 review 的强制协调项）。
+/// `current` 为空（尚未装载工程）时不建流，直接返回 `None`。
+#[allow(clippy::too_many_arguments)]
+fn rebuild(
+    current: &Option<Project>,
+    catalog: &[CatalogPlugin],
+    editor_handles: &EditorHandles,
+    shared: &SharedTransport,
+    status: &Arc<SharedStatus>,
+    sample_rate: &AtomicU32,
+    available: &AtomicBool,
+    error: &Mutex<Option<String>>,
+    scope: &Arc<ScopeBuffer>,
+    reset_rate: bool,
+) -> Option<AudioHost> {
+    let project = current.clone()?;
+    if reset_rate {
+        sample_rate.store(0, Ordering::Relaxed);
+    }
+    // 关键：清掉上一根流的失效标记，让重建后的健康流重新可被判定为可用。
+    status.clear();
+    start_host(
+        &project,
+        catalog,
+        editor_handles,
+        shared,
+        sample_rate,
+        available,
+        error,
+        status,
+        scope,
+    )
+}
+
+/// 重建后恢复位置与播放状态。
+///
+/// 这两条命令会在第一个回调块开始前入队并被应用，因此界面不会观察到位置瞬间归零。
+fn restore_transport(host: &mut Option<AudioHost>, frame: u64, was_playing: bool) {
+    if let Some(h) = host.as_mut() {
+        h.seek(frame);
+        if was_playing {
+            h.play();
+        }
+    }
+}
+
+/// 音频线程主体：独占宿主，按消息重建播放器或转发传输命令，并每秒轮询一次设备。
 fn run_audio_thread(
     rx: Receiver<AudioMessage>,
     shared: SharedTransport,
@@ -313,72 +392,118 @@ fn run_audio_thread(
     editor_handles: EditorHandles,
     scope: Arc<ScopeBuffer>,
 ) {
+    /// 设备轮询间隔：够快能跟上插拔耳机，又不至于每秒多次查询 CoreAudio 太过分。
+    const POLL: std::time::Duration = std::time::Duration::from_millis(1000);
+
     let mut host: Option<AudioHost> = None;
     let mut current: Option<Project> = None;
+    // 已知的默认输出设备身份：用来判断设备是否换了。每次重建后同步刷新。
+    let mut signature = default_output_signature();
 
-    // 所有发送端都析构后 `recv` 返回错误，线程随之退出（并释放宿主）。
-    while let Ok(message) = rx.recv() {
-        match message {
-            AudioMessage::Command(command) => {
+    // 所有发送端都析构后 `recv_timeout` 返回 `Disconnected`，线程随之退出（并释放宿主）。
+    loop {
+        match rx.recv_timeout(POLL) {
+            Ok(AudioMessage::Command(command)) => {
                 if let Some(h) = host.as_mut() {
                     h.send(command);
                 }
             }
             // 目录更新（启动时扫描完成）：重建注册表，重新装载当前工程。
-            AudioMessage::SetCatalog(new_catalog) => {
+            Ok(AudioMessage::SetCatalog(new_catalog)) => {
                 catalog = new_catalog;
-                let Some(project) = current.clone() else { continue };
+                // 重建前后尽量保持听感连续：记住位置与播放状态。
                 let was_playing = shared.is_playing();
                 let frame = shared.position_frames();
                 // 先释放旧宿主（`Drop` 会暂停底层输出流），避免同时占用设备。
                 drop(host.take());
-                host = start_host(
-                    &project,
+                host = rebuild(
+                    &current,
                     &catalog,
                     &editor_handles,
                     &shared,
+                    &status,
                     &sample_rate,
                     &available,
                     &error,
-                    &status,
                     &scope,
+                    false,
                 );
-                if let Some(h) = host.as_mut() {
-                    h.seek(frame);
-                    if was_playing {
-                        h.play();
-                    }
-                }
+                restore_transport(&mut host, frame, was_playing);
+                signature = default_output_signature();
             }
-            AudioMessage::Load(project) => {
+            Ok(AudioMessage::Load(project)) => {
                 current = Some((*project).clone());
-                // 编辑前后尽量保持听感连续：记住位置与播放状态。
                 let was_playing = shared.is_playing();
                 let frame = shared.position_frames();
-
-                // 先释放旧宿主（`Drop` 会暂停底层输出流），避免同时占用设备。
                 drop(host.take());
-
-                host = start_host(
-                    &project,
+                host = rebuild(
+                    &current,
                     &catalog,
                     &editor_handles,
                     &shared,
+                    &status,
                     &sample_rate,
                     &available,
                     &error,
-                    &status,
                     &scope,
+                    // 工程变化不改采样率（采样率取决于设备），沿用缓存即可。
+                    false,
                 );
-                if let Some(h) = host.as_mut() {
-                    // 这两条命令会在第一个回调块开始前入队并被应用，因此界面不会
-                    // 观察到位置瞬间归零。
-                    h.seek(frame);
-                    if was_playing {
-                        h.play();
-                    }
-                }
+                restore_transport(&mut host, frame, was_playing);
+                // 重建后记录当前设备身份，避免下一次轮询把同一设备误判为「变化」。
+                signature = default_output_signature();
             }
+            Ok(AudioMessage::Retry) => {
+                let was_playing = shared.is_playing();
+                let frame = shared.position_frames();
+                drop(host.take());
+                // 设备可能换了：清采样率缓存后重新探测。
+                host = rebuild(
+                    &current,
+                    &catalog,
+                    &editor_handles,
+                    &shared,
+                    &status,
+                    &sample_rate,
+                    &available,
+                    &error,
+                    &scope,
+                    true,
+                );
+                restore_transport(&mut host, frame, was_playing);
+                signature = default_output_signature();
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // 设备换了，或上次建流失败/流已死：重建一次（保留位置与播放状态）。
+                // `host.is_none()` 让建流失败后每秒自动重试；`status.dead()` 让「设备名
+                // 没变但流死了」也能救。
+                let now = default_output_signature();
+                let needs = host.is_none()
+                    || status.dead()
+                    || device_changed(signature.as_ref(), now.as_ref());
+                if !needs {
+                    continue;
+                }
+                let was_playing = shared.is_playing();
+                let frame = shared.position_frames();
+                drop(host.take());
+                host = rebuild(
+                    &current,
+                    &catalog,
+                    &editor_handles,
+                    &shared,
+                    &status,
+                    &sample_rate,
+                    &available,
+                    &error,
+                    &scope,
+                    true,
+                );
+                restore_transport(&mut host, frame, was_playing);
+                // 记录本次探测到（并已据此重建）的设备身份，稳住下一轮判定。
+                signature = now;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 

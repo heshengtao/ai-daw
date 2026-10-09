@@ -190,8 +190,8 @@ impl SharedTransport {
 
 /// 音频流的运行期状态：流回调出错时写入，控制侧读取。
 ///
-/// 只在 cpal 的**错误回调**里写（那是 cpal 自己的线程，不是实时回调），因此这里的
-/// `Mutex` 不会出现在音频处理路径上。
+/// 运行期唯一写入点是 cpal 的**错误回调**（那是 cpal 自己的线程，不是实时回调），
+/// 因此这里的 `Mutex` 不会出现在音频处理路径上；`clear()` 由控制侧在重建前重置。
 #[derive(Debug, Clone, Default)]
 pub struct SharedStatus {
     dead: Arc<AtomicBool>,
