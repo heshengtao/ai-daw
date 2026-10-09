@@ -16,7 +16,7 @@ use std::thread;
 use daw_party_engine::event::Event;
 use daw_party_engine::model::{Project, TrackId};
 use daw_party_engine::realtime::{
-    default_output_sample_rate, AudioHost, RealtimeOptions, SharedTransport,
+    default_output_sample_rate, AudioHost, RealtimeOptions, SharedStatus, SharedTransport,
 };
 use daw_party_engine::schedule::ScheduledEvents;
 use daw_party_engine::scope::ScopeBuffer;
@@ -66,6 +66,8 @@ pub struct AudioEngine {
     sample_rate: Arc<AtomicU32>,
     available: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
+    /// 流的运行期状态：错误回调写入（设备被拔/切换），`snapshot()` 据此把实时播放判为不可用。
+    status: Arc<SharedStatus>,
     /// 实时波形缓冲（音频线程写、界面读）。播放器重建时沿用同一个，界面不必重新拿。
     scope: Arc<ScopeBuffer>,
 }
@@ -78,6 +80,7 @@ impl AudioEngine {
         let sample_rate = Arc::new(AtomicU32::new(0));
         let available = Arc::new(AtomicBool::new(false));
         let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let status = Arc::new(SharedStatus::new());
         let scope = Arc::new(ScopeBuffer::new(SCOPE_CAPACITY));
 
         let engine = AudioEngine {
@@ -86,6 +89,7 @@ impl AudioEngine {
             sample_rate: Arc::clone(&sample_rate),
             available: Arc::clone(&available),
             error: Arc::clone(&error),
+            status: Arc::clone(&status),
             scope: Arc::clone(&scope),
         };
         thread::Builder::new()
@@ -97,6 +101,7 @@ impl AudioEngine {
                     sample_rate,
                     available,
                     error,
+                    status,
                     catalog,
                     editor_handles,
                     scope,
@@ -167,13 +172,16 @@ impl AudioEngine {
 
     /// 当前传输状态快照。
     pub fn snapshot(&self) -> TransportSnapshot {
-        let available = self.available.load(Ordering::Relaxed);
+        // 除「打开失败」外，运行期流错误（设备被拔/切换）也要算不可用：否则界面会一直显示
+        // 「Realtime」而实际已经没声音。流死亡时 `available=false` 且带上死亡原因。
+        let dead = self.status.dead();
+        let available = self.available.load(Ordering::Relaxed) && !dead;
         TransportSnapshot {
             available,
             playing: available && self.shared.is_playing(),
             position_frames: if available { self.shared.position_frames() } else { 0 },
             sample_rate: self.sample_rate.load(Ordering::Relaxed),
-            error: self.error.lock().unwrap().clone(),
+            error: if dead { self.status.message() } else { self.error.lock().unwrap().clone() },
         }
     }
 
@@ -257,6 +265,7 @@ fn start_host(
     sample_rate: &AtomicU32,
     available: &AtomicBool,
     error: &Mutex<Option<String>>,
+    status: &Arc<SharedStatus>,
     scope: &Arc<ScopeBuffer>,
 ) -> Option<AudioHost> {
     let rate = match resolve_sample_rate(sample_rate) {
@@ -274,6 +283,7 @@ fn start_host(
         max_block: MAX_BLOCK,
         command_capacity: COMMAND_CAPACITY,
         scope: Arc::clone(scope),
+        status: Arc::clone(status),
     };
     match AudioHost::start_with(schedule, &registry, options, shared.clone()) {
         Ok(host) => {
@@ -298,6 +308,7 @@ fn run_audio_thread(
     sample_rate: Arc<AtomicU32>,
     available: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
+    status: Arc<SharedStatus>,
     mut catalog: Vec<CatalogPlugin>,
     editor_handles: EditorHandles,
     scope: Arc<ScopeBuffer>,
@@ -329,6 +340,7 @@ fn run_audio_thread(
                     &sample_rate,
                     &available,
                     &error,
+                    &status,
                     &scope,
                 );
                 if let Some(h) = host.as_mut() {
@@ -355,6 +367,7 @@ fn run_audio_thread(
                     &sample_rate,
                     &available,
                     &error,
+                    &status,
                     &scope,
                 );
                 if let Some(h) = host.as_mut() {

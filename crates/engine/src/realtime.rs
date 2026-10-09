@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use thiserror::Error;
@@ -26,6 +26,8 @@ pub struct RealtimeOptions {
     pub command_capacity: usize,
     /// 界面画波形用的缓冲；音频回调每块往里推一份。
     pub scope: Arc<ScopeBuffer>,
+    /// 流状态：错误回调写入，控制侧读取。
+    pub status: Arc<SharedStatus>,
 }
 
 /// 实时宿主错误。
@@ -183,6 +185,48 @@ impl SharedTransport {
     /// 音频线程最近一次报告的播放状态。
     pub fn is_playing(&self) -> bool {
         self.playing.load(Ordering::Relaxed)
+    }
+}
+
+/// 音频流的运行期状态：流回调出错时写入，控制侧读取。
+///
+/// 只在 cpal 的**错误回调**里写（那是 cpal 自己的线程，不是实时回调），因此这里的
+/// `Mutex` 不会出现在音频处理路径上。
+#[derive(Debug, Clone, Default)]
+pub struct SharedStatus {
+    dead: Arc<AtomicBool>,
+    message: Arc<Mutex<Option<String>>>,
+}
+
+impl SharedStatus {
+    /// 新建一份健康状态。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 流是否已失效（设备被拔掉/切换后 cpal 报告的错误）。
+    pub fn dead(&self) -> bool {
+        self.dead.load(Ordering::Relaxed)
+    }
+
+    /// 失效原因（若有）。
+    pub fn message(&self) -> Option<String> {
+        self.message.lock().unwrap().clone()
+    }
+
+    /// 标记失效；保留**第一条**原因（后续连环错误通常只是前一因的余波）。
+    pub fn mark_dead(&self, reason: &str) {
+        self.dead.store(true, Ordering::Relaxed);
+        let mut slot = self.message.lock().unwrap();
+        if slot.is_none() {
+            *slot = Some(reason.to_string());
+        }
+    }
+
+    /// 清空状态（重建宿主前调用）。
+    pub fn clear(&self) {
+        self.dead.store(false, Ordering::Relaxed);
+        *self.message.lock().unwrap() = None;
     }
 }
 
@@ -385,8 +429,13 @@ impl AudioHost {
             position_cb.store(player.position_frames(), Ordering::Relaxed);
             playing_cb.store(player.is_playing(), Ordering::Relaxed);
         };
-        let on_error = move |err| {
+        // 状态只在 cpal 的**错误回调**里写：实时数据回调（`on_data`）依旧不加锁、不分配。
+        // cpal 在独立线程上调用错误回调，因此这里的 `Mutex` 不在音频处理路径上。
+        // 注：cpal 0.18 里该回调的参数是 `cpal::Error`（旧版叫 `StreamError`）。
+        let status = Arc::clone(&options.status);
+        let on_error = move |err: cpal::Error| {
             eprintln!("audio stream error: {err}");
+            status.mark_dead(&err.to_string());
         };
 
         // 真正的流只建一次，用上面选定的块大小；失败原样向上抛 `RealtimeError::Cpal`。
@@ -532,6 +581,22 @@ mod tests {
     }
 
     #[test]
+    fn shared_status_starts_healthy_and_records_the_first_error() {
+        let status = SharedStatus::new();
+        assert!(!status.dead());
+        assert_eq!(status.message(), None);
+        status.mark_dead("device gone");
+        assert!(status.dead());
+        assert_eq!(status.message().as_deref(), Some("device gone"));
+        // 首次错误保留，不被后续覆盖。
+        status.mark_dead("later");
+        assert_eq!(status.message().as_deref(), Some("device gone"));
+        status.clear();
+        assert!(!status.dead());
+        assert_eq!(status.message(), None);
+    }
+
+    #[test]
     fn shared_transport_starts_idle_and_survives_cloning() {
         let shared = SharedTransport::new();
         let observer = shared.clone();
@@ -546,6 +611,7 @@ mod tests {
             max_block: 2048,
             command_capacity: 64,
             scope: Arc::new(ScopeBuffer::new(crate::SCOPE_CAPACITY)),
+            status: Arc::new(SharedStatus::new()),
         };
         match AudioHost::start(schedule(), &PluginRegistry::with_builtins(), options) {
             Ok(mut host) => {

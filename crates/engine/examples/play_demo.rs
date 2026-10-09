@@ -6,7 +6,7 @@ use daw_party_engine::command::Command;
 use daw_party_engine::event::{Actor, Event};
 use daw_party_engine::model::Note;
 use daw_party_engine::registry::PluginRegistry;
-use daw_party_engine::realtime::{AudioHost, RealtimeOptions};
+use daw_party_engine::realtime::{AudioHost, RealtimeOptions, SharedStatus};
 use daw_party_engine::schedule::ScheduledEvents;
 
 fn main() {
@@ -29,6 +29,7 @@ fn main() {
         max_block: 2048,
         command_capacity: 64,
         scope: std::sync::Arc::new(daw_party_engine::scope::ScopeBuffer::new(8192)),
+        status: std::sync::Arc::new(SharedStatus::new()),
     };
 
     let mut host = match AudioHost::start(schedule, &registry, options) {
