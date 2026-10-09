@@ -86,9 +86,21 @@ const offlineHint = computed(() =>
   }),
 );
 
+/** 是否有一次「重试音频」请求在途：用于合并重复点击。 */
+const retrying = ref(false);
+
 /** 重试输出设备：重新探测并重建实时宿主；结果由传输事件推回来，无需手动刷新。 */
 function onRetryAudio(): void {
-  void retryAudio();
+  // 连点/重复触发时合并为一次在途请求，避免给音频线程灌入多条 Retry。
+  if (retrying.value) return;
+  retrying.value = true;
+  // 失败无需在此处理：可用性由传输事件/轮询推回，界面会继续显示离线提示。这里只兜住
+  // promise，避免未处理的 rejection（沿用本项目静默吞掉后台失败的做法，见 App.vue）。
+  void retryAudio()
+    .catch(() => {})
+    .finally(() => {
+      retrying.value = false;
+    });
 }
 </script>
 
@@ -378,9 +390,11 @@ function onRetryAudio(): void {
   outline-offset: 1px;
 }
 
-/* 窄屏：先丢引擎信息与读数，保持左右对称不被破坏 */
+/* 窄屏：先丢引擎信息与读数，保持左右对称不被破坏。
+   注意只隐藏**在线**指示（`.engine` 无 `fallback`）；离线状态是唯一可点的重试入口，
+   在窄窗口上恰恰最需要可操作，不能一起藏掉。 */
 @media (max-width: 1080px) {
-  .engine {
+  .engine:not(.fallback) {
     display: none;
   }
 }
