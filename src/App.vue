@@ -34,14 +34,23 @@ const route = useRoute();
 /** 设置页独占中栏：不显示音轨栏与右侧面板。 */
 const isSettings = computed(() => route.path.startsWith("/settings"));
 
+/** 独立窗口的路由前缀。 */
+const BARE_PREFIXES = ["/synth", "/effect", "/blank"];
+
+/** `#/effect?track=2` → `/effect`（同步读，不经过 router）。 */
+function hashPath(): string {
+  return window.location.hash.replace(/^#/, "").split("?")[0] ?? "";
+}
+
 /**
  * 独立窗口（合成器面板 / 效果器面板 / 插件界面宿主页）：只渲染自己的内容，不套工作区外壳。
+ *
+ * **同时看 `location.hash`**：`route` 要等 router 异步解析完才有值，在那之前它是 `/`，
+ * 于是独立窗口会先渲染**一帧主界面**再跳成自己的内容（打开窗口时的闪屏）。
+ * hash 是同步可读的，第一帧就能判断对。
  */
-const isBareWindow = computed(
-  () =>
-    route.path.startsWith("/synth") ||
-    route.path.startsWith("/effect") ||
-    route.path.startsWith("/blank"),
+const isBareWindow = computed(() =>
+  [hashPath(), route.path].some((p) => BARE_PREFIXES.some((prefix) => p.startsWith(prefix))),
 );
 
 const aiActive = ref(false);

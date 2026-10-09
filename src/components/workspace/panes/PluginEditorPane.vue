@@ -13,7 +13,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import PluginParamList from "@/components/common/PluginParamList.vue";
 import PresetBar from "@/components/common/PresetBar.vue";
 import SynthPanel from "@/components/workspace/panes/SynthPanel.vue";
-import { canonicalPluginId, effectiveParams, SYNTH_ID } from "@/data/plugins";
+import { canonicalPluginId, EFFECT_DEFAULTS, effectiveParams, SYNTH_ID } from "@/data/plugins";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
@@ -82,6 +82,16 @@ onMounted(() => {
 onUnmounted(() => {
   if (statusTimer !== null) window.clearInterval(statusTimer);
 });
+
+// ---- 效果器链 ----
+
+/**
+ * 效果器的**完整**参数集：链上的实例可能只存了改过的那些（刚加进来时甚至是空的），
+ * 比对预设与「另存为」都要补齐，否则永远匹配不上出厂预设。
+ */
+function fxParams(fx: { plugin_id: string; params: Record<string, number> }): Record<string, number> {
+  return { ...(EFFECT_DEFAULTS[canonicalPluginId(fx.plugin_id)] ?? {}), ...fx.params };
+}
 
 /** 参数表懒加载：乐器 + 链上每个效果器。 */
 watch(
@@ -213,6 +223,11 @@ async function commitEffectMany(index: number, params: Record<string, number>): 
         <div class="group-title">{{ i18n.t("inspector.fxChain") }}</div>
         <div v-for="(fx, i) in track.effects" :key="i" class="card">
           <div class="plugin-name">{{ i + 1 }} · {{ plugins.name(fx.plugin_id) }}</div>
+          <PresetBar
+            :plugin-id="fx.plugin_id"
+            :params="fxParams(fx)"
+            @apply="(p: Record<string, number>) => commitEffectMany(i, p)"
+          />
           <PluginParamList
             :plugin-id="fx.plugin_id"
             :values="fx.params"

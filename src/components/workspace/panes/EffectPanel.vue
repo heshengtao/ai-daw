@@ -10,6 +10,7 @@
 import { computed, ref } from "vue";
 
 import Md3Knob from "@/components/common/Md3Knob.vue";
+import PresetBar from "@/components/common/PresetBar.vue";
 import { usePluginsStore } from "@/stores/plugins";
 import { useI18n } from "@/i18n";
 
@@ -43,6 +44,16 @@ function shown(id: string): number {
   return drafts.value[id] ?? base(id);
 }
 
+/**
+ * **补齐后**的当前参数。
+ *
+ * 效果器实例刚加进链上时 `params` 是空的（界面靠参数表回落显示默认值），拿那份残缺参数去
+ * 比对预设永远匹配不上——所以比对与「另存为」都用这一份完整的。
+ */
+const current = computed(() =>
+  Object.fromEntries(specs.value.map((p) => [p.id, base(p.id)])),
+);
+
 function onLive(id: string, value: number): void {
   drafts.value = { ...drafts.value, [id]: value };
 }
@@ -67,6 +78,12 @@ function restore(): void {
   emit("commitMany", defaults());
 }
 
+/** 选了一条预设：整组参数一次写回（父组件合成一个撤销步骤）。 */
+function onApply(params: Record<string, number>): void {
+  drafts.value = {};
+  emit("commitMany", params);
+}
+
 function display(id: string): string {
   const spec = specs.value.find((p) => p.id === id);
   return `${shown(id).toFixed(spec?.digits ?? 2)}${spec?.unit ?? ""}`;
@@ -75,6 +92,9 @@ function display(id: string): string {
 
 <template>
   <div class="panel">
+    <!-- 预设：出厂四条 + 自己存的（保存 / 加载 / 删除都在这一条上，与合成器共用同一个组件）。 -->
+    <PresetBar :plugin-id="pluginId" :params="current" @apply="onApply" />
+
     <div class="knobs">
       <Md3Knob
         v-for="p in specs"

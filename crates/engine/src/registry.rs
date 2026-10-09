@@ -38,18 +38,22 @@ pub const BUILTIN_PRESETS: &[Preset] = &[
         id: "builtin.synth.lead",
         name: "8-bit 主音",
         patch: &[
-            ("gain", 0.7),
+            // NES 2A03 脉冲通道：25% 占空比、无滤波、延迟颤音。数值与
+            // 前端 `SYNTH_FACTORY_PRESETS` 里的同名条目**必须一致**。
+            ("gain", 0.45),
             ("wave", 1.0),
-            ("pwm", 0.25),
+            ("pwm", 0.222),
             ("attack", 0.002),
-            ("decay", 0.2),
-            ("sustain", 0.7),
-            ("release", 0.06),
-            ("cutoff", 0.95),
-            ("resonance", 0.05),
-            ("filterEnv", 0.1),
+            ("decay", 0.25),
+            ("sustain", 0.6),
+            ("release", 0.08),
+            ("cutoff", 1.0),
+            ("resonance", 0.0),
+            ("filterEnv", 0.0),
             ("keyFollow", 0.0),
-            ("crush", 0.35),
+            ("lfoRate", 0.8),
+            ("lfoDelay", 0.35),
+            ("lfoPitch", 0.16),
             ("hpf", 0.15),
         ],
     },
@@ -57,35 +61,37 @@ pub const BUILTIN_PRESETS: &[Preset] = &[
         id: "builtin.synth.bass",
         name: "低音 Bass",
         patch: &[
-            ("gain", 0.8),
+            ("gain", 0.75),
             ("wave", 0.0),
-            ("sub", 0.5),
-            ("attack", 0.004),
-            ("decay", 0.3),
-            ("sustain", 0.5),
-            ("release", 0.1),
-            ("cutoff", 0.32),
-            ("resonance", 0.2),
-            ("filterEnv", 0.5),
+            ("sub", 0.35),
+            ("attack", 0.005),
+            ("decay", 0.5),
+            ("sustain", 0.4),
+            ("release", 0.12),
+            ("cutoff", 0.45),
+            ("resonance", 0.15),
+            ("filterEnv", 0.35),
             ("keyFollow", 0.3),
+            ("noise", 0.08),
         ],
     },
     Preset {
         id: "builtin.synth.drums",
         name: "底鼓 Kick",
         patch: &[
-            ("gain", 0.95),
+            // 808 式底鼓：音高约 8.4 半音的下扫（约 31 ms）+ 约 350 ms 的幅度衰减。
+            ("gain", 0.85),
             ("wave", 2.0),
             ("attack", 0.0),
-            ("decay", 0.18),
+            ("decay", 0.35),
             ("sustain", 0.0),
             ("release", 0.05),
-            ("cutoff", 0.35),
-            ("resonance", 0.05),
-            ("filterEnv", 0.2),
+            ("cutoff", 1.0),
+            ("resonance", 0.0),
+            ("filterEnv", 0.0),
             ("keyFollow", 0.0),
-            ("pitchEnv", 0.55),
-            ("pitchDecay", 0.35),
+            ("pitchEnv", 0.35),
+            ("pitchDecay", 0.3),
         ],
     },
     Preset {
@@ -94,40 +100,37 @@ pub const BUILTIN_PRESETS: &[Preset] = &[
         patch: &[
             ("gain", 0.55),
             ("wave", 0.0),
-            ("attack", 0.3),
-            ("decay", 0.8),
+            ("detune", 0.35),
+            ("attack", 0.18),
+            ("decay", 1.5),
             ("sustain", 0.85),
-            ("release", 0.9),
-            ("cutoff", 0.55),
-            ("resonance", 0.1),
-            ("filterEnv", 0.2),
-            ("keyFollow", 0.4),
-            ("detune", 0.6),
-            ("lfoRate", 0.5),
-            ("lfoDelay", 0.4),
-            ("lfoPitch", 0.06),
+            ("release", 0.5),
+            ("cutoff", 0.72),
+            ("resonance", 0.08),
+            ("filterEnv", 0.1),
+            ("keyFollow", 0.3),
         ],
     },
     Preset {
         id: "builtin.synth.pad",
         name: "铺底 Pad",
         patch: &[
-            ("gain", 0.5),
+            ("gain", 0.55),
             ("wave", 0.0),
-            ("attack", 0.6),
-            ("decay", 1.2),
-            ("sustain", 0.9),
-            ("release", 1.6),
-            ("cutoff", 0.45),
-            ("resonance", 0.12),
-            ("filterEnv", 0.25),
-            ("keyFollow", 0.3),
-            ("detune", 0.75),
-            ("lfoRate", 0.35),
-            ("lfoDelay", 0.5),
-            ("lfoFilter", 0.25),
+            ("detune", 0.4),
+            ("attack", 0.35),
+            ("decay", 2.0),
+            ("sustain", 0.8),
+            ("release", 0.9),
+            ("cutoff", 0.6),
+            ("resonance", 0.1),
+            ("filterEnv", 0.12),
+            ("keyFollow", 0.2),
+            ("lfoRate", 0.25),
+            ("lfoFilter", 0.15),
         ],
     },
+
 ];
 
 /// 一条内置预设的定义。
@@ -288,7 +291,17 @@ mod tests {
         let r = PluginRegistry::with_builtins();
         let p = r.create("builtin.synth.pad", TrackId(1)).expect("pad preset exists");
         assert_eq!(p.descriptor().id, "builtin.synth.pad");
-        assert_eq!(p.get_param(&"attack".into()), Some(0.6));
+        // 断言「实例拿到的是**这条预设自己的补丁值**」：所以从补丁表里把值读出来比对，
+        // 不把某个具体数字写死在这里——音色会调，这个测试不该跟着碎。
+        let patched = BUILTIN_PRESETS
+            .iter()
+            .find(|preset| preset.id == "builtin.synth.pad")
+            .and_then(|preset| {
+                preset.patch.iter().find(|(id, _)| *id == "attack").map(|(_, value)| *value)
+            })
+            .expect("pad 补丁里应当有 attack");
+        assert_eq!(p.get_param(&"attack".into()), Some(patched));
+        assert_ne!(patched, 0.01, "补丁值等同于全局默认值时，上面的断言证明不了补丁被应用了");
     }
 
     /// 默认波形是正弦后，注册表里的预设必须**显式钉住自己的波形**，否则听感会跟着默认值漂移。

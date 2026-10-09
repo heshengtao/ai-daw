@@ -692,7 +692,10 @@ mod tests {
         assert!(rms(&noisy) > rms(&clean) * 0.5, "噪声不该比正弦轻太多");
     }
 
-    /// 位深压碎真的在量化：电平的最小间隔变成 1/8（3 bit），而不是连续值。
+    /// 位深压碎真的在量化：电平的最小间隔变成量化档距，而不是连续值。
+    ///
+    /// 语义改过一次：早先是**降采样**（采样保持，会引入混叠），现在是与名字一致的**位深量化**
+    /// ——`crush = 1` 对应 4 bit（16 档），与 NES 的 4 bit 音量同量级。
     #[test]
     fn crush_quantizes_the_output() {
         let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
@@ -701,8 +704,8 @@ mod tests {
         let (c, k) = (min_level_gap(&clean), min_level_gap(&crushed));
         assert!(c < 0.01, "未压碎的正弦电平应当基本连续：最小间隔 {c}");
         assert!(
-            (k - 0.125).abs() < 1e-4,
-            "拉满压碎后电平步长应当是 1/8（3 bit）：{k}"
+            (k - 1.0 / 16.0).abs() < 1e-4,
+            "拉满压碎后电平步长应当是 1/16（4 bit）：{k}"
         );
     }
 

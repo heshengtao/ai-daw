@@ -9,6 +9,21 @@
 
   <body>
     <div id="app"></div>
+    <script>
+      // 在打包脚本加载前就把底色铺上：否则独立窗口（合成器 / 效果器面板）打开时会先闪一帧白。
+      // 这段判断必须与 `composables/useTheme` 保持一致（同一个 localStorage 键、同一个默认值）。
+      (function () {
+        try {
+          var mode = localStorage.getItem("daw-party-theme") || "dark";
+          var dark =
+            mode === "dark" ||
+            (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.style.backgroundColor = dark ? "#1c1b1f" : "#fef7ff";
+        } catch (e) {
+          /* 隐私模式读不到 localStorage：留着浏览器默认底色就好 */
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

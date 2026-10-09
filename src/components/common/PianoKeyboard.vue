@@ -7,7 +7,7 @@
  *
  * 除了鼠标，也认电脑键盘：`A W S E D F T G Y H U J K` 对应 C..C（和大多数 DAW 一样）。
  */
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { auditionNote } from "@/api/tauri";
 import { useI18n } from "@/i18n";
 
@@ -138,6 +138,16 @@ onMounted(() => {
   window.addEventListener("keyup", onKeyUp);
   window.addEventListener("blur", releaseAll);
 });
+
+/**
+ * 换了起始音高（八度按钮）就把按住的音全松开。
+ *
+ * 按住的音高是**绝对 MIDI 号**，键位一换，那些号已经不在键盘上了——不放会留下挂住的音。
+ */
+watch(
+  () => props.baseNote,
+  () => releaseAll(),
+);
 onUnmounted(() => {
   window.removeEventListener("pointerup", onDocPointerUp);
   window.removeEventListener("keydown", onKeyDown);

@@ -9,7 +9,13 @@ import { ref } from "vue";
 
 import { deletePreset, listPresets, savePreset, updatePreset } from "@/api/tauri";
 import type { EffectSpec, Preset } from "@/api/types";
-import { SYNTH_FACTORY_PRESETS, SYNTH_ID, canonicalPluginId, fullSynthParams } from "@/data/plugins";
+import {
+  EFFECT_FACTORY_PRESETS,
+  SYNTH_FACTORY_PRESETS,
+  SYNTH_ID,
+  canonicalPluginId,
+  fullSynthParams,
+} from "@/data/plugins";
 import { useI18n } from "@/i18n";
 
 /** 界面上的一条可选预设。 */
@@ -59,23 +65,33 @@ export const usePresetsStore = defineStore("presets", () => {
     }
   }
 
-  /** 某个插件可选的预设：出厂（只有内置合成器有）+ 用户自存的。 */
+  /** 某个插件可选的预设：出厂（合成器 + 内置效果器都有）+ 用户自存的。 */
   function forPlugin(pluginId: string | undefined | null): PresetOption[] {
     if (!pluginId) return [];
     const id = canonicalPluginId(pluginId);
-    const factory: PresetOption[] =
-      id === SYNTH_ID
-        ? SYNTH_FACTORY_PRESETS.map((p) => ({
-            id: p.id,
-            name: t(p.name),
-            note: t(p.note),
-            category: p.category,
-            // 出厂预设是「补丁」，这里摊成完整参数集：切预设要一次把整台合成器设好。
-            params: fullSynthParams(p.params),
-            effects: p.effects ?? [],
-            factory: true,
-          }))
-        : [];
+    let factory: PresetOption[];
+    if (id === SYNTH_ID) {
+      factory = SYNTH_FACTORY_PRESETS.map((p) => ({
+        id: p.id,
+        name: t(p.name),
+        note: t(p.note),
+        category: p.category,
+        // 出厂预设是「补丁」，这里摊成完整参数集：切预设要一次把整台合成器设好。
+        params: fullSynthParams(p.params),
+        effects: p.effects ?? [],
+        factory: true,
+      }));
+    } else {
+      // 内置效果器的出厂预设：参数本就是完整的，直接照抄。
+      factory = (EFFECT_FACTORY_PRESETS[id] ?? []).map((p) => ({
+        id: p.id,
+        name: t(p.name),
+        note: t(p.note),
+        params: p.params,
+        effects: [],
+        factory: true,
+      }));
+    }
     // 用户自存预设没有类别（`category` 留空），界面按「我的预设」分组。
     const mine: PresetOption[] = user.value
       .filter((p) => canonicalPluginId(p.plugin_id) === id)

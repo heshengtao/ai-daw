@@ -180,6 +180,41 @@ const FILTER_TYPES = [
 /** 高级区是否展开（只存组件内，不持久化）。 */
 const advanced = ref(false);
 
+/**
+ * 试听键盘的音域。
+ *
+ * **默认落在中音区**：从 C2（MIDI 36）起四个八度 = C2..C6，正好以中央 C（C4）为中心，
+ * 是「中间、略偏低」的那一块。之前从 C4 起往上四个八度（C4..C8）——太高了，
+ * 试听低音和和弦都不对劲。
+ */
+const KB_BASE = 36;
+const KB_OCTAVES = 4;
+/** 八度位移上限：再低/再高就出 MIDI 音域了。 */
+const KB_SHIFT_MAX = 2;
+
+/** 八度位移：鼠标与电脑键盘**一起**走（两边锚在同一个起始音上）。 */
+const octaveShift = ref(0);
+const keyboardBase = computed(() => KB_BASE + octaveShift.value * 12);
+
+/** 夹在 ±KB_SHIFT_MAX 内，免得把键盘推到 MIDI 音域外。 */
+function shiftOctave(by: number): void {
+  octaveShift.value = Math.max(-KB_SHIFT_MAX, Math.min(KB_SHIFT_MAX, octaveShift.value + by));
+}
+const canShiftDown = computed(() => octaveShift.value > -KB_SHIFT_MAX);
+const canShiftUp = computed(() => octaveShift.value < KB_SHIFT_MAX);
+
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+/** MIDI 音高 → 音名（中央 C = C4 = 60）。 */
+function noteName(note: number): string {
+  return `${NOTE_NAMES[note % 12]}${Math.floor(note / 12) - 1}`;
+}
+
+/** 当前音域，写成 `C2 – C6`。 */
+const keyboardRange = computed(
+  () => `${noteName(keyboardBase.value)} – ${noteName(keyboardBase.value + KB_OCTAVES * 12)}`,
+);
+
 const basicKnobs = computed(() =>
   BASIC_IDS.map((id) =>
     // 展开高级区时基础旋钮一并收小：给高级卡片腾出整行的地方。
@@ -578,9 +613,32 @@ function pickPad(option: PresetOption): void {
       </section>
 
       <!-- 底部：键盘**贴死窗口边缘**（面板不留下内边距，左右负边距拉满整宽，
-           圆角由窗口本身切出来）。 -->
+           圆角由窗口本身切出来）。上面一条细杆放音域与八度按钮。 -->
       <div v-if="props.track !== undefined" class="keyboard-row">
-        <PianoKeyboard :track="props.track" :octaves="4" />
+        <div class="kb-bar">
+          <span class="kb-range">{{ keyboardRange }}</span>
+          <button
+            class="kb-btn"
+            :disabled="!canShiftDown"
+            :title="t('synth.octaveDown')"
+            :aria-label="t('synth.octaveDown')"
+            @click="shiftOctave(-1)"
+          >
+            −8
+          </button>
+          <button
+            class="kb-btn"
+            :disabled="!canShiftUp"
+            :title="t('synth.octaveUp')"
+            :aria-label="t('synth.octaveUp')"
+            @click="shiftOctave(1)"
+          >
+            +8
+          </button>
+        </div>
+        <div class="kb-keys">
+          <PianoKeyboard :track="props.track" :base-note="keyboardBase" :octaves="KB_OCTAVES" />
+        </div>
       </div>
   </div>
 </template>
@@ -943,9 +1001,53 @@ function pickPad(option: PresetOption): void {
 /* ---- 底部：键盘（贴死窗口底边） ---- */
 .keyboard-row {
   flex: 0 0 auto;
-  height: 96px;
+  display: flex;
+  flex-direction: column;
   /* 抵消面板左右内边距，让键盘横跨整宽；下边不留缝，直接贴底。 */
   margin: 0 -10px;
+}
+/* 键盘上方那条细杆：左边音域，右边两个八度按钮。 */
+.kb-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+}
+.kb-range {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  color: rgb(var(--md-on-surface-variant));
+  font-variant-numeric: tabular-nums;
+}
+.kb-btn {
+  flex: 0 0 auto;
+  min-width: 30px;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--md-on-surface-variant));
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+.kb-btn:hover:not(:disabled) {
+  background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
+  color: rgb(var(--md-on-surface));
+}
+.kb-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.kb-keys {
+  flex: 0 0 auto;
+  height: 96px;
 }
 
 .pad:focus-visible,
