@@ -630,12 +630,14 @@ onUnmounted(() => {
         @pointerdown="onLanePointerDown($event, track)"
       >
         <!-- 左侧留白里的轨道色竖线：点它即选中这条音轨 -->
+        <!-- @pointerdown.stop：拦住冒泡，避免留白上的按下触发 lane 的拖拽建片段/框选删除 -->
         <button
           class="lane-accent"
           type="button"
           :style="{ '--track-hue': String(trackHue(ti)) }"
           :aria-label="i18n.t('arrange.selectTrack')"
           :aria-pressed="selection.trackId === track.id"
+          @pointerdown.stop
           @click.stop="selection.selectTrack(track.id)"
         />
 
@@ -756,7 +758,6 @@ onUnmounted(() => {
   width: var(--timeline-inset, 26px);
   padding: 0;
   border: 0;
-  pointer-events: auto;
   cursor: pointer;
   background-color: hsl(var(--track-hue) 55% 55% / 0.1);
 }
