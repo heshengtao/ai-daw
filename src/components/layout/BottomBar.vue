@@ -24,6 +24,7 @@ import { useProjectStore } from "@/stores/project";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
 import { useI18n } from "@/i18n";
+import { barBeatAt, barBeatsAt, meterAt, tempoAt } from "@/utils/tempo";
 
 const props = defineProps<{ aiActive: boolean }>();
 
@@ -31,42 +32,55 @@ const store = useProjectStore();
 const transport = useTransportStore();
 const timeline = useTimelineStore();
 const i18n = useI18n();
-const tempo = ref(store.project?.transport.tempo ?? 120);
 
-watch(
-  () => store.project?.transport.tempo,
-  (t) => {
-    if (t != null) tempo.value = t;
-  },
-  { immediate: true },
+/** 当前工程的传输设置（分段换算用）。 */
+const settings = computed(
+  () => store.project?.transport ?? { tempo: 120, time_sig_num: 4, time_sig_den: 4, keyframes: [] },
 );
 
-// 步进器已把值夹在 20..300，store 还会再校验一次。
+/** 播放头位置（拍）：BPM / 拍号 / 读数都按它取生效值。 */
+const atBeat = computed(() => transport.positionBeats);
+
+/** 播放头处的生效拍号（随播放头移动）。 */
+const timeSigNum = computed(() => meterAt(atBeat.value, settings.value).num);
+const timeSigDen = computed(() => meterAt(atBeat.value, settings.value).den);
+
+const tempo = ref(tempoAt(0, settings.value));
+
+// 播放头 / 工程变化时，BPM 输入框跟随该处的生效值；靠「与生效值比较」避免自触发回写。
+watch(
+  [() => store.project?.transport, atBeat],
+  () => {
+    tempo.value = tempoAt(atBeat.value, settings.value);
+  },
+  { immediate: true, deep: true },
+);
+
+// 步进器已把值夹在 20..300，store 还会再校验一次。值等于该处生效值时说明是上面的同步，不回写。
 watch(tempo, (t) => {
-  void store.setTempo(t);
+  if (t === tempoAt(atBeat.value, settings.value)) return;
+  void store.applyTempoAt(atBeat.value, t);
 });
 
-const timeSigNum = computed(() => store.project?.transport.time_sig_num ?? 4);
-const timeSigDen = computed(() => store.project?.transport.time_sig_den ?? 4);
-
-/** 拍号变化：交给 store（内部会做范围校验，引擎再归一化一次）。 */
+/** 拍号变化：写在对准的关键点或基准（第 0 拍）上。 */
 function onTimeSignature(num: number, den: number): void {
-  void store.setTimeSignature(num, den);
+  void store.applyMeterAt(atBeat.value, num, den);
 }
 
-/** 工程内容长度（小节）。与网格/标尺共用 timeline store 的同一个公式（spec §4.6）。 */
+/** 播放头是否正对准某个关键点（显示徽标）。 */
+const onKeyframe = computed(() => store.keyframeAt(atBeat.value) !== null);
+
+/** 工程内容长度（小节），按分段累计。 */
 const bars = computed(() => {
   const beats = timeline.contentBeats;
   if (beats <= 0) return 0;
-  return Math.ceil(beats / timeline.barBeats);
+  return barBeatAt(beats, settings.value).bar + (beats % barBeatsAt(beats, settings.value) > 1e-9 ? 1 : 0);
 });
 
-/** 当前位置（小节.拍），随实时位置推进。小节/拍长度同样取自 timeline store。 */
+/** 当前位置（小节.拍），随实时位置推进，按分段读数。 */
 const positionText = computed(() => {
-  const beats = transport.positionBeats;
-  const bar = Math.floor(beats / timeline.barBeats) + 1;
-  const beat = Math.floor((beats % timeline.barBeats) / timeline.meterBeat) + 1;
-  return `${bar}.${beat}`;
+  const p = barBeatAt(transport.positionBeats, settings.value);
+  return `${p.bar}.${p.beatInBar}`;
 });
 
 /** 采样率展示（kHz，保留一位小数）。 */
@@ -130,6 +144,10 @@ function onRetryAudio(): void {
       </Tooltip>
 
       <span class="t-sep" />
+
+      <span v-if="onKeyframe" class="keyframe-pill" :title="i18n.t('bottom.keyframeHint')">
+        {{ i18n.t("bottom.keyframe") }}
+      </span>
 
       <TimeSignatureField :num="timeSigNum" :den="timeSigDen" @change="onTimeSignature" />
 
@@ -270,6 +288,20 @@ function onRetryAudio(): void {
   height: 18px;
   margin: 0 4px;
   background-color: rgb(var(--md-outline-variant) / 0.6);
+  flex: 0 0 auto;
+}
+/* 播放头对准关键点时的徽标：提醒「这里的改动只影响该关键点之后」。 */
+.keyframe-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background-color: rgb(var(--md-tertiary-container));
+  color: rgb(var(--md-on-tertiary-container));
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
   flex: 0 0 auto;
 }
 .play-btn {

@@ -184,6 +184,8 @@ const en: Record<string, string> = {
   "bottom.stop": "Stop and rewind",
   "bottom.stopLabel": "Stop",
   "bottom.bar": "Bar",
+  "bottom.keyframe": "Keyframe",
+  "bottom.keyframeHint": "Edits apply from this keyframe onward",
   "bottom.aiBusy": "AI writing…",
   "bottom.aiIdle": "AI idle",
   "bottom.offline": "Offline",

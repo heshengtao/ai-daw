@@ -183,6 +183,8 @@ const zh: Record<string, string> = {
   "bottom.stop": "停止并回到起点",
   "bottom.stopLabel": "停止",
   "bottom.bar": "小节",
+  "bottom.keyframe": "关键点",
+  "bottom.keyframeHint": "改动只影响该关键点之后",
   "bottom.aiBusy": "AI 正在写…",
   "bottom.aiIdle": "AI 空闲",
   "bottom.offline": "离线试听",
