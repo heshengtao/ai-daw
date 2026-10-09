@@ -15,6 +15,7 @@ import type {
   ClipRef,
   HistoryDepths,
   HistoryState,
+  McpStatus,
   MixerState,
   Note,
   NoteEdit,
@@ -324,6 +325,18 @@ export function exportWav(path: string, sampleRate = 44100): Promise<string> {
 export function analyzeProject(sampleRate = 44100): Promise<AnalysisReport> {
   if (mockEnabled()) return Promise.resolve(mockApi.analyzeProject());
   return invoke<AnalysisReport>("analyze_project", { sampleRate });
+}
+
+/** 读取 MCP 服务器的配置与运行状态。 */
+export function mcpStatus(): Promise<McpStatus> {
+  if (mockEnabled()) return Promise.resolve(mockApi.mcpStatus());
+  return invoke<McpStatus>("mcp_status");
+}
+
+/** 更新 MCP 配置（写盘并即时启停），返回最新状态。 */
+export function setMcpConfig(enabled: boolean, port: number): Promise<McpStatus> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setMcpConfig(enabled, port));
+  return invoke<McpStatus>("set_mcp_config", { enabled, port });
 }
 
 // ---------------------------------------------------------------------------

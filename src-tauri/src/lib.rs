@@ -201,6 +201,11 @@ fn preset_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("presets.json"))
 }
 
+/// MCP 服务器配置文件的位置：应用配置目录下的 `mcp.json`。
+fn mcp_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("mcp.json"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -221,8 +226,10 @@ pub fn run() {
             spawn_transport_ticker(app.handle().clone(), audio);
             spawn_plugin_scan(app.handle().clone());
             spawn_editor_ticker(app.handle().clone());
-            // 内嵌 MCP 服务器：把 DAW 能力暴露给 AI 代理（只监听回环）。
-            crate::mcp::spawn(app.handle().clone());
+            // 内嵌 MCP 服务器：把 DAW 能力暴露给 AI 代理（只监听回环）。按设置启动。
+            let mcp = crate::mcp::McpRuntime::load(app.handle().clone(), mcp_file(app.handle()));
+            mcp.autostart();
+            app.manage(mcp);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -288,6 +295,8 @@ pub fn run() {
             commands::save_preset,
             commands::update_preset,
             commands::delete_preset,
+            mcp::mcp_status,
+            mcp::set_mcp_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running daw-party");

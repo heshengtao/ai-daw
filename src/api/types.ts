@@ -196,3 +196,19 @@ export interface AnalysisReport {
   rms_dbfs: number | null;
   spectrum: AnalysisSpectrum;
 }
+
+/** MCP 服务器配置（与后端 `mcp::McpConfig` 一一对应）。 */
+export interface McpConfig {
+  /** 是否运行（随应用启动，也可在设置里即时开关）。 */
+  enabled: boolean;
+  /** 监听端口；`0` = 由系统分配临时端口。 */
+  port: number;
+}
+
+/** MCP 服务器的配置 + 运行状态（与后端 `mcp::McpStatus` 一一对应）。 */
+export interface McpStatus extends McpConfig {
+  /** 是否正在监听。 */
+  running: boolean;
+  /** 正在监听时的接入地址（形如 `http://127.0.0.1:8787/mcp`），否则为 `null`。 */
+  url: string | null;
+}

@@ -14,12 +14,29 @@ import type {
   ClipRef,
   HistoryDepths,
   HistoryState,
+  McpConfig,
+  McpStatus,
   Note,
   NoteEdit,
   Preset,
   Project,
   TransportSnapshot,
 } from "./types";
+
+/** MCP 服务器：浏览器预览里没有真服务器，配置只存在内存里。 */
+let mcpConfig: McpConfig = { enabled: true, port: 0 };
+/** 端口填 0（自动）时，预览里假装分配到的端口。 */
+const MCP_FALLBACK_PORT = 8787;
+
+/** 预览版的 MCP 状态：开启即视为「正在监听」。 */
+function mockMcpStatus(): McpStatus {
+  const port = mcpConfig.port === 0 ? MCP_FALLBACK_PORT : mcpConfig.port;
+  return {
+    ...mcpConfig,
+    running: mcpConfig.enabled,
+    url: mcpConfig.enabled ? `http://127.0.0.1:${port}/mcp` : null,
+  };
+}
 
 /** 是否使用假数据。 */
 export function mockEnabled(): boolean {
@@ -654,6 +671,12 @@ export const mockApi = {
       magnitudes_db: Array.from({ length: 2_048 / 2 + 1 }, () => null),
     },
   }),
+
+  mcpStatus: (): McpStatus => mockMcpStatus(),
+  setMcpConfig: (enabled: boolean, port: number): McpStatus => {
+    mcpConfig = { enabled, port };
+    return mockMcpStatus();
+  },
 
   // ---- 传输 ----
 

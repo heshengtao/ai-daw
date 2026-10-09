@@ -3,7 +3,7 @@
  * 设置页：自带一条侧栏（进入设置时应用侧栏隐藏，避免出现两条侧栏）。
  * 内容为居中列 + 分组卡片；全部控件自绘，不使用原生表单控件。
  */
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeftIcon } from "@heroicons/vue/24/outline";
 import {
@@ -19,14 +19,17 @@ import Md3Slider from "@/components/common/Md3Slider.vue";
 import { usePluginsStore } from "@/stores/plugins";
 import { useI18n } from "@/i18n";
 import { lastWorkspace } from "@/router";
+import { mcpStatus, setMcpConfig } from "@/api/tauri";
+import type { McpStatus } from "@/api/types";
 
-type Section = "general" | "appearance" | "layout" | "plugins" | "about";
+type Section = "general" | "appearance" | "layout" | "plugins" | "mcp" | "about";
 
 const SECTIONS: { id: Section; labelKey: string; captionKey: string }[] = [
   { id: "general", labelKey: "settings.section.general", captionKey: "settings.section.general.caption" },
   { id: "appearance", labelKey: "settings.section.appearance", captionKey: "settings.section.appearance.caption" },
   { id: "layout", labelKey: "settings.section.layout", captionKey: "settings.section.layout.caption" },
   { id: "plugins", labelKey: "settings.section.plugins", captionKey: "settings.section.plugins.caption" },
+  { id: "mcp", labelKey: "settings.section.mcp", captionKey: "settings.section.mcp.caption" },
   { id: "about", labelKey: "settings.section.about", captionKey: "settings.section.about.caption" },
 ];
 
@@ -56,6 +59,67 @@ function onTheme(t: Theme): void {
 function onAccent(a: AccentColor): void {
   setAccent(a);
 }
+
+// ---- MCP 服务器 ----
+/** 配置与运行状态；加载失败（预览 / 后端不可用）时保持 null。 */
+const mcp = ref<McpStatus | null>(null);
+/** 端口输入框的草稿值（数字输入在编辑过程中不应该被后端回写打断）。 */
+const mcpPort = ref("0");
+const mcpSaving = ref(false);
+/** 上一次应用的失败原因，供界面提示。 */
+const mcpError = ref("");
+
+async function loadMcp(): Promise<void> {
+  try {
+    mcp.value = await mcpStatus();
+    mcpPort.value = String(mcp.value.port);
+  } catch {
+    mcp.value = null;
+  }
+}
+
+async function applyMcp(enabled: boolean, port: number): Promise<void> {
+  mcpSaving.value = true;
+  mcpError.value = "";
+  try {
+    mcp.value = await setMcpConfig(enabled, port);
+    mcpPort.value = String(mcp.value.port);
+  } catch (err) {
+    mcpError.value = String(err);
+  } finally {
+    mcpSaving.value = false;
+  }
+}
+
+function toggleMcp(): void {
+  void applyMcp(!(mcp.value?.enabled ?? false), clampPort(mcpPort.value));
+}
+
+function onMcpPort(e: Event): void {
+  const raw = (e.target as HTMLInputElement).value;
+  const port = clampPort(raw);
+  mcpPort.value = String(port);
+  void applyMcp(mcp.value?.enabled ?? false, port);
+}
+
+/** 端口夹紧到 0..=65535（0 = 自动）。 */
+function clampPort(raw: string): number {
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(Math.max(n, 0), 65535);
+}
+
+async function copyEndpoint(): Promise<void> {
+  const url = mcp.value?.url;
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+  } catch {
+    // 剪贴板不可用（无权限 / 非安全上下文）时静默：地址就在旁边，用户可以手抄。
+  }
+}
+
+onMounted(loadMcp);
 </script>
 
 <template>
@@ -318,6 +382,77 @@ function onAccent(a: AccentColor): void {
                 <button class="scan-btn" :disabled="plugins.loading" @click="plugins.rescan()">
                   {{ plugins.loading ? i18n.t("settings.plugins.scanning") : i18n.t("settings.plugins.rescan") }}
                 </button>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- AI / MCP -->
+        <template v-else-if="active === 'mcp'">
+          <div class="group">
+            <div class="group-title">{{ i18n.t("settings.mcp.server") }}</div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.mcp.enable") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.mcp.enableHint") }}</span>
+                </div>
+                <button
+                  class="m3-switch"
+                  :class="{ on: mcp?.enabled ?? false }"
+                  role="switch"
+                  :aria-checked="mcp?.enabled ?? false"
+                  :aria-label="i18n.t('settings.mcp.enable')"
+                  :disabled="mcpSaving"
+                  @click="toggleMcp"
+                />
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.mcp.port") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.mcp.portHint") }}</span>
+                </div>
+                <input
+                  class="port-input md3-field"
+                  type="number"
+                  min="0"
+                  max="65535"
+                  inputmode="numeric"
+                  :value="mcpPort"
+                  :disabled="mcpSaving || !mcp?.enabled"
+                  :aria-label="i18n.t('settings.mcp.port')"
+                  @change="onMcpPort"
+                />
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.mcp.status") }}</span>
+                  <span class="row-sub">{{ mcpError || mcp?.url || i18n.t("settings.mcp.notListening") }}</span>
+                </div>
+                <span class="row-value">
+                  {{ mcp?.running ? i18n.t("settings.mcp.running") : i18n.t("settings.mcp.stopped") }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="group">
+            <div class="group-title">{{ i18n.t("settings.mcp.usage") }}</div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.mcp.endpoint") }}</span>
+                  <span class="row-sub">{{ mcp?.url ?? i18n.t("settings.mcp.notListening") }}</span>
+                </div>
+                <button class="scan-btn" :disabled="!mcp?.url" @click="copyEndpoint">
+                  {{ i18n.t("settings.mcp.copy") }}
+                </button>
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.mcp.security") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.mcp.securityHint") }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -638,5 +773,14 @@ function onAccent(a: AccentColor): void {
 .scan-btn:disabled {
   color: rgb(var(--md-on-surface-muted));
   cursor: default;
+}
+/* MCP 端口输入：与其它 md3-field 同形状，只是更窄并右对齐。 */
+.port-input {
+  width: 104px;
+  flex: 0 0 auto;
+  text-align: right;
+}
+.port-input:disabled {
+  opacity: 0.5;
 }
 </style>

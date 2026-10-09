@@ -10,6 +10,11 @@
 //!
 //! 只读工具（`get_project` / `get_transport` / `list_plugins`）不需要这条管线，直接读共享状态。
 
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::Duration;
+
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{ErrorCode, ServerCapabilities, ServerConfig};
@@ -17,8 +22,9 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
-use serde::Deserialize;
-use tauri::{AppHandle, Manager};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager, State};
+use tokio_util::sync::CancellationToken;
 
 use daw_party_engine::command::Command;
 use daw_party_engine::event::Event;
@@ -457,30 +463,196 @@ impl ServerHandler for DawMcpServer {
     }
 }
 
-/// 启动内嵌 MCP 服务器（绑定 `127.0.0.1` 的临时端口）。
-///
-/// 服务器生命周期跟着进程走：不起优雅关闭，进程退出即结束。
-pub fn spawn(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        if let Err(err) = serve(app).await {
-            eprintln!("[mcp] 服务器已退出：{err}");
-        }
-    });
+// ---------------------------------------------------------------------------
+// 配置与运行时
+// ---------------------------------------------------------------------------
+
+/// 采样率无关的服务器配置：落到应用配置目录的 `mcp.json`，设置页可改。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct McpConfig {
+    /// 是否运行（随应用启动，也可在设置里即时开关）。
+    pub enabled: bool,
+    /// 监听端口；`0` = 每次启动由系统分配临时端口。
+    pub port: u16,
 }
 
-async fn serve(app: AppHandle) -> Result<(), String> {
-    let service: StreamableHttpService<DawMcpServer, LocalSessionManager> = StreamableHttpService::new(
-        move || Ok(DawMcpServer::new(app.clone())),
-        Default::default(),
-        StreamableHttpServerConfig::default(),
-    );
-    let router = axum::Router::new().nest_service("/mcp", service);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .map_err(|e| format!("监听失败：{e}"))?;
-    let addr = listener.local_addr().map_err(|e| format!("取地址失败：{e}"))?;
-    eprintln!("[mcp] 已启动：http://{addr}/mcp（仅本机）");
-    axum::serve(listener, router).await.map_err(|e| format!("服务异常：{e}"))
+impl Default for McpConfig {
+    fn default() -> Self {
+        // 默认开启、临时端口——与本功能引入时的行为一致。
+        Self { enabled: true, port: 0 }
+    }
+}
+
+/// 汇报给界面的配置 + 运行状态。
+#[derive(Debug, Clone, Serialize)]
+pub struct McpStatus {
+    pub enabled: bool,
+    pub port: u16,
+    pub running: bool,
+    /// 正在监听时的接入地址（形如 `http://127.0.0.1:8787/mcp`），否则为 `None`。
+    pub url: Option<String>,
+}
+
+/// 运行中的服务器句柄。
+struct Running {
+    addr: SocketAddr,
+    cancel: CancellationToken,
+}
+
+struct Inner {
+    config: McpConfig,
+    running: Option<Running>,
+}
+
+/// MCP 服务器的控制器：读写配置、按需启停。
+///
+/// 由 Tauri 管理（`app.manage`），设置页的 `mcp_status` / `set_mcp_config` 命令操作它。
+pub struct McpRuntime {
+    app: AppHandle,
+    /// 配置文件位置；拿不到配置目录时为 `None`（配置只活在内存里）。
+    path: Option<PathBuf>,
+    inner: Mutex<Inner>,
+}
+
+impl McpRuntime {
+    /// 读取配置目录里的 `mcp.json`（缺失或损坏时退回默认值）。
+    pub fn load(app: AppHandle, path: Option<PathBuf>) -> Self {
+        let config = path
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|text| serde_json::from_str::<McpConfig>(&text).ok())
+            .unwrap_or_default();
+        Self { app, path, inner: Mutex::new(Inner { config, running: None }) }
+    }
+
+    /// 当前配置与运行状态。
+    pub fn status(&self) -> McpStatus {
+        let inner = self.inner.lock().unwrap();
+        McpStatus {
+            enabled: inner.config.enabled,
+            port: inner.config.port,
+            running: inner.running.is_some(),
+            url: inner.running.as_ref().map(|r| format!("http://{}/mcp", r.addr)),
+        }
+    }
+
+    /// 按已存配置启动（启动时调用；未启用则什么都不做）。
+    pub fn autostart(&self) {
+        if self.inner.lock().unwrap().config.enabled {
+            if let Err(err) = self.start() {
+                eprintln!("[mcp] 启动失败：{err}");
+            }
+        }
+    }
+
+    /// 应用新配置：写盘，并让运行状态跟上（开 → 起；关或换端口 → 重启）。
+    pub fn apply(&self, config: McpConfig) -> Result<McpStatus, String> {
+        self.save(&config);
+        self.stop();
+        let enabled = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.config = config;
+            inner.config.enabled
+        };
+        if enabled {
+            self.start()?;
+        }
+        Ok(self.status())
+    }
+
+    fn save(&self, config: &McpConfig) {
+        let Some(path) = &self.path else { return };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match serde_json::to_string_pretty(config) {
+            Ok(json) => {
+                if let Err(err) = std::fs::write(path, json) {
+                    eprintln!("[mcp] 写入配置失败：{err}");
+                }
+            }
+            Err(err) => eprintln!("[mcp] 序列化配置失败：{err}"),
+        }
+    }
+
+    /// 起服务器（已运行则空转）。先同步 bind，端口占用能立刻报错、也能马上拿到实际端口。
+    fn start(&self) -> Result<(), String> {
+        let (port, already_running) = {
+            let inner = self.inner.lock().unwrap();
+            (inner.config.port, inner.running.is_some())
+        };
+        if already_running {
+            return Ok(());
+        }
+        let listener = bind_loopback(port)?;
+        let addr = listener.local_addr().map_err(|e| e.to_string())?;
+        let cancel = CancellationToken::new();
+        let token = cancel.clone();
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
+                eprintln!("[mcp] 接管监听失败");
+                return;
+            };
+            let service: StreamableHttpService<DawMcpServer, LocalSessionManager> =
+                StreamableHttpService::new(
+                    move || Ok(DawMcpServer::new(app.clone())),
+                    Default::default(),
+                    StreamableHttpServerConfig::default(),
+                );
+            let router = axum::Router::new().nest_service("/mcp", service);
+            let shutdown = async move { token.cancelled_owned().await };
+            if let Err(err) = axum::serve(listener, router).with_graceful_shutdown(shutdown).await {
+                eprintln!("[mcp] 服务异常：{err}");
+            }
+        });
+        eprintln!("[mcp] 已启动：http://{addr}/mcp（仅本机）");
+        self.inner.lock().unwrap().running = Some(Running { addr, cancel });
+        Ok(())
+    }
+
+    /// 停服务器：取消令牌会让 axum 优雅退出。
+    fn stop(&self) {
+        if let Some(running) = self.inner.lock().unwrap().running.take() {
+            running.cancel.cancel();
+        }
+    }
+}
+
+/// 绑定回环地址。换端口 / 重启时旧监听可能还没释放，故做一小段重试。
+fn bind_loopback(port: u16) -> Result<std::net::TcpListener, String> {
+    let mut last = None;
+    for _ in 0..20 {
+        match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(listener) => {
+                listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+                return Ok(listener);
+            }
+            Err(err) => {
+                last = Some(err);
+                // 临时端口（0）不会冲突，重试只为等旧 socket 释放。
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+    Err(format!("监听 127.0.0.1:{port} 失败：{}", last.map(|e| e.to_string()).unwrap_or_default()))
+}
+
+/// 读取 MCP 服务器的配置与运行状态。
+#[tauri::command]
+pub fn mcp_status(runtime: State<'_, McpRuntime>) -> McpStatus {
+    runtime.status()
+}
+
+/// 更新 MCP 配置（写盘并即时启停），返回最新状态。
+#[tauri::command]
+pub fn set_mcp_config(
+    runtime: State<'_, McpRuntime>,
+    enabled: bool,
+    port: u16,
+) -> Result<McpStatus, String> {
+    runtime.apply(McpConfig { enabled, port })
 }
 
 #[cfg(test)]
@@ -525,5 +697,26 @@ mod tests {
             assert!(router.get(name).is_some(), "缺少工具 {name}（现有：{names:?}）");
         }
         assert_eq!(names.len(), expected.len(), "工具数量对不上：{names:?}");
+    }
+
+    #[test]
+    fn config_defaults_are_enabled_on_an_ephemeral_port() {
+        let config = McpConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.port, 0);
+    }
+
+    #[test]
+    fn config_tolerates_missing_fields() {
+        // 手改过的 / 旧版本的 `mcp.json` 缺字段时，缺的部分走默认值而不是整份丢弃。
+        let config: McpConfig = serde_json::from_str(r#"{"port": 8787}"#).unwrap();
+        assert!(config.enabled);
+        assert_eq!(config.port, 8787);
+    }
+
+    #[test]
+    fn binding_an_ephemeral_port_picks_a_real_one() {
+        let listener = bind_loopback(0).expect("应当能绑到回环临时端口");
+        assert_ne!(listener.local_addr().unwrap().port(), 0);
     }
 }
