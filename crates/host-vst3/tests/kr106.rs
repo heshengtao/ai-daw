@@ -135,6 +135,32 @@ fn exercise(format: &str) {
     }
 
     assert!(peak > 0.01, "{format} 宿主必须让音源出声（峰值 {peak}）");
+
+    // 「暂停 / 停止」＝宿主对乐器调 `reset()`，之后必须**照样出声**。
+    //
+    // 注意这条断言抓不到完整的 bug：真正出事的是「**界面开着**时 reset」——那需要开原生窗口，
+    // 只能在主线程上做，测试进程给不了。那一路由 `examples/editor_audio.rs` 覆盖
+    // （它照搬应用的主线程泵界面 + 独立音频线程的结构）。这条断言守住的是「reset 本身不许弄哑乐器」。
+    let off = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOff { note: 60 } }];
+    plugin.process(&ctx, &mut [&mut left, &mut right], &off);
+    plugin.process(&ctx, &mut [&mut left, &mut right], &[]);
+    plugin.reset();
+
+    let mut after = 0.0f32;
+    let mut sent = false;
+    for _ in 0..50 {
+        let evs: &[TimedMidiEvent] = if sent { &[] } else { &events };
+        plugin.process(&ctx, &mut [&mut left, &mut right], evs);
+        sent = true;
+        for s in left.iter().chain(right.iter()) {
+            after = after.max(s.abs());
+        }
+    }
+    assert!(
+        after > 0.01,
+        "{format} 在 reset()（暂停/停止）之后必须还能出声（峰值 {after}）"
+    );
+
     assert!(!plugin.save_state().is_empty(), "{format} 应能保存插件状态");
 }
 

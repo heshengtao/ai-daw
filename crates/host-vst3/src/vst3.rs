@@ -168,13 +168,17 @@ impl Plugin for Vst3HostedPlugin {
     }
 
     fn reset(&mut self) {
-        // 没有独立的清音接口：丢弃悬挂的声部，再重开处理。
-        let Ok(mut plugin) = self.inner.lock() else { return };
+        // 只做「丢弃悬挂声部」这一件事：`midi_panic()` 就是全音符关（all-notes-off）。
+        //
+        // **绝不能在这里 stop/start_processing**，两个原因都是实测踩过的：
+        // - `start_processing()` 一旦失败，`started` 就永久为 false，这个乐器此后**再不出声**
+        //   （错误还被 `let _` 吞掉）。表现出来正是「按一下播放有声音、停了再按就没声音了」。
+        // - 它要拿实例锁，而**开插件界面时主线程会长时间持锁**；实时线程在这儿干等会卡住。
+        //   隔壁 CLAP 后端早先就是这套写法而中招，`clap.rs::reset` 里留着那段记录。
+        //
+        // 所以用 `try_lock`：拿不到就这一块先不清（下一块再来），绝不阻塞实时线程。
+        let Ok(mut plugin) = self.inner.try_lock() else { return };
         let _ = plugin.midi_panic();
-        if self.started {
-            let _ = plugin.stop_processing();
-            self.started = plugin.start_processing().is_ok();
-        }
     }
 
     fn process(&mut self, _ctx: &ProcessContext, audio: &mut [&mut [f32]], events: &[TimedMidiEvent]) {

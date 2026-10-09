@@ -1,4 +1,4 @@
-//! 复现「插件原生界面开着时，音频线程还出不出声」。
+//! 复现「插件原生界面开着时，音频线程还出不出声、能连响几下」。
 //!
 //! 结构照搬真实宿主：
 //! - **主线程**（这里就是 `main`）：开界面窗口，并按帧泵 `service_platform_events`；
@@ -20,7 +20,7 @@ use daw_party_plugin_api::{MidiEvent, ProcessContext, TimedMidiEvent};
 const SR: f64 = 48_000.0;
 const BLOCK: usize = 512;
 /// 音频线程跑多久（秒）。
-const SECONDS: f64 = 2.0;
+const SECONDS: f64 = 6.0;
 
 fn main() {
     let format = std::env::args().nth(1).unwrap_or_else(|| "vst3".to_string());
@@ -46,7 +46,7 @@ fn main() {
         eprintln!("{format} 没能拿到编辑器句柄");
         std::process::exit(2);
     };
-    println!("{format}: 已加载，界面 {} ", if entry.has_editor { "有" } else { "无" });
+    eprintln!("{format}: 已加载，界面 {} ", if entry.has_editor { "有" } else { "无" });
 
     // 音频线程：先按「没开界面」跑一段，再在界面打开后跑一段。
     let audio_plugin = Arc::new(Mutex::new(plugin));
@@ -65,46 +65,71 @@ fn main() {
             .name("audio".into())
             .spawn(move || {
                 let ctx = ProcessContext { sample_rate: SR, block_size: BLOCK, tempo: 120.0, playing: true };
-                let evs = [TimedMidiEvent {
-                    frame: 0,
-                    event: MidiEvent::NoteOn { note: 60, velocity: 100 },
-                }];
                 let mut left = vec![0.0f32; BLOCK];
                 let mut right = vec![0.0f32; BLOCK];
-                let mut peak = 0.0f32;
                 let mut blocks = 0u32;
                 let total = (SECONDS * SR / BLOCK as f64) as u32;
-                let mut sent = false;
+                // **按真实时间推进**：否则整段音频会在几十毫秒内渲染完——界面还没开就结束了，
+                // 测出来的「界面开着还有声」是假的。
+                let started = std::time::Instant::now();
+                // 每 0.4 秒一个音：按下 → 0.2 秒后松开。逐个音记它的峰值。
+                let per_note = (0.4 * SR / BLOCK as f64) as u32;
+                let hold = (0.2 * SR / BLOCK as f64) as u32;
+                let mut note_peak = 0.0f32;
+                let mut note_index = 0u32;
                 while !stop.load(Ordering::Relaxed) && blocks < total {
+                    let in_note = blocks % per_note;
+                    let mut evs: Vec<TimedMidiEvent> = Vec::new();
+                    if in_note == 0 {
+                        note_index += 1;
+                    }
+                    if in_note == 0 {
+                        evs.push(TimedMidiEvent {
+                            frame: 0,
+                            event: MidiEvent::NoteOn { note: 60, velocity: 100 },
+                        });
+                    } else if in_note == hold {
+                        evs.push(TimedMidiEvent {
+                            frame: 0,
+                            event: MidiEvent::NoteOff { note: 60 },
+                        });
+                    }
+                    // 等这一块的真实时长过去（**放在最前面**：`continue` 也要按时间走，
+                    // 否则拿不到锁时空转会一路把整段跑完，测出来的东西全是假的）。
+                    let due = started
+                        + Duration::from_secs_f64(blocks as f64 * BLOCK as f64 / SR);
+                    if let Some(rest) = due.checked_duration_since(std::time::Instant::now()) {
+                        std::thread::sleep(rest);
+                    }
                     let Ok(mut plugin) = audio_plugin.try_lock() else {
                         // 与真实宿主一致：拿不到锁这一块就静音跳过。
                         blocks += 1;
                         continue;
                     };
-                    let first = !sent;
-                    plugin.process(&ctx, &mut [&mut left, &mut right], if first { &evs } else { &[] });
-                    sent = true;
-                    // **每块单独取峰值**再推进列表：累计最大值是单调的，永远测不出「中途变静音」。
+                    plugin.process(&ctx, &mut [&mut left, &mut right], &evs);
                     let mut block_peak = 0.0f32;
                     for s in left.iter().chain(right.iter()) {
                         block_peak = block_peak.max(s.abs());
                     }
-                    peak = peak.max(block_peak);
+                    note_peak = note_peak.max(block_peak);
                     blocks += 1;
-                    peaks.lock().unwrap().push(block_peak);
+                    // 一个音走完，记下这个音的峰值。
+                    if blocks % per_note == 0 {
+                        eprintln!("  第 {note_index} 个音：峰值 {note_peak:.3}");
+                        peaks.lock().unwrap().push(note_peak);
+                        note_peak = 0.0;
+                    }
                 }
-                println!("  音频线程结束：跑了 {blocks} 块，峰值 {peak:.3}");
             })
             .expect("起音频线程");
     }
 
-    // 「没开界面」阶段：等 0.5 秒，读一次峰值。
-    std::thread::sleep(Duration::from_millis(700));
-    let before = *peaks.lock().unwrap().last().unwrap_or(&0.0);
-    println!("  开界面前：峰值 {before:.3}");
+    // 先让它响几个音，再开界面，然后继续响——这样能看出「开界面之后第几个音开始没声」。
+    std::thread::sleep(Duration::from_millis(1500));
+    let before: Vec<f32> = peaks.lock().unwrap().clone();
+    eprintln!("  开界面前已响 {} 个音", before.len());
 
-    // 打开界面，然后按帧泵事件（模拟宿主 ticker）。
-    println!("  打开界面…");
+    eprintln!("  打开界面…");
     let window = match handle.open("KR-106", None) {
         Ok(w) => w,
         Err(e) => {
@@ -113,39 +138,46 @@ fn main() {
             return;
         }
     };
-    // 界面打开后，模拟宿主在「暂停 / 停止」时做的事情：对乐器调 `reset()`。
-    // 真实宿主里 `Player::silence()` 就是这么干的（丢弃悬挂声部 + 重开处理）。
-    std::thread::sleep(Duration::from_millis(300));
-    let mid = *peaks.lock().unwrap().last().unwrap_or(&0.0);
-    println!("  reset 之前：峰值 {mid:.3}");
-    {
-        let mut plugin = audio_plugin.lock().unwrap();
-        plugin.reset();
-    }
-    println!("  已调用 reset()");
-    let open_since = std::time::Instant::now();
-    while open_since.elapsed() < Duration::from_millis(1300) {
+
+    // 界面开着跑一会儿之后，插一次 `reset()`——真实宿主里 `Player::silence()`（暂停/停止）
+    // 对乐器做的就是这件事。这一步是「第二下播放不出来」的嫌疑点。
+    let reset_at = std::time::Instant::now();
+    let mut did_reset = false;
+    // 界面开着的同时按帧泵事件，直到音频线程跑完。
+    while !stop.load(Ordering::Relaxed) {
+        if !did_reset && reset_at.elapsed() > Duration::from_millis(1500) {
+            let reset_note = peaks.lock().unwrap().len();
+            {
+                let mut plugin = audio_plugin.lock().unwrap();
+                plugin.reset();
+            }
+            did_reset = true;
+            eprintln!("  ⟳ 在第 {reset_note} 个音之后调用了 reset()（等价于暂停/停止）");
+        }
         window.service();
         std::thread::sleep(Duration::from_millis(16));
+        if peaks.lock().unwrap().len() >= (SECONDS / 0.4) as usize {
+            break;
+        }
     }
-    let after = *peaks.lock().unwrap().last().unwrap_or(&0.0);
-    // 只看界面打开之后那段有没有「动」：最后 0.5 秒的峰值增量。
-    let len = peaks.lock().unwrap().len();
-    let tail_peak = {
-        let p = peaks.lock().unwrap();
-        let from = len.saturating_sub((0.4 * SR / BLOCK as f64) as usize);
-        p[from..].iter().cloned().fold(0.0f32, f32::max)
-    };
-    println!("  开界面后：峰值 {after:.3}");
-    println!("  开界面后最后 0.4 秒的峰值：{tail_peak:.3}");
 
-    if tail_peak > 0.01 {
-        println!("✅ 界面开着时音频线程仍在出声音");
-    } else {
-        println!("❌ 界面开着时音频线程没有输出（复现成功）");
+    let all: Vec<f32> = peaks.lock().unwrap().clone();
+    eprintln!("\n  每个音的峰值：");
+    let mut first_silent: Option<usize> = None;
+    for (i, peak) in all.iter().enumerate() {
+        let mark = if *peak > 0.01 { "✓" } else { "✗ 没声" };
+        eprintln!("    第 {} 个音：{peak:.3} {mark}", i + 1);
+        if *peak <= 0.01 && first_silent.is_none() {
+            first_silent = Some(i + 1);
+        }
+    }
+    match first_silent {
+        None => eprintln!("\n✅ 每个音都出声（界面开着）"),
+        Some(n) => eprintln!("\n❌ 第 {n} 个音开始没声（开界面在第 {} 个音之后）", before.len()),
     }
 
     stop.store(true, Ordering::Relaxed);
     std::thread::sleep(Duration::from_millis(200));
     window.close();
+
 }
