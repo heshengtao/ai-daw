@@ -60,4 +60,6 @@ pub enum TransportCommand {
         /// 目标值。
         value: f32,
     },
+    /// 开关循环播放：播到工程结尾无缝回到起点继续。属于运行时传输状态，不写入工程。
+    SetLoop(bool),
 }

@@ -94,6 +94,8 @@ pub struct Player {
     position: u64,
     end_frame: u64,
     playing: bool,
+    /// 循环播放开关。`Player` 自己不改位置；「到结尾回到起点」由宿主执行。
+    looping: bool,
     master_gain_db: f32,
     master_pan: f32,
     master_left: f32,
@@ -189,6 +191,7 @@ impl Player {
             position: 0,
             end_frame,
             playing: false,
+            looping: false,
             master_gain_db: master.gain_db,
             master_pan: master.pan,
             master_left: 1.0,
@@ -205,6 +208,11 @@ impl Player {
     /// 当前是否正在播放。
     pub fn is_playing(&self) -> bool {
         self.playing
+    }
+
+    /// 当前是否开启循环播放。
+    pub fn is_looping(&self) -> bool {
+        self.looping
     }
 
     /// 当前位置（自播放起点起的帧数）。
@@ -298,6 +306,7 @@ impl Player {
             TransportCommand::Audition { track, note, velocity, on } => {
                 self.push_audition(track, note, velocity, on);
             }
+            TransportCommand::SetLoop(on) => self.looping = on,
             TransportCommand::SetParam { track, effect, param, value } => {
                 // 非有限值会让插件内部出现 NaN，直接拒绝。
                 if !value.is_finite() {
@@ -627,6 +636,19 @@ mod tests {
             player.process_block(&mut out, 512);
         }
         assert!(peak(&out) < 0.001, "松开后要停下来");
+    }
+
+    /// 循环开关本身不改变播放状态与位置，只是被记下来。
+    #[test]
+    fn set_loop_toggles_the_flag_without_touching_playback() {
+        let mut player = Player::new(schedule(), &PluginRegistry::with_builtins(), 48_000.0, 512);
+        assert!(!player.is_looping(), "默认不循环");
+        player.apply_command(TransportCommand::SetLoop(true));
+        assert!(player.is_looping());
+        assert!(!player.is_playing(), "开关不该启动播放");
+        assert_eq!(player.position_frames(), 0, "开关不该移动位置");
+        player.apply_command(TransportCommand::SetLoop(false));
+        assert!(!player.is_looping());
     }
 
     #[test]
