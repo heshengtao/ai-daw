@@ -117,7 +117,7 @@ const scrollTop = ref(0);
 let applyingScroll = false;
 
 /** 控制器泳道当前显示的属性。 */
-const controllerProperty = ref<ControllerProperty>("velocity");
+const controllerProperty = ref<ControllerProperty>("volume");
 
 /** 指针位置 → (绝对拍, 音高)；`rel` 是相对片段起点的拍。 */
 function pointAt(clientX: number, clientY: number): { beat: number; pitch: number; rel: number } {
@@ -743,10 +743,6 @@ onUnmounted(() => {
           </div>
 
           <div class="playhead" :style="{ left: `${playheadPx}px` }" />
-
-          <p v-if="clip && clip.notes.length === 0" class="roll-empty text-body-md">
-            这个片段还没有音符——在网格上拖动即可画出音符
-          </p>
         </div>
 
         <!-- 没有片段时的入口：直接建一个片段，否则这里是个死胡同 -->
@@ -976,15 +972,6 @@ onUnmounted(() => {
   background-color: rgb(var(--md-primary) / 0.9);
   pointer-events: none;
   z-index: 2;
-}
-.roll-empty {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgb(var(--md-on-surface-muted));
-  pointer-events: none;
 }
 /* 没有片段时的空状态：居中在可见区域，并给出一个可点的入口 */
 .roll-blank {
