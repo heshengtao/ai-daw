@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-use ai_daw_plugin_api::{MidiEvent, ParamId, Plugin, PluginKind, ProcessContext, TimedMidiEvent};
+use ai_daw_plugin_api::{
+    IoLayout, MidiEvent, ParamId, ParamInfo, Plugin, PluginDescriptor, PluginError, PluginKind,
+    ProcessContext, TimedMidiEvent,
+};
 
 use crate::model::MixerChannel;
 use crate::registry::PluginRegistry;
@@ -92,6 +95,45 @@ fn fold_note_volume(events: &mut Vec<ScheduledMidi>) {
         }
     }
     *events = out;
+}
+
+/// 效果链里的**占位**：工程声明了这个条目，但它装不上（注册表里没有），或类型不是效果器。
+///
+/// 它**必须留在链里**，不能像以前那样 `continue` 跳过：`fx<i>` 自动化与
+/// `set_effect_param(track, index, …)` 都是按**声明链的下标**寻址的，一旦有条目被跳过，
+/// 后面所有效果器的下标都会整体前移——自动化就会写到**别的**效果器上（或静默失效）。
+///
+/// 处理上等同于「这条不在链上」：`process` 什么都不做，音频原样透传。
+struct Bypass;
+
+impl Plugin for Bypass {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor {
+            id: "engine.bypass".into(),
+            name: "Bypass".into(),
+            kind: PluginKind::Effect,
+            io: IoLayout { inputs: 2, outputs: 2 },
+            capabilities: Default::default(),
+        }
+    }
+    fn params(&self) -> Vec<ParamInfo> {
+        Vec::new()
+    }
+    fn get_param(&self, _id: &ParamId) -> Option<f32> {
+        None
+    }
+    fn set_param(&mut self, _id: &ParamId, _value: f32) {}
+    fn prepare(&mut self, _sample_rate: f64, _block_size: usize) {}
+    fn reset(&mut self) {}
+    fn process(&mut self, _ctx: &ProcessContext, _audio: &mut [&mut [f32]], _events: &[TimedMidiEvent]) {
+        // 透传：链上占个位，不碰音频。
+    }
+    fn save_state(&self) -> Vec<u8> {
+        Vec::new()
+    }
+    fn load_state(&mut self, _state: &[u8]) -> Result<(), PluginError> {
+        Ok(())
+    }
 }
 
 /// 一条音频片段的运行期状态。
@@ -339,8 +381,9 @@ impl Player {
                     fold_note_volume(&mut events);
                 }
             }
-            // 效果链：只收「效果」类插件。缺失或类型不符的条目直接跳过——
-            // 让整条链静音比「少一个效果」糟糕得多。
+            // 效果链：只收「效果」类插件。缺失或类型不符的条目**用占位顶住**，不能丢——
+            // `fx<i>` 自动化按**声明链下标**寻址，跳过任何一个都会让后面的下标前移。占位是
+            // 透传的，等于「这条不在链上」，但下标仍然对齐声明链。
             //
             // 复用旧实例的条件是**整条链的 id 序列完全一致**：顺序或组成一变，实例就对不上号。
             // 对不上的旧链在这里（控制侧）释放。
@@ -357,17 +400,23 @@ impl Player {
                     .flatten()
                     .zip(&st.effects)
                     .all(|(plugin, fx)| plugin.descriptor().id == fx.plugin_id);
-            let mut effects = Vec::with_capacity(st.effects.len());
+            let mut effects: Vec<Box<dyn Plugin>> = Vec::with_capacity(st.effects.len());
             for (index, fx) in st.effects.iter().enumerate() {
                 let mut fx_plugin = if reuse_chain {
                     carried_chain[index].take().expect("复用链长度已校验")
                 } else {
                     match registry.create(&fx.plugin_id, st.track_id) {
                         Some(plugin) => plugin,
-                        None => continue,
+                        // 装不上（注册表里没有）：占位，别丢——见 [`Bypass`] 的说明。
+                        None => {
+                            effects.push(Box::new(Bypass));
+                            continue;
+                        }
                     }
                 };
                 if fx_plugin.descriptor().kind != PluginKind::Effect {
+                    // 类型不符（如乐器插在效果位）：实例在这里（控制侧）丢掉，改用占位顶住。
+                    effects.push(Box::new(Bypass));
                     continue;
                 }
                 fx_plugin.prepare(sample_rate, max_block);
@@ -1216,6 +1265,44 @@ mod tests {
         let mut out = vec![0.0f32; 512 * 2];
         player.process_block(&mut out, 512);
         assert!(peak(&out) > 0.01, "乐器插在效果位不得让整条链静音");
+    }
+
+    #[test]
+    fn a_missing_effect_keeps_the_following_effects_index_stable() {
+        // 声明链：[装不上的效果器, test.param.effect]——`fx1:level` 必须落到**第二个**（有效的）那个。
+        let mut registry = PluginRegistry::new();
+        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.param.effect", |_track| {
+            Box::new(ParamLevel { level: 1.0, kind: PluginKind::Effect })
+        });
+        // 刻意不注册 "test.missing.effect"。
+
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        let mut t = tone_track(1, "T", 255); // 乐器满幅 1.0
+        t.effects = vec![
+            PluginInstance { plugin_id: "test.missing.effect".into(), params: Default::default(), state: vec![] },
+            PluginInstance {
+                plugin_id: "test.param.effect".into(),
+                params: [("level".to_string(), 0.25)].into_iter().collect(),
+                state: vec![],
+            },
+        ];
+        t.automation = vec![AutomationLane {
+            param: "fx1:level".into(),
+            points: vec![AutomationPoint { beat: 0.0, value: 0.5 }],
+        }];
+        p.tracks.push(t);
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        assert_eq!(schedule.tracks[0].effects.len(), 2, "声明链原样入表");
+        assert_eq!(schedule.tracks[0].lanes.len(), 1, "fx1: 在链内");
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+        // 1.0 经过第二个效果器的 level（自动化 0.5 覆盖静态 0.25）。
+        assert!((peak(&out) - 0.5).abs() < 0.05, "缺失效果器不得让后面的下标前移（峰值 {}）", peak(&out));
     }
 
     /// 实时参数变更直接作用于已装载的实例，不重建播放器。
