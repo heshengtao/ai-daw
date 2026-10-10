@@ -6,7 +6,8 @@
  * 不带工程就换工程会串。
  *
  * **`undefined` 与 `[]` 是两回事**：键不存在 = 「没有显式记录 → 用默认精选」；
- * `[]` = 「用户显式全解绑」。判断一律用 `Object.hasOwn`，绝不用 `?? []`。
+ * `[]` = 「用户显式全解绑」。判断一律**直接读值**看是不是 `undefined`（`[]` 是真值，能区分开），
+ * 绝不用 `?? []`；**也不要改用 `Object.hasOwn`**——那个 trap 不被 Vue 追踪，见 `explicit`。
  *
  * 与 `settings` 同款：初始化读一次 localStorage，`watch(deep)` 写回。
  */
@@ -60,7 +61,11 @@ export const useParamBindingsStore = defineStore("paramBindings", () => {
   /** 该作用域**显式绑定**的键；**没有记录时返回 `null`**（调用方据此走默认精选）。 */
   function explicit(trackId: number): string[] | null {
     const scope = scopeKey(trackId);
-    return Object.hasOwn(bindings.value, scope) ? [...(bindings.value[scope] ?? [])] : null;
+    // 必须**无条件读一次**：`Object.hasOwn` 走 `[[GetOwnProperty]]`，Vue 的响应式代理不追踪
+    // 这个 trap——只 `hasOwn` 不 `get` 的话，调用方（computed）拿不到依赖，「记录从无到有」
+    // 时不会重算：参数页里刚绑上的参数不会出现在车道下拉里，直到刷新页面。
+    const stored = bindings.value[scope];
+    return stored ? [...stored] : null;
   }
 
   /**
@@ -84,9 +89,10 @@ export const useParamBindingsStore = defineStore("paramBindings", () => {
    */
   function toggle(trackId: number, key: string, fallbackBound: string[]): void {
     const scope = scopeKey(trackId);
-    const current = Object.hasOwn(bindings.value, scope)
-      ? (bindings.value[scope] ?? [])
-      : [...fallbackBound];
+    // 与 `explicit()` 同一个坑：**无条件读一次**（键不存在时也要读），写路径也保持一致、把依赖
+    // 建立起来。`[]` 是真值 → 显式全解绑保持 `[]`；`undefined` = 没有记录 → 实体化 `fallbackBound`。
+    const stored = bindings.value[scope];
+    const current = stored === undefined ? [...fallbackBound] : stored;
     const at = current.indexOf(key);
     bindings.value[scope] = at >= 0
       ? [...current.slice(0, at), ...current.slice(at + 1)]
