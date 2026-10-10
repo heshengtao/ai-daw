@@ -817,10 +817,10 @@ onUnmounted(() => {
       />
     </div>
 
-    <!-- 自动化曲线编辑器：编排视图底部，与网格共用同一条时间轴 -->
+    <!-- 自动化曲线编辑器：编排视图底部，与网格共用同一条时间轴（原点 = 同一份留白常量） -->
     <template v-if="layout.showAutomation">
       <PanelResizer side="bottom" @resize="layout.resizeAutomation($event)" />
-      <AutomationLane :height="layout.automationHeight" />
+      <AutomationLane :height="layout.automationHeight" :inset-px="TIMELINE_INSET_PX" />
     </template>
   </div>
 </template>
