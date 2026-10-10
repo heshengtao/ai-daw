@@ -278,12 +278,18 @@ impl ScheduledEvents {
                 }
             }
             events.sort_by_key(|e| e.frame);
-            // 自动化车道：只保留能被识别的键（未知形式在求值时会被忽略，不入表）。
+            // 自动化车道：解析键 + **结构性校验**——`inst:` 要求本轨有乐器，`fx<i>:`
+            // 要求下标在效果链内；不满足就跟未知键一样丢弃（工程里仍保留，装回即恢复）。
             let lanes: Vec<ScheduledLane> = track
                 .automation
                 .iter()
                 .filter_map(|lane| {
                     let param = LaneTarget::from_key(&lane.param)?;
+                    match &param {
+                        LaneTarget::Instrument(_) if track.instrument.is_none() => return None,
+                        LaneTarget::Effect { index, .. } if *index >= track.effects.len() => return None,
+                        _ => {}
+                    }
                     let points = lane.points.clone();
                     Some(ScheduledLane { param, points })
                 })
@@ -529,5 +535,27 @@ mod tests {
         assert!(s.tracks[0].lanes.is_empty(), "未知参数不生成车道");
         assert!(s.tracks[0].sends.is_empty(), "悬空发送被丢弃");
         assert_eq!(s.order, vec![0, 1], "没有有效发送时按原顺序");
+    }
+
+    #[test]
+    fn structurally_impossible_lanes_are_dropped() {
+        let mut p = project_with_note(); // 该轨 instrument: None、effects: 空
+        p.tracks[0].automation = vec![
+            AutomationLane { param: "inst:cutoff".into(), points: vec![AutomationPoint { beat: 0.0, value: 1.0 }] },
+            AutomationLane { param: "fx0:mix".into(), points: vec![AutomationPoint { beat: 0.0, value: 1.0 }] },
+            AutomationLane { param: "gain_db".into(), points: vec![AutomationPoint { beat: 0.0, value: -3.0 }] },
+        ];
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        assert_eq!(s.tracks[0].lanes.len(), 1, "没有乐器 / 没有效果器时，插件参数车道要丢掉");
+        assert_eq!(s.tracks[0].lanes[0].param, LaneTarget::GainDb);
+
+        // 装上乐器之后，`inst:` 就该入表。
+        p.tracks[0].instrument = Some(PluginInstance {
+            plugin_id: "builtin.synth".into(),
+            params: Default::default(),
+            state: vec![],
+        });
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        assert!(s.tracks[0].lanes.iter().any(|l| matches!(l.param, LaneTarget::Instrument(_))));
     }
 }

@@ -853,6 +853,71 @@ mod tests {
     use crate::transport::TransportCommand;
     use ai_daw_plugin_api::{IoLayout, ParamId, ParamInfo, PluginDescriptor, PluginError};
 
+    /// 测试用「参数即电平」插件：`level` 参数就是输出。
+    ///
+    /// **一个结构兼两种角色**（音源 / 效果器），两个自动化测试共用同一份夹具——
+    /// 注册表按 plugin id 建实例，所以两个角色各注册一个 id、各自指定 `kind`。
+    struct ParamLevel {
+        level: f32,
+        kind: PluginKind,
+    }
+
+    impl Plugin for ParamLevel {
+        fn descriptor(&self) -> PluginDescriptor {
+            PluginDescriptor {
+                id: "test.paramlevel".into(),
+                name: "ParamLevel".into(),
+                kind: self.kind,
+                // 音源没有输入总线，效果器有。
+                io: IoLayout {
+                    inputs: if self.kind == PluginKind::Effect { 2 } else { 0 },
+                    outputs: 2,
+                },
+                capabilities: Default::default(),
+            }
+        }
+        fn params(&self) -> Vec<ParamInfo> {
+            vec![ParamInfo {
+                id: ParamId("level".into()),
+                name: "Level".into(),
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+                automatable: true,
+            }]
+        }
+        fn get_param(&self, _id: &ParamId) -> Option<f32> {
+            Some(self.level)
+        }
+        fn set_param(&mut self, id: &ParamId, value: f32) {
+            if id.0 == "level" {
+                self.level = value;
+            }
+        }
+        fn prepare(&mut self, _sample_rate: f64, _block_size: usize) {}
+        fn reset(&mut self) {}
+        fn process(&mut self, _ctx: &ProcessContext, audio: &mut [&mut [f32]], _events: &[TimedMidiEvent]) {
+            for channel in audio.iter_mut() {
+                match self.kind {
+                    // 音源：把缓冲直接写成参数值。
+                    PluginKind::Instrument => channel.fill(self.level),
+                    // 效果器：就地乘上参数值。
+                    PluginKind::Effect => {
+                        for sample in channel.iter_mut() {
+                            *sample *= self.level;
+                        }
+                    }
+                }
+            }
+        }
+        fn save_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn load_state(&mut self, _state: &[u8]) -> Result<(), PluginError> {
+            Ok(())
+        }
+    }
+
     /// 测试用效果器：把信号砍半（就地处理，与引擎契约一致）。
     struct HalfGain;
 
@@ -1695,5 +1760,74 @@ mod tests {
         });
         player.process_block(&mut out, 512);
         assert!(peak(&out) > 0.9, "移除曲线后应恢复满幅（峰值 {}）", peak(&out));
+    }
+
+    #[test]
+    fn instrument_param_automation_overrides_the_static_value() {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.param.instrument", |_track| {
+            Box::new(ParamLevel { level: 0.0, kind: PluginKind::Instrument })
+        });
+
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        p.tracks.push(Track {
+            id: TrackId(1),
+            name: "T".into(),
+            instrument: Some(PluginInstance {
+                plugin_id: "test.param.instrument".into(),
+                // 静态值 0.2；曲线要求 0.8 → 输出应当是 0.8（自动化覆盖静态值）。
+                params: [("level".to_string(), 0.2)].into_iter().collect(),
+                state: vec![],
+            }),
+            effects: vec![],
+            clips: vec![],
+            mixer: Default::default(),
+            sends: vec![],
+            automation: vec![AutomationLane {
+                param: "inst:level".into(),
+                points: vec![AutomationPoint { beat: 0.0, value: 0.8 }],
+            }],
+        });
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        assert_eq!(schedule.tracks[0].lanes.len(), 1, "inst: 目标要入表");
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+        assert!((peak(&out) - 0.8).abs() < 0.05, "乐器参数自动化应覆盖静态值（峰值 {}）", peak(&out));
+    }
+
+    #[test]
+    fn effect_param_automation_overrides_the_static_value() {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.param.effect", |_track| {
+            Box::new(ParamLevel { level: 1.0, kind: PluginKind::Effect })
+        });
+
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        let mut t = tone_track(1, "T", 255); // 乐器满幅 1.0
+        t.effects = vec![PluginInstance {
+            plugin_id: "test.param.effect".into(),
+            // 静态 0.25；曲线要求 0.5 → 输出应当是 0.5。
+            params: [("level".to_string(), 0.25)].into_iter().collect(),
+            state: vec![],
+        }];
+        t.automation = vec![AutomationLane {
+            param: "fx0:level".into(),
+            points: vec![AutomationPoint { beat: 0.0, value: 0.5 }],
+        }];
+        p.tracks.push(t);
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        assert_eq!(schedule.tracks[0].lanes.len(), 1, "fx0: 目标要入表");
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+        assert!((peak(&out) - 0.5).abs() < 0.05, "效果器参数自动化应覆盖静态值（峰值 {}）", peak(&out));
     }
 }
