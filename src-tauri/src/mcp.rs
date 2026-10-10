@@ -201,7 +201,7 @@ struct PointArg {
 struct SetAutomationArgs {
     /// 轨道 id。
     track: u64,
-    /// 参数名：`gain_db` 或 `pan`。
+    /// 参数名：`gain_db` 或 `pan`，或 `inst:<参数id>`（轨道乐器）/ `fx<i>:<参数id>`（效果链第 i 个，i 从 0 起）。
     param: String,
     /// 关键点（整体替换；空数组 = 删除该车道）。
     points: Vec<PointArg>,
@@ -491,7 +491,7 @@ impl DawMcpServer {
         Ok(format!("轨道 {} 的发送已更新", args.track))
     }
 
-    #[tool(description = "设置一条自动化车道（参数 `gain_db` / `pan`；整体替换该曲线，空 points = 删除）。")]
+    #[tool(description = "设置一条自动化车道（参数 `gain_db` / `pan`，或 `inst:<参数id>`（轨道乐器）/ `fx<i>:<参数id>`（效果链第 i 个，i 从 0 起）；整体替换该曲线，空 points = 删除）。")]
     fn set_automation(&self, Parameters(args): Parameters<SetAutomationArgs>) -> Result<String, ErrorData> {
         let points = args
             .points

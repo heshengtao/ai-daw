@@ -94,6 +94,15 @@ fn schedule() -> ScheduledEvents {
                     ai_daw_engine::model::AutomationPoint { beat: 8.0, value: 0.9 },
                 ],
             },
+            // 效果器参数车道同样要覆盖：`refresh_mix` 会逐块对 `effects[i]` `set_param`（`fx<i>` 分支）。
+            // `fx0` = 链上第一个效果器（reverb），`mix` 是它的真实参数。
+            ai_daw_engine::model::AutomationLane {
+                param: "fx0:mix".into(),
+                points: vec![
+                    ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.2 },
+                    ai_daw_engine::model::AutomationPoint { beat: 8.0, value: 0.7 },
+                ],
+            },
         ],
     });
     // 一条总线轨道：接收上面那条轨道的发送。
@@ -194,5 +203,23 @@ fn realtime_block_path_does_not_allocate() {
     assert_eq!(
         allocations, 0,
         "插件参数车道的 SetAutomation 必须在音频线程上零分配（saw {allocations}）"
+    );
+
+    // 效果器参数目标（`fx<i>` 分支：按槽位下标取效果器再 `set_param`）同样必须在音频线程上零分配。
+    let command = TransportCommand::SetAutomation {
+        track: TrackId(1),
+        target: ai_daw_engine::schedule::LaneTarget::from_key("fx0:mix").expect("键能解析"),
+        points: vec![
+            ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.25 },
+            ai_daw_engine::model::AutomationPoint { beat: 4.0, value: 0.6 },
+        ],
+    };
+    ALLOCATIONS.store(0, Ordering::SeqCst);
+    player.apply_command(command);
+    player.process_block(&mut out, MAX_BLOCK);
+    let allocations = ALLOCATIONS.load(Ordering::SeqCst);
+    assert_eq!(
+        allocations, 0,
+        "效果器参数车道的 SetAutomation 必须在音频线程上零分配（saw {allocations}）"
     );
 }
