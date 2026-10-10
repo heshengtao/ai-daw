@@ -78,13 +78,23 @@ fn schedule() -> ScheduledEvents {
         mixer: Default::default(),
         // 发送与自动化也要在门禁覆盖范围内：总线路由与逐块自动化求值都跑在音频回调里。
         sends: vec![ai_daw_engine::model::Send { target: TrackId(2), gain_db: -6.0 }],
-        automation: vec![ai_daw_engine::model::AutomationLane {
-            param: "gain_db".into(),
-            points: vec![
-                ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.0 },
-                ai_daw_engine::model::AutomationPoint { beat: 8.0, value: -12.0 },
-            ],
-        }],
+        automation: vec![
+            ai_daw_engine::model::AutomationLane {
+                param: "gain_db".into(),
+                points: vec![
+                    ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.0 },
+                    ai_daw_engine::model::AutomationPoint { beat: 8.0, value: -12.0 },
+                ],
+            },
+            // 插件参数车道也要在门禁覆盖范围内：`refresh_mix` 会逐块对乐器 `set_param`。
+            ai_daw_engine::model::AutomationLane {
+                param: "inst:cutoff".into(),
+                points: vec![
+                    ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.2 },
+                    ai_daw_engine::model::AutomationPoint { beat: 8.0, value: 0.9 },
+                ],
+            },
+        ],
     });
     // 一条总线轨道：接收上面那条轨道的发送。
     project.tracks.push(Track {
@@ -165,5 +175,24 @@ fn realtime_block_path_does_not_allocate() {
     assert_eq!(
         allocations, 0,
         "SetAutomation 必须在音频线程上零分配（saw {allocations}）"
+    );
+
+    // 插件参数目标同样必须在音频线程上零分配：目标在测量前就解析好（`from_key` 会分配，
+    // 那是控制侧的事），进到音频线程的只有移动与 `set_param`。
+    let command = TransportCommand::SetAutomation {
+        track: TrackId(1),
+        target: ai_daw_engine::schedule::LaneTarget::from_key("inst:cutoff").expect("键能解析"),
+        points: vec![
+            ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.3 },
+            ai_daw_engine::model::AutomationPoint { beat: 4.0, value: 0.8 },
+        ],
+    };
+    ALLOCATIONS.store(0, Ordering::SeqCst);
+    player.apply_command(command);
+    player.process_block(&mut out, MAX_BLOCK);
+    let allocations = ALLOCATIONS.load(Ordering::SeqCst);
+    assert_eq!(
+        allocations, 0,
+        "插件参数车道的 SetAutomation 必须在音频线程上零分配（saw {allocations}）"
     );
 }
