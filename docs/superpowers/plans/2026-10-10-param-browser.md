@@ -365,3 +365,30 @@ git commit -m "docs: 参数浏览器的执行结果与验收记录"
 - **风险最高的两处**（实现时盯紧）：`undefined` ≠ `[]`；保存工程后的 re-key。
 - **开工前改掉的三处**（原稿会被评审正确地记成问题）：① 原稿让新模态"克隆 `PluginBrowser` 的外壳与工具条"——那是逐字复制约 170 行 CSS，改成先抽 `ModalShell`/`ListToolbar` 并让 `PluginBrowser` 改用（Task 2 Step 1/2）；② 原稿对 `curateTargets` 只有 `npm run build`，现在补了 esbuild + 一次性脚本的断言（Task 1 Step 6）；③ 原稿漏了 `src/stores/project.ts`（re-key 挂在保存路径上）。
 - **仍然存在的缺口（记录在案，不在本期解决）**：本仓库没有前端测试运行器，Task 1 的断言是**一次性脚本**而非可持续的回归套件；`curateTargets` 之外的 UI 逻辑仍只靠构建 + 浏览器回归。要根治得先决定引入 vitest——那是独立的一期。
+
+---
+
+## 最终评审与遗留（2026-10-10）
+
+**最终全分支评审**（10 个提交，最强模型；附本分支逐任务遗留清单作分诊输入）→「**With fixes**」，无 Critical、无回归。
+唯一 Important 是**既有**行为：`plugins.ensureParams` 失败时把 `[]` 缓存下来，参数页于是只显示 增益 / 声像，且本会话内没有错误提示也没有重试（该 store 本分支未动）。评审自己判为"可随发布，跟进项"。
+
+**合并前回修**（`e902fa5`，五项，范围化复评全部 ADDRESSED）：① 两条车道表头补上所选目标的 `hint`
+（设计 §4.4 原本漏做，而用户明确要求"每个默认参数都像力度一样有解释"）；② 乐器卡那颗 pill 去掉 `.small`
+（与旁边的「打开界面」基线对齐）；③ 新增 `inspector.paramsFor`，让无障碍名带上插件名；
+④ `load()` 加形状守卫、`rekey` 补一句"另存为优先保留目标路径记录"的说明；⑤ 三处文档口径
+（Architecture 的"克隆"、设计 §4.3 的 props、§7 的 §4.4 状态）。
+
+### 遗留（最终评审分诊：均可随本次发布）
+
+- **`ensureParams` 失败静默变空**（唯一 Important）：既有行为，需要产品决策（失败态 + 重试），单独一期。
+- **保存后 re-key 未点测**：浏览器 mock 走不完保存（需要真实的"选择保存位置"），`saveTo → rekeyProject`
+  只经代码审阅；**需在真 Tauri 构建上补一次点测**。
+- **两条车道的目标计算重复**（`AutomationLane.vue` 与 `EditView.vue` 逐字节等价）：评审称为"下一个最该做的清理"，
+  抽 `useLaneTargets(track)` 可消除漂移风险（本次不阻塞）。
+- **没有前端测试运行器**：`curateTargets` 只有一次性脚本断言、`paramBindings` 的 re-key 只有代码审阅——
+  本期的响应性缺陷证明静态评审替代不了跑一遍。根治要先决定引入 vitest（新增 devDependency），单独一期。
+- 杂项（评审判"可随发布"）：`Md3Select` 的 z-index 95→140 是全局改动（`openUp` 阈值 180 也让贴底的下拉向下展开）；
+  两个浏览器之间约 70 行 列表/空态 CSS 重复；新模态因 `v-if` + `:open=\"true\"` 没有离场动画；无轨道时「＋」按钮仍渲染；
+  同一效果器在链上出现两次时「参数…」预选第一个槽位；`gain_db` / `pan` 的 `isBound()` 返回 `false`，由
+  `isPinned || isBound` 兜住。
