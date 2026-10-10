@@ -7,10 +7,13 @@
 - **第二次修订（2026-10-10，同日）**：完成 **C2 录音**、**C3 发送/总线/自动化（引擎 + API + 编辑器 UI）**、
   **F3/D3 skills 文档包 + `aidaw_help` 网关**、**G3 AI 面板**、**G0–G2 真模型（Basic Pitch / LocalVQE ONNX）**；
   MCP 工具数 30 → **33**。
-  剩余：**F1/F2（无 Tauri 运行时 + `aidaw` CLI）**、**E1/E2**、**G4 其余四项**、
+  剩余：**F1/F2（`aidaw` CLI：MCP 薄客户端 + 发现/启动）**、**E1/E2**、**G4 其余四项**、
   **模型打包进 `bundle.resources`**（现在靠 `tools/fetch-models.sh`）。
   **（C3 的编辑器 UI 随后已补齐：检查器发送区 + 编排视图的自动化曲线编辑器。）**
   新增：`crates/engine/src/recorder.rs`、`skills/`、`specs+plans/2026-10-10-{recording,mixing-sends-buses-automation}`。
+- **第三次修订（2026-10-10）**：**改向 Stage F** —— `aidaw` CLI 由「镜像全部命令」改为
+  **MCP 薄客户端**（软件开着就转发 `tools/call`、没开就启动）；原 F1「抽 `crates/runtime` 无 Tauri 运行时」
+  降级为 **F5（搁置）**；F2 的传输只用 HTTP（不用 stdio）。理由见 Stage F。
 
 ## 1. 现状总览
 
@@ -31,7 +34,7 @@
 | 新增 | 内置效果器（延迟 / 混响 / 合唱 / 过载 / 两段 EQ） | ✅ 完成 | `crates/effects`（`ai-daw-effects`）：施罗德混响 + 插值延迟 + 合唱 + 软削波过载 + 两段 EQ；注册为 `builtin.delay` / `builtin.reverb` / `builtin.chorus` / `builtin.drive` / `builtin.eq`；缓冲只在 `prepare` 分配，零分配门禁已把它们纳入覆盖 |
 | 新增 | 合成器音源扩展 + 8 类 32 条预设 | ✅ 完成 | 参数 18→26（噪声/压碎/失谐/FM/音高包络/滤波类型）；预设重写为 8bit/吉他/贝斯/鼓/弦乐/管乐/铺底/音效 各 4 条，可自带效果链。设计见 `specs/2026-10-09-synth-overhaul-design.md` |
 | 品牌 | 应用图标 / favicon | ✅ 完成 | `src-tauri/app-icon.svg`（薰衣草紫，与 `common/Logo.vue` 同图形）→ `tauri icon` 生成 `src-tauri/icons/*`；`public/logo.svg` 作网页 favicon |
-| 新方向 | skills 文档包 + `aidaw` CLI（AI harness 可挂载） | 🟡 部分 | **skills 包 + `aidaw_help` 网关 ✅（F3）**；`aidaw` CLI 与无 Tauri 运行时未做（F1/F2） |
+| 新方向 | skills 文档包 + `aidaw` CLI（AI harness 可挂载） | 🟡 部分 | **skills 包 + `aidaw_help` 网关 ✅（F3）**；`aidaw` CLI（MCP 薄客户端）未做（F1/F2）；原「无 Tauri 运行时」方案改为薄客户端，headless 引擎搁置（F5） |
 | 新方向 | 本地 AI 能力（音频转 MIDI / 降噪） | 🟢 模型已接入 | **Basic Pitch（转 MIDI）+ LocalVQE v1.2（降噪）ONNX 已接入**（`crates/local-ai/src/models/`，`ort` 进程内、后台线程、可取消）；**权重缺失时退回内置 DSP** 并在摘要里标明。AI 面板 ✅（G3）。权重不进仓库，见 `tools/fetch-models.sh` |
 
 ### 近期已提交、尚无设计文档的改动（commit `38ef87b`，2026-10-10）
@@ -269,37 +272,52 @@
 
 ### Stage F — Skills 层 + `aidaw` CLI（让任意 AI Harness 可挂载）
 
-**定位**：把已存在的 **33 个 MCP 工具 / 80+ 个 Tauri 命令**做成 AI harness 可**渐进式**接入的统一接口，
-**避免一次把成百上千个工具灌进上下文**。
+**定位**：把已存在的 **33 个 MCP 工具**做成 AI harness 可**渐进式**接入的统一接口：
+一个 `aidaw` CLI（MCP 薄客户端）负责**执行**，`skills/` 文档包负责**按需披露**。
 
-> **状态（2026-10-10）**：**F3 ✅ 完成**（`skills/` 文档包 + `aidaw_help` 网关）；**F1 / F2 / F4 未做**。
+> **状态（2026-10-10）**：**F3 ✅ 完成**（`skills/` 文档包 + `aidaw_help` 网关）；**F1 / F2 未做**；
+> **F4 / F5 暂缓**。**改向（2026-10-10）**：原 F1（无 Tauri 运行时）+ F2（CLI 镜像全部命令）方案
+> **改为薄客户端** —— 见下；原方案降级为 **F5（搁置）**。
 
-- **F1 · 抽出无 Tauri 运行时（前置，零行为变化）** ⬜ 未做
-  - 新 crate `crates/runtime`：承载 `AppState`（`Mutex<Engine>` + `Arc<AudioEngine>`）、`AudioEngine`、
-    `AssetCache`、`build_registry`、`run`/`run_agent`，并把副作用抽成 **`Effect` trait**
-    （GUI 实现 = `app.emit` + 关插件窗口；CLI 实现 = stdout/日志 + no-op）。
-  - 把 30 个 `#[tool]` 从 `src-tauri/src/mcp.rs` 移入新 `crates/mcp`，**对 `Arc<AppState>` 泛型**
-    （不再依赖 `AppHandle`）。
-  - `src-tauri` 退化为薄适配层（实现 `Effect` + `TauriMainThread`）。
-  - 依据（已核实）：`state.rs` / `audio.rs` / `assets.rs` / `plugins.rs` / `presets.rs` / `session.rs`
-    **本来就不 import tauri**；`host-vst3` 在无 dispatcher 时**默认 inline 派发**，CLI 只需 `mark_main_thread()`。
-- **F2 · `aidaw` CLI** ⬜ 未做（依赖 F1）
+- **设计基线（2026-10-10 确定）**：`aidaw` **是 MCP 客户端，不是引擎**。
+  - 软件开着 → `aidaw` 连它的 MCP HTTP 端点（仅回环）执行；
+  - 软件没开 → `aidaw` 先把它**启动**起来，再执行；
+  - 因此 `aidaw` **不链接 Tauri、不内置引擎**，也**不需要**「无 Tauri 运行时」。
+  - **加一个 MCP 工具 = 自动多一条可调用的 CLI 命令**（按名转发，无需逐工具写代码）——
+    这是选「CLI 作 MCP 薄客户端」而非「CLI 镜像命令面」的核心理由。
+- **F1 · `aidaw` CLI（MCP 薄客户端）** ⬜ 未做
   - 在**根** workspace 新增 crate（`[[bin]] name = "aidaw"`），用 `clap`（MIT/Apache，符合 `deny.toml`）。
-  - 子命令镜像全部操作：`project` / `transport` / `track` / `clip` / `note` / `mix` / `preset` / `effect`
-    / `audio` / `render` / `analyze` / `undo`。
-  - `aidaw mcp serve --stdio | --http`：**GUI 进程不能被 MCP 客户端以 stdio 启动，CLI 可以** ——
-    这是 CLI 相对 GUI 的独有入口。
-  - 无头离线渲染 / 分析 / 导出直接复用 `engine` / `analysis` / `asset`。
+  - 子命令：
+    - `aidaw tools` —— 转发 MCP `tools/list`（列出当前所有工具）。
+    - `aidaw call <tool> [--json '{…}']` —— 转发 MCP `tools/call`；JSON 参数直通。
+    - `aidaw status` —— 软件在不在、MCP 地址是否可达。
+    - `aidaw start` —— 没开就启动（macOS `open -a "AI DAW"`，其余平台按需），等到 MCP 就绪再返回。
+  - 客户端实现：复用 `rmcp` 的 `transport-streamable-http-client` 特性（与现有服务器同一协议栈），
+    或等价的轻量 HTTP 客户端；**二选一在实现时定**。
+  - 能力面 = MCP 工具面：只在 Tauri 命令层、未暴露成 MCP 工具的动作（如「打开插件窗口」）
+    CLI 暂不可用——解决办法就是「先加一个 MCP tool」，与「加工具顺便加命令」一致。
+- **F2 · 发现与启动（F1 的前置）** ⬜ 未做
+  - **为什么需要**：MCP 默认端口 `50562`，但被占用时 `mcp.rs` 会**退回临时端口**，那时 CLI 找不到。
+  - 软件启动时把**实际**监听地址写入应用配置目录（`com.aidaw.app`）的一个运行时文件（如 `mcp-url`），
+    停止 / 退出时清理；CLI 先读它，读不到再用默认端口 `50562` 兜底。
+  - **传输只用 HTTP**（不用 stdio）：GUI 进程本就在跑 HTTP MCP；stdio 只在「CLI 自己当 MCP 服务器」时才需要，
+    而薄客户端模式下 CLI 是**客户端**，不需要。
 - **F3 · skills 文档包（渐进式披露）** ✅ **完成（2026-10-10）**
   - 仓库根 `skills/`：`README.md`（顶层索引，只列能力域）+ 9 个域（`project` / `track` / `clip` / `note`
     / `mix` / `audio` / `transport` / `analysis` / `plugin`），每个域只描述它那一小组工具与组合用法。
-  - **gateway 工具**：MCP 的 `aidaw_help(topic)` —— 留空给索引，按域取细则；文档用 `include_str!`
-    编译期内嵌（无需资源打包）。`aidaw_call(op, args)`（总控执行）**未做**——目前直接用逐个 MCP 工具即可。
-  - 想直接用逐个 MCP 工具也**照常支持**（两种入口并存）。
-- **F4 · 分发与验收** ⬜ 未做。
-  - `aidaw` 以 `bundle.externalBin`（sidecar）或独立产物分发；skills 文档纳入 `bundle.resources`。
-  - 验收：harness 只加载索引 skill → 按需加载域 skill → 用 `aidaw`（或 MCP）完成
-    「建轨 / 编曲 / 导出 / 分析」闭环。
+  - **gateway 工具**：MCP 的 `aidaw_help(topic)` —— 留空给索引，按域取细则；文档用 `include_str!` 编译期内嵌。
+  - **待补（随 F1）**：`skills/README.md` 加「CLI 入口」一节——`aidaw status` → 没开 `aidaw start` →
+    `aidaw call …`；`aidaw_call(op, args)` 由 `aidaw call` 落地。
+- **F4 · 分发与打包** 🅿️ **暂缓**
+  - `aidaw` 与 `skills/` 随应用分发（`bundle.externalBin` / `bundle.resources`）——待 F1/F2 落地后再做。
+- **F5 · 无 Tauri 运行时 / headless 引擎（原 F1）** 🅿️ **搁置**
+  - 原方案：抽 `crates/runtime`（`AppState` + `AudioEngine` + `AssetCache` + `build_registry` + `run/run_agent`）、
+    副作用抽成 `Effect` trait、33 个 `#[tool]` 移入 `crates/mcp` 并对 `Arc<AppState>` 泛型化、
+    `src-tauri` 退化为薄适配层（依据：`state.rs` / `audio.rs` / `assets.rs` / `plugins.rs` / `presets.rs` / `session.rs`
+    本就不 import tauri；`host-vst3` 无 dispatcher 时默认 inline 派发）。
+  - **搁置理由**：它解决的是「**不开 GUI 也能跑引擎**」（CI / 服务器 / 纯 headless 渲染）。
+    当前诉求（AI 遥控**正在运行的**软件 + 没开就启动）**不需要**它，而它是本仓库风险最高的一块重构。
+  - **重启条件**：确有 headless / CI 渲染需求时再做；迁移手法沿用 `crates/ipc`（搬家 + `pub use` 薄壳、零行为变化）。
 
 ### Stage G — 本地 AI 能力（Local AI，内置模型）
 
@@ -395,6 +413,7 @@ M3（Stage C：可录音、有音频片段）→ M4（Stage D：可被 AI 驱动
   - `plans/2026-10-10-plugin-param-automation.md`（C3 扩展：插件参数自动化 + 卷帘参数车道，✅ 完成）
   - `plans/2026-10-09-audio-device-resilience.md`（✅ 完成）
   - `plans/2026-10-09-ipc-contract.md`（✅ 完成）
+  - `plans/2026-10-10-aidaw-cli-mcp-client.md`（Stage F 改向后的 `aidaw` 薄客户端实现计划，⏳ 待开工）
 - 调研（research）：
   - `research/2026-10-10-open-source-survey.md`（录音 / 混音 / MIDI 输入 / 插件商店：可直接用的库与只能参考的项目，含许可结论）
 - skills 文档包（渐进式披露，AI harness 用）：`skills/`（索引 + 9 个能力域；由 MCP 的 `aidaw_help` 提供）
