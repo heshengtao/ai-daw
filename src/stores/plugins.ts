@@ -45,6 +45,7 @@ function toSpec(raw: BackendParam): ParamSpec {
     step: span > 0 ? span / 100 : 0.01,
     default: raw.default,
     digits: 2,
+    automatable: raw.automatable,
   };
 }
 

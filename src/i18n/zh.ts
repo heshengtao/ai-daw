@@ -448,6 +448,9 @@ const zh: Record<string, string> = {
   "auto.noTrack": "选中一条轨道来画它的自动化",
   "auto.clear": "清空",
   "auto.hide": "收起自动化车道",
+  "auto.group.track": "轨道",
+  "auto.group.instrument": "乐器",
+  "auto.group.effect": "效果器 {n}",
 
   // ---- 音色浏览器 ----
   "browser.title": "选择音色",

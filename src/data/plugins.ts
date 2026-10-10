@@ -654,6 +654,8 @@ export interface ParamSpec {
   unit?: string;
   /** 展示小数位。 */
   digits?: number;
+  /** 是否可自动化（缺省视为可自动化）。外部插件由后端 `ParamInfo` 给出。 */
+  automatable?: boolean;
 }
 
 /**
@@ -692,6 +694,51 @@ export const SYNTH_PARAMS: ParamSpec[] = [
   { id: "pitchDecay", name: "音高扫时长", min: 0, max: 1, step: 0.01, default: 0.1, digits: 2 },
   { id: "filterType", name: "滤波类型", min: 0, max: 2, step: 1, default: 0, digits: 0 },
 ];
+
+/**
+ * 内置合成器参数 id → 显示名（i18n 键）。
+ *
+ * 与 `SynthPanel.vue` 共用同一张表（那边直接 `import { SYNTH_PARAM_LABELS as LABELS }`）——
+ * 参数下拉与旋钮面板显示的名字必须一致。
+ */
+export const SYNTH_PARAM_LABELS: Record<string, string> = {
+  wave: "synth.wave",
+  sub: "synth.sub",
+  pwm: "synth.pwm",
+  glide: "synth.glide",
+  hpf: "synth.hpf",
+  cutoff: "synth.brightness",
+  resonance: "synth.sharpness",
+  filterEnv: "synth.filterEnvName",
+  keyFollow: "synth.keyFollow",
+  attack: "synth.attack",
+  decay: "synth.decay",
+  sustain: "synth.sustain",
+  release: "synth.release",
+  lfoRate: "synth.lfoRate",
+  lfoDelay: "synth.lfoDelay",
+  lfoPitch: "synth.lfoPitch",
+  lfoFilter: "synth.lfoFilter",
+  gain: "synth.gain",
+  noise: "synth.noise",
+  crush: "synth.crush",
+  detune: "synth.detune",
+  fm: "synth.fm",
+  fmRatio: "synth.fmRatio",
+  pitchEnv: "synth.pitchEnv",
+  pitchDecay: "synth.pitchDecay",
+  filterType: "synth.filterType",
+};
+
+/**
+ * 自动化下拉里**精选**的参数（插件 id → 参数 id 数组）。
+ *
+ * 有表就只列表里的（顺序即展示顺序），没有表的插件列全部可自动化参数。
+ * 想加/减内置合成器的可选参数，**只改这里**。
+ */
+export const COMMON_INSTRUMENT_PARAMS: Record<string, string[]> = {
+  [SYNTH_ID]: ["cutoff", "resonance", "attack", "decay", "sustain", "release", "detune", "lfoRate"],
+};
 
 /** 内置合成器的参数默认值（摊平预设补丁用）。 */
 export const SYNTH_DEFAULTS: Record<string, number> = Object.fromEntries(

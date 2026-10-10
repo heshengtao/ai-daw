@@ -449,6 +449,9 @@ const en: Record<string, string> = {
   "auto.noTrack": "Select a track to draw its automation",
   "auto.clear": "Clear",
   "auto.hide": "Hide the automation lane",
+  "auto.group.track": "Track",
+  "auto.group.instrument": "Instrument",
+  "auto.group.effect": "Effect {n}",
 
   // ---- Sound browser ----
   "browser.title": "Choose a sound",

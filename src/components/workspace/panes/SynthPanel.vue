@@ -17,7 +17,13 @@ import Md3Knob from "@/components/common/Md3Knob.vue";
 import Oscilloscope from "@/components/common/Oscilloscope.vue";
 import PianoKeyboard from "@/components/common/PianoKeyboard.vue";
 import PresetBar from "@/components/common/PresetBar.vue";
-import { SYNTH_DEFAULTS, SYNTH_ID, SYNTH_PARAMS, type ParamSpec } from "@/data/plugins";
+import {
+  SYNTH_PARAM_LABELS as LABELS,
+  SYNTH_DEFAULTS,
+  SYNTH_ID,
+  SYNTH_PARAMS,
+  type ParamSpec,
+} from "@/data/plugins";
 import { useI18n } from "@/i18n";
 import { usePresetsStore, type PresetOption } from "@/stores/presets";
 import type { WaveParams } from "@/utils/waveform";
@@ -80,40 +86,6 @@ function display(id: string, value: number): string {
   const digits = spec.digits ?? 2;
   return `${value.toFixed(digits)}${spec.unit ?? ""}`;
 }
-
-/** 参数 id → 显示名（i18n 键）。没列到的直接退回 id，至少不会显示成空。 */
-const LABELS: Record<string, string> = {
-  wave: "synth.wave",
-  sub: "synth.sub",
-  pwm: "synth.pwm",
-  glide: "synth.glide",
-  hpf: "synth.hpf",
-  // 面板上露出的显示名走小白化词典（设计稿 §4.2）：截止→亮度、共振→尖锐度、包络量→滤波包络。
-  // 改指向后 `synth.cutoff` / `synth.resonance` / `synth.envAmount` 已无代码引用（成为孤儿键，
-  // 保留不删，避免误伤将来可能的复用）；值不动，这里只换旋钮指向的键。
-  cutoff: "synth.brightness",
-  resonance: "synth.sharpness",
-  filterEnv: "synth.filterEnvName",
-  keyFollow: "synth.keyFollow",
-  attack: "synth.attack",
-  decay: "synth.decay",
-  sustain: "synth.sustain",
-  release: "synth.release",
-  lfoRate: "synth.lfoRate",
-  lfoDelay: "synth.lfoDelay",
-  lfoPitch: "synth.lfoPitch",
-  lfoFilter: "synth.lfoFilter",
-  gain: "synth.gain",
-  // 扩展音源能力
-  noise: "synth.noise",
-  crush: "synth.crush",
-  detune: "synth.detune",
-  fm: "synth.fm",
-  fmRatio: "synth.fmRatio",
-  pitchEnv: "synth.pitchEnv",
-  pitchDecay: "synth.pitchDecay",
-  filterType: "synth.filterType",
-};
 
 /** 一个旋钮需要的全部信息（模板只遍历这份数据，不手写 18 份旋钮）。 */
 interface KnobDef {
