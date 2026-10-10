@@ -429,6 +429,7 @@ const en: Record<string, string> = {
   "lane.property": "Controller",
   "lane.velocity": "Velocity",
   "lane.velocityHint": "Playing strength — universal; most instruments use it for level and timbre.",
+  "lane.hide": "Hide the bottom lane",
   "lane.selected": "{count} selected",
   "keyboard.group": "Audition keyboard",
   "keyboard.audition": "Audition {note}",

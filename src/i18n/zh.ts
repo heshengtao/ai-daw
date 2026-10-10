@@ -428,6 +428,7 @@ const zh: Record<string, string> = {
   "lane.property": "控制器",
   "lane.velocity": "力度",
   "lane.velocityHint": "演奏强度：所有乐器通用，多数音源用它同时决定音量与音色。",
+  "lane.hide": "收起下方窗格",
   "lane.selected": "{count} 个已选",
   "keyboard.group": "试听键盘",
   "keyboard.audition": "试听 {note}",

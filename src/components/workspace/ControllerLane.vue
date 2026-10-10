@@ -14,10 +14,12 @@
  * 落实提交。可选目标由外壳经 `targets` 传入（本组件只在最前面补上「力度」这一项）。
  */
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { XMarkIcon } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
 import AutomationCurve from "@/components/workspace/AutomationCurve.vue";
 import { capturePointer } from "@/utils/pointer";
 import { useI18n } from "@/i18n";
+import { useLayoutStore } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import type { AutomationPoint, Note } from "@/api/types";
 import type { AutomationTarget } from "@/utils/automation";
@@ -73,6 +75,7 @@ const emit = defineEmits<{
 }>();
 
 const timeline = useTimelineStore();
+const layout = useLayoutStore();
 const i18n = useI18n();
 
 /** 当前选中目标的定义；`velocity` 由本组件自己提供，不在 `props.targets` 里。 */
@@ -296,6 +299,18 @@ onUnmounted(() => {
         <strong class="tabular">{{ readout.value }}</strong>
       </span>
       <span v-else class="readout muted">{{ i18n.t("lane.velocityHint") }}</span>
+
+      <span class="lane-spacer" />
+
+      <!-- 右上角的收起按钮：与编排视图自动化车道的那颗同款（由顶栏开关再打开） -->
+      <button
+        class="lane-close"
+        type="button"
+        :aria-label="i18n.t('lane.hide')"
+        @click="layout.showControllerLane = false"
+      >
+        <XMarkIcon class="lane-close-icon" />
+      </button>
     </div>
 
     <!-- 泳道本体：左侧 60px 与卷帘的琴键列对齐 -->
@@ -404,6 +419,38 @@ onUnmounted(() => {
 .readout strong {
   color: rgb(var(--md-on-surface));
   margin-left: 4px;
+}
+/* 把右上角的收起按钮顶到最右 */
+.lane-spacer {
+  flex: 1 1 auto;
+}
+/* 收起按钮：与编排视图自动化车道的那颗同款（22px 药丸 + 14px 图标） */
+.lane-close {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--md-on-surface-variant));
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+.lane-close:hover {
+  background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
+  color: rgb(var(--md-on-surface));
+}
+.lane-close:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 1px;
+}
+.lane-close-icon {
+  width: 14px;
+  height: 14px;
 }
 .tabular {
   font-variant-numeric: tabular-nums;
