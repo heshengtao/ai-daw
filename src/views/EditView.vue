@@ -26,13 +26,15 @@ import { useClipboardStore } from "@/stores/clipboard";
 import { useLayoutStore } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
-import ControllerLane, { type ControllerProperty } from "@/components/workspace/ControllerLane.vue";
+import { usePluginsStore } from "@/stores/plugins";
+import ControllerLane from "@/components/workspace/ControllerLane.vue";
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
 import { capturePointer } from "@/utils/pointer";
+import { automationTargetsFor } from "@/utils/automation";
 import { auditionNote } from "@/api/tauri";
 import { useI18n } from "@/i18n";
-import type { Note, NoteEdit } from "@/api/types";
+import type { AutomationPoint, Note, NoteEdit } from "@/api/types";
 
 const store = useProjectStore();
 const i18n = useI18n();
@@ -41,6 +43,7 @@ const clipboard = useClipboardStore();
 const layout = useLayoutStore();
 const timeline = useTimelineStore();
 const transport = useTransportStore();
+const plugins = usePluginsStore();
 const router = useRouter();
 
 const LOW = 36; // C2
@@ -116,10 +119,6 @@ const rollEl = ref<HTMLElement | null>(null);
 /** 卷帘的纵向滚动（琴键列靠它同步）。 */
 const scrollTop = ref(0);
 let applyingScroll = false;
-
-/** 控制器泳道当前显示的属性。 */
-// 默认显示**力度**：它是所有音源都通用的属性（音量对不支持逐音符音量的音源会被折算进力度）。
-const controllerProperty = ref<ControllerProperty>("velocity");
 
 /** 指针位置 → (绝对拍, 音高)；`rel` 是相对片段起点的拍。 */
 function pointAt(clientX: number, clientY: number): { beat: number; pitch: number; rel: number } {
@@ -505,8 +504,54 @@ async function deleteNotes(indices: number[]): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 控制器泳道
+// 参数车道（卷帘下方泳道）
 // ---------------------------------------------------------------------------
+
+/** 卷帘下方泳道当前选中的目标键（`velocity` = 逐音符力度）。 */
+const controllerTargetKey = ref<string>("velocity");
+/** 可自动化的目标：轨道混音 + 乐器 + 效果器（与编排视图的自动化车道同一份列表）。 */
+const controllerTargets = computed(() =>
+  automationTargetsFor(selection.track, plugins.paramsOf, i18n.t),
+);
+/** 选中目标当前的曲线点（就是 `Track.automation` 里那条，与编排视图共用）。 */
+const controllerCurvePoints = computed<AutomationPoint[]>(() => {
+  const key = controllerTargetKey.value;
+  const lane = selection.track?.automation?.find((l) => l.param === key);
+  return lane?.points ?? [];
+});
+
+/** 提交曲线（一次拖拽 = 一条撤销记录）。 */
+async function applyControllerCurve(points: AutomationPoint[]): Promise<void> {
+  const t = selection.trackId;
+  if (t === null) return;
+  try {
+    await store.setAutomation(t, controllerTargetKey.value, points);
+  } catch (err) {
+    layout.notify(i18n.t("error.setAutomation", { error: String(err) }));
+  }
+}
+
+// 进视图 / 换轨道时确保**乐器与整条效果链**的参数表已在（外部插件懒加载；
+// `ensureParams` 对已缓存的表是空操作）。外部效果器的参数表也要在，否则目标下拉里会缺项。
+watch(
+  () => [
+    selection.track?.instrument?.plugin_id,
+    ...(selection.track?.effects ?? []).map((fx) => fx.plugin_id),
+  ],
+  (ids) => {
+    for (const id of ids) if (id) void plugins.ensureParams(id);
+  },
+  { immediate: true },
+);
+// 目标消失（乐器 / 效果器被删）时回落到力度。
+watch(controllerTargets, (list) => {
+  if (
+    controllerTargetKey.value !== "velocity" &&
+    !list.some((t) => t.key === controllerTargetKey.value)
+  ) {
+    controllerTargetKey.value = "velocity";
+  }
+});
 
 /** 把属性改动应用到全部所选音符（一次提交 = 一条撤销记录）。 */
 async function applyToSelection(patch: Partial<Note>): Promise<void> {
@@ -832,17 +877,20 @@ onUnmounted(() => {
       <!-- 卷帘与控制器泳道之间可拖拽 -->
       <PanelResizer side="bottom" @resize="layout.resizeLane($event)" />
 
-      <!-- 控制器泳道：经典 DAW 的一排直角条 -->
+      <!-- 参数车道：力度 = 逐音符直角条；其余目标 = 编排视图那条自动化曲线 -->
       <ControllerLane
         :notes="clip?.notes ?? []"
         :selected-indices="selection.noteIndices"
-        :property="controllerProperty"
+        :target-key="controllerTargetKey"
+        :targets="controllerTargets"
         :offset-beats="clipStart"
         :content-height="layout.laneHeight"
-        @update:property="(p: ControllerProperty) => (controllerProperty = p)"
+        :curve-points="controllerCurvePoints"
+        @update:target-key="(k: string) => (controllerTargetKey = k)"
         @select="selection.setNoteSelection($event)"
         @apply="applyToSelection"
         @delete="deleteNotes"
+        @apply-curve="applyControllerCurve"
       />
     </template>
 

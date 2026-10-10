@@ -93,10 +93,16 @@ function onChoose(id: string): void {
   param.value = id;
 }
 
-/** 外部插件是懒加载的：进车道时确保乐器的参数表已在。 */
+// 外部插件是懒加载的：进车道时确保**乐器与整条效果链**的参数表已在（`ensureParams` 对已缓存
+// 的表是空操作）。外部效果器的参数表也要在，否则目标下拉里会缺项。
 watch(
-  () => track.value?.instrument?.plugin_id,
-  (id) => void plugins.ensureParams(id),
+  () => [
+    track.value?.instrument?.plugin_id,
+    ...(track.value?.effects ?? []).map((fx) => fx.plugin_id),
+  ],
+  (ids) => {
+    for (const id of ids) if (id) void plugins.ensureParams(id);
+  },
   { immediate: true },
 );
 

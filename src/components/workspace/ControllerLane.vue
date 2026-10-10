@@ -1,35 +1,29 @@
 <script setup lang="ts">
 /**
- * 控制器泳道：经典 DAW 钢琴卷帘下方那一条「直角条」。
+ * 参数车道：经典 DAW 钢琴卷帘下方那一条「泳道」，按所选目标切换两种形态。
  *
- * 每个音符对应一根矩形条：
- * - **横位置与宽度**与上方卷帘里的音符**一一对应**（同一起点、同一时长、同一缩放、
- *   同一绝对时间轴——所以片段有偏移时也照样对齐）；
- * - **高度**表示当前所选属性。
+ * - **力度**（`velocity`，逐音符）：每根直角条的**横位置与宽度**与上方卷帘里的音符
+ *   **一一对应**（同一起点、同一时长、同一缩放、同一绝对时间轴——所以片段有偏移时也照样对齐），
+ *   高度是力度。上下拖动改值（多选整组、松手才提交一次）、空白处左键框选、右键点击删除、
+ *   右键拖动框选批量删除。走 `set_notes`，与旧控制器泳道逐字一致。
+ * - **其余目标**（`gain_db` / `pan` / `inst:<id>` / `fx<i>:<id>`）：就是**编排视图自动化车道的
+ *   同一份数据**（`Track.automation`），用共享的 `AutomationCurve` 画曲线。左侧 60px 刻度列与
+ *   琴键列对齐（所以曲线传 `insetPx = 0`，不画自带刻度列）。
  *
- * 属性用**下拉选择**（与主流 DAW 的控制器/包络选择一致），列表可扩展。目前有两项：
- * - **力度**（velocity，演奏强度）：**所有乐器通用**——它写在 Note On 里，任何 MIDI 音源都收。
- * - **音量**（单音电平）：纯增益微调，不改音色。支持「逐音符音量」的音源（内置合成器）直接生效；
- *   其余音源由引擎**折算进力度**（见 `player::fold_note_volume`），所以也照样有反应，只是表现方式
- *   取决于音源怎么解释力度。
- *
- * 交互：上下拖动条子改值（多选整组、松手才提交一次）；空白处左键框选；
- * 右键点击删除、右键拖动框选批量删除。
+ * 组件本身**不认识工程**：力度改动经 `apply` 交回、曲线经 `applyCurve` 交回，由外壳（`EditView`）
+ * 落实提交。可选目标由外壳经 `targets` 传入（本组件只在最前面补上「力度」这一项）。
  */
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import Md3Select from "@/components/common/Md3Select.vue";
+import AutomationCurve from "@/components/workspace/AutomationCurve.vue";
 import { capturePointer } from "@/utils/pointer";
 import { useI18n } from "@/i18n";
 import { useTimelineStore } from "@/stores/timeline";
-import type { Note } from "@/api/types";
+import type { AutomationPoint, Note } from "@/api/types";
+import type { AutomationTarget } from "@/utils/automation";
 
-/** 泳道可显示的属性。 */
-export type ControllerProperty = "volume" | "velocity";
-
+/** 逐音符属性的取值域与读写（目前只有力度）。 */
 interface Spec {
-  /** i18n key（渲染时翻译）。 */
-  labelKey: string;
-  hintKey: string;
   min: number;
   max: number;
   step: number;
@@ -40,66 +34,67 @@ interface Spec {
   patch: (v: number) => Partial<Note>;
 }
 
-const MAX_MIDI = 127;
-
-const SPECS: Record<ControllerProperty, Spec> = {
-  volume: {
-    labelKey: "lane.volume",
-    hintKey: "lane.volumeHint",
-    min: 0,
-    max: MAX_MIDI,
-    step: 1,
-    digits: 0,
-    get: (n) => n.volume,
-    patch: (v) => ({ volume: Math.round(v) }),
-  },
-  velocity: {
-    labelKey: "lane.velocity",
-    hintKey: "lane.velocityHint",
-    min: 0,
-    max: MAX_MIDI,
-    step: 1,
-    digits: 0,
-    get: (n) => n.velocity,
-    patch: (v) => ({ velocity: Math.round(v) }),
-  },
+/**
+ * 力度：本组件唯一保留的**逐音符**属性（写在 MIDI Note On 里，所有乐器通用）。
+ *
+ * 其余目标一律是**轨道参数曲线**（`Track.automation`）——它们不是逐音符的量，由
+ * `AutomationCurve` 编辑、外壳提交，见 `utils/automation.ts`。
+ */
+const spec: Spec = {
+  min: 0,
+  max: 127,
+  step: 1,
+  digits: 0,
+  get: (n) => n.velocity,
+  patch: (v) => ({ velocity: Math.round(v) }),
 };
-
-/** 下拉里的展示顺序：**力度在前**（它是所有音源都通用的那一个）。 */
-const OPTIONS: ControllerProperty[] = ["velocity", "volume"];
 
 const props = defineProps<{
   notes: Note[];
   selectedIndices: number[];
-  property: ControllerProperty;
+  /** 当前选中的目标键：`"velocity"` 或自动化目标键（`gain_db` / `inst:cutoff` / `fx0:mix` …）。 */
+  targetKey: string;
+  /** 可选目标（力度由本组件自己加在最前面）。 */
+  targets: AutomationTarget[];
   /** 片段在时间轴上的起点（拍）：音符坐标是相对片段的，这里换算成绝对时间。 */
   offsetBeats: number;
   /** 泳道内容高度（条形的最大高度）。 */
   contentHeight: number;
+  /** 非 `velocity` 目标时的曲线点（来自 `Track.automation`）。 */
+  curvePoints: AutomationPoint[];
 }>();
 
 const emit = defineEmits<{
-  (e: "update:property", value: ControllerProperty): void;
+  (e: "update:targetKey", value: string): void;
   (e: "select", indices: number[]): void;
   (e: "apply", patch: Partial<Note>): void;
   (e: "delete", indices: number[]): void;
+  (e: "applyCurve", points: AutomationPoint[]): void;
 }>();
 
 const timeline = useTimelineStore();
 const i18n = useI18n();
-const spec = computed(() => SPECS[props.property]);
 
-/** 下拉选项：名称 + 一句说明（`Md3Select` 会把说明显示成第二行小字）。 */
-const chooserOptions = computed(() =>
-  OPTIONS.map((opt) => ({
-    id: opt,
-    label: i18n.t(SPECS[opt].labelKey),
-    hint: i18n.t(SPECS[opt].hintKey),
-  })),
-);
+/** 当前选中目标的定义；`velocity` 由本组件自己提供，不在 `props.targets` 里。 */
+const curveTarget = computed(() => props.targets.find((t) => t.key === props.targetKey) ?? null);
+
+/** 刻度列极值：非 `velocity` 目标取自它的值域，`力度` 仍是 0 / 127。 */
+const scaleMin = computed(() => curveTarget.value?.min ?? spec.min);
+const scaleMax = computed(() => curveTarget.value?.max ?? spec.max);
+
+/** 下拉选项：`力度` 单独一组（逐音符），其余按 `props.targets` 的 `group` 分组。 */
+const chooserOptions = computed(() => [
+  {
+    id: "velocity",
+    label: i18n.t("lane.velocity"),
+    hint: i18n.t("lane.velocityHint"),
+    group: i18n.t("auto.group.note"),
+  },
+  ...props.targets.map((t) => ({ id: t.key, label: t.label, group: t.group })),
+]);
 
 function onChoose(id: string): void {
-  emit("update:property", id as ControllerProperty);
+  emit("update:targetKey", id);
 }
 
 /** 拖动中的值（预览用）；松手才提交。 */
@@ -126,7 +121,7 @@ const marqueeStyle = computed(() => ({
 
 /** 某个数值对应的条形高度（px）。 */
 function heightFor(value: number): number {
-  const { min, max } = spec.value;
+  const { min, max } = spec;
   const ratio = (value - min) / (max - min || 1);
   return Math.max(2, Math.min(1, Math.max(0, ratio)) * props.contentHeight);
 }
@@ -134,7 +129,7 @@ function heightFor(value: number): number {
 /** 渲染用数值：拖动中的已选音符显示预览值。 */
 function valueOf(index: number, note: Note): number {
   if (dragValue.value !== null && props.selectedIndices.includes(index)) return dragValue.value;
-  return spec.value.get(note);
+  return spec.get(note);
 }
 
 function barStyle(index: number, note: Note): Record<string, string> {
@@ -152,11 +147,11 @@ function isSelected(index: number): boolean {
 /** 指针 y → 数值（顶部最大）。 */
 function valueFromY(clientY: number): number {
   const el = bodyEl.value;
-  if (!el) return spec.value.min;
+  if (!el) return spec.min;
   const rect = el.getBoundingClientRect();
   const usable = Math.max(1, rect.height - 6);
   const ratio = Math.min(1, Math.max(0, 1 - (clientY - rect.top - 3) / usable));
-  const { min, max, step } = spec.value;
+  const { min, max, step } = spec;
   const raw = min + ratio * (max - min);
   return Math.min(max, Math.max(min, Math.round(raw / step) * step));
 }
@@ -236,7 +231,7 @@ function onPointerUp(): void {
     const value = dragValue.value;
     dragValue.value = null;
     if (value === null) return;
-    emit("apply", spec.value.patch(value));
+    emit("apply", spec.patch(value));
     return;
   }
   if (current === "marquee") {
@@ -267,8 +262,8 @@ const readout = computed(() => {
   if (indices.length === 0) return null;
   const primary = props.notes[indices[indices.length - 1]];
   if (!primary) return null;
-  const value = dragValue.value ?? spec.value.get(primary);
-  return { count: indices.length, value: value.toFixed(spec.value.digits) };
+  const value = dragValue.value ?? spec.get(primary);
+  return { count: indices.length, value: value.toFixed(spec.digits) };
 });
 
 onMounted(() => {
@@ -283,34 +278,37 @@ onUnmounted(() => {
 
 <template>
   <div class="lane-block">
-    <!-- 头部：属性选择 + 读数 -->
+    <!-- 头部：目标选择 + 读数 -->
     <div class="lane-head">
-      <!-- 属性选择：下拉（与主流 DAW 的控制器/包络选择一致），说明文字在菜单里 -->
+      <!-- 目标选择：下拉（力度 + 该轨道可自动化的全部插件参数），说明文字在菜单里 -->
       <div class="lane-chooser">
         <Md3Select
-          :model-value="property"
+          :model-value="targetKey"
           :options="chooserOptions"
           :label="i18n.t('lane.property')"
           @select="onChoose"
         />
       </div>
 
-      <span v-if="readout" class="readout">
-        {{ i18n.t("lane.selected", { count: readout.count }) }} · {{ i18n.t(spec.labelKey) }}
+      <span v-if="curveTarget" class="readout muted">{{ curveTarget.label }}</span>
+      <span v-else-if="readout" class="readout">
+        {{ i18n.t("lane.selected", { count: readout.count }) }} · {{ i18n.t("lane.velocity") }}
         <strong class="tabular">{{ readout.value }}</strong>
       </span>
-      <span v-else class="readout muted">{{ i18n.t(spec.hintKey) }}</span>
+      <span v-else class="readout muted">{{ i18n.t("lane.velocityHint") }}</span>
     </div>
 
     <!-- 泳道本体：左侧 60px 与卷帘的琴键列对齐 -->
     <div class="lane-row">
       <div class="lane-gutter">
-        <span class="max">{{ spec.max }}</span>
-        <span class="min">{{ spec.min }}</span>
+        <span class="max">{{ scaleMax }}</span>
+        <span class="min">{{ scaleMin }}</span>
       </div>
 
       <div class="lane-clip">
+        <!-- 力度：逐音符直角条（横位置与宽度与上方音符一一对应） -->
         <div
+          v-if="targetKey === 'velocity'"
           ref="bodyEl"
           class="lane-body"
           :style="{ height: `${contentHeight + 6}px` }"
@@ -326,7 +324,7 @@ onUnmounted(() => {
               :class="{ selected: isSelected(i), dragging: mode === 'value' && isSelected(i) }"
               :style="barStyle(i, n)"
               :data-index="i"
-              :title="i18n.t(spec.labelKey)"
+              :title="i18n.t('lane.velocity')"
               @pointerdown="onBarPointerDown($event, i)"
               @contextmenu="onBarContextMenu($event, i)"
             />
@@ -339,6 +337,20 @@ onUnmounted(() => {
             :style="marqueeStyle"
           />
         </div>
+
+        <!-- 其余目标：与编排视图的自动化车道**同一份数据**的曲线（左侧 60px 已有刻度列，故 insetPx = 0） -->
+        <AutomationCurve
+          v-if="curveTarget"
+          :points="curvePoints"
+          :min="curveTarget.min"
+          :max="curveTarget.max"
+          :step="curveTarget.step"
+          :digits="curveTarget.digits"
+          :unit="curveTarget.unit"
+          :height="contentHeight + 6"
+          :inset-px="0"
+          @apply="(p: AutomationPoint[]) => emit('applyCurve', p)"
+        />
       </div>
     </div>
   </div>
@@ -362,7 +374,7 @@ onUnmounted(() => {
   padding: 0 12px;
   border-bottom: 1px solid rgb(var(--md-outline-variant) / 0.35);
 }
-/* 属性下拉：压到与泳道头部同高的小尺寸（`Md3Select` 默认是 34px 的宽药丸） */
+/* 目标下拉：压到与泳道头部同高的小尺寸（`Md3Select` 默认是 34px 的宽药丸） */
 .lane-chooser {
   flex: 0 0 auto;
   display: inline-flex;
@@ -457,4 +469,5 @@ onUnmounted(() => {
   border-color: rgb(var(--md-error));
   background-color: rgb(var(--md-error) / 0.16);
 }
+/* 曲线目标的样式在 `AutomationCurve` 里（曲线画布整块搬过去了）。 */
 </style>

@@ -10,7 +10,7 @@
 | `set_solo` | `track`,`on` | 独奏（有任一独奏时其余自动静音）。 |
 | `set_master_gain` | `gain_db` | 总输出增益。 |
 | `set_sends` | `track`,`sends` | 发送列表（**整体替换**）：`[{"target":<轨道 id>,"gain_db":<dB>}]`。 |
-| `set_automation` | `track`,`param`,`points` | 自动化车道（**整体替换**）：`param` 为 `gain_db`/`pan`；`points` 为 `[{"beat":<拍>,"value":<值>}]`，空数组 = 删除。 |
+| `set_automation` | `track`,`param`,`points` | 自动化车道（**整体替换**）：`param` 为 `gain_db`/`pan`，或 `inst:<参数id>`（轨道乐器）/ `fx<i>:<参数id>`（效果链第 `i` 个，`i` 从 **0** 起）；`points` 为 `[{"beat":<拍>,"value":<值>}]`，空数组 = 删除。 |
 
 **要点**
 - **总线**：新建一条空轨道当总线，把源轨的 `set_sends` 指向它；总线照常去 master，
@@ -18,4 +18,8 @@
 - 自发送（`target` = 自身）会被丢弃；指向不存在轨道的发送会被忽略。
 - **自动化覆盖推子值**（读取模式）：某参数一旦有曲线，推子值对该参数不再生效。
 - 自动化是「仅混音」变更：拖曲线**不会**打断音频（逐块求值）。
+- **插件参数也能自动化**：`param` 除 `gain_db` / `pan` 外，还可写 `inst:<参数id>`（轨道乐器）或
+  `fx<i>:<参数id>`（效果链第 `i` 个，`i` 从 0 起，如 `fx0:mix`）；参数表用 `plugin_params` 查
+  （带 `automatable` 标记）。插件参数曲线与轨道混音参数一样逐块求值并覆盖静态值；目标不存在
+  （乐器/效果器被删、下标越界）时该车道不生效。
 - 反馈环（互相发送）不会挂死：环上的发送被忽略。

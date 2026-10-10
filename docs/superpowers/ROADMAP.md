@@ -239,7 +239,11 @@
   （`components/workspace/AutomationLane.vue`：参数下拉 `gain_db` / `pan`、点击加点、拖动改拍与值、
   右键删点、清空；与编排网格共用同一条时间轴，画布两端补抽头以匹配引擎的「夹住」语义；
   顶栏开关在编排与钢琴卷帘两个视图都有、各自控制本视图的底部窗格且默认打开；可见性/高度持久化、
-  高度可拖拽）。**自动化车道目前只认 `gain_db` / `pan`；插件参数自动化未做**（设计 §2 的 v1 非目标）。
+  高度可拖拽）。**自动化目标已扩展到 `inst:` / `fx<i>:`：乐器与效果链上任意参数都能画曲线**
+  （键的命名空间见 `specs/2026-10-10-plugin-param-automation-design.md` §4），
+  见 `specs+plans/2026-10-10-plugin-param-automation*`；卷帘下方的控制器泳道随之改成**参数车道**
+  （`力度` 仍是逐音符直角条，其余目标是与编排视图**同一份** `Track.automation` 的曲线），
+  下拉里删掉与力度重复的「音量」（`Note.volume` 字段保留，旧工程听感不变）。
   测试：`cargo test -p ai-daw-engine --features realtime` → 141 通过；`realtime_safety.rs` 门禁已覆盖发送 + 自动化
   （含 `SetAutomation` 的 `apply_command` 零分配断言）。
   设计与计划：`specs/2026-10-10-mixing-sends-buses-automation-design.md`、`plans/2026-10-10-mixing-sends-buses-automation.md`。
@@ -369,6 +373,7 @@ M3（Stage C：可录音、有音频片段）→ M4（Stage D：可被 AI 驱动
   - `specs/2026-10-09-audio-clip-design.md`（C1，✅ 完成）
   - `specs/2026-10-10-recording-design.md`（C2，✅ 完成）
   - `specs/2026-10-10-mixing-sends-buses-automation-design.md`（C3，✅ 完成）
+  - `specs/2026-10-10-plugin-param-automation-design.md`（C3 扩展：插件参数自动化 + 卷帘参数车道，✅ 完成）
   - `specs/2026-10-09-synth-overhaul-design.md`（✅ 完成）
   - `specs/2026-10-09-audio-device-resilience-design.md`（✅ 完成）
   - `specs/2026-10-08-builtin-synth-ui-redesign-design.md`（✅ 完成，预设部分被 synth-overhaul 取代）
@@ -387,6 +392,7 @@ M3（Stage C：可录音、有音频片段）→ M4（Stage D：可被 AI 驱动
   - `plans/2026-10-09-audio-clip.md`（✅ 完成）
   - `plans/2026-10-10-recording.md`（C2，✅ 完成）
   - `plans/2026-10-10-mixing-sends-buses-automation.md`（C3，✅ 完成）
+  - `plans/2026-10-10-plugin-param-automation.md`（C3 扩展：插件参数自动化 + 卷帘参数车道，✅ 完成）
   - `plans/2026-10-09-audio-device-resilience.md`（✅ 完成）
   - `plans/2026-10-09-ipc-contract.md`（✅ 完成）
 - 调研（research）：

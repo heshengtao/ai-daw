@@ -427,9 +427,7 @@ const en: Record<string, string> = {
 
   // ---- Controller lane ----
   "lane.property": "Controller",
-  "lane.volume": "Volume",
   "lane.velocity": "Velocity",
-  "lane.volumeHint": "Per-note level trim. Applied directly where supported, folded into velocity otherwise.",
   "lane.velocityHint": "Playing strength — universal; most instruments use it for level and timbre.",
   "lane.selected": "{count} selected",
   "keyboard.group": "Audition keyboard",
@@ -452,6 +450,7 @@ const en: Record<string, string> = {
   "auto.group.track": "Track",
   "auto.group.instrument": "Instrument",
   "auto.group.effect": "Effect {n}",
+  "auto.group.note": "Note properties",
 
   // ---- Sound browser ----
   "browser.title": "Choose a sound",

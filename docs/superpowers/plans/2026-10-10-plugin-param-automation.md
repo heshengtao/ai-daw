@@ -10,6 +10,21 @@
 
 设计见 `../specs/2026-10-10-plugin-param-automation-design.md`。
 
+## 执行记录（2026-10-10）
+
+6 个任务全部完成，分支 `feat/plugin-param-automation`。实测数字：
+
+- **引擎** `cargo test -p ai-daw-engine --features realtime` → **162 通过，0 失败**
+  （unittests 149 + `audio_clip` 7 + `builtin_effects` 3 + `input_capture_safety` 1 +
+  `realtime_safety` 1 + `render_to_wav` 1）；`realtime_safety.rs` 的零分配门禁已覆盖插件参数车道。
+- **前端** `npm run build`（vue-tsc + vite）通过；528 模块，无类型错误。
+- **i18n** 中英键数 **657 / 657**，两侧键集合相等（删 `lane.volume` / `lane.volumeHint`，
+  增 `auto.group.note`）。
+- 说明：`Track` / `AutomationLane` / `AutomationPoint` 模型与 `Command` / `Event` 字段未改，
+  MCP 工具表仍 33 个（本分支未增删工具）；旧工程零迁移。
+- **浏览器端到端验证**（编排画曲线 → 卷帘下方车道看到同一条、效果器分组、无「音量」选项、
+  顶栏底部窗格开关在混音/设置页禁用）留给编排者在用户自己的 dev server 上执行。
+
 ## Global Constraints
 
 - 许可 Apache-2.0-only；**不新增依赖**。

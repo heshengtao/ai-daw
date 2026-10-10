@@ -426,9 +426,7 @@ const zh: Record<string, string> = {
 
   // ---- 控制器泳道 ----
   "lane.property": "控制器",
-  "lane.volume": "音量",
   "lane.velocity": "力度",
-  "lane.volumeHint": "单音电平微调，不改音色。支持逐音符音量的音源直接生效，其余折算进力度。",
   "lane.velocityHint": "演奏强度：所有乐器通用，多数音源用它同时决定音量与音色。",
   "lane.selected": "{count} 个已选",
   "keyboard.group": "试听键盘",
@@ -451,6 +449,7 @@ const zh: Record<string, string> = {
   "auto.group.track": "轨道",
   "auto.group.instrument": "乐器",
   "auto.group.effect": "效果器 {n}",
+  "auto.group.note": "音符属性",
 
   // ---- 音色浏览器 ----
   "browser.title": "选择音色",
