@@ -100,9 +100,9 @@ export const useParamBindingsStore = defineStore("paramBindings", () => {
   }
 
   /**
-   * 保存工程后把旧作用域（`untitled::<id>`）的记录搬到新作用域（`<path>::<id>`）。
+   * **单条原语**：把一个作用域键的记录搬到另一个。`rekeyProject` 对旧基下的每条轨道记录各调它一次。
    *
-   * 新键已有记录则**不覆盖**（只丢掉旧的），否则用户已经保存过的绑定会被未保存的桶冲掉。
+   * 新键已有记录则**不覆盖**（只丢掉旧的），否则用户已经保存过的绑定会被未保存的桶冲掉；随后删掉旧键。
    */
   function rekey(oldScope: string, newScope: string): void {
     if (oldScope === newScope) return;

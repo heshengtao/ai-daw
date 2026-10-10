@@ -28,7 +28,7 @@
 | 2 | 搜索（显示名 / 原始 id / 单位）、排序、筛选、翻页都生效；页数随筛选变化，筛选一变回第 1 页 | ✅ 搜索「波形」→ 28 里筛出 4；两组 chips、翻页均生效；改筛选回到第 1 页 |
 | 3 | 绑定 / 解绑**立即**反映到车道下拉；解绑不删曲线；有曲线的参数即使解绑仍在列表 | ✅ 绑定 / 解绑两个方向都**无需刷新**即时更新车道下拉；一个**带曲线**的参数解绑后**仍在下拉里**（排到末尾） |
 | 4 | 默认：内置合成器轨道 = 增益 / 声像 + 精选 8；外部插件轨道 = 增益 / 声像 | ✅ 内置合成器轨道车道下拉 = `增益` / `声像` + 精选 8 个；外部插件轨道 = `增益` / `声像` |
-| 5 | 刷新保持绑定；**换工程不串**；保存后 re-key | ⏳ 刷新保持绑定已验；**换工程不串 + 保存后 re-key 由本任务 Part A 接上（静态核对；编排者点测）**——见下 |
+| 5 | 刷新保持绑定；**换工程不串**；保存后 re-key | ⏳ 刷新保持绑定：编排者已实测（整页重载后绑定仍在）；换工程不串 + 保存后 re-key：仅代码审阅，未点测——见下 |
 | 6 | 参数页与插件界面是两个不同的东西：检查器不再摊开通用参数列表，只有「参数…」 | ✅ 检查器不再展开通用参数；乐器卡「参数…」预选该乐器（`共 28 个参数（筛出 26 个）`），效果器行「参数…」预选该槽位（加一个延迟后 `共 31 个参数（筛出 3 个）`） |
 | 7 | `npm run build` 通过；中英词典键数相等 | ✅ 构建通过（539 模块）；698 / 698 |
 
@@ -42,7 +42,8 @@
   `written` 后 `currentPath.value = written`，再 `useParamBindingsStore().rekeyProject(from, written)`。
 - **null→path**：未保存的工程把绑定记在 `untitled::<id>` 下；首次保存 `from` 是 `null`、`written` 是真实路径
   → 该基下**每一条**轨道记录都搬到 `<路径>::<id>`，用户不会「一保存就变回默认」。
-- **打开既有工程无需 re-key**：`openFrom()` 只设 `currentPath`；绑定键由 `scopeKey()` 在**读时**按当前路径现算
+- **其余写 `currentPath` 的地方都无需 re-key**：`newProject()` 置 `null`（读时落到共享的 `untitled` 桶，即设计 §7
+  记的 v1 限制）；`openFrom()` 与 `loadPath()` 只设路径——绑定键由 `scopeKey()` 在**读时**按当前路径现算
   （`<路径>::<id>`），所以一打开就落在正确的桶里，没有「旧基」要搬。
 - 备注：`saveTo` 也承载「另存为」（Cmd+Shift+S → `App.vue` 的保存对话框），此时 `from` 是旧路径、`written`
   是新路径，同一条 `rekeyProject` 把绑定一并迁走（设计 §3.1 的「另存/首次保存」）。
@@ -67,7 +68,7 @@ shape 守卫、`Md3Select` menu z-index、`ParameterBrowser` 与 `PluginBrowser`
 ## 文件清单
 
 - 新建：`src/stores/paramBindings.ts`、`src/stores/paramBrowser.ts`、`src/components/common/ModalShell.vue`、`src/components/common/ListToolbar.vue`、`src/components/common/ParameterBrowser.vue`
-- 修改：`src/utils/automation.ts`、`src/data/plugins.ts`、`src/components/common/PluginBrowser.vue`（改用共享件）、`src/components/workspace/AutomationLane.vue`、`src/components/workspace/ControllerLane.vue`、`src/views/EditView.vue`、`src/components/workspace/InspectorPanel.vue`、`src/App.vue`、`src/stores/project.ts`（保存后 re-key）、`src/i18n/zh.ts`、`src/i18n/en.ts`、`docs/superpowers/ROADMAP.md`
+- 修改：`src/utils/automation.ts`、`src/data/plugins.ts`、`src/components/common/PluginBrowser.vue`（改用共享件）、`src/components/workspace/AutomationLane.vue`、`src/components/workspace/ControllerLane.vue`、`src/views/EditView.vue`、`src/components/workspace/InspectorPanel.vue`、`src/App.vue`、`src/stores/project.ts`（保存后 re-key）、`src/i18n/zh.ts`、`src/i18n/en.ts`、`docs/superpowers/ROADMAP.md`（本轮未动，见设计 §7）
 
 ---
 
