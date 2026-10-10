@@ -22,8 +22,8 @@
 
 ## 文件清单
 
-- 新建：`src/stores/paramBindings.ts`、`src/stores/paramBrowser.ts`、`src/components/common/ParameterBrowser.vue`
-- 修改：`src/utils/automation.ts`、`src/data/plugins.ts`、`src/components/workspace/AutomationLane.vue`、`src/components/workspace/ControllerLane.vue`、`src/views/EditView.vue`、`src/components/workspace/InspectorPanel.vue`、`src/App.vue`、`src/i18n/zh.ts`、`src/i18n/en.ts`、`docs/superpowers/ROADMAP.md`
+- 新建：`src/stores/paramBindings.ts`、`src/stores/paramBrowser.ts`、`src/components/common/ModalShell.vue`、`src/components/common/ListToolbar.vue`、`src/components/common/ParameterBrowser.vue`
+- 修改：`src/utils/automation.ts`、`src/data/plugins.ts`、`src/components/common/PluginBrowser.vue`（改用共享件）、`src/components/workspace/AutomationLane.vue`、`src/components/workspace/ControllerLane.vue`、`src/views/EditView.vue`、`src/components/workspace/InspectorPanel.vue`、`src/App.vue`、`src/stores/project.ts`（保存后 re-key）、`src/i18n/zh.ts`、`src/i18n/en.ts`、`docs/superpowers/ROADMAP.md`
 
 ---
 
@@ -116,7 +116,25 @@ export function defaultBoundParamIds(pluginId: string): string[] {
 Run: `npm run build`
 Expected: 通过（本任务只有纯 TS，`vue-tsc` 会盯类型）。
 
-- [ ] **Step 6: 提交**
+- [ ] **Step 6: 给 `curateTargets` 一条真能跑的断言（本仓库没有前端测试运行器）**
+
+`curateTargets` 是本期唯一有真实分支的纯函数，只靠"看起来对"不够。用已在 `node_modules` 里的 esbuild 把它打成 ESM，再用一次性脚本断言（脚本放会话 scratchpad，**不进仓库**；输出贴进报告）：
+
+```bash
+node_modules/.bin/esbuild src/utils/automation.ts --bundle --format=esm \
+  --alias:@=./src --outfile=<scratchpad>/automation.mjs
+node <scratchpad>/check-curate.mjs
+```
+
+必须断言的行为（对应设计 §3.3）：
+
+1. `增益` / `声像` 永远在最前，且保持 `all` 里的原始顺序。
+2. `bound` 的顺序被保留（后绑的在后面）。
+3. `bound === null` → 用 `fallbackBound`。
+4. `bound === []` → **只**剩 `增益` / `声像`（**不是**回落默认精选——这是最容易写错的一条）。
+5. `usedKeys` 里"已用但已解绑"的追加在后面；`all` 里不存在的键一律忽略。
+
+- [ ] **Step 7: 提交**
 
 ```bash
 git add src/stores/paramBindings.ts src/utils/automation.ts src/data/plugins.ts src/i18n/zh.ts src/i18n/en.ts
@@ -125,33 +143,45 @@ git commit -m "feat(ui): 自动化目标绑定的数据层（UI 偏好存储 + �
 
 ---
 
-## Task 2: 参数页模态 + 打开状态
+## Task 2: 参数页模态 + 打开状态（含抽取共享外壳与工具条）
 
 **Files:**
-- Create: `src/stores/paramBrowser.ts`、`src/components/common/ParameterBrowser.vue`
-- Modify: `src/App.vue`、`src/i18n/zh.ts`、`src/i18n/en.ts`
+- Create: `src/components/common/ModalShell.vue`、`src/components/common/ListToolbar.vue`、`src/stores/paramBrowser.ts`、`src/components/common/ParameterBrowser.vue`
+- Modify: `src/components/common/PluginBrowser.vue`、`src/App.vue`、`src/i18n/zh.ts`、`src/i18n/en.ts`
+
+**为什么先抽壳**：`PluginBrowser.vue:141-204` 的外壳（scrim/dialog/head/foot）与工具条（搜索药丸/chips/排序分段）加起来约 170 行 CSS，"克隆一份"就是**逐字复制一个逻辑块**——评审会（正确地）把它记成 Important。所以先抽成两个共享组件，新模态只组合它们，`PluginBrowser` 也改用。**抽取必须行为不变。**
 
 **Interfaces:**
 - Consumes: Task 1 的 store / `curateTargets` / `automationTargetsFor` / `ensureParams`。
-- Produces: `useParamBrowserStore()`（`open({ trackId, pluginId? })` / `close()` / `isOpen` / `trackId` / `pluginId`）；
-  `<ParameterBrowser v-if="browser.isOpen" ... />`。
+- Produces:
+  `ModalShell.vue` — props `{ open: boolean; title: string }`，emits `update:open`；默认 slot = body，具名 slot `toolbar`、`foot`；自己管 Escape、点 scrim 关闭、`role="dialog"` `aria-modal`、`z-index:120`、`width:620px`、`max-height:78vh`。
+  `ListToolbar.vue` — props `{ query: string; placeholder: string; chips: {id:string;label:string}[]; activeChip: string; sorts: {id:string;label:string}[]; activeSort: string }`，emits `update:query` / `update:activeChip` / `update:activeSort`。
+  `useParamBrowserStore()` — `open({ trackId, pluginId? })` / `close()` / `isOpen` / `trackId` / `pluginId`（**不持久化**）。
+- 依赖顺序：Step 1/2（抽件）→ Step 3/4（新模态）→ Step 5+ 才有意义。
 
-- [ ] **Step 1: `stores/paramBrowser.ts`**
+- [ ] **Step 1: 抽 `ModalShell.vue`，并让 `PluginBrowser` 改用**
+
+把 `PluginBrowser.vue:141-151` 的 `Teleport` → `.scrim`（`@pointerdown.self` 关闭）→ `.dialog`（`role="dialog"` `aria-modal="true"` `tabindex="-1"` `@keydown`）→ `.head`（`.large .title` + `.icon-btn`）搬进 `ModalShell.vue`，CSS（`:254-309`）**连 class 名一起搬**。`PluginBrowser` 删掉自己那份、改成组合。
+**行为逐项不变**（这是本步的验收）：Escape 关闭、点 scrim 关闭、打开时聚焦搜索框（`:128-137`）、`z-index:120`、`width:620px`、`max-height:78vh`、标题与关闭按钮位置一致。
+
+- [ ] **Step 2: 抽 `ListToolbar.vue`，并让 `PluginBrowser` 改用**
+
+把 `PluginBrowser.vue:159-204`（搜索药丸 + `.chips` + `.sorts` 分段）与 CSS `:310-426` 搬进 `ListToolbar.vue`，改成 props 驱动 + emit 回写。`PluginBrowser` 改用后，**筛选项与交互逐项不变**（同样的 chip 集合、同样的排序项、同样的清空按钮）。
+
+- [ ] **Step 3: `stores/paramBrowser.ts`**
 
 一个极轻的 store：`isOpen = ref(false)`、`trackId = ref<number | null>(null)`、`pluginId = ref<string | null>(null)`，`open(...)` / `close()`。**不持久化。**
 
-- [ ] **Step 2: `ParameterBrowser.vue` 外壳**
+- [ ] **Step 4: `ParameterBrowser.vue` 用两个共享件拼出外壳**
 
-克隆 `PluginBrowser.vue` 的壳（`:141-151` 的 `Teleport` → `.scrim` / `.dialog`，CSS `:254-309` 的 `.head` / `.icon-btn` / `.body` / `.foot`）：`role="dialog"`、`aria-modal="true"`、点 scrim 关闭、`Escape` 关闭、打开时聚焦搜索框。标题「参数（用于自动化）」。
+`ModalShell`（标题「参数（用于自动化）」）+ `ListToolbar` 放 `toolbar` slot + body 放行列表 + `foot` 放翻页条。**不要**再复制一份 scrim/dialog/toolbar 的 CSS。
 
-- [ ] **Step 3: 取数 + 分组**
+- [ ] **Step 5: 取数 + 分组**
 
 `trackId` → `project.track(trackId)`；打开时对该轨道的 `instrument.plugin_id` 与**所有** `effects[i].plugin_id` 调 `plugins.ensureParams(id)`（外部插件异步），加载中显示占位。
 然后 `automationTargetsFor(track, plugins.paramsOf, i18n.t)` 拿**全量**目标，每个目标带 `key` / `label` / `group` / `hint`。行里额外显示：组名（乐器 / 效果器 i）、原始参数 id、单位与范围。
 
-- [ ] **Step 4: 工具栏（搜索 / 筛选 / 排序）**
-
-复用 `PluginBrowser.vue:159-204` 的三件套与 CSS（`.search` 药丸、`.chips` / `.chip.on`、`.seg` / `.seg-btn.on`）：
+- [ ] **Step 6: 搜索 / 筛选 / 排序的**取值逻辑**（样式与交互已在 `ListToolbar`）**
 
 - 搜索：匹配 **显示名 / 原始 id / 单位**（大小写不敏感）。
 - 筛选 chips：`全部` / `已绑定` / `未绑定` / `已有曲线`；另一个 chips：`仅可自动化`（**默认开**）。
@@ -159,24 +189,26 @@ git commit -m "feat(ui): 自动化目标绑定的数据层（UI 偏好存储 + �
 - 排序：`默认（插件顺序）` / `参数名` / `已绑定在前`。
 - **任一筛选 / 搜索 / 排序变化 → `page.value = 1`。**
 
-- [ ] **Step 5: 翻页 + 行 + 绑定按钮**
+- [ ] **Step 7: 翻页 + 行 + 绑定按钮**
 
 - 页大小 `pageSize` 默认 16，可切 `16 / 32 / 64 / 全部`；底部 `上一页` / `第 x / y 页` / `下一页`，右侧 `共 N 个（筛出 M 个）`。
 - 行：`<div class="row">` + 名称 span + id/单位 span + 当前值 span + 绑定按钮（`已绑定` = 主色实心，`未绑定` = 描边）；按钮 `@click` → `bindings.toggle(trackId, key, fallback)`。**不要**把按钮嵌进 button。
 - `automatable === false` 的目标：行可见但按钮禁用，并注明"该插件声明此参数不可自动化"。
 
-- [ ] **Step 6: 挂到 `App.vue`**
+- [ ] **Step 8: 挂到 `App.vue`**
 
 在 `App.vue:487-499` 那几个 dialog 旁边挂 `<ParameterBrowser v-if="browser.isOpen" />`（**不要**挂进 `InspectorPanel`，车道下拉也要用它）。
 
-- [ ] **Step 7: i18n + 构建 + 提交**
+- [ ] **Step 9: i18n + 构建 + 浏览器回归 + 提交**
 
 新增键：`browser.title`、`browser.search`、`browser.filter.*`、`browser.sort.*`、`browser.page.prev/next/of`、`browser.count`、`browser.bind`、`browser.unbind`、`browser.notAutomatable`、`browser.loading`。
 
+Run: `npm run build` + i18n 键数相等。
+**浏览器回归由编排者执行**（端口 1420 被用户的 dev server 占着，别自己起）：打开插件浏览器，确认搜索/筛选/排序/选中/关闭/Escape 与改动前一致（Step 1/2 是行为不变的抽取，这条回归就是它的验收）。
+
 ```bash
-npm run build
-git add src/stores/paramBrowser.ts src/components/common/ParameterBrowser.vue src/App.vue src/i18n/zh.ts src/i18n/en.ts
-git commit -m "feat(ui): 参数浏览器模态（翻页 + 查找 + 排序 + 筛选 + 绑定/解绑）"
+git add src/components/common/ModalShell.vue src/components/common/ListToolbar.vue src/stores/paramBrowser.ts src/components/common/ParameterBrowser.vue src/components/common/PluginBrowser.vue src/App.vue src/i18n/zh.ts src/i18n/en.ts
+git commit -m "feat(ui): 抽出共享的 ModalShell/ListToolbar，新增参数浏览器模态（翻页+查找+排序+筛选+绑定/解绑）"
 ```
 
 ---
@@ -280,6 +312,8 @@ git commit -m "docs: 参数浏览器的执行结果与验收记录"
 ## 自查记录
 
 - **Spec 覆盖**：§3.1/§3.2→Task 1；§3.4/§3.5→Task 2；§3.3→Task 3；§4.4→Task 1/2；§6 验收→Task 5。
-- **占位符扫描**：无 TBD；Task 1/2 给了可直接粘贴的关键代码，Task 2 的模板/样式明确要求"克隆 `PluginBrowser`"（不重写 CSS）。
+- **占位符扫描**：无 TBD；Task 1/2 给了可直接粘贴的关键代码，Task 2 的样式要求是"抽共享件"而不是"重写一份 CSS"。
 - **类型一致性**：`explicit()` 返回 `string[] | null` 在 Task 1/3 之间一致；`curateTargets` 的 `bound: string[] | null` 与之一致；`browse` action 的 emit 名与 `Md3Select.vue:42` 一致。
 - **风险最高的两处**（实现时盯紧）：`undefined` ≠ `[]`；保存工程后的 re-key。
+- **开工前改掉的三处**（原稿会被评审正确地记成问题）：① 原稿让新模态"克隆 `PluginBrowser` 的外壳与工具条"——那是逐字复制约 170 行 CSS，改成先抽 `ModalShell`/`ListToolbar` 并让 `PluginBrowser` 改用（Task 2 Step 1/2）；② 原稿对 `curateTargets` 只有 `npm run build`，现在补了 esbuild + 一次性脚本的断言（Task 1 Step 6）；③ 原稿漏了 `src/stores/project.ts`（re-key 挂在保存路径上）。
+- **仍然存在的缺口（记录在案，不在本期解决）**：本仓库没有前端测试运行器，Task 1 的断言是**一次性脚本**而非可持续的回归套件；`curateTargets` 之外的 UI 逻辑仍只靠构建 + 浏览器回归。要根治得先决定引入 vitest——那是独立的一期。
