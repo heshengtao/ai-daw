@@ -1,6 +1,6 @@
 # 参数浏览器（自动化目标绑定）设计
 
-> 状态：设计完成（2026-10-10），待实现。
+> 状态：✅ 完成（2026-10-10）。
 
 ## 1 背景与问题
 
@@ -98,8 +98,10 @@ export const useParamBindingsStore = defineStore("paramBindings", () => {
   function isBound(trackId: number, key: string): boolean;
   /** 绑定 / 解绑（幂等）；首次绑定会把默认精选"实体化"（见 §3.2）。 */
   function toggle(trackId: number, key: string): void;
-  /** 保存工程后把 `untitled::<id>` 的记录搬到 `<path>::<id>`。 */
+  /** 保存工程后把 `untitled::<id>` 的记录搬到 `<path>::<id>`（单条原语，见 §7）。 */
   function rekey(oldScope: string, newScope: string): void;
+  /** 保存路径调用：把「旧工程基」下**每一条**轨道记录搬到「新工程基」（`fromPath === null` = `untitled`）。 */
+  function rekeyProject(fromPath: string | null, toPath: string): void;
 });
 ```
 
@@ -156,3 +158,26 @@ export const useParamBindingsStore = defineStore("paramBindings", () => {
 | 外部插件参数表要异步加载 | 打开时 `ensureParams`，列表加载态；加载完再算筛选/翻页 |
 | 绑定的是**槽位下标键**（`fx<i>:…`），重排效果链后绑定项指向别的效果器 | 与曲线同一个 v1 取舍（设计 §9 已记）；参数页的插件筛选按**当前**槽位计算，不做缓存 |
 | 库里已有缺陷：`Md3Knob` / `Md3Slider` 不判断按键，右键会把值跳到光标并提交 | 本期不做右键手势，但**这个 bug 该单独修**（见下一条非目标） |
+
+### 实现中偏离设计的地方（2026-10-10）
+
+1. **车道入口是「表头常驻按钮」，不是 `Md3Select` 的 action 行**（§3.4 原写 action 行）。
+   实测：车道 select 在 900px 窗口里位于 y=664..686，`spaceBelow=202` 达不到 180px 的向上翻转阈值，
+   菜单只能向下展开、`max-height` 仅 202px，而内容高 478px —— 「＋ 添加参数…」那一行被排在 **y=1130**
+   （窗口之外），点它只会关掉菜单。改为每条车道的**表头**放一个常驻按钮；共享的 `Md3Select` 未动
+   （检查器那条 action 行的菜单够高，维持原样）。
+2. **`automationTargetsFor` 现在无条件「全量」**（计划错误地假设它本来就是全量）。
+   原实现把内置合成器收窄到精选 8 个、并丢掉不可自动化的参数；实现期用过一个过渡开关 `curatedOnly`，
+   Task 3 已把它两个调用点删掉。**精选表只剩一个用途**：经 `defaultBoundKeys` 当**默认绑定集**。
+   于是参数页列出内置合成器轨道的**全部 28 个参数**（2 混音 + 26 合成器），不是精选那 8 个。
+3. **`paramBindings.explicit()` 必须无条件读属性**。原先用 `Object.hasOwn(bindings.value, scope)` 判断
+   「有无记录」——Vue 的响应式代理不追踪 `[[GetOwnProperty]]`，所以「记录从无到有」时不建立依赖：
+   参数页刚绑上的参数**不会**出现在车道下拉里，要**整页刷新**才看得到。改成无条件读一次
+   `bindings.value[scope]`（`toggle()` 同理）。保存路径的 re-key 也不再调用单条原语，而是走新增的
+   `rekeyProject(fromPath, toPath)`（遍历本 store 自己的键、覆盖旧基下每一条轨道记录，见 §4.1）。
+
+### 本分支未做（待补）
+
+- **ROADMAP 那一行待补**：本分支不动 `docs/superpowers/ROADMAP.md`（工作区里那份带用户未提交的 Stage F
+  改向，另有他新写的 `plans/2026-10-10-aidaw-cli-mcp-client.md`，整目录 `git add` 会把它们卷进来）。
+  「参数浏览器」的 ROADMAP 一行等该改向落到 **main** 之后再补。

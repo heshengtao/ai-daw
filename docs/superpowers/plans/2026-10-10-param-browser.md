@@ -10,6 +10,50 @@
 
 设计见 `../specs/2026-10-10-param-browser-design.md`。
 
+## 执行记录（2026-10-10）
+
+5 个任务全部完成，分支 `feat/param-browser`。构建与词典数字：
+
+- **前端** `npm run build`（`vue-tsc --noEmit` + `vite build`）**通过**：539 模块，无类型错误，`built in 1.19s`。
+- **i18n** 中英键数 **698 / 698**，两侧键集合相等（差集为空、无重复键）。
+
+### 设计 §6 验收结果
+
+浏览器端到端由**编排者**执行（端口 1420 被用户的 dev server 占着；实现者不起服务器、不跑浏览器，用 mock 后端、
+单页内 hash 导航）。逐条：
+
+| # | 验收项 | 结果 |
+| --- | --- | --- |
+| 1 | 参数页列出该轨道全部插件的全部参数，按插件分组、组名带槽位号 | ✅ 内置合成器轨道列出 **28** 个参数（2 混音 + 26 合成器），分 2 页、按插件分组；搜索 / 两组 chips / 翻页 / 每行绑定按钮齐全 |
+| 2 | 搜索（显示名 / 原始 id / 单位）、排序、筛选、翻页都生效；页数随筛选变化，筛选一变回第 1 页 | ✅ 搜索「波形」→ 28 里筛出 4；两组 chips、翻页均生效；改筛选回到第 1 页 |
+| 3 | 绑定 / 解绑**立即**反映到车道下拉；解绑不删曲线；有曲线的参数即使解绑仍在列表 | ✅ 绑定 / 解绑两个方向都**无需刷新**即时更新车道下拉；一个**带曲线**的参数解绑后**仍在下拉里**（排到末尾） |
+| 4 | 默认：内置合成器轨道 = 增益 / 声像 + 精选 8；外部插件轨道 = 增益 / 声像 | ✅ 内置合成器轨道车道下拉 = `增益` / `声像` + 精选 8 个；外部插件轨道 = `增益` / `声像` |
+| 5 | 刷新保持绑定；**换工程不串**；保存后 re-key | ⏳ 刷新保持绑定已验；**换工程不串 + 保存后 re-key 由本任务 Part A 接上（静态核对；编排者点测）**——见下 |
+| 6 | 参数页与插件界面是两个不同的东西：检查器不再摊开通用参数列表，只有「参数…」 | ✅ 检查器不再展开通用参数；乐器卡「参数…」预选该乐器（`共 28 个参数（筛出 26 个）`），效果器行「参数…」预选该槽位（加一个延迟后 `共 31 个参数（筛出 3 个）`） |
+| 7 | `npm run build` 通过；中英词典键数相等 | ✅ 构建通过（539 模块）；698 / 698 |
+
+### Part A：保存后 re-key（本任务新增）
+
+- `src/stores/paramBindings.ts`：新增 `rekeyProject(fromPath, toPath)`——遍历**本 store 自己的键**，把
+  `${fromBase}::<trackId>` 逐条搬到 `${toPath}::<trackId>`（`fromBase = fromPath ?? UNTITLED`，`UNTITLED`
+  仍是私有常量）；新基下已有同名轨道记录则**不覆盖**、随后删旧键；`fromBase === toPath` 时不做任何事。
+  单条原语 `rekey(oldScope, newScope)` 保留、`rekeyProject` 复用它（无死代码）。
+- `src/stores/project.ts` 的 `saveTo(target)`：**赋值前**先存 `const from = currentPath.value`，写完拿到
+  `written` 后 `currentPath.value = written`，再 `useParamBindingsStore().rekeyProject(from, written)`。
+- **null→path**：未保存的工程把绑定记在 `untitled::<id>` 下；首次保存 `from` 是 `null`、`written` 是真实路径
+  → 该基下**每一条**轨道记录都搬到 `<路径>::<id>`，用户不会「一保存就变回默认」。
+- **打开既有工程无需 re-key**：`openFrom()` 只设 `currentPath`；绑定键由 `scopeKey()` 在**读时**按当前路径现算
+  （`<路径>::<id>`），所以一打开就落在正确的桶里，没有「旧基」要搬。
+- 备注：`saveTo` 也承载「另存为」（Cmd+Shift+S → `App.vue` 的保存对话框），此时 `from` 是旧路径、`written`
+  是新路径，同一条 `rekeyProject` 把绑定一并迁走（设计 §3.1 的「另存/首次保存」）。
+
+### 遗留（延续前几个任务的 triage，本任务未处理）
+
+Task 1–4 的 minor 项仍在 `.superpowers/sdd/2026-10-10-param-browser/progress.md` 里逐条在案（`load()` 的
+shape 守卫、`Md3Select` menu z-index、`ParameterBrowser` 与 `PluginBrowser` 的 CSS 重复、`ensureParams` 失败
+静默、「参数…」按钮 aria-label 无插件名、同效果器两次时预选到第一个等）。真正要根治构建之外的 UI 逻辑，
+得先决定引入前端测试运行器（`curateTargets` 之外仍只有构建 + 浏览器回归兜底）。
+
 ## Global Constraints
 
 - **许可 Apache-2.0-only；不新增任何依赖**（`package.json` 不动）。
