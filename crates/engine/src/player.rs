@@ -7,7 +7,7 @@ use ai_daw_plugin_api::{MidiEvent, ParamId, Plugin, PluginKind, ProcessContext, 
 use crate::model::MixerChannel;
 use crate::registry::PluginRegistry;
 use crate::schedule::{
-    LaneParam, ScheduledAudioClip, ScheduledEvents, ScheduledLane, ScheduledMidi, ScheduledSend,
+    LaneTarget, ScheduledAudioClip, ScheduledEvents, ScheduledLane, ScheduledMidi, ScheduledSend,
 };
 use crate::tempo::TempoMap;
 use crate::transport::TransportCommand;
@@ -500,18 +500,34 @@ impl Player {
             }
             track.audible = want;
             // 自动化**覆盖**推子值（读取模式）：有曲线的参数以曲线为准。
-            let mut gain_db = track.gain_db;
-            let mut pan = track.pan;
-            for lane in &track.lanes {
-                if let Some(value) = lane.value_at(beats) {
-                    match lane.param {
-                        LaneParam::GainDb => gain_db = MixerChannel::normalize_gain_db(value),
-                        LaneParam::Pan => pan = MixerChannel::normalize_pan(value),
+            // 拆字段借用：车道只读、插件实例可变，两者是不同字段，可以同时借。
+            //
+            // 覆盖只作用于**本次混音计算**：`gain_db` / `pan` 字段本身绝不能被写回——那条车道
+            // 被移除（或曲线求值失败）后必须回到用户的推子值，写回会把推子值永久吃掉。
+            let (mix_gain_db, mix_pan) = {
+                let TrackVoice { lanes, plugin, effects, gain_db, pan, .. } = track;
+                let (mut mix_gain_db, mut mix_pan) = (*gain_db, *pan);
+                for lane in lanes.iter() {
+                    let Some(value) = lane.value_at(beats) else { continue };
+                    match &lane.param {
+                        LaneTarget::GainDb => mix_gain_db = MixerChannel::normalize_gain_db(value),
+                        LaneTarget::Pan => mix_pan = MixerChannel::normalize_pan(value),
+                        LaneTarget::Instrument(param) => {
+                            if let Some(p) = plugin.as_mut() {
+                                p.set_param(param, value);
+                            }
+                        }
+                        LaneTarget::Effect { index, param } => {
+                            if let Some(fx) = effects.get_mut(*index) {
+                                fx.set_param(param, value);
+                            }
+                        }
                     }
                 }
-            }
-            let gain = db_to_linear(gain_db);
-            let (l, r) = pan_gains(pan);
+                (mix_gain_db, mix_pan)
+            };
+            let gain = db_to_linear(mix_gain_db);
+            let (l, r) = pan_gains(mix_pan);
             track.left_gain = gain * l;
             track.right_gain = gain * r;
         }
@@ -582,13 +598,9 @@ impl Player {
                 self.master_gain_db = MixerChannel::normalize_gain_db(gain_db);
                 self.refresh_mix();
             }
-            TransportCommand::SetAutomation { track, param, points } => {
-                // 未知参数名：忽略（v1 只认 gain_db / pan）。
-                let Some(lane_param) = LaneParam::from_name(&param) else {
-                    return;
-                };
-                // 控制侧已归一化；这里就地过滤 + 排序（`retain` / `sort_unstable_by` 都不分配），
-                // 再整体替换该参数的车道——音频线程因此不必扩容。
+            TransportCommand::SetAutomation { track, target, points } => {
+                // 目标已在控制侧解析好；这里就地过滤 + 排序（`retain` / `sort_unstable_by`
+                // 都不分配），再整体替换该目标的车道——音频线程因此不必扩容。
                 let mut points = points;
                 points.retain(|p| p.beat.is_finite() && p.value.is_finite());
                 points.sort_unstable_by(|a, b| {
@@ -597,10 +609,10 @@ impl Player {
                 let empty = points.is_empty();
                 for voice in self.tracks.iter_mut() {
                     if voice.track_id == track {
-                        voice.lanes.retain(|lane| lane.param != lane_param);
+                        voice.lanes.retain(|lane| lane.param != target);
                         if !empty {
                             voice.lanes.push(ScheduledLane {
-                                param: lane_param,
+                                param: target,
                                 points: std::mem::take(&mut points),
                             });
                         }
@@ -1669,7 +1681,7 @@ mod tests {
 
         player.apply_command(TransportCommand::SetAutomation {
             track: TrackId(1),
-            param: "gain_db".into(),
+            target: LaneTarget::GainDb,
             points: vec![AutomationPoint { beat: 0.0, value: -60.0 }],
         });
         player.process_block(&mut out, 512);
@@ -1678,7 +1690,7 @@ mod tests {
         // 空曲线 = 删除该车道 → 回到推子值。
         player.apply_command(TransportCommand::SetAutomation {
             track: TrackId(1),
-            param: "gain_db".into(),
+            target: LaneTarget::GainDb,
             points: vec![],
         });
         player.process_block(&mut out, 512);

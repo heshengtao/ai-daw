@@ -152,7 +152,7 @@ fn realtime_block_path_does_not_allocate() {
     // 命令自身在测量前就构造好（它的 Vec/String 会分配，那是控制侧的事）。
     let command = TransportCommand::SetAutomation {
         track: TrackId(1),
-        param: "gain_db".into(),
+        target: ai_daw_engine::schedule::LaneTarget::GainDb,
         points: vec![
             ai_daw_engine::model::AutomationPoint { beat: 0.0, value: -3.0 },
             ai_daw_engine::model::AutomationPoint { beat: 4.0, value: -6.0 },

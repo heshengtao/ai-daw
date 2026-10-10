@@ -341,12 +341,15 @@ impl AudioEngine {
                     });
                 }
                 // 自动化是「仅混音」变更：把新曲线直接推给音频线程，逐块求值——不必重建。
+                // 键在这里（控制侧）解析成目标：音频线程拿到的是已经建好的 `ParamId`，只做移动。
                 Event::AutomationChanged { track, param, points, .. } => {
-                    self.queue_if_available(TransportCommand::SetAutomation {
-                        track: *track,
-                        param: param.clone(),
-                        points: points.clone(),
-                    });
+                    if let Some(target) = ai_daw_engine::schedule::LaneTarget::from_key(param) {
+                        self.queue_if_available(TransportCommand::SetAutomation {
+                            track: *track,
+                            target,
+                            points: points.clone(),
+                        });
+                    }
                 }
                 other => {
                     // 兜底：任何新增事件默认都走重建，宁可多重建也不要漏掉结构变更。

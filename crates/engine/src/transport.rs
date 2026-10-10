@@ -3,8 +3,7 @@ use crate::model::TrackId;
 /// 运行时传输命令（不属于可撤销的工程编辑）。
 ///
 /// 绝大多数字段是 `Copy` 标量：这些命令会经由无锁 SPSC 队列进入音频回调。
-/// `SetParam` 携带的参数名是唯一的所有权字段——它在控制侧分配妥当，推入队列与取出
-/// 都只是移动，**实时侧不会因此分配内存**。
+/// `SetParam` 的参数名与 `SetAutomation` 的目标是所有权字段——都在控制侧分配妥当，实时侧只做移动。
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransportCommand {
     /// 开始或恢复播放。
@@ -65,11 +64,14 @@ pub enum TransportCommand {
     /// 实时更新一条自动化车道（`points` 为空 = 删除该车道）。
     ///
     /// 自动化是「仅混音」变更：不重建播放器，只把新曲线推给音频线程，逐块求值。
+    ///
+    /// `target` 是**控制侧解析好的**目标（`schedule::LaneTarget`）；音频线程不做键解析，
+    /// 因为那会给 `ParamId` 分配内存，破坏零分配门禁。
     SetAutomation {
         /// 目标轨道。
         track: crate::model::TrackId,
-        /// 参数名（`"gain_db"` / `"pan"`）。
-        param: String,
+        /// 已解析的自动化目标。
+        target: crate::schedule::LaneTarget,
         /// 关键点（拍，升序）。
         points: Vec<crate::model::AutomationPoint>,
     },

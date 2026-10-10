@@ -1,29 +1,50 @@
 use std::sync::Arc;
 
-use ai_daw_plugin_api::MidiEvent;
+use ai_daw_plugin_api::{MidiEvent, ParamId};
 
 use crate::audio::{DecodedAudio, SampleProvider};
 use crate::model::{AutomationPoint, MixerChannel, Note, PluginInstance, Project, TrackId};
 use crate::player::db_to_linear;
 use crate::tempo::TempoMap;
 
-/// 可被自动化的参数（v1）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LaneParam {
-    /// 轨道增益（dB）。
+/// 一条自动化车道的**已解析目标**。
+///
+/// 键的形式（见 `specs/2026-10-10-plugin-param-automation-design.md` §4）：
+/// `gain_db` / `pan` / `inst:<param_id>` / `fx<i>:<param_id>`（`i` 从 0 起）。
+///
+/// 非 `Copy`：`ParamId` 拥有自己的 `String`。**构造只在控制侧 / 调度构建时发生**
+/// （`from_key` 会分配），解析好的目标随 `ScheduledLane` 带进播放器，音频线程只做移动。
+#[derive(Debug, Clone, PartialEq)]
+pub enum LaneTarget {
+    /// 轨道推子增益（dB）。
     GainDb,
     /// 轨道声像（-1..=1）。
     Pan,
+    /// 轨道的乐器参数。
+    Instrument(ParamId),
+    /// 效果链第 `index` 个效果器的参数。
+    Effect { index: usize, param: ParamId },
 }
 
-impl LaneParam {
-    /// 从参数名解析；不认识的名字返回 `None`（求值时忽略）。
-    pub fn from_name(name: &str) -> Option<LaneParam> {
-        match name {
-            "gain_db" => Some(LaneParam::GainDb),
-            "pan" => Some(LaneParam::Pan),
-            _ => None,
+impl LaneTarget {
+    /// 从键解析。**会分配**（`ParamId` 持有 `String`）——**绝不在音频线程调用**。
+    pub fn from_key(key: &str) -> Option<LaneTarget> {
+        match key {
+            "gain_db" => return Some(LaneTarget::GainDb),
+            "pan" => return Some(LaneTarget::Pan),
+            _ => {}
         }
+        if let Some(rest) = key.strip_prefix("inst:") {
+            return (!rest.is_empty()).then(|| LaneTarget::Instrument(ParamId(rest.to_string())));
+        }
+        if let Some(rest) = key.strip_prefix("fx") {
+            let (index, param) = rest.split_once(':')?;
+            if param.is_empty() {
+                return None;
+            }
+            return Some(LaneTarget::Effect { index: index.parse().ok()?, param: ParamId(param.to_string()) });
+        }
+        None
     }
 }
 
@@ -31,7 +52,7 @@ impl LaneParam {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScheduledLane {
     /// 目标参数。
-    pub param: LaneParam,
+    pub param: LaneTarget,
     /// 关键点（拍，升序）。
     pub points: Vec<AutomationPoint>,
 }
@@ -257,12 +278,12 @@ impl ScheduledEvents {
                 }
             }
             events.sort_by_key(|e| e.frame);
-            // 自动化车道：只保留能被识别的参数（未知名字求值时会被忽略，不入表）。
+            // 自动化车道：只保留能被识别的键（未知形式在求值时会被忽略，不入表）。
             let lanes: Vec<ScheduledLane> = track
                 .automation
                 .iter()
                 .filter_map(|lane| {
-                    let param = LaneParam::from_name(&lane.param)?;
+                    let param = LaneTarget::from_key(&lane.param)?;
                     let points = lane.points.clone();
                     Some(ScheduledLane { param, points })
                 })
@@ -312,6 +333,28 @@ mod tests {
     use crate::model::{
         AutomationLane, AutomationPoint, Clip, ClipId, Note, Send, Track, TrackId,
     };
+    use ai_daw_plugin_api::ParamId;
+
+    #[test]
+    fn lane_target_from_key_parses_every_form() {
+        assert_eq!(LaneTarget::from_key("gain_db"), Some(LaneTarget::GainDb));
+        assert_eq!(LaneTarget::from_key("pan"), Some(LaneTarget::Pan));
+        assert_eq!(
+            LaneTarget::from_key("inst:cutoff"),
+            Some(LaneTarget::Instrument(ParamId("cutoff".into())))
+        );
+        assert_eq!(
+            LaneTarget::from_key("fx2:mix"),
+            Some(LaneTarget::Effect { index: 2, param: ParamId("mix".into()) })
+        );
+        // 不认识 / 残缺的形式
+        assert_eq!(LaneTarget::from_key(""), None);
+        assert_eq!(LaneTarget::from_key("nope"), None);
+        assert_eq!(LaneTarget::from_key("inst:"), None);
+        assert_eq!(LaneTarget::from_key("fx:mix"), None, "下标必须是数字");
+        assert_eq!(LaneTarget::from_key("fx1:"), None, "参数名不能为空");
+        assert_eq!(LaneTarget::from_key("fx"), None);
+    }
 
     fn project_with_note() -> Project {
         let mut p = Project::new("p");
@@ -474,7 +517,7 @@ mod tests {
         assert_eq!(s.tracks[0].sends[0].target_index, 1);
         assert!((s.tracks[0].sends[0].gain - 1.0).abs() < 1e-6, "0 dB → 单位增益");
         assert_eq!(s.tracks[0].lanes.len(), 1);
-        assert_eq!(s.tracks[0].lanes[0].param, LaneParam::GainDb);
+        assert_eq!(s.tracks[0].lanes[0].param, LaneTarget::GainDb);
 
         // 未知参数名不入表；指向不存在轨道的发送被丢掉。
         p.tracks[0].automation = vec![AutomationLane {
