@@ -22,8 +22,30 @@
   增 `auto.group.note`）。
 - 说明：`Track` / `AutomationLane` / `AutomationPoint` 模型与 `Command` / `Event` 字段未改，
   MCP 工具表仍 33 个（本分支未增删工具）；旧工程零迁移。
-- **浏览器端到端验证**（编排画曲线 → 卷帘下方车道看到同一条、效果器分组、无「音量」选项、
-  顶栏底部窗格开关在混音/设置页禁用）留给编排者在用户自己的 dev server 上执行。
+- **浏览器端到端验证**（编排者执行；单页内用 hash 导航，因为 `agent-browser open` 会重置 mock 状态）：
+  编排的 `inst:cutoff` 曲线与卷帘下方车道读到的是**同一个点**（同键同数据）、在卷帘车道里拖动会写回编排、
+  效果器分组出现（延迟的 时间/反馈/混合）、下拉里**没有「音量」**、有音符时「力度」仍是逐音符条、
+  曲线原点与编排网格严格对齐（inset 26 / 0）、顶栏底部窗格开关在混音 / 设置页为禁用。
+- **最终全分支评审**（最强模型，8 个提交）→「With fixes」：两处 Important 已在本分支修掉——
+  ① 移除插件参数曲线时把参数写回静态值（读取模式，`e0c98f5`）；② `mcp.rs` 的 `set_automation`
+  描述补上 `inst:` / `fx<i>:` 形式（`2e8ce2a`）；顺带把零分配门禁扩到 `fx<i>:` 车道。
+  修复后的一次范围化复评：**全部 ADDRESSED，无新的 Critical / Important**。
+
+### 遗留（评审分诊：均可随本次发布）
+
+- 自动化点上限 4096；仅线性曲线；无 pre-fader send；曲线画布未做纵向值域缩放。
+- 效果器按**槽位下标**寻址：重排效果链后曲线跟槽位走（v1 明说的取舍，见设计 §9）。
+- 插件参数「恢复静态值」有一个**窄边界**：若在曲线活跃期间发生结构性重建，且该参数既不在工程的
+  `params` 里、也未被插件 `state` 复现（主要是外部插件），重建会把当前值当作静态值快照下来。
+  彻底消除需要把自动化前的值持久化进工程 / 调度表（v1 不做，见设计 §9）。
+- 零分配门禁测到的是 `SetAutomation` 的**添加 / 替换**路径，未单独测「移除并写回」与「添加时
+  `get_param`」两个分支（经检视两者均不分配）。
+- `laneValueAtOrNull` / `automationTargetsFor` 无自动化测试（本仓库没有前端测试运行器）。
+- 文案：`ControllerLane` 仍用 `lane.property`（「控制器」）、`topbar.bottomLane*` 仍写 "controller"
+  ——该窗格现在是**参数车道**，措辞待改。
+- 杂项：`EditView.applyControllerCurve` 用 `selection.trackId` 而文件其余处用局部 `trackId`；
+  `paramLabel` 重复算 `canonicalPluginId`；内置**效果器**参数名在英文界面仍显示中文；
+  目标不存在时分组编号会跳号（例如只有「效果器 2」）；零轨工程的自动化车道只剩 30px 表头。
 
 ## Global Constraints
 
