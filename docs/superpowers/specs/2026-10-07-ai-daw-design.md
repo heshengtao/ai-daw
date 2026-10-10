@@ -1,10 +1,10 @@
-# daw-party — 轻量级 AI 原生 DAW 设计文档
+# AI DAW — 轻量级 AI 原生 DAW 设计文档
 
-- 日期：2026-10-07
-- 状态：已评审通过，**部分实现中**（进度见 `../ROADMAP.md`）
+- 日期：2026-10-07（**2026-10-10 校准**）
+- 状态：已评审通过，**v1 主体已实现**（进度见 `../ROADMAP.md`）
 - 许可证：Apache-2.0（**纯 Apache-2.0-only，无 GPL**）
 
-> **修订说明（2026-10-08）**：本文档的部分技术选型已随实现演进，权威口径以 `../ROADMAP.md` 为准。主要偏差：前端实际为 **Vue 3 + Pinia + Vue Router + Tailwind**（非 React + `@m3e/react`）；内置合成器为**手写正弦 + 线性 ADSR**（未引入 `fundsp`）；VST3 宿主首选 **`truce-rack`**；**不使用 ASIO**（其 SDK 为 GPLv3/专有，破坏 Apache-2.0）。
+> **修订说明（2026-10-10）**：本文档的部分技术选型已随实现演进，权威口径以 `../ROADMAP.md` 为准。主要偏差：前端实际为 **Vue 3 + Pinia + Vue Router + Tailwind**（非 React + `@m3e/react`）；内置合成器为**手写正弦 + 线性 ADSR**（未引入 `fundsp`）；VST3 宿主**实装为 `vst3-host` + `clack-host`**（原首选 `truce-rack` 的 VST3 后端托管不了「无音频输入总线的音源」、CLAP 后端加载 KR-106 会段错误，见 ROADMAP §2）；**不使用 ASIO**（其 SDK 为 GPLv3/专有，破坏 Apache-2.0）。§3 与 §5 的状态列已按实现翻正。
 
 ## 1. 目标与非目标
 
@@ -40,10 +40,11 @@
 | 内置合成器 DSP | **手写正弦振荡器 + 线性 ADSR**（`fundsp` 未引入） | ✅ |
 | WAV 读写 | `hound` | ✅ |
 | MIDI 输入 | `midir` | ⬜ |
-| 音频解码/重采样 | `symphonia` / `rubato` | ⬜ |
-| VST3 宿主 | **首选 `truce-rack`**（MIT OR Apache-2.0、纯 Rust binding；CLAP+VST3 默认，AU/LV2 可选）；否则基于 MIT 的 VST3 SDK 做薄绑定 | ⬜ |
-| CLAP（后置） | `clack`（或随 `truce-rack` 一并获得） | ⬜ |
-| 响度/频谱分析 | `ebur128` / `rustfft` | ⬜ |
+| 音频解码 | `symphonia`（wav / flac / mp3 / ogg / aac / m4a） | ✅ |
+| 保音高变速 | `rubato` | ⬜（v1 明确不做） |
+| VST3 / CLAP 宿主 | **`vst3-host` + `clack-host`**（未用 `truce-rack`，见上方「修订说明」） | ✅ |
+| CLAP | `clack-host`（已随宿主一并落地，非「后置」） | ✅ |
+| 响度/频谱分析 | `ebur128` / `rustfft` | ✅ |
 
 ### 许可证结论
 - **VST 3.8 SDK（2025-10）已改为纯 MIT**，GPLv3/专有双授权已取消。MIT 与 Apache-2.0 兼容（保留 MIT 声明）。宿主 VST3 + Apache-2.0 开源可行。
@@ -82,11 +83,13 @@
 
 - `crates/engine` — ✅ **已实现**：工程模型、命令/事件总线、传输、调度、实时与离线渲染、混音。
 - `crates/plugin-api` — ✅ **已实现**：统一插件 ABI（trait + 描述符 + 参数模型 + 状态）。
-- `crates/synth` — ✅ **已实现**：唯一内置音色插件（**手写正弦 + 线性 ADSR**，非 `fundsp`），实现同一 ABI。
-- `crates/host-vst3` — ⬜ **未开始**：VST3 宿主适配器，把 VST3 实例适配为同一 ABI（首选 `truce-rack`）。
-- `crates/ipc` — ⬜ **未开始**：命令/事件/工程 schema（serde），API 契约，前后端与未来 AI 共用。
-- `crates/analysis` — ⬜ **未开始**：渲染结果 → 响度/频谱指标（AI 的"听感"闭环；用 `ebur128`/`rustfft`）。
-- `src-tauri` — ✅ **已实现**：Tauri App（薄命令层；实时传输待接）。
+- `crates/synth` — ✅ **已实现**：唯一内置音色插件（**手写正弦 + 线性 ADSR**，非 `fundsp`），实现同一 ABI；另有 8 类 32 条出厂预设。
+- `crates/ipc` — ✅ **已实现**：`Command` / `Event` / `Project` schema 的**唯一来源**（serde）；引擎以薄壳再导出，路径与行为不变。
+- `crates/host-vst3` — ✅ **已实现**：VST3 用 `vst3-host`、CLAP 用 `clack-host`，适配到同一 ABI（含扫描 / 参数 / 状态 / 原生窗口）。
+- `crates/asset` — ✅ **已实现**：音频解码（`symphonia`：wav / flac / mp3 / ogg / aac / m4a）+ 波形 `peaks`（MPL-2.0，见 `NOTICE`）。
+- `crates/effects` — ✅ **已实现**：内置效果器（延迟 / 混响 / 合唱 / 过载 / 两段 EQ，共 5 个）。
+- `crates/analysis` — ✅ **已实现**：渲染结果 → 响度（EBU R128：LUFS / LRA / 真峰值）+ 频谱指标（AI 的"听感"闭环；`ebur128` / `rustfft`）。
+- `src-tauri` — ✅ **已实现**：Tauri App（命令层 + 实时传输 + 内嵌 MCP）。
 - `src` — ✅ **已实现**：**Vue 3** 前端。
 - `docs` — 文档与设计。
 

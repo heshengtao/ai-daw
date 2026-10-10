@@ -5,7 +5,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use thiserror::Error;
 
 use crate::command_queue::{command_queue, CommandSender};
-use crate::player::Player;
+use crate::audio::DecodedAudio;
+use crate::player::{Player, ReusableInstances, YieldSink};
+use crate::recorder::Recorder;
 use crate::registry::PluginRegistry;
 use crate::schedule::ScheduledEvents;
 use crate::scope::ScopeBuffer;
@@ -36,6 +38,9 @@ pub enum RealtimeError {
     /// 系统没有可用的默认输出设备。
     #[error("no default output device available")]
     NoDevice,
+    /// 系统没有可用的输入设备（或指定名字的设备不存在）。
+    #[error("no input device available")]
+    NoInputDevice,
     /// 设备不支持所需的 f32 输出配置（既不报 f32 范围，默认格式也不是 f32）。
     #[error("device does not support an f32 output configuration: {0}")]
     UnsupportedConfig(String),
@@ -346,6 +351,12 @@ pub struct AudioHost {
     stream: cpal::Stream,
     commands: CommandSender,
     shared: SharedTransport,
+    /// 重建前用来向音频回调**索取插件实例**的回收槽（见 [`AudioHost::take_instances`]）。
+    yield_sink: YieldSink,
+    /// 已打开（armed）的输入设备采集器；`None` = 没有输入流。
+    recorder: Option<Recorder>,
+    /// 当前输入流对应的设备名（`None` = 默认设备）。用于避免重复开关同一条流。
+    armed_device: Option<String>,
 }
 
 impl AudioHost {
@@ -359,18 +370,26 @@ impl AudioHost {
         registry: &PluginRegistry,
         options: RealtimeOptions,
     ) -> Result<Self, RealtimeError> {
-        Self::start_with(schedule, registry, options, SharedTransport::new())
+        Self::start_with(
+            schedule,
+            registry,
+            options,
+            SharedTransport::new(),
+            ReusableInstances::default(),
+        )
     }
 
-    /// 与 [`AudioHost::start`] 相同，但复用调用方提供的共享状态。
+    /// 与 [`AudioHost::start`] 相同，但复用调用方提供的共享状态与插件实例。
     ///
     /// 音频线程重建宿主（例如工程被编辑）时传入同一个 `SharedTransport`，界面侧因此
-    /// 不必重新订阅就能继续读到位置与播放状态。
+    /// 不必重新订阅就能继续读到位置与播放状态；`carried` 是上一个宿主交出来的插件实例，
+    /// 新播放器会复用它们——插件状态与已打开的界面窗口因此得以跨重建保留。
     pub fn start_with(
         schedule: ScheduledEvents,
         registry: &PluginRegistry,
         options: RealtimeOptions,
         shared: SharedTransport,
+        carried: ReusableInstances,
     ) -> Result<Self, RealtimeError> {
         let host = cpal::default_host();
         let device = host
@@ -456,9 +475,18 @@ impl AudioHost {
         let scope = Arc::clone(&options.scope);
 
         let (tx, mut rx) = command_queue(options.command_capacity);
+        // 回收槽：重建前宿主在这里放一个发送端，回调收到 `YieldInstances` 时把实例交出来。
+        let yield_sink: YieldSink = Arc::new(Mutex::new(None));
         // `Player` 的 scratch 全部按 `max_block` 预分配：回调内不分配、不加锁。
         // 调度表按值移交：回调只建一份，不再需要为「可能的第二次尝试」克隆一份。
-        let mut player = Player::new(schedule, registry, device_rate, max_block);
+        let mut player = Player::with_carried(
+            schedule,
+            registry,
+            device_rate,
+            max_block,
+            carried,
+            Arc::clone(&yield_sink),
+        );
         // 重建宿主时延续循环开关：界面不必重新订阅，用户看到的状态也不会因编辑而复位。
         player.apply_command(TransportCommand::SetLoop(shared.is_looping()));
         let mut staging: Vec<f32> = Vec::with_capacity(max_block * 2);
@@ -520,7 +548,67 @@ impl AudioHost {
             stream,
             commands: tx,
             shared,
+            yield_sink,
+            recorder: None,
+            armed_device: None,
         })
+    }
+
+    /// 打开（或替换）输入设备：供电平表使用，尚未录制。
+    ///
+    /// **同一设备已在用时直接复用**（不重开流，避免一次多余的开关抖动）；换设备才重建。
+    /// 传 `None` 表示用**默认输入设备**；要「关闭输入流」请调 [`AudioHost::disarm_input`]。
+    pub fn arm_input(
+        &mut self,
+        device: Option<String>,
+        scope: Arc<ScopeBuffer>,
+    ) -> Result<(), RealtimeError> {
+        if self.recorder.is_some() && self.armed_device == device {
+            return Ok(());
+        }
+        // 先丢弃旧流（若在录制中，这也顺带结束本次采集）。
+        self.recorder = None;
+        self.armed_device = None;
+        let recorder = Recorder::open(device.clone(), scope)?;
+        self.recorder = Some(recorder);
+        self.armed_device = device;
+        Ok(())
+    }
+
+    /// 关闭输入流（会一并丢弃正在采集的内容）。
+    pub fn disarm_input(&mut self) {
+        self.recorder = None;
+        self.armed_device = None;
+    }
+
+    /// 开始录制；尚未 arm 输入设备时报 [`RealtimeError::NoInputDevice`]。
+    pub fn start_recording(&mut self) -> Result<(), RealtimeError> {
+        let recorder = self.recorder.as_mut().ok_or(RealtimeError::NoInputDevice)?;
+        recorder.begin();
+        Ok(())
+    }
+
+    /// 结束录制并取走采集内容（未录制 / 空则 `None`）。输入流保持打开。
+    pub fn stop_recording(&mut self) -> Option<DecodedAudio> {
+        self.recorder.as_mut().and_then(|recorder| recorder.finish())
+    }
+
+    /// 让音频回调把当前**活着的**插件实例交出来（重建宿主前调用）。
+    ///
+    /// 回调可能已经不在跑（流已死 / 被插件卡住），所以这里**有界等待**：超时就返回空表，
+    /// 重建照常进行（代价只是插件状态与界面窗口保不住，退回旧行为）。
+    pub fn take_instances(&mut self) -> ReusableInstances {
+        let (tx, rx) = std::sync::mpsc::channel();
+        *self.yield_sink.lock().unwrap() = Some(tx);
+        if !self.send(TransportCommand::YieldInstances) {
+            // 队列满：把刚装上的发送端收回，免得回调稍后把实例丢进一个没人等的通道。
+            self.yield_sink.lock().unwrap().take();
+            return ReusableInstances::default();
+        }
+        match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+            Ok(carried) => carried,
+            Err(_) => ReusableInstances::default(),
+        }
     }
 
     /// 发送任意传输命令，返回是否成功入队（队列满时不阻塞地返回 `false`）。
@@ -603,6 +691,8 @@ mod tests {
             effects: vec![],
             clips: vec![],
             mixer: Default::default(),
+            sends: vec![],
+            automation: vec![],
         };
         track.clips.push(Clip {
             id: ClipId(1),

@@ -7,12 +7,12 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use daw_party_engine::command_queue::command_queue;
-use daw_party_engine::model::{Clip, ClipId, Note, PluginInstance, Project, Track, TrackId};
-use daw_party_engine::player::Player;
-use daw_party_engine::registry::PluginRegistry;
-use daw_party_engine::schedule::ScheduledEvents;
-use daw_party_engine::transport::TransportCommand;
+use ai_daw_engine::command_queue::command_queue;
+use ai_daw_engine::model::{Clip, ClipId, Note, PluginInstance, Project, Track, TrackId};
+use ai_daw_engine::player::Player;
+use ai_daw_engine::registry::PluginRegistry;
+use ai_daw_engine::schedule::ScheduledEvents;
+use ai_daw_engine::transport::TransportCommand;
 /// 统计分配的全局分配器（仅本测试二进制生效）。
 struct CountingAllocator;
 
@@ -58,12 +58,12 @@ fn schedule() -> ScheduledEvents {
         // 参数给非默认值是为了让湿声路径真的执行（干声路径太容易「碰巧不分配」）。
         effects: vec![
             PluginInstance {
-                plugin_id: daw_party_engine::registry::BUILTIN_REVERB.into(),
+                plugin_id: ai_daw_engine::registry::BUILTIN_REVERB.into(),
                 params: [("size".to_string(), 0.8), ("mix".to_string(), 0.5)].into_iter().collect(),
                 state: vec![],
             },
             PluginInstance {
-                plugin_id: daw_party_engine::registry::BUILTIN_DELAY.into(),
+                plugin_id: ai_daw_engine::registry::BUILTIN_DELAY.into(),
                 params: [("time".to_string(), 0.3), ("mix".to_string(), 0.4)].into_iter().collect(),
                 state: vec![],
             },
@@ -76,6 +76,26 @@ fn schedule() -> ScheduledEvents {
             audio: None,
         }],
         mixer: Default::default(),
+        // 发送与自动化也要在门禁覆盖范围内：总线路由与逐块自动化求值都跑在音频回调里。
+        sends: vec![ai_daw_engine::model::Send { target: TrackId(2), gain_db: -6.0 }],
+        automation: vec![ai_daw_engine::model::AutomationLane {
+            param: "gain_db".into(),
+            points: vec![
+                ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.0 },
+                ai_daw_engine::model::AutomationPoint { beat: 8.0, value: -12.0 },
+            ],
+        }],
+    });
+    // 一条总线轨道：接收上面那条轨道的发送。
+    project.tracks.push(Track {
+        id: TrackId(2),
+        name: "Bus".into(),
+        instrument: None,
+        effects: vec![],
+        clips: vec![],
+        mixer: Default::default(),
+        sends: vec![],
+        automation: vec![],
     });
     ScheduledEvents::from_project(&project, 48_000.0)
 }
@@ -126,5 +146,24 @@ fn realtime_block_path_does_not_allocate() {
     assert_eq!(
         allocations, 0,
         "realtime audio path must not allocate (saw {allocations})"
+    );
+
+    // --- 第二阶段：`SetAutomation` 的 apply_command 也必须零分配 ---
+    // 命令自身在测量前就构造好（它的 Vec/String 会分配，那是控制侧的事）。
+    let command = TransportCommand::SetAutomation {
+        track: TrackId(1),
+        param: "gain_db".into(),
+        points: vec![
+            ai_daw_engine::model::AutomationPoint { beat: 0.0, value: -3.0 },
+            ai_daw_engine::model::AutomationPoint { beat: 4.0, value: -6.0 },
+        ],
+    };
+    ALLOCATIONS.store(0, Ordering::SeqCst);
+    player.apply_command(command);
+    player.process_block(&mut out, MAX_BLOCK);
+    let allocations = ALLOCATIONS.load(Ordering::SeqCst);
+    assert_eq!(
+        allocations, 0,
+        "SetAutomation 必须在音频线程上零分配（saw {allocations}）"
     );
 }

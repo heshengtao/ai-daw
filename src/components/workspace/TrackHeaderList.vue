@@ -98,7 +98,7 @@ watch(laneScrollTop, (v) => {
         </button>
       </Tooltip>
       <Logo filled />
-      <span class="brand-name">daw-party</span>
+      <span class="brand-name">AI DAW</span>
     </div>
 
     <header class="heads-head">

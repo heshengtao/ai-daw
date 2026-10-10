@@ -827,21 +827,24 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 卷帘与控制器泳道之间可拖拽 -->
-    <PanelResizer side="bottom" @resize="layout.resizeLane($event)" />
+    <!-- 底部窗格（顶栏开关控制，默认打开）：分隔线 + 控制器泳道 -->
+    <template v-if="layout.showControllerLane">
+      <!-- 卷帘与控制器泳道之间可拖拽 -->
+      <PanelResizer side="bottom" @resize="layout.resizeLane($event)" />
 
-    <!-- 控制器泳道：经典 DAW 的一排直角条 -->
-    <ControllerLane
-      :notes="clip?.notes ?? []"
-      :selected-indices="selection.noteIndices"
-      :property="controllerProperty"
-      :offset-beats="clipStart"
-      :content-height="layout.laneHeight"
-      @update:property="(p: ControllerProperty) => (controllerProperty = p)"
-      @select="selection.setNoteSelection($event)"
-      @apply="applyToSelection"
-      @delete="deleteNotes"
-    />
+      <!-- 控制器泳道：经典 DAW 的一排直角条 -->
+      <ControllerLane
+        :notes="clip?.notes ?? []"
+        :selected-indices="selection.noteIndices"
+        :property="controllerProperty"
+        :offset-beats="clipStart"
+        :content-height="layout.laneHeight"
+        @update:property="(p: ControllerProperty) => (controllerProperty = p)"
+        @select="selection.setNoteSelection($event)"
+        @apply="applyToSelection"
+        @delete="deleteNotes"
+      />
+    </template>
 
     <!-- 框选矩形：客户端坐标的固定覆盖层 -->
     <div

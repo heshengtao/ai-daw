@@ -3,18 +3,21 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{Emitter, Manager, State};
 
-use daw_party_engine::audio::{AudioBuffer, DecodedAudio};
-use daw_party_engine::bus::Engine;
-use daw_party_engine::command::Command;
-use daw_party_engine::event::{Actor, Event};
-use daw_party_engine::model::{AudioSource, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, Project, TrackId};
-use daw_party_engine::registry::PluginRegistry;
-use daw_party_engine::render::{render_with_assets, RenderOptions};
-use daw_party_engine::tempo::TempoMap;
-use daw_party_engine::transport::TransportCommand;
-use daw_party_engine::wav::wav_bytes;
-use daw_party_host_vst3::{CatalogPlugin, EditorHandle};
-use daw_party_plugin_api::ParamInfo;
+use ai_daw_engine::audio::{AudioBuffer, DecodedAudio};
+use ai_daw_engine::bus::Engine;
+use ai_daw_engine::command::Command;
+use ai_daw_engine::event::{Actor, Event};
+use ai_daw_engine::model::{
+    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, Project, Send,
+    TrackId,
+};
+use ai_daw_engine::registry::PluginRegistry;
+use ai_daw_engine::render::{render_with_assets, RenderOptions};
+use ai_daw_engine::tempo::TempoMap;
+use ai_daw_engine::transport::TransportCommand;
+use ai_daw_engine::wav::wav_bytes;
+use ai_daw_host_vst3::{CatalogPlugin, EditorHandle};
+use ai_daw_plugin_api::ParamInfo;
 
 use crate::audio::TransportSnapshot;
 use crate::plugins::build_registry;
@@ -65,7 +68,7 @@ fn run_all(
     actor: Actor,
     commands: Vec<Command>,
 ) -> (Project, Vec<Event>) {
-    let (project, events) = {
+    let (mut project, events) = {
         let mut engine = state.engine.lock().unwrap();
         let events: Vec<Event> = engine.execute_all(commands, actor);
         (engine.project().clone(), events)
@@ -73,13 +76,56 @@ fn run_all(
     for event in &events {
         let _ = app.emit(EVENT_ENGINE, event);
     }
+    let structural = events.iter().any(is_structural);
+    if structural {
+        // 结构性变更会重建播放器、连带重建插件实例。**先**把实例里的插件状态抢救进工程，
+        // 再交给音频线程重建：重建后的实例据此还原，于是改效果链 / 移动片段这类结构变更
+        // 不会再重置乐器的配置。抢救后要重新取一份工程快照（状态已写进去）。
+        capture_plugin_states(state);
+        project = state.engine.lock().unwrap().project().clone();
+    }
     state.audio.sync_events(&project, &events);
-    // 结构性变更会重建播放器、连带重建插件实例：已开的窗口此时挂在**停用的旧实例**上，
-    // 继续调它不会影响声音。直接关掉，让用户重新打开（下次可做成自动重挂）。
-    if events.iter().any(is_structural) {
-        close_all_plugin_windows(app, state);
+    // 结构性变更会重建播放器，但插件实例会被**搬到新播放器复用**，所以只有「乐器真的被换掉
+    // / 轨道被删」的那些窗口才失效、才需要关——其余照旧开着。
+    if structural {
+        close_stale_plugin_windows(app, state);
     }
     (project, events)
+}
+
+/// 把「活着的插件实例」的内部状态抢救进工程。
+///
+/// 外部插件（VST3 / CLAP）的旋钮与预设只存在于实例内部，重建播放器就会丢。宿主在重建
+/// **之前**调用它，把状态写进 `PluginInstance::state`；重建后的实例启动时会 `load_state`
+/// 还原。于是「改效果链 / 移动片段」这类结构性变更不会再让乐器回到默认配置。
+///
+/// 只处理**登记过编辑器句柄**的实例——句柄是宿主与实例共享的那份引用，没有句柄就无从读取。
+/// 读取失败返回空，会被忽略：绝不用空状态覆盖已有的好状态。
+fn capture_plugin_states(state: &AppState) {
+    let handles: Vec<(u64, EditorHandle)> = state
+        .editor_handles
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(track, handle)| (*track, handle.clone()))
+        .collect();
+    if handles.is_empty() {
+        return;
+    }
+    let captured: Vec<(TrackId, Vec<u8>)> = handles
+        .into_iter()
+        .filter_map(|(track, handle)| {
+            let bytes = handle.save_state();
+            (!bytes.is_empty()).then_some((TrackId(track), bytes))
+        })
+        .collect();
+    if captured.is_empty() {
+        return;
+    }
+    let mut engine = state.engine.lock().unwrap();
+    for (track, bytes) in captured {
+        engine.set_instrument_state(track, bytes);
+    }
 }
 
 /// 界面走的编辑入口（署名 `Actor::Human`）。
@@ -139,16 +185,16 @@ fn is_structural(event: &Event) -> bool {
         && !matches!(event, Event::ParamChanged { .. } | Event::EffectParamChanged { .. })
 }
 
-/// 关掉所有插件窗口（须在主线程执行创建/销毁，所以走 `run_on_main_thread`）。
+/// 关掉指定轨道的插件窗口（须在主线程执行创建/销毁，所以走 `run_on_main_thread`）。
 ///
-/// 顺带清空 `editor_handles`：结构一变，那些编辑器句柄就指向即将被丢弃的实例。句柄持有实例
-/// 的 `Arc`，不清就会让已销毁的插件实例一直留在内存里，也会让编辑器 ticker 去服务过期句柄。
-/// 音频线程重建 Player 时会重新登记新句柄。
+/// 只清**这几条轨道**的编辑器句柄：别处的实例会被重建**复用**，句柄仍然有效，不能一起清。
 ///
-/// 清空**必须在主线程上做**：句柄可能正好是实例的最后一个引用，而释放会触发
+/// 清句柄**必须在主线程上做**：句柄可能正好是实例的最后一个引用，而释放会触发
 /// `clap_plugin.destroy()`——那是主线程专属调用。
-fn close_all_plugin_windows(app: &tauri::AppHandle, state: &AppState) {
-    let tracks: Vec<u64> = state.open_editors.lock().unwrap().iter().copied().collect();
+fn close_plugin_windows_for(app: &tauri::AppHandle, tracks: Vec<u64>) {
+    if tracks.is_empty() {
+        return;
+    }
     let (tx, rx) = std::sync::mpsc::channel();
     let app_for_main = app.clone();
     if app
@@ -172,14 +218,66 @@ fn close_all_plugin_windows(app: &tauri::AppHandle, state: &AppState) {
                     }
                 }
             }
-            state.open_editors.lock().unwrap().clear();
-            state.editor_handles.lock().unwrap().clear();
+            {
+                let mut handles = state.editor_handles.lock().unwrap();
+                for track in &tracks {
+                    handles.remove(track);
+                }
+            }
+            {
+                let mut open = state.open_editors.lock().unwrap();
+                let mut meta = state.editor_plugins.lock().unwrap();
+                for track in &tracks {
+                    open.remove(track);
+                    meta.remove(track);
+                }
+            }
             let _ = tx.send(());
         })
         .is_ok()
     {
         let _ = rx.recv();
     }
+}
+
+/// 关掉**全部**插件窗口（整个工程被替换时用，例如打开另一个工程）。
+fn close_all_plugin_windows(app: &tauri::AppHandle, state: &AppState) {
+    let tracks: Vec<u64> = state.open_editors.lock().unwrap().iter().copied().collect();
+    close_plugin_windows_for(app, tracks);
+}
+
+/// 关掉**实例已经不在**的插件窗口，其余保持不动。
+///
+/// 重建播放器时插件实例会被搬进新播放器复用（见 `ReusableInstances`），所以只要某条轨道的
+/// **乐器没换**，它的窗口（以及插件内部状态）就照旧有效——**不要关**。只有乐器被换掉、轨道被
+/// 删除、或整个工程被替换时，旧窗口才真的失效，必须关掉，否则窗口会指着一个已销毁的实例。
+fn close_stale_plugin_windows(app: &tauri::AppHandle, state: &AppState) {
+    let project = { state.engine.lock().unwrap().project().clone() };
+
+    let mut stale: Vec<u64> = {
+        let opened = state.editor_plugins.lock().unwrap().clone();
+        opened
+            .into_iter()
+            .filter(|(track, opened_for)| {
+                project
+                    .track(TrackId(*track))
+                    .and_then(|t| t.instrument.as_ref())
+                    .map(|instrument| instrument.plugin_id != *opened_for)
+                    .unwrap_or(true) // 轨道已经不在了
+            })
+            .map(|(track, _)| track)
+            .collect()
+    };
+    // 已删除轨道遗留的编辑器句柄也一并收掉，免得实例（连同它的界面）迟迟不释放。
+    {
+        let handles = state.editor_handles.lock().unwrap();
+        for track in handles.keys() {
+            if project.track(TrackId(*track)).is_none() && !stale.contains(track) {
+                stale.push(*track);
+            }
+        }
+    }
+    close_plugin_windows_for(app, stale);
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +483,7 @@ pub fn new_project(
     let mut commands = vec![Command::NewProject { name: "untitled".into(), track_names }];
     // 设置里可配的「新工程默认速度」：与模板默认 120 不同才补一条命令（同一个撤销步骤）。
     if let Some(bpm) = tempo {
-        if (bpm - daw_party_engine::model::Transport::default().tempo).abs() > f64::EPSILON {
+        if (bpm - ai_daw_engine::model::Transport::default().tempo).abs() > f64::EPSILON {
             commands.push(Command::SetTempo(bpm));
         }
     }
@@ -443,7 +541,7 @@ pub fn remove_clip(
     track: u64,
     clip: u64,
 ) -> Project {
-    run(&app, &state, Command::RemoveClip { track: TrackId(track), clip: daw_party_engine::model::ClipId(clip) })
+    run(&app, &state, Command::RemoveClip { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip) })
 }
 
 /// 把片段移动到新的起始拍。
@@ -458,7 +556,7 @@ pub fn move_clip(
     run(
         &app,
         &state,
-        Command::MoveClip { track: TrackId(track), clip: daw_party_engine::model::ClipId(clip), start },
+        Command::MoveClip { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), start },
     )
 }
 
@@ -484,7 +582,7 @@ pub fn resize_clip(
     run(
         &app,
         &state,
-        Command::ResizeClip { track: TrackId(track), clip: daw_party_engine::model::ClipId(clip), length },
+        Command::ResizeClip { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), length },
     )
 }
 
@@ -500,7 +598,7 @@ pub fn add_note(
     run(
         &app,
         &state,
-        Command::AddNote { track: TrackId(track), clip: daw_party_engine::model::ClipId(clip), note },
+        Command::AddNote { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), note },
     )
 }
 
@@ -517,7 +615,7 @@ pub fn set_note(
     run(
         &app,
         &state,
-        Command::SetNote { track: TrackId(track), clip: daw_party_engine::model::ClipId(clip), index, note },
+        Command::SetNote { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), index, note },
     )
 }
 
@@ -533,7 +631,7 @@ pub fn set_notes(
     run(
         &app,
         &state,
-        Command::SetNotes { track: TrackId(track), clip: daw_party_engine::model::ClipId(clip), entries },
+        Command::SetNotes { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), entries },
     )
 }
 
@@ -549,7 +647,7 @@ pub fn remove_note(
     run(
         &app,
         &state,
-        Command::RemoveNote { track: TrackId(track), clip: daw_party_engine::model::ClipId(clip), index },
+        Command::RemoveNote { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), index },
     )
 }
 
@@ -565,7 +663,7 @@ pub fn remove_notes(
     run(
         &app,
         &state,
-        Command::RemoveNotes { track: TrackId(track), clip: daw_party_engine::model::ClipId(clip), indices },
+        Command::RemoveNotes { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), indices },
     )
 }
 
@@ -630,6 +728,29 @@ pub fn set_master_gain(
     gain_db: f32,
 ) -> Project {
     run(&app, &state, Command::SetMasterGain(gain_db))
+}
+
+/// 设置轨道的发送列表（整体替换；空 = 清空）。
+#[tauri::command]
+pub fn set_sends(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    sends: Vec<Send>,
+) -> Project {
+    run(&app, &state, Command::SetSends { track: TrackId(track), sends })
+}
+
+/// 设置一条自动化车道（整体替换该参数的曲线；空 `points` = 删除该车道）。
+#[tauri::command]
+pub fn set_automation(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    param: String,
+    points: Vec<AutomationPoint>,
+) -> Project {
+    run(&app, &state, Command::SetAutomation { track: TrackId(track), param, points })
 }
 
 /// 实时监听用的混音预览：**不写入工程、不进入撤销历史**。
@@ -699,14 +820,19 @@ pub(crate) fn redo_now(state: &AppState) -> HistoryState {
 
 /// 撤销最后一次命令。
 #[tauri::command]
-pub fn undo(state: State<'_, AppState>) -> HistoryState {
-    undo_now(&state)
+pub fn undo(app: tauri::AppHandle, state: State<'_, AppState>) -> HistoryState {
+    let out = undo_now(&state);
+    // 撤销可能改回别的乐器：实例对不上的窗口要关掉（对得上的仍然保留）。
+    close_stale_plugin_windows(&app, &state);
+    out
 }
 
 /// 重做上一次被撤销的命令。
 #[tauri::command]
-pub fn redo(state: State<'_, AppState>) -> HistoryState {
-    redo_now(&state)
+pub fn redo(app: tauri::AppHandle, state: State<'_, AppState>) -> HistoryState {
+    let out = redo_now(&state);
+    close_stale_plugin_windows(&app, &state);
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -766,6 +892,8 @@ pub fn transport_set_loop(state: State<'_, AppState>, on: bool) -> Result<(), St
 /// 把当前工程保存为 JSON 文件，返回写入的绝对路径。
 #[tauri::command]
 pub async fn save_project(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    // 落盘前先把插件实例的内部状态抢救进工程，否则存出去的工程会丢掉外部插件的补丁。
+    capture_plugin_states(&state);
     let project = { state.engine.lock().unwrap().project().clone() };
     let json = serde_json::to_string_pretty(&project).map_err(|e| e.to_string())?;
     let written = tauri::async_runtime::spawn_blocking(move || {
@@ -798,6 +926,8 @@ pub fn cache_session(
     let Some(file) = crate::session_file(&app) else {
         return Ok(());
     };
+    // 会话缓存同样要记下插件实例的内部状态，下次启动才能还原外部插件的补丁。
+    capture_plugin_states(&state);
     let (project, saved) = {
         let engine = state.engine.lock().unwrap();
         (engine.project().clone(), engine.saved().clone())
@@ -810,7 +940,11 @@ pub fn cache_session(
 
 /// 从 JSON 文件导入工程：替换当前工程并清空历史（导入是一个新的起点）。
 #[tauri::command]
-pub async fn open_project(state: State<'_, AppState>, path: String) -> Result<Project, String> {
+pub async fn open_project(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Project, String> {
     let path_for_session = path.clone();
     let text = tauri::async_runtime::spawn_blocking(move || std::fs::read_to_string(&path))
         .await
@@ -824,21 +958,21 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> Result<Pr
     }
     project.transport.tempo = project.transport.tempo.clamp(1.0, 1000.0);
     // 拍号同样归一化：分母为 0 会让按小节换算的长度除不尽。
-    let (num, den) = daw_party_engine::model::Transport::normalize_time_sig(
+    let (num, den) = ai_daw_engine::model::Transport::normalize_time_sig(
         project.transport.time_sig_num,
         project.transport.time_sig_den,
     );
     project.transport.time_sig_num = num;
     project.transport.time_sig_den = den;
     // 混音参数与片段/音符同样要过一遍归一化：工程文件可能被手改过。
-    project.master.gain_db = daw_party_engine::model::MixerChannel::normalize_gain_db(project.master.gain_db);
-    project.master.pan = daw_party_engine::model::MixerChannel::normalize_pan(project.master.pan);
+    project.master.gain_db = ai_daw_engine::model::MixerChannel::normalize_gain_db(project.master.gain_db);
+    project.master.pan = ai_daw_engine::model::MixerChannel::normalize_pan(project.master.pan);
     for track in project.tracks.iter_mut() {
-        track.mixer.gain_db = daw_party_engine::model::MixerChannel::normalize_gain_db(track.mixer.gain_db);
-        track.mixer.pan = daw_party_engine::model::MixerChannel::normalize_pan(track.mixer.pan);
+        track.mixer.gain_db = ai_daw_engine::model::MixerChannel::normalize_gain_db(track.mixer.gain_db);
+        track.mixer.pan = ai_daw_engine::model::MixerChannel::normalize_pan(track.mixer.pan);
         for clip in track.clips.iter_mut() {
-            clip.start = daw_party_engine::model::Clip::normalize_start(clip.start);
-            clip.length = daw_party_engine::model::Clip::normalize_length(clip.length);
+            clip.start = ai_daw_engine::model::Clip::normalize_start(clip.start);
+            clip.length = ai_daw_engine::model::Clip::normalize_length(clip.length);
             for note in clip.notes.iter_mut() {
                 *note = Note::normalize(*note);
             }
@@ -851,6 +985,8 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> Result<Pr
         engine.project().clone()
     };
     state.audio.load(&snapshot);
+    // 整个工程被替换：已开的插件窗口一律作废（哪怕轨道 id 碰巧撞上，内容也换了）。
+    close_all_plugin_windows(&app, &state);
     // 打开的工程即为「已保存」状态，并记下它的文件路径。
     state.set_session_path(Some(path_for_session));
     Ok(snapshot)
@@ -892,13 +1028,13 @@ pub async fn render_preview(
 pub async fn analyze_project(
     state: State<'_, AppState>,
     sample_rate: u32,
-) -> Result<daw_party_analysis::Report, String> {
+) -> Result<ai_daw_analysis::Report, String> {
     validate_sample_rate(sample_rate)?;
     let inputs = render_inputs(&state);
     tauri::async_runtime::spawn_blocking(move || {
         // 分析只关心工程正文，不加尾音。
         let buffer = render_offline(inputs, sample_rate, 0.0);
-        daw_party_analysis::analyze(buffer.data(), buffer.channels(), sample_rate as f64)
+        ai_daw_analysis::analyze(buffer.data(), buffer.channels(), sample_rate as f64)
             .map_err(|e| e.to_string())
     })
     .await
@@ -917,7 +1053,7 @@ pub async fn export_wav(
     let inputs = render_inputs(&state);
     tauri::async_runtime::spawn_blocking(move || {
         let buffer = render_offline(inputs, sample_rate, 0.5);
-        daw_party_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| e.to_string())?;
+        ai_daw_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| e.to_string())?;
         Ok::<String, String>(path)
     })
     .await
@@ -959,7 +1095,7 @@ pub async fn import_audio(
     if !(seconds.is_finite() && seconds > 0.0) {
         return Err(format!("音频素材没有可用长度：{path}"));
     }
-    let start = daw_party_engine::model::Clip::normalize_start(start);
+    let start = ai_daw_engine::model::Clip::normalize_start(start);
     let length = {
         let engine = state.engine.lock().unwrap();
         natural_length_beats(engine.project(), start, seconds)
@@ -1047,16 +1183,136 @@ pub async fn split_clip(
 }
 
 /// 取某个音频文件的波形包络（每桶 min/max 各一个值，长度 = `buckets * 2`），供界面绘制。
+///
+/// `offset_frames` / `frames` 用来只取素材的一个**窗口**（片段引用的是窗口而不是整段素材）；
+/// 缺省表示整段。
 #[tauri::command]
 pub async fn audio_waveform(
     state: State<'_, AppState>,
     path: String,
     buckets: usize,
+    offset_frames: Option<u64>,
+    frames: Option<u64>,
 ) -> Result<Vec<f32>, String> {
     let assets = Arc::clone(&state.assets);
-    tauri::async_runtime::spawn_blocking(move || assets.waveform(&path, buckets))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        assets.waveform_range(&path, buckets, offset_frames.unwrap_or(0), frames)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ---------------------------------------------------------------------------
+// 录音（C2）
+// ---------------------------------------------------------------------------
+
+/// 本机可用的音频输入设备。
+#[tauri::command]
+pub fn list_input_devices() -> Vec<ai_daw_engine::recorder::InputDeviceInfo> {
+    ai_daw_engine::recorder::list_input_devices()
+}
+
+/// 选择输入设备（`None` = 关闭输入流）。选定后输入电平表即可工作。
+///
+/// **不等待**音频线程确认：这条命令在用户选设备 / 开录时被调用，那时音频线程可能正在
+/// 装载带音频片段的工程，等它只会白等出「等待音频线程超时」。设备真打不开时电平表会一直是 0。
+///
+/// 界面**不会**在启动时自动调用它——麦克风只在用户显式选设备或开始录音时才被占用。
+#[tauri::command]
+pub fn set_input_device(state: State<'_, AppState>, device: Option<String>) -> Result<(), String> {
+    match device {
+        Some(name) => state.audio.arm_input(Some(name), false),
+        None => {
+            state.audio.disarm_input();
+            Ok(())
+        }
+    }
+}
+
+/// 输入电平表：最近 `points` 个采样（供界面画条）。
+#[tauri::command]
+pub fn input_level(state: State<'_, AppState>, points: usize) -> Vec<f32> {
+    state.audio.input_scope_snapshot(points)
+}
+
+/// 开始录音：打开输入设备、开始采集，并从播放头走带。
+#[tauri::command]
+pub fn record_start(
+    state: State<'_, AppState>,
+    track: u64,
+    start: f64,
+    device: Option<String>,
+) -> Result<(), String> {
+    // 录音前挂载输入流：这里**要等**确认，设备打不开才好立刻提示。
+    state.audio.arm_input(device, true)?;
+    state.audio.start_recording()?;
+    state.set_recording(Some(crate::state::RecordingTarget { track: TrackId(track), start }));
+    let _ = state.audio.send(TransportCommand::Play);
+    Ok(())
+}
+
+/// 结束录音：停带、写 WAV、把片段挂到轨道上（一个撤销步骤）。没录到内容返回 `None`。
+#[tauri::command]
+pub async fn record_stop(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<Project>, String> {
+    let _ = state.audio.send(TransportCommand::Pause);
+    let target = state.take_recording();
+    let captured = state.audio.stop_recording()?;
+    let (Some(target), Some(audio)) = (target, captured) else {
+        return Ok(None);
+    };
+    if audio.frames() == 0 {
+        return Ok(None);
+    }
+
+    // 落盘到「应用数据目录 /recordings/rec-<epochms>.wav」。
+    let path = recording_path(&app)?;
+    let audio = Arc::new(audio);
+    let for_write = Arc::clone(&audio);
+    let path_for_write = path.clone();
+    let rate = audio.sample_rate.round().max(1.0) as u32;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut buffer = AudioBuffer::silence(for_write.channels, for_write.frames());
+        buffer.data_mut().copy_from_slice(&for_write.samples);
+        ai_daw_engine::wav::write_wav(&path_for_write, &buffer, rate).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // 免去立刻重解码，并追加一条可撤销的音频片段。
+    state.assets.insert(&path, Arc::clone(&audio));
+    let start = ai_daw_engine::model::Clip::normalize_start(target.start);
+    let length = {
+        let engine = state.engine.lock().unwrap();
+        natural_length_beats(engine.project(), start, audio.frames() as f64 / audio.sample_rate)
+    };
+    Ok(Some(run(
+        &app,
+        &state,
+        Command::AddAudioClip {
+            track: target.track,
+            start,
+            length,
+            source: AudioSource { path, offset_frames: 0, frames: Some(audio.frames() as u64) },
+        },
+    )))
+}
+
+/// 录音文件路径：应用数据目录下的 `recordings/rec-<epochms>.wav`。
+fn recording_path(app: &tauri::AppHandle) -> Result<String, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("拿不到应用数据目录：{e}"))?
+        .join("recordings");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    Ok(dir.join(format!("rec-{stamp}.wav")).to_string_lossy().into_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -1075,7 +1331,7 @@ pub async fn rescan_plugins(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<CatalogPlugin>, String> {
-    let catalog = tauri::async_runtime::spawn_blocking(daw_party_host_vst3::scan_catalog)
+    let catalog = tauri::async_runtime::spawn_blocking(ai_daw_host_vst3::scan_catalog)
         .await
         .map_err(|e| e.to_string())?;
     state.install_catalog(catalog.clone());
@@ -1098,7 +1354,7 @@ pub async fn plugin_params(
             .into_iter()
             .find(|e| e.id == plugin_id)
             .ok_or_else(|| format!("未知插件：{plugin_id}"))?;
-        let plugin = daw_party_host_vst3::load_catalog_plugin(&entry).map_err(|e| e.to_string())?;
+        let plugin = ai_daw_host_vst3::load_catalog_plugin(&entry).map_err(|e| e.to_string())?;
         Ok(plugin.params())
     })
     .await
@@ -1256,7 +1512,43 @@ fn native_view_handle(_window: &tauri::WebviewWindow) -> Option<usize> {
     None
 }
 
-/// 为某条轨道打开插件的原生界面。
+/// 轨道显示名（找不到就退回 `轨道 <id>`）。
+fn track_name(state: &AppState, track: u64) -> String {
+    state
+        .engine
+        .lock()
+        .unwrap()
+        .project()
+        .track(TrackId(track))
+        .map(|t| t.name.clone())
+        .unwrap_or_else(|| format!("轨道 {track}"))
+}
+
+/// 把某条轨道已经开着的插件窗口带到最前面（**必须在主线程**）。
+///
+/// 原生窗口（VST3 的 `PluginWindow`、CLAP 的浮动窗口）由插件自己管理，没有统一的聚焦 API；
+/// 这里保证**嵌入模式的宿主窗口**被抬起，插件自己的窗口是否跟随交给插件。
+fn focus_plugin_window(app: &tauri::AppHandle, track: u64) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let app_for_main = app.clone();
+    if app
+        .run_on_main_thread(move || {
+            if let Some(window) = app_for_main.get_webview_window(&host_window_label(track)) {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+            let _ = tx.send(());
+        })
+        .is_ok()
+    {
+        let _ = rx.recv();
+    }
+}
+
+/// 为某条轨道打开插件的原生界面（**已经开着就把它带到最前面**，不再开新窗）。
+///
+/// `title` 是插件展示名（界面按当前语言给出）；宿主再拼上轨道名，于是窗口标题是
+/// 「轨道名 - 插件名」，用户一眼能看出这扇窗是从哪条轨道开的。
 ///
 /// 窗口必须在主线程创建（macOS 的 `NSWindow` 只能在那里建），所以走 `run_on_main_thread`，
 /// 并把结果通过 channel 带回来。
@@ -1265,30 +1557,28 @@ pub fn open_plugin_window(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     track: u64,
+    title: String,
 ) -> Result<(), String> {
     if state.open_editors.lock().unwrap().contains(&track) {
+        // 已经开着：把它带到最前面，而不是无动作——否则用户点「打开界面」毫无反应。
+        focus_plugin_window(&app, track);
         return Ok(());
     }
     let handle = state
         .editor_handle(track)
         .ok_or_else(|| "这条轨道没有可打开的插件界面".to_string())?;
 
-    // 窗口标题用插件的展示名（目录里有就用目录名，否则退回插件 id）。
+    // 记下这扇窗是**为哪个乐器**开的：重建后据此判断它是否还有效（乐器没换就不关）。
     let plugin_id = {
         let engine = state.engine.lock().unwrap();
         engine
             .project()
             .track(TrackId(track))
             .and_then(|t| t.instrument.as_ref())
-            .map(|i| i.plugin_id.clone())
+            .map(|instrument| instrument.plugin_id.clone())
             .unwrap_or_default()
     };
-    let title = state
-        .catalog_snapshot()
-        .into_iter()
-        .find(|e| e.id == plugin_id)
-        .map(|e| e.name)
-        .unwrap_or(plugin_id);
+    let title = format!("{} - {}", track_name(&state, track), title);
 
     let (tx, rx) = std::sync::mpsc::channel();
     let app_for_main = app.clone();
@@ -1331,6 +1621,7 @@ pub fn open_plugin_window(
                 });
                 let state = app_for_main.state::<AppState>();
                 state.open_editors.lock().unwrap().insert(track);
+                state.editor_plugins.lock().unwrap().insert(track, plugin_id);
                 if host_size.is_some() {
                     state.host_windows.lock().unwrap().insert(track);
                 }
@@ -1357,6 +1648,7 @@ pub fn close_plugin_window(app: tauri::AppHandle, track: u64) -> Result<(), Stri
         }
         let state = app_for_main.state::<AppState>();
         state.open_editors.lock().unwrap().remove(&track);
+        state.editor_plugins.lock().unwrap().remove(&track);
         // 嵌入模式的界面住在我们建的宿主窗口里，一并收掉。
         if state.host_windows.lock().unwrap().remove(&track) {
             if let Some(window) = app_for_main.get_webview_window(&host_window_label(track)) {
@@ -1385,11 +1677,13 @@ async fn open_panel_window(
     app: tauri::AppHandle,
     label: String,
     url: String,
-    title: &'static str,
+    title: String,
     size: (f64, f64),
     min: (f64, f64),
 ) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(&label) {
+        // 已经开着：抬起并聚焦，不再开新窗（最小化时也要先还原）。
+        let _ = window.unminimize();
         let _ = window.set_focus();
         return Ok(());
     }
@@ -1416,17 +1710,23 @@ async fn open_panel_window(
     rx.recv().map_err(|e| e.to_string())?
 }
 
-/// 打开内置合成器的**独立窗口**。
+/// 打开内置合成器的**独立窗口**（已经开着就聚焦过去）。
 ///
 /// 内置合成器没有原生编辑器，但它的面板也不该只能挤在侧边栏里——给它一个自己的窗口，
-/// 「打开界面」这个动作对所有音色就都成立。
+/// 「打开界面」这个动作对所有音色就都成立。窗口标题是「轨道名 - 插件名」。
 #[tauri::command]
-pub async fn open_synth_window(app: tauri::AppHandle, track: u64) -> Result<(), String> {
+pub async fn open_synth_window(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    title: String,
+) -> Result<(), String> {
+    let title = format!("{} - {}", track_name(&state, track), title);
     open_panel_window(
         app,
         format!("synth-{track}"),
         format!("index.html#/synth?track={track}"),
-        "内置合成器",
+        title,
         (960.0, 680.0),
         (780.0, 560.0),
     )
@@ -1443,6 +1743,7 @@ pub async fn open_effect_window(
     state: State<'_, AppState>,
     track: u64,
     plugin_id: String,
+    title: String,
 ) -> Result<(), String> {
     // **以 plugin id 为准在链里现算序号**，而不是听调用方的：调用方（主窗口的检查器）
     // 可能拿着一条**过时的效果链**——别的窗口（例如合成器窗口切预设）刚把整条链换掉，
@@ -1463,11 +1764,12 @@ pub async fn open_effect_window(
     // 窗口 label 与 URL 都用 plugin id：链怎么变，同一个效果器都对应同一扇窗。
     let plugin_arg = format!("&plugin={}", encode_query_value(&plugin_id));
     let key = format!("{:016x}", fnv1a(&plugin_id));
+    let title = format!("{} - {}", track_name(&state, track), title);
     open_panel_window(
         app,
         format!("effect-{track}-{key}"),
         format!("index.html#/effect?track={track}&index={index}{plugin_arg}"),
-        "效果器",
+        title,
         (560.0, 400.0),
         (460.0, 320.0),
     )

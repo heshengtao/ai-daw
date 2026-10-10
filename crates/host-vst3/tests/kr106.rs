@@ -12,8 +12,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, OnceLock};
 
-use daw_party_host_vst3::MainThreadDispatch;
-use daw_party_plugin_api::{MidiEvent, ProcessContext, TimedMidiEvent};
+use ai_daw_host_vst3::MainThreadDispatch;
+use ai_daw_plugin_api::{MidiEvent, ProcessContext, TimedMidiEvent};
 
 /// 假主线程上执行过的任务数。用来断言「这件事确实被派到主线程去了」。
 static MAIN_THREAD_TASKS: AtomicUsize = AtomicUsize::new(0);
@@ -35,7 +35,7 @@ fn fake_main_thread() {
         std::thread::Builder::new()
             .name("fake-main-thread".into())
             .spawn(move || {
-                daw_party_host_vst3::mark_main_thread();
+                ai_daw_host_vst3::mark_main_thread();
                 let _ = ready_tx.send(());
                 while let Ok(task) = rx.recv() {
                     task();
@@ -47,7 +47,7 @@ fn fake_main_thread() {
         ready_rx.recv().expect("假主线程必须完成登记");
 
         let fake = Arc::new(FakeMain { tx });
-        daw_party_host_vst3::set_main_thread_dispatch(Arc::clone(&fake) as Arc<dyn MainThreadDispatch>);
+        ai_daw_host_vst3::set_main_thread_dispatch(Arc::clone(&fake) as Arc<dyn MainThreadDispatch>);
         let _ = FAKE.set(fake);
     });
 }
@@ -72,14 +72,14 @@ impl MainThreadDispatch for FakeMain {
 }
 
 /// 按格式找一个 KR-106。
-fn find(format: &str) -> Option<daw_party_host_vst3::ScannedPlugin> {
-    daw_party_host_vst3::scan()
+fn find(format: &str) -> Option<ai_daw_host_vst3::ScannedPlugin> {
+    ai_daw_host_vst3::scan()
         .into_iter()
         .find(|p| p.name.contains("KR-106") && p.format == format)
 }
 
 /// 从 `clap:<id>` 形式的条目 id 里取出插件 id。
-fn plugin_id_of(scanned: &daw_party_host_vst3::ScannedPlugin) -> std::ffi::CString {
+fn plugin_id_of(scanned: &ai_daw_host_vst3::ScannedPlugin) -> std::ffi::CString {
     std::ffi::CString::new(
         scanned
             .id
@@ -103,7 +103,7 @@ fn exercise(format: &str) {
     let d = plugin.descriptor();
     assert_eq!(
         d.kind,
-        daw_party_plugin_api::PluginKind::Instrument,
+        ai_daw_plugin_api::PluginKind::Instrument,
         "{format} 的 KR-106 是音源"
     );
     assert_eq!(d.io.outputs, 2, "引擎是立体声输出");
@@ -186,7 +186,7 @@ fn hosts_a_real_clap_instrument_and_renders_audio() {
 /// 另外用假主线程的任务计数证明 `activate` 确实是被派到主线程执行的。
 #[test]
 fn clap_lifecycle_follows_thread_rules() {
-    use daw_party_plugin_api::Plugin;
+    use ai_daw_plugin_api::Plugin;
 
     fake_main_thread();
     let Some(scanned) = find("clap") else {
@@ -197,7 +197,7 @@ fn clap_lifecycle_follows_thread_rules() {
     // 加载：`init` 与参数枚举都必须发生在那条假主线程上。
     let plugin_id = plugin_id_of(&scanned);
     let (mut clap, _handle) =
-        daw_party_host_vst3::scan::load_clap_plugin(&scanned.id, &scanned.path, &plugin_id)
+        ai_daw_host_vst3::scan::load_clap_plugin(&scanned.id, &scanned.path, &plugin_id)
             .unwrap_or_else(|e| panic!("加载 clap 版 KR-106 失败：{e}"));
     assert!(
         MAIN_THREAD_TASKS.load(Ordering::SeqCst) > 0,
@@ -255,16 +255,14 @@ fn clap_lifecycle_follows_thread_rules() {
     assert!(!clap.save_state().is_empty(), "应能保存插件状态");
 }
 
-/// 音频线程 id 必须取自**真正跑 `process` 的那条线程**。
+/// 复用旧实例（重建播放器时把实例「搬」过来）必须能重新激活并继续出声。
 ///
-/// 真实应用里「建实例的线程」（主线程）和「跑 process 的线程」（音频后端回调线程）不是同一条。
-/// 如果宿主在建实例时就把当前线程当成音频线程，插件每次 `process` 都会被告知「你不在音频
-/// 线程」，于是**每个音频块往 stderr 打一行日志**——实时线程被 I/O 堵死，应用卡死。
-///
-/// 单线程的测试抓不到这个 bug，所以这里刻意在另一条线程上跑 `process`。
+/// 这正是「改效果链不再重置乐器、不再关掉插件窗口」依赖的底层能力：回调把实例交出去前先
+/// `release_processing()` 停掉处理，重建方再 `prepare()` 重新激活——而且**新线程**要被认成
+/// 音频线程（重建会新建一条音频流，回调线程通常不是同一条）。
 #[test]
-fn audio_thread_is_learned_from_the_processing_thread() {
-    use daw_party_plugin_api::Plugin;
+fn clap_instance_can_be_reused_across_a_rebuild() {
+    use ai_daw_plugin_api::Plugin;
 
     fake_main_thread();
     let Some(scanned) = find("clap") else {
@@ -274,7 +272,80 @@ fn audio_thread_is_learned_from_the_processing_thread() {
 
     let plugin_id = plugin_id_of(&scanned);
     let (mut plugin, _handle) =
-        daw_party_host_vst3::scan::load_clap_plugin(&scanned.id, &scanned.path, &plugin_id)
+        ai_daw_host_vst3::scan::load_clap_plugin(&scanned.id, &scanned.path, &plugin_id)
+            .expect("构造 CLAP 实例");
+    plugin.prepare(48_000.0, 512);
+
+    // ——第一次「宿主」：在一条线程上跑起来——
+    let (mut plugin, first) = std::thread::spawn(move || {
+        let ctx = ProcessContext { sample_rate: 48_000.0, block_size: 512, tempo: 120.0, playing: true };
+        let events = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } }];
+        let mut l = vec![0.0f32; 512];
+        let mut r = vec![0.0f32; 512];
+        let mut peak = 0.0f32;
+        for _ in 0..50 {
+            plugin.process(&ctx, &mut [&mut l, &mut r], &events);
+            for s in l.iter().chain(r.iter()) {
+                peak = peak.max(s.abs());
+            }
+        }
+        let recognized = plugin.audio_thread_is_current();
+        // 回调在交出实例前做的事（见 `Player::yield_instances`）。
+        plugin.release_processing();
+        (plugin, (recognized, peak))
+    })
+    .join()
+    .expect("第一条线程不应 panic");
+
+    assert!(first.0, "跑 process 的线程应被认成音频线程");
+    assert!(first.1 > 0.01, "复用前必须出声（峰值 {}）", first.1);
+
+    // ——重建：在**另一条**线程上重新 prepare 并跑（模拟新的音频流）——
+    let (recognized_again, peak_again) = std::thread::spawn(move || {
+        plugin.prepare(48_000.0, 512);
+        let ctx = ProcessContext { sample_rate: 48_000.0, block_size: 512, tempo: 120.0, playing: true };
+        let events = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } }];
+        let mut l = vec![0.0f32; 512];
+        let mut r = vec![0.0f32; 512];
+        let mut peak = 0.0f32;
+        for _ in 0..50 {
+            plugin.process(&ctx, &mut [&mut l, &mut r], &events);
+            for s in l.iter().chain(r.iter()) {
+                peak = peak.max(s.abs());
+            }
+        }
+        (plugin.audio_thread_is_current(), peak)
+    })
+    .join()
+    .expect("第二条线程不应 panic");
+
+    assert!(recognized_again, "复用后新的音频线程必须被认成音频线程");
+    assert!(
+        peak_again > 0.01,
+        "复用旧实例后必须还能出声（峰值 {peak_again}）——否则说明重新激活失败"
+    );
+}
+
+/// 音频线程 id 必须取自**真正跑 `process` 的那条线程**。
+///
+/// 真实应用里「建实例的线程」（主线程）和「跑 process 的线程」（音频后端回调线程）不是同一条。
+/// 如果宿主在建实例时就把当前线程当成音频线程，插件每次 `process` 都会被告知「你不在音频
+/// 线程」，于是**每个音频块往 stderr 打一行日志**——实时线程被 I/O 堵死，应用卡死。
+///
+/// 单线程的测试抓不到这个 bug，所以这里刻意在另一条线程上跑 `process`。
+#[test]
+fn audio_thread_is_learned_from_the_processing_thread() {
+    use ai_daw_plugin_api::Plugin;
+
+    fake_main_thread();
+    let Some(scanned) = find("clap") else {
+        eprintln!("本机未安装 KR-106 的 clap 版本，跳过。");
+        return;
+    };
+
+    let plugin_id = plugin_id_of(&scanned);
+    let (mut plugin, _handle) =
+        ai_daw_host_vst3::scan::load_clap_plugin(&scanned.id, &scanned.path, &plugin_id)
             .expect("构造 CLAP 实例");
     plugin.prepare(48_000.0, 512);
 

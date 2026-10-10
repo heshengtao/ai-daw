@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use daw_party_engine::model::Project;
+use ai_daw_engine::model::Project;
 use serde::{Deserialize, Serialize};
 
 /// 会话缓存文件的内容。
@@ -47,7 +47,7 @@ mod tests {
 
     #[test]
     fn roundtrips_through_the_file() {
-        let dir = std::env::temp_dir().join(format!("daw-party-session-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ai-daw-session-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("session.json");
 
@@ -71,6 +71,6 @@ mod tests {
 
     #[test]
     fn missing_or_corrupt_file_reads_as_none() {
-        assert!(read_session(Path::new("/nonexistent/daw-party/session.json")).is_none());
+        assert!(read_session(Path::new("/nonexistent/ai-daw/session.json")).is_none());
     }
 }

@@ -169,6 +169,8 @@ mod tests {
                 audio: None,
             }],
             mixer: Default::default(),
+            sends: vec![],
+            automation: vec![],
         });
 
         let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.5 };

@@ -25,8 +25,8 @@ export const THEMES: { id: Theme; labelKey: string }[] = [
   { id: "dark", labelKey: "theme.dark" },
 ];
 
-const THEME_KEY = "daw-party-theme";
-const ACCENT_KEY = "daw-party-accent";
+const THEME_KEY = "ai-daw-theme";
+const ACCENT_KEY = "ai-daw-accent";
 
 function loadTheme(): Theme {
   const saved = localStorage.getItem(THEME_KEY);

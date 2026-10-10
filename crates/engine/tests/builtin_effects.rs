@@ -6,9 +6,9 @@
 
 use std::collections::BTreeMap;
 
-use daw_party_engine::model::{Clip, ClipId, Note, PluginInstance, Project, Track, TrackId};
-use daw_party_engine::registry::{PluginRegistry, BUILTIN_DELAY, BUILTIN_REVERB};
-use daw_party_engine::render::{render, RenderOptions};
+use ai_daw_engine::model::{Clip, ClipId, Note, PluginInstance, Project, Track, TrackId};
+use ai_daw_engine::registry::{PluginRegistry, BUILTIN_DELAY, BUILTIN_REVERB};
+use ai_daw_engine::render::{render, RenderOptions};
 
 const SR: f64 = 48_000.0;
 
@@ -50,6 +50,8 @@ fn project(effects: Vec<PluginInstance>) -> Project {
             audio: None,
         }],
         mixer: Default::default(),
+        sends: vec![],
+        automation: vec![],
     });
     p
 }

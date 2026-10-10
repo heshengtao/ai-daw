@@ -1,7 +1,7 @@
 # 音频输出设备适配（多设备 / 热切换 / 错误可见）— 设计文档
 
 - 日期：2026-10-09
-- 状态：待评审
+- 状态：**已完成（2026-10-10 校准）**（6/6 任务；真实设备热切换只能人工验证，见 §6）
 - 主题：让实时音频跟随系统默认输出设备变化（例如插上耳机），并在设备不可用时可见、可恢复
 
 ## 1. 症状
@@ -125,7 +125,7 @@ pub struct SharedStatus { dead: Arc<AtomicBool>, message: Arc<Mutex<Option<Strin
 
 ## 6. 验证方式
 
-- Rust：纯函数部分走 TDD（`choose_output_format` / `device_changed` 的真实单测）；`cargo test -p daw-party-engine`。
+- Rust：纯函数部分走 TDD（`choose_output_format` / `device_changed` 的真实单测）；`cargo test -p ai-daw-engine`。
 - 前端：`npm run build`（无测试框架）。
 - **设备热切换只能人工验证**：本机跑起来，播放中切设备。这一点必须在报告里如实说明，不能声称已验证。
 

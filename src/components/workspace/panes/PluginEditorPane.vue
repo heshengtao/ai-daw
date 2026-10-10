@@ -65,7 +65,7 @@ async function toggleEditorWindow(): Promise<void> {
       await closePluginWindow(t.id);
       editorOpen.value = false;
     } else {
-      await openPluginWindow(t.id);
+      await openPluginWindow(t.id, plugins.name(t.instrument?.plugin_id));
       editorOpen.value = true;
     }
   } catch (err) {

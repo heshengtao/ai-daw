@@ -6,7 +6,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use daw_party_plugin_api::{
+use ai_daw_plugin_api::{
     IoLayout, MidiEvent as HostEvent, ParamId, ParamInfo, Plugin, PluginCapabilities,
     PluginDescriptor, PluginError, PluginKind, ProcessContext, TimedMidiEvent,
 };
@@ -157,12 +157,21 @@ impl Plugin for Vst3HostedPlugin {
     }
 
     fn prepare(&mut self, sample_rate: f64, block_size: usize) {
+        // 实例可能是**复用**来的（重建 Player 时从旧播放器搬过来）：它可能已在处理。
+        // 采样率没变时 `start_processing` 是幂等的，不必重来；采样率变了才先停再起，
+        // 让插件按新配置重新 setup。
+        let rate_changed = self.sample_rate != sample_rate;
         self.sample_rate = sample_rate;
         self.block_size = block_size.max(1);
         let inputs = self.io.inputs as usize;
         self.buffers = AudioBuffers::new(inputs, ENGINE_CHANNELS, self.block_size, sample_rate);
         self.started = match self.inner.lock() {
-            Ok(mut plugin) => plugin.start_processing().is_ok(),
+            Ok(mut plugin) => {
+                if rate_changed && self.started {
+                    let _ = plugin.stop_processing();
+                }
+                plugin.start_processing().is_ok()
+            }
             Err(_) => false,
         };
     }

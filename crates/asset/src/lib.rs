@@ -2,7 +2,7 @@
 
 //! 音频素材的**解码与波形包络**。
 //!
-//! 只做「文件 → 交错 f32」这一件事：解码成 [`daw_party_engine::audio::DecodedAudio`]，
+//! 只做「文件 → 交错 f32」这一件事：解码成 [`ai_daw_engine::audio::DecodedAudio`]，
 //! 或算出画波形用的 min/max 包络。**不认识 UI / Tauri**，也不碰播放路径——引擎只认已经
 //! 解码好的数据（播放回调里绝不解码，见 `crates/engine/tests/realtime_safety.rs`）。
 //!
@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use daw_party_engine::audio::DecodedAudio;
+use ai_daw_engine::audio::DecodedAudio;
 use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::codecs::CodecParameters;
 use symphonia::core::formats::probe::Hint;
@@ -126,27 +126,38 @@ pub fn decode(path: impl AsRef<Path>) -> Result<DecodedAudio, AssetError> {
 /// 直接给画波形用：每个像素列取该列覆盖帧范围内最低与最高的采样。多声道先按帧取平均，
 /// 得到一条包络。空素材或 `buckets == 0` 时返回全 0。
 pub fn peaks(audio: &DecodedAudio, buckets: usize) -> Vec<f32> {
+    peaks_range(audio, 0, audio.frames() as u64, buckets)
+}
+
+/// 与 [`peaks`] 相同，但只取素材的 `[offset_frames, offset_frames + frames)` 这一段。
+///
+/// 片段（`Clip.audio`）只引用素材的一个窗口，波形也必须只画这个窗口——否则被切分/裁剪过的
+/// 片段会显示**整段素材**，看上去像「被压缩的完整波形」。
+pub fn peaks_range(
+    audio: &DecodedAudio,
+    offset_frames: u64,
+    frames: u64,
+    buckets: usize,
+) -> Vec<f32> {
     if buckets == 0 {
         return Vec::new();
     }
-    let frames = audio.frames();
+    let total = audio.frames() as u64;
+    let start_f = offset_frames.min(total);
+    let end_f = start_f.saturating_add(frames).min(total);
+    let span = end_f.saturating_sub(start_f);
     let channels = audio.channels.max(1);
-    if frames == 0 {
+    if span == 0 {
         return vec![0.0; buckets * 2];
     }
     let mut out = Vec::with_capacity(buckets * 2);
     for b in 0..buckets {
-        let start = b * frames / buckets;
-        if start >= frames {
-            out.push(0.0);
-            out.push(0.0);
-            continue;
-        }
-        let end = (((b + 1) * frames) / buckets).clamp(start + 1, frames);
+        let start = start_f + (b as u64 * span) / buckets as u64;
+        let end = (start_f + ((b as u64 + 1) * span) / buckets as u64).clamp(start + 1, end_f);
         let mut lo = f32::INFINITY;
         let mut hi = f32::NEG_INFINITY;
         for f in start..end {
-            let base = f * channels;
+            let base = (f as usize) * channels;
             let mut sum = 0.0f32;
             for c in 0..channels {
                 sum += audio.samples.get(base + c).copied().unwrap_or(0.0);
@@ -243,6 +254,29 @@ mod tests {
         let empty = DecodedAudio { samples: Arc::from(Vec::<f32>::new()), channels: 2, sample_rate: 48_000.0 };
         assert_eq!(peaks(&empty, 4), vec![0.0; 8]);
         assert!(peaks(&empty, 0).is_empty());
+    }
+
+    /// 只画**窗口**：切分/裁剪后的片段不能显示整段素材。
+    #[test]
+    fn peaks_range_covers_only_the_requested_window() {
+        // 阶梯素材：前 100 帧静音，后 100 帧满幅。
+        let mut samples = vec![0.0f32; 100];
+        samples.extend(std::iter::repeat(1.0f32).take(100));
+        let audio = DecodedAudio { samples: Arc::from(samples), channels: 1, sample_rate: 48_000.0 };
+
+        // 取后半段：每个桶的 max 都是 1.0。
+        let second = peaks_range(&audio, 100, 100, 4);
+        for b in 0..4 {
+            assert!((second[b * 2 + 1] - 1.0).abs() < 1e-6, "第 {b} 桶应是满幅");
+        }
+        // 取前半段：全 0。
+        assert_eq!(peaks_range(&audio, 0, 100, 4), vec![0.0; 8]);
+        // 整段分两桶：第一桶 0、第二桶 1。
+        let whole = peaks_range(&audio, 0, 200, 2);
+        assert!(whole[1].abs() < 1e-6, "第一桶应静音");
+        assert!((whole[3] - 1.0).abs() < 1e-6, "第二桶应满幅");
+        // 越界窗口收敛，不 panic。
+        assert_eq!(peaks_range(&audio, 500, 100, 2), vec![0.0; 4]);
     }
 
     #[test]

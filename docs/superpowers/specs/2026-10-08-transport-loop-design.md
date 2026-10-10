@@ -1,7 +1,7 @@
 # 循环播放按钮 — 设计文档
 
 - 日期：2026-10-08
-- 状态：待评审
+- 状态：**已完成（2026-10-10 校准）**（`SetLoop` / `SharedTransport.looping` / 底栏按钮 / i18n 均已落地；真机「无缝」仍待人工验证）
 - 主题：底栏新增「循环」按钮；开启后播到工程结尾**无缝**回到起点继续播放
 
 ## 1. 背景
@@ -98,7 +98,7 @@ if player.end_frame() > 0 && player.position_frames() >= player.end_frame() {
 
 ## 7. 验证方式
 
-- Rust：`cargo test -p daw-party-engine`
+- Rust：`cargo test -p ai-daw-engine`
   - `Player`：`SetLoop(true)` 后 `is_looping()`；`Seek` 不改变 `playing`；`Player` 仍不自动停止（离线渲染回归不变）。
 - 前端：`npm run build`（`vue-tsc`）通过；浏览器预览里点循环、听见（看得见播放头）回绕。
 - 手动（桌面端）：有内容时开循环播放，确认无缝；编辑工程后开关仍在。

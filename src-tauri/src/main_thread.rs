@@ -1,4 +1,4 @@
-//! 把 `daw-party-host-vst3` 的「主线程派发」接到 Tauri 的主线程上。
+//! 把 `ai-daw-host-vst3` 的「主线程派发」接到 Tauri 的主线程上。
 //!
 //! CLAP 规定 `init` / 参数枚举 / `activate` / 原生界面都只能在**进程主线程**上调用，插件会
 //! 真的去核对 `clap_host_thread_check`。宿主 crate 是库、不认识 Tauri，所以由这里注入实现。
@@ -9,7 +9,7 @@
 use std::sync::mpsc;
 use std::sync::Arc;
 
-use daw_party_host_vst3::MainThreadDispatch;
+use ai_daw_host_vst3::MainThreadDispatch;
 use tauri::AppHandle;
 
 /// 用 `AppHandle::run_on_main_thread` 实现的主线程派发。
@@ -26,7 +26,7 @@ impl TauriMainThread {
     /// 调用前必须先调过 `mark_main_thread()`：否则 `is_on_main_thread()` 恒为 false，主线程
     /// 自己发起的派发会退化成「自己等自己」而死锁。
     pub fn install(app: &AppHandle) {
-        daw_party_host_vst3::set_main_thread_dispatch(Arc::new(Self { app: app.clone() }));
+        ai_daw_host_vst3::set_main_thread_dispatch(Arc::new(Self { app: app.clone() }));
     }
 }
 

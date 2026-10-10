@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use daw_party_engine::audio::DecodedAudio;
+use ai_daw_engine::audio::DecodedAudio;
 
 /// 路径 → 素材（`None` = 已知加载失败）。
 pub struct AssetCache {
@@ -33,7 +33,7 @@ impl AssetCache {
             }
         }
         // 解码在锁外做：它很慢，别把其它路径的查询一起堵住。
-        let outcome = match daw_party_asset::decode(path) {
+        let outcome = match ai_daw_asset::decode(path) {
             Ok(audio) => Some(Arc::new(audio)),
             Err(err) => {
                 eprintln!("[asset] 解码失败 {path}：{err}");
@@ -64,7 +64,46 @@ impl AssetCache {
     /// 波形包络（每桶 min/max 各一个值），供界面绘制。
     pub fn waveform(&self, path: &str, buckets: usize) -> Result<Vec<f32>, String> {
         let audio = self.load(path)?;
-        Ok(daw_party_asset::peaks(&audio, buckets))
+        Ok(ai_daw_asset::peaks(&audio, buckets))
+    }
+
+    /// 波形包络，只取素材的 `[offset_frames, offset_frames + frames)` 这一段。
+    ///
+    /// 片段只引用素材的一个窗口；`frames` 为 `None` 表示「到结尾」（旧工程）。
+    pub fn waveform_range(
+        &self,
+        path: &str,
+        buckets: usize,
+        offset_frames: u64,
+        frames: Option<u64>,
+    ) -> Result<Vec<f32>, String> {
+        let audio = self.load(path)?;
+        let window = frames.unwrap_or_else(|| (audio.frames() as u64).saturating_sub(offset_frames));
+        Ok(ai_daw_asset::peaks_range(&audio, offset_frames, window, buckets))
+    }
+
+    /// 插入一份已解码素材（录音刚落盘时用：免去立刻重解码）。
+    pub fn insert(&self, path: &str, audio: Arc<DecodedAudio>) {
+        self.map.lock().unwrap().insert(path.to_string(), Some(audio));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_serves_a_predecoded_asset_without_touching_disk() {
+        let cache = AssetCache::new();
+        let audio = Arc::new(DecodedAudio {
+            samples: vec![0.25f32, -0.25].into(),
+            channels: 2,
+            sample_rate: 48_000.0,
+        });
+        cache.insert("/nonexistent/rec.wav", Arc::clone(&audio));
+        let got = cache.load("/nonexistent/rec.wav").expect("插入过的路径必须直接命中");
+        assert_eq!(got.samples.len(), 2);
+        assert_eq!(got.sample_rate, 48_000.0);
     }
 }
 

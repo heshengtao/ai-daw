@@ -30,7 +30,7 @@ export interface PluginInfo {
   hasEditor?: boolean;
 }
 
-/** 内置合成器的插件 id（与引擎 `daw_party_engine::BUILTIN_SYNTH` 一致）。 */
+/** 内置合成器的插件 id（与引擎 `ai_daw_engine::BUILTIN_SYNTH` 一致）。 */
 export const SYNTH_ID = "builtin.synth";
 /** 内置延迟的插件 id（与引擎 `BUILTIN_DELAY` 一致）。 */
 export const DELAY_ID = "builtin.delay";

@@ -1,10 +1,56 @@
 use std::sync::Arc;
 
-use daw_party_plugin_api::MidiEvent;
+use ai_daw_plugin_api::MidiEvent;
 
 use crate::audio::{DecodedAudio, SampleProvider};
-use crate::model::{MixerChannel, Note, PluginInstance, Project, TrackId};
+use crate::model::{AutomationPoint, MixerChannel, Note, PluginInstance, Project, TrackId};
+use crate::player::db_to_linear;
 use crate::tempo::TempoMap;
+
+/// 可被自动化的参数（v1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneParam {
+    /// 轨道增益（dB）。
+    GainDb,
+    /// 轨道声像（-1..=1）。
+    Pan,
+}
+
+impl LaneParam {
+    /// 从参数名解析；不认识的名字返回 `None`（求值时忽略）。
+    pub fn from_name(name: &str) -> Option<LaneParam> {
+        match name {
+            "gain_db" => Some(LaneParam::GainDb),
+            "pan" => Some(LaneParam::Pan),
+            _ => None,
+        }
+    }
+}
+
+/// 一条已解析的自动化车道（保留「拍」坐标，求值时用速度表换算）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScheduledLane {
+    /// 目标参数。
+    pub param: LaneParam,
+    /// 关键点（拍，升序）。
+    pub points: Vec<AutomationPoint>,
+}
+
+impl ScheduledLane {
+    /// 在 `beat` 处求值（不分配）。
+    pub fn value_at(&self, beat: f64) -> Option<f32> {
+        crate::model::lane_value_at(&self.points, beat)
+    }
+}
+
+/// 一路已解析的发送：目标解析成**轨道下标**，播放时 O(1) 路由。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScheduledSend {
+    /// 目标轨道在 `ScheduledEvents::tracks` 里的下标。
+    pub target_index: usize,
+    /// 线性发送增益。
+    pub gain: f32,
+}
 
 /// 一条已定绝对帧的 MIDI 事件。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,6 +95,10 @@ pub struct ScheduledTrack {
     pub events: Vec<ScheduledMidi>,
     /// 音频片段（可能为空）。素材缺失的片段不会出现在这里（按静音处理）。
     pub audio_clips: Vec<ScheduledAudioClip>,
+    /// 自动化车道（已解析参数；求值时按速度表换算拍）。
+    pub lanes: Vec<ScheduledLane>,
+    /// 发送（目标已解析成轨道下标）。
+    pub sends: Vec<ScheduledSend>,
 }
 
 /// 整首工程的定帧事件表：离线渲染与实时播放共用。
@@ -68,6 +118,56 @@ pub struct ScheduledEvents {
     /// 构建该事件表时使用的采样率（Hz）；所有 `frame` 均以此刻度定点。宿主应在
     /// 采样率不一致时拒绝播放，否则事件会被静默错误定时。
     pub sample_rate: f64,
+    /// 处理顺序（各轨道在 `tracks` 里的下标）：**被发送的目标排在其来源之后**。
+    ///
+    /// 由发送关系做拓扑排序；有环时剩余的轨道按原顺序追加（环上的发送会被忽略）。
+    /// 播放器按这个顺序逐轨处理，总线才能看到已经汇总好的输入。
+    pub order: Vec<usize>,
+    /// 速度表：自动化按「拍」求值时，播放器用它把当前帧位置换算成拍。
+    pub tempo_map: TempoMap,
+}
+
+/// 由发送边算出一个「来源在前、目标在后」的处理顺序。
+///
+/// `edges[i]` = 从轨道 i 发出的目标下标。用 Kahn 算法，零入度者按**下标升序**取，保证
+/// 结果确定；有环时剩余的按下标顺序追加（环上的边会被忽略——宁可少一路发送，也不要死循环）。
+pub fn routing_order(edges: &[Vec<usize>]) -> Vec<usize> {
+    let n = edges.len();
+    let mut indegree = vec![0usize; n];
+    for targets in edges {
+        for &t in targets {
+            if t < n {
+                indegree[t] += 1;
+            }
+        }
+    }
+    let mut order = Vec::with_capacity(n);
+    let mut used = vec![false; n];
+    loop {
+        // 取一个未使用、入度为 0 的最小下标。
+        let mut picked = None;
+        for i in 0..n {
+            if !used[i] && indegree[i] == 0 {
+                picked = Some(i);
+                break;
+            }
+        }
+        let Some(i) = picked else { break };
+        used[i] = true;
+        order.push(i);
+        for &t in &edges[i] {
+            if t < n && indegree[t] > 0 {
+                indegree[t] -= 1;
+            }
+        }
+    }
+    // 环上的残余节点：按下标顺序补上（它们的出边已经无法满足拓扑约束）。
+    for i in 0..n {
+        if !used[i] {
+            order.push(i);
+        }
+    }
+    order
 }
 
 impl ScheduledEvents {
@@ -96,7 +196,16 @@ impl ScheduledEvents {
             tempo_points.push((to_frame(s.start_beat), s.tempo));
         }
 
+        // 轨道 id → 下标：发送的目标要用下标表达（播放器 O(1) 路由）。
+        let index_by_id: std::collections::HashMap<TrackId, usize> = project
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.id, i))
+            .collect();
+
         let mut tracks = Vec::with_capacity(project.tracks.len());
+        let mut edges: Vec<Vec<usize>> = Vec::with_capacity(project.tracks.len());
         for track in &project.tracks {
             let mut events = Vec::new();
             let mut audio_clips = Vec::new();
@@ -148,6 +257,28 @@ impl ScheduledEvents {
                 }
             }
             events.sort_by_key(|e| e.frame);
+            // 自动化车道：只保留能被识别的参数（未知名字求值时会被忽略，不入表）。
+            let lanes: Vec<ScheduledLane> = track
+                .automation
+                .iter()
+                .filter_map(|lane| {
+                    let param = LaneParam::from_name(&lane.param)?;
+                    let points = lane.points.clone();
+                    Some(ScheduledLane { param, points })
+                })
+                .collect();
+            // 发送：目标解析成下标；指向不存在轨道或指向自己的发送丢弃。
+            let self_index = index_by_id[&track.id];
+            let sends: Vec<ScheduledSend> = track
+                .sends
+                .iter()
+                .filter_map(|s| {
+                    let target_index = *index_by_id.get(&s.target)?;
+                    (target_index != self_index)
+                        .then_some(ScheduledSend { target_index, gain: db_to_linear(s.gain_db) })
+                })
+                .collect();
+            edges.push(sends.iter().map(|s| s.target_index).collect());
             tracks.push(ScheduledTrack {
                 track_id: track.id,
                 instrument: track.instrument.clone(),
@@ -155,8 +286,12 @@ impl ScheduledEvents {
                 mixer: track.mixer,
                 events,
                 audio_clips,
+                lanes,
+                sends,
             });
         }
+
+        let order = routing_order(&edges);
 
         ScheduledEvents {
             tracks,
@@ -165,6 +300,8 @@ impl ScheduledEvents {
             tempo: map.tempo_at(0.0),
             tempo_points,
             sample_rate,
+            order,
+            tempo_map: map,
         }
     }
 }
@@ -172,7 +309,9 @@ impl ScheduledEvents {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Clip, ClipId, Note, Track, TrackId};
+    use crate::model::{
+        AutomationLane, AutomationPoint, Clip, ClipId, Note, Send, Track, TrackId,
+    };
 
     fn project_with_note() -> Project {
         let mut p = Project::new("p");
@@ -190,6 +329,8 @@ mod tests {
                 audio: None,
             }],
             mixer: Default::default(),
+            sends: vec![],
+            automation: vec![],
         });
         p
     }
@@ -280,6 +421,8 @@ mod tests {
                 audio: None,
             }],
             mixer: Default::default(),
+            sends: vec![],
+            automation: vec![],
         });
         let s = ScheduledEvents::from_project(&p, 48_000.0);
         // 3 拍 = 0..2 @120 (1s) + 2..3 @240 (0.25s) = 1.25s = 60000 帧。
@@ -287,5 +430,61 @@ mod tests {
         // tempo_points: 帧 0 → 120；帧 48000（2 拍 @120 = 1s）→ 240。
         assert_eq!(s.tempo_points[0], (0, 120.0));
         assert_eq!(s.tempo_points[1], (48_000, 240.0));
+    }
+
+    #[test]
+    fn routing_order_puts_send_targets_after_their_sources() {
+        // 0→2、1→2：0 与 1 都排在 2 之前。
+        assert_eq!(routing_order(&[vec![2], vec![2], vec![]]), vec![0, 1, 2]);
+        // 1→0：0 必须排在 1 之后。
+        assert_eq!(routing_order(&[vec![], vec![0]]), vec![1, 0]);
+    }
+
+    #[test]
+    fn routing_order_survives_cycles() {
+        // 环（0↔1）：绝不挂死，两个轨道都仍然被处理。
+        let order = routing_order(&[vec![1], vec![0]]);
+        let mut sorted = order.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![0, 1]);
+    }
+
+    #[test]
+    fn sends_and_lanes_are_resolved_into_the_schedule() {
+        let mut p = project_with_note();
+        p.tracks.push(Track {
+            id: TrackId(2),
+            name: "Bus".into(),
+            instrument: None,
+            effects: vec![],
+            clips: vec![],
+            mixer: Default::default(),
+            sends: vec![],
+            automation: vec![],
+        });
+        // 轨道 1（下标 0）把信号发送给总线（轨道 2，下标 1）。
+        p.tracks[0].sends = vec![Send { target: TrackId(2), gain_db: 0.0 }];
+        p.tracks[0].automation = vec![AutomationLane {
+            param: "gain_db".into(),
+            points: vec![AutomationPoint { beat: 0.0, value: -3.0 }],
+        }];
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        assert_eq!(s.order, vec![0, 1], "发送目标必须排在来源之后");
+        assert_eq!(s.tracks[0].sends.len(), 1);
+        assert_eq!(s.tracks[0].sends[0].target_index, 1);
+        assert!((s.tracks[0].sends[0].gain - 1.0).abs() < 1e-6, "0 dB → 单位增益");
+        assert_eq!(s.tracks[0].lanes.len(), 1);
+        assert_eq!(s.tracks[0].lanes[0].param, LaneParam::GainDb);
+
+        // 未知参数名不入表；指向不存在轨道的发送被丢掉。
+        p.tracks[0].automation = vec![AutomationLane {
+            param: "nope".into(),
+            points: vec![AutomationPoint { beat: 0.0, value: 1.0 }],
+        }];
+        p.tracks[0].sends = vec![Send { target: TrackId(999), gain_db: 0.0 }];
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        assert!(s.tracks[0].lanes.is_empty(), "未知参数不生成车道");
+        assert!(s.tracks[0].sends.is_empty(), "悬空发送被丢弃");
+        assert_eq!(s.order, vec![0, 1], "没有有效发送时按原顺序");
     }
 }

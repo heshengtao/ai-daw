@@ -1,7 +1,7 @@
 # 内置合成器界面重设计 + 编排网格适配 — 设计文档
 
 - 日期：2026-10-08
-- 状态：待评审
+- 状态：**已完成（2026-10-10 校准）；预设部分已被 `2026-10-09-synth-overhaul-design.md` 取代**（24 条 → 32 条、类别重排；默认正弦 / 固定尺寸窗口 / 一个周期示波器 / MD3 下拉均已落地）
 - 主题：内置合成器（`builtin.synth`）的默认音色、插件界面、示波器与预设；编排界面的左侧留白与网格随拍号适配
 
 ## 1. 背景
@@ -188,7 +188,7 @@
 
 ## 7. 验证方式
 
-- Rust：`cargo test -p daw-party-synth`（默认波形 + 现有用例）、`cargo test -p daw-party-engine`（预设补丁不破）。
+- Rust：`cargo test -p ai-daw-synth`（默认波形 + 现有用例）、`cargo test -p ai-daw-engine`（预设补丁不破）。
 - 前端：`npm run build`（含 `vue-tsc` 类型检查）必须通过；`npm run dev` 浏览器预览核对布局与示波器（`openSynthWindow` 在预览里会回退到侧边栏面板，可验证缩放兜底）。
 - 手动：改拍号核对两个视图网格与底部读数；拖旋钮核对示波器；点「高级」核对展开。
 

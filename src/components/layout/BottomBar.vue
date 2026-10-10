@@ -6,7 +6,7 @@
  * 传输直接调用 `transport` store：实时播放走原生音频线程，设备不可用时自动降级为
  * 离线试听，两种模式下这些按钮的行为完全一致。
  */
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   PlayIcon,
   PauseIcon,
@@ -16,12 +16,14 @@ import {
   ArrowUturnRightIcon,
   ArrowPathIcon,
 } from "@heroicons/vue/24/outline";
+import Md3Select from "@/components/common/Md3Select.vue";
 import NumberField from "@/components/common/NumberField.vue";
 import TimeSignatureField from "@/components/common/TimeSignatureField.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
 import { retryAudio } from "@/api/tauri";
 import { useEngineEventsStore } from "@/stores/engineEvents";
 import { useProjectStore } from "@/stores/project";
+import { useSelectionStore } from "@/stores/selection";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
 import { useI18n } from "@/i18n";
@@ -32,8 +34,53 @@ const props = defineProps<{ aiActive: boolean }>();
 const store = useProjectStore();
 const transport = useTransportStore();
 const timeline = useTimelineStore();
+const selection = useSelectionStore();
 const i18n = useI18n();
 const aiEvents = useEngineEventsStore();
+
+/** 录音目标轨道：选中轨道，否则首轨。 */
+const recordTrack = computed(() => selection.trackId ?? store.project?.tracks[0]?.id ?? null);
+
+/** 输入设备下拉选项。带上连接类型 / 默认标记，避免「蓝牙耳机」这类设备看着像纯输出。 */
+const inputOptions = computed(() =>
+  transport.inputDevices.map((d) => {
+    const parts: string[] = [];
+    if (d.transport) parts.push(i18n.t(`bottom.inputTransport.${d.transport}`));
+    if (d.is_default) parts.push(i18n.t("bottom.inputDefault"));
+    parts.push(`${d.sample_rate} Hz · ${d.channels}ch`);
+    return { id: d.name, label: d.name, hint: parts.join(" · ") };
+  }),
+);
+
+/** 电平表填充宽度（0..100%）。 */
+const levelPct = computed(() => `${Math.round(Math.min(1, transport.inputLevelPeak) * 100)}%`);
+
+let levelTimer: number | null = null;
+
+/** 切设备时重建输入流。 */
+async function onSelectInput(name: string): Promise<void> {
+  await transport.selectInput(name);
+}
+
+/** 录音开关：开始前把起点吸附到网格。 */
+async function onToggleRecord(): Promise<void> {
+  if (transport.recording) {
+    await transport.stopRecording();
+    return;
+  }
+  if (recordTrack.value === null) return;
+  await transport.startRecording(recordTrack.value, timeline.snapBeats(transport.positionBeats));
+}
+
+onMounted(async () => {
+  // 只拉设备列表，**不自动打开输入流**：麦克风只在用户显式选设备或开始录音时才被占用。
+  await transport.refreshInputDevices();
+  // 电平表轮询：只在底部条存在时跑。输入流没开时 store 会直接归零，不发 IPC。
+  levelTimer = window.setInterval(() => void transport.pollInputLevel(), 120);
+});
+onUnmounted(() => {
+  if (levelTimer !== null) window.clearInterval(levelTimer);
+});
 
 /** 当前工程的传输设置（分段换算用）。 */
 const settings = computed(
@@ -170,6 +217,19 @@ function onRetryAudio(): void {
         {{ i18n.t("bottom.keyframe") }}
       </span>
 
+      <span class="input-pick">
+        <Md3Select
+          :model-value="transport.inputDevice"
+          :options="inputOptions"
+          :label="i18n.t('bottom.recordInputLabel')"
+          :placeholder="i18n.t('bottom.recordInputNone')"
+          @update:model-value="onSelectInput"
+        />
+      </span>
+      <span class="level-meter" :class="{ idle: !transport.inputActive }" :title="i18n.t('bottom.recordLevel')">
+        <span class="level-fill" :style="{ width: levelPct }" />
+      </span>
+
       <TimeSignatureField :num="timeSigNum" :den="timeSigDen" @change="onTimeSignature" />
 
       <span class="readout" :title="i18n.t('bottom.positionTitle', { bar: positionText })">
@@ -178,11 +238,28 @@ function onRetryAudio(): void {
       </span>
     </div>
 
-    <!-- 中：传输键（严格居中） -->
+    <!-- 中：传输键（严格居中）。播放键左右各两个按钮 → 它正好落在底栏中线上。 -->
     <div class="core">
       <Tooltip :text="i18n.t('bottom.toStart')" place="above" align="center">
         <button class="t-btn" :aria-label="i18n.t('bottom.toStartLabel')" @click="transport.rewind()">
           <BackwardIcon class="w-[17px] h-[17px]" />
+        </button>
+      </Tooltip>
+
+      <Tooltip
+        :text="transport.recording ? i18n.t('bottom.recordStop') : i18n.t('bottom.record')"
+        place="above"
+        align="center"
+      >
+        <button
+          class="rec-btn"
+          :class="{ on: transport.recording }"
+          :disabled="recordTrack === null"
+          :aria-pressed="transport.recording"
+          :aria-label="transport.recording ? i18n.t('bottom.recordStopLabel') : i18n.t('bottom.recordLabel')"
+          @click="onToggleRecord"
+        >
+          <span class="rec-dot" />
         </button>
       </Tooltip>
 
@@ -253,11 +330,12 @@ function onRetryAudio(): void {
 </template>
 
 <style scoped>
-/* 三栏等宽（1fr / auto / 1fr）→ 中栏永远居中，左右容器宽度对称。 */
+/* 三栏等宽（minmax(0,1fr) / auto / minmax(0,1fr)）→ 中栏严格居中：
+   两侧轨道允许收缩到 0，内容再多也不会把播放键挤偏。 */
 .bottom-bar {
   height: 60px;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   padding: 0 14px;
@@ -373,6 +451,71 @@ function onRetryAudio(): void {
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
 }
+/* 录音键：空闲是暗红圆点，录制中点亮并放大。 */
+.rec-btn {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+.rec-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.rec-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background-color: rgb(var(--md-error));
+  transition:
+    box-shadow var(--md-ease-emphasized),
+    transform var(--md-ease-emphasized);
+}
+.rec-btn.on .rec-dot {
+  box-shadow: 0 0 0 4px rgb(var(--md-error) / 0.25);
+  transform: scale(1.1);
+}
+/* 输入设备下拉：限宽 + 单行省略号，绝不撑大左栏（否则播放键会被挤偏）。 */
+.input-pick {
+  display: flex;
+  min-width: 0;
+  max-width: 160px;
+  flex: 0 1 auto;
+}
+.input-pick :deep(button) {
+  min-width: 0;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 输入电平表：一条细药丸，填充宽度随输入峰值。 */
+.level-meter {
+  display: inline-block;
+  width: 48px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  overflow: hidden;
+  background-color: rgb(var(--md-surface-container-high));
+}
+.level-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background-color: rgb(var(--md-primary));
+  transition: width 120ms linear;
+}
+/* 输入流没开（未选设备且未录音）时压暗，提示电平表当前无输入。 */
+.level-meter.idle {
+  opacity: 0.45;
+}
 .play-btn:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 3px;
@@ -465,6 +608,12 @@ function onRetryAudio(): void {
 /* 窄屏：先丢引擎信息与读数，保持左右对称不被破坏。
    注意只隐藏**在线**指示（`.engine` 无 `fallback`）；离线状态是唯一可点的重试入口，
    在窄窗口上恰恰最需要可操作，不能一起藏掉。 */
+@media (max-width: 1180px) {
+  .input-pick,
+  .level-meter {
+    display: none;
+  }
+}
 @media (max-width: 1080px) {
   .engine:not(.fallback) {
     display: none;

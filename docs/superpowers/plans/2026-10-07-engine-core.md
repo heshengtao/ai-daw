@@ -1,4 +1,4 @@
-# daw-party 引擎核心实现计划（Plan 1：无头引擎）
+# AI DAW 引擎核心实现计划（Plan 1：无头引擎）
 
 > **状态（2026-10-08）**：✅ **已全部落地**。对应 `crates/{plugin-api,synth,engine}`。
 > 注意：本计划的 `sequencer.rs` 已在 Plan 2 Task 4 中删除，其职责由 `schedule.rs` + `player.rs` 承担——下方任务文本保留为历史记录。
@@ -76,7 +76,7 @@ license = "Apache-2.0"
 
 ```toml
 [package]
-name = "daw-party-plugin-api"
+name = "ai-daw-plugin-api"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -92,27 +92,27 @@ thiserror = "1"
 
 ```toml
 [package]
-name = "daw-party-synth"
+name = "ai-daw-synth"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-daw-party-plugin-api = { path = "../plugin-api" }
+ai-daw-plugin-api = { path = "../plugin-api" }
 ```
 
 `crates/engine/Cargo.toml`：
 
 ```toml
 [package]
-name = "daw-party-engine"
+name = "ai-daw-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-daw-party-plugin-api = { path = "../plugin-api" }
-daw-party-synth = { path = "../synth" }
+ai-daw-plugin-api = { path = "../plugin-api" }
+ai-daw-synth = { path = "../synth" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
@@ -149,7 +149,7 @@ mod tests {
 
 - [ ] **Step 3: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-plugin-api`
+Run: `cargo test -p ai-daw-plugin-api`
 Expected: 编译失败（`PluginDescriptor` 未定义）。
 
 - [ ] **Step 4: 实现类型**
@@ -389,7 +389,7 @@ mod tests {
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-plugin-api plugin::`
+Run: `cargo test -p ai-daw-plugin-api plugin::`
 Expected: 编译失败（`Plugin`、`ProcessContext` 未定义）。
 
 - [ ] **Step 3: 实现 trait**
@@ -440,7 +440,7 @@ pub use plugin::*;
 
 - [ ] **Step 4: 运行测试，确认通过**
 
-Run: `cargo test -p daw-party-plugin-api`
+Run: `cargo test -p ai-daw-plugin-api`
 Expected: PASS（2 个测试）。
 
 - [ ] **Step 5: 提交**
@@ -462,7 +462,7 @@ EOF
 - Create: `crates/synth/src/lib.rs`、`crates/synth/src/voice.rs`
 
 **Interfaces:**
-- Consumes: `daw_party_plugin_api::{Plugin, PluginDescriptor, PluginKind, IoLayout, ParamId, ParamInfo, ProcessContext, TimedMidiEvent, MidiEvent, PluginError}`。
+- Consumes: `ai_daw_plugin_api::{Plugin, PluginDescriptor, PluginKind, IoLayout, ParamId, ParamInfo, ProcessContext, TimedMidiEvent, MidiEvent, PluginError}`。
 - Produces: `SynthPlugin`（`Plugin` 实现），插件 id 固定为 `"builtin.synth"`；参数 id：`"gain"`（0..1，默认 0.8）、`"attack"`（0..1 秒，默认 0.01）、`"release"`（0..4 秒，默认 0.3）。
 
 - [ ] **Step 1: 写失败测试**
@@ -473,7 +473,7 @@ EOF
 #[cfg(test)]
 mod tests {
     use super::*;
-    use daw_party_plugin_api::{MidiEvent, Plugin, ProcessContext, TimedMidiEvent};
+    use ai_daw_plugin_api::{MidiEvent, Plugin, ProcessContext, TimedMidiEvent};
 
     fn ctx(block: usize) -> ProcessContext {
         ProcessContext { sample_rate: 48_000.0, block_size: block, tempo: 120.0, playing: true }
@@ -549,7 +549,7 @@ mod tests {
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-synth`
+Run: `cargo test -p ai-daw-synth`
 Expected: 编译失败（`SynthPlugin` 未定义）。
 
 - [ ] **Step 3: 实现声部**
@@ -641,7 +641,7 @@ impl Voice {
 
 mod voice;
 
-use daw_party_plugin_api::{
+use ai_daw_plugin_api::{
     IoLayout, MidiEvent, ParamId, ParamInfo, Plugin, PluginDescriptor, PluginError, PluginKind,
     ProcessContext, TimedMidiEvent,
 };
@@ -785,7 +785,7 @@ impl Plugin for SynthPlugin {
 
 - [ ] **Step 5: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-synth`
+Run: `cargo test -p ai-daw-synth`
 Expected: PASS（4 个测试）。
 
 ```bash
@@ -853,7 +853,7 @@ mod tests {
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-engine model::`
+Run: `cargo test -p ai-daw-engine model::`
 Expected: 编译失败。
 
 - [ ] **Step 3: 实现模型**
@@ -1030,7 +1030,7 @@ pub fn beats_to_seconds(beats: f64, tempo: f64) -> f64 {
 
 - [ ] **Step 4: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine model::`
+Run: `cargo test -p ai-daw-engine model::`
 Expected: PASS。
 
 ```bash
@@ -1103,7 +1103,7 @@ mod tests {
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-engine apply::`
+Run: `cargo test -p ai-daw-engine apply::`
 Expected: 编译失败。
 
 - [ ] **Step 3: 实现**
@@ -1241,7 +1241,7 @@ pub mod event;
 
 - [ ] **Step 4: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine --features realtime`
+Run: `cargo test -p ai-daw-engine --features realtime`
 Expected: PASS。
 
 ```bash
@@ -1312,7 +1312,7 @@ mod tests {
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-engine bus::`
+Run: `cargo test -p ai-daw-engine bus::`
 Expected: 编译失败（`Engine` 未定义）。
 
 - [ ] **Step 3: 实现总线**
@@ -1442,7 +1442,7 @@ pub use bus::Engine;
 
 - [ ] **Step 4: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine --features realtime`
+Run: `cargo test -p ai-daw-engine --features realtime`
 Expected: PASS。
 
 ```bash
@@ -1463,7 +1463,7 @@ EOF
 - Modify: `crates/engine/src/lib.rs`
 
 **Interfaces:**
-- Consumes: `daw_party_plugin_api::Plugin`、`daw_party_synth::SynthPlugin`。
+- Consumes: `ai_daw_plugin_api::Plugin`、`ai_daw_synth::SynthPlugin`。
 - Produces: `PluginRegistry`（`with_builtins`、`register`、`create`、`ids`）。
 
 - [ ] **Step 1: 写失败测试**
@@ -1474,7 +1474,7 @@ EOF
 #[cfg(test)]
 mod tests {
     use super::*;
-    use daw_party_plugin_api::Plugin;
+    use ai_daw_plugin_api::Plugin;
 
     #[test]
     fn builtins_include_synth() {
@@ -1500,7 +1500,7 @@ mod tests {
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-engine registry::`
+Run: `cargo test -p ai-daw-engine registry::`
 Expected: 编译失败。
 
 - [ ] **Step 3: 实现注册表**
@@ -1510,7 +1510,7 @@ Expected: 编译失败。
 ```rust
 use std::collections::HashMap;
 
-use daw_party_plugin_api::Plugin;
+use ai_daw_plugin_api::Plugin;
 
 type Factory = Box<dyn Fn() -> Box<dyn Plugin> + Send + Sync>;
 
@@ -1528,7 +1528,7 @@ impl PluginRegistry {
     /// 内置插件：目前只有合成器。
     pub fn with_builtins() -> Self {
         let mut r = PluginRegistry::new();
-        r.register("builtin.synth", || Box::new(daw_party_synth::SynthPlugin::new()));
+        r.register("builtin.synth", || Box::new(ai_daw_synth::SynthPlugin::new()));
         r
     }
 
@@ -1557,7 +1557,7 @@ pub use registry::PluginRegistry;
 
 - [ ] **Step 4: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine --features realtime`
+Run: `cargo test -p ai-daw-engine --features realtime`
 Expected: PASS。
 
 ```bash
@@ -1578,7 +1578,7 @@ EOF
 - Modify: `crates/engine/src/lib.rs`
 
 **Interfaces:**
-- Consumes: `model::{Track, Clip, Note}`、`daw_party_plugin_api::{MidiEvent, TimedMidiEvent}`。
+- Consumes: `model::{Track, Clip, Note}`、`ai_daw_plugin_api::{MidiEvent, TimedMidiEvent}`。
 - Produces: `collect_track_events(track, block_start_beats, block_frames, sample_rate, tempo) -> Vec<TimedMidiEvent>`。
 
 - [ ] **Step 1: 写失败测试**
@@ -1590,7 +1590,7 @@ EOF
 mod tests {
     use super::*;
     use crate::model::{Clip, ClipId, Note, Track, TrackId};
-    use daw_party_plugin_api::MidiEvent;
+    use ai_daw_plugin_api::MidiEvent;
 
     fn track_with_note() -> Track {
         Track {
@@ -1630,7 +1630,7 @@ mod tests {
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-engine sequencer::`
+Run: `cargo test -p ai-daw-engine sequencer::`
 Expected: 编译失败。
 
 - [ ] **Step 3: 实现音序器**
@@ -1638,7 +1638,7 @@ Expected: 编译失败。
 `crates/engine/src/sequencer.rs`：
 
 ```rust
-use daw_party_plugin_api::{MidiEvent, TimedMidiEvent};
+use ai_daw_plugin_api::{MidiEvent, TimedMidiEvent};
 
 use crate::beats_to_seconds;
 use crate::model::Track;
@@ -1690,7 +1690,7 @@ pub mod sequencer;
 
 - [ ] **Step 4: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine --features realtime`
+Run: `cargo test -p ai-daw-engine --features realtime`
 Expected: PASS。
 
 ```bash
@@ -1769,7 +1769,7 @@ mod tests {
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-engine render::`
+Run: `cargo test -p ai-daw-engine render::`
 Expected: 编译失败。
 
 - [ ] **Step 3: 实现音频缓冲**
@@ -1825,7 +1825,7 @@ impl AudioBuffer {
 `crates/engine/src/render.rs`：
 
 ```rust
-use daw_party_plugin_api::ProcessContext;
+use ai_daw_plugin_api::ProcessContext;
 
 use crate::audio::AudioBuffer;
 use crate::beats_to_seconds;
@@ -1907,7 +1907,7 @@ pub mod render;
 
 - [ ] **Step 5: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine --features realtime`
+Run: `cargo test -p ai-daw-engine --features realtime`
 Expected: PASS。
 
 ```bash
@@ -1936,16 +1936,16 @@ EOF
 `crates/engine/tests/render_to_wav.rs`：
 
 ```rust
-use daw_party_engine::audio::AudioBuffer;
-use daw_party_engine::bus::Engine;
-use daw_party_engine::command::Command;
-use daw_party_engine::event::{Actor, Event};
-use daw_party_engine::model::Note;
-use daw_party_engine::registry::PluginRegistry;
-use daw_party_engine::render::{render, RenderOptions};
-use daw_party_engine::wav::write_wav;
+use ai_daw_engine::audio::AudioBuffer;
+use ai_daw_engine::bus::Engine;
+use ai_daw_engine::command::Command;
+use ai_daw_engine::event::{Actor, Event};
+use ai_daw_engine::model::Note;
+use ai_daw_engine::registry::PluginRegistry;
+use ai_daw_engine::render::{render, RenderOptions};
+use ai_daw_engine::wav::write_wav;
 
-fn demo() -> daw_party_engine::model::Project {
+fn demo() -> ai_daw_engine::model::Project {
     let mut e = Engine::new("e2e");
     let ev = e.execute(Command::AddTrack { name: "Lead".into() }, Actor::Human);
     let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
@@ -1996,7 +1996,7 @@ tempfile = "3"
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-engine --test render_to_wav`
+Run: `cargo test -p ai-daw-engine --test render_to_wav`
 Expected: 编译失败（`write_wav` 未定义）。
 
 - [ ] **Step 3: 实现 WAV 导出**
@@ -2051,13 +2051,13 @@ Expected: PASS（含 `render_to_wav` 端到端测试）。
 创建 `crates/engine/examples/render_demo.rs`：
 
 ```rust
-use daw_party_engine::bus::Engine;
-use daw_party_engine::command::Command;
-use daw_party_engine::event::{Actor, Event};
-use daw_party_engine::model::Note;
-use daw_party_engine::registry::PluginRegistry;
-use daw_party_engine::render::{render, RenderOptions};
-use daw_party_engine::wav::write_wav;
+use ai_daw_engine::bus::Engine;
+use ai_daw_engine::command::Command;
+use ai_daw_engine::event::{Actor, Event};
+use ai_daw_engine::model::Note;
+use ai_daw_engine::registry::PluginRegistry;
+use ai_daw_engine::render::{render, RenderOptions};
+use ai_daw_engine::wav::write_wav;
 
 fn main() {
     let mut e = Engine::new("demo");
@@ -2078,7 +2078,7 @@ fn main() {
 }
 ```
 
-Run: `cargo run -p daw-party-engine --example render_demo`
+Run: `cargo run -p ai-daw-engine --example render_demo`
 Expected: 打印 `wrote demo.wav (...)` 且生成 `demo.wav`。把 `demo.wav` 加入 `.gitignore`。
 
 ```bash

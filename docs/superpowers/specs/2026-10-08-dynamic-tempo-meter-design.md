@@ -1,7 +1,7 @@
 # 动态 BPM 与动态节拍（速度/拍号关键点）— 设计文档
 
 - 日期：2026-10-08
-- 状态：待评审
+- 状态：**已完成（2026-10-10 校准）**（关键点模型 / `TempoMap` / 分段网格 / 标尺 / 底栏全部落地；仅「关键点拖动」按 §2 非目标未做）
 - 主题：时间轴上的「关键点」同时携带 **BPM** 与 **拍号**；关键点从自身位置起生效。含引擎分段计时与分段的网格/标尺
 
 ## 1. 背景
@@ -216,7 +216,7 @@ applyMeterAt(beat: number, num: number, den: number): Promise<void>;  // 同上
 
 ## 8. 验证方式
 
-- Rust：`cargo test -p daw-party-engine`
+- Rust：`cargo test -p ai-daw-engine`
   - `TempoMap` 单测：常量段 = 旧公式；分段 `beats_to_seconds` / `seconds_to_beats` 互逆；关键点处取值切换；`beat<=0` 的关键点被拒。
   - `schedule` / `render`：加一个关键点后帧位置随时长变化；无关键点时输出与旧版逐位一致。
   - `apply`：关键点归一化（夹紧/有序/去重）、越界与非法值被拒。

@@ -1,0 +1,12 @@
+[package]
+name = "ai-daw-local-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ort = "2.0.0-rc.13"
+# 频谱：窗函数 + FFT（与 `crates/analysis` 同一个库，MIT OR Apache-2.0）。
+rustfft = "6"
+
+[dev-dependencies]

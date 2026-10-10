@@ -18,7 +18,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import EffectPanel from "@/components/workspace/panes/EffectPanel.vue";
 import { useI18n } from "@/i18n";
-import { usePluginsStore } from "@/stores/plugins";
 import { useProjectStore } from "@/stores/project";
 import { isTauri } from "@/utils/platform";
 import type { PluginInstance } from "@/api/types";
@@ -26,7 +25,6 @@ import type { PluginInstance } from "@/api/types";
 const route = useRoute();
 const i18n = useI18n();
 const store = useProjectStore();
-const plugins = usePluginsStore();
 
 /** 要显示哪条轨道的效果器。 */
 const trackId = computed(() => {
@@ -70,7 +68,6 @@ const resolved = computed<{ fx: PluginInstance; index: number } | null>(() => {
 });
 
 const fx = computed(() => resolved.value?.fx ?? null);
-const title = computed(() => (fx.value ? plugins.name(fx.value.plugin_id) : ""));
 
 /** 是否曾经成功定位到效果器（用来区分「还没载入」与「真的没了」）。 */
 const everResolved = ref(false);
@@ -104,11 +101,7 @@ async function commitMany(params: Record<string, number>): Promise<void> {
 
 <template>
   <div class="fx-window">
-    <header v-if="fx" class="head">
-      <h1 class="title">{{ title }}</h1>
-      <span v-if="track" class="subtitle">{{ track.name }}</span>
-    </header>
-
+    <!-- 标题栏已显示「轨道名 - 插件名」，窗口内不再重复一行。 -->
     <EffectPanel
       v-if="fx"
       :plugin-id="fx.plugin_id"
@@ -134,27 +127,6 @@ async function commitMany(params: Record<string, number>): Promise<void> {
   overflow: hidden;
   background-color: rgb(var(--md-surface));
   color: rgb(var(--md-on-surface));
-}
-.head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 10px 14px 0;
-  min-width: 0;
-}
-.title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.subtitle {
-  font-size: 11px;
-  color: rgb(var(--md-on-surface-variant));
-  white-space: nowrap;
 }
 .empty {
   margin: 40px auto;

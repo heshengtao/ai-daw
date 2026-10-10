@@ -75,7 +75,7 @@ impl DecodedAudio {
 /// 按路径提供已解码素材。
 ///
 /// 调度（[`crate::schedule::ScheduledEvents`]）只认这个 trait，不认识文件系统——
-/// 解码（IO）留在宿主/`daw-party-asset`，引擎保持纯计算。
+/// 解码（IO）留在宿主/`ai-daw-asset`，引擎保持纯计算。
 pub trait SampleProvider {
     /// 取某条路径的素材；缺失返回 `None`（该片段按静音处理）。
     fn get(&self, path: &str) -> Option<Arc<DecodedAudio>>;

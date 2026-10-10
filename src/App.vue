@@ -3,7 +3,6 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { message } from "@tauri-apps/plugin-dialog";
 import { ExclamationTriangleIcon, ArrowPathIcon } from "@heroicons/vue/24/outline";
 import AppShell from "@/components/layout/AppShell.vue";
 import TrackHeaderList from "@/components/workspace/TrackHeaderList.vue";
@@ -12,6 +11,7 @@ import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import ToastHost from "@/components/common/ToastHost.vue";
 import ProjectDialog from "@/components/common/ProjectDialog.vue";
 import ShortcutsDialog from "@/components/common/ShortcutsDialog.vue";
+import UnsavedChangesDialog from "@/components/common/UnsavedChangesDialog.vue";
 import { useProjectSync } from "@/composables/useProjectSync";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
@@ -91,6 +91,24 @@ const projectDialogMode = ref<"rename" | "save">("rename");
 
 /** 快捷键速查表模态框。 */
 const shortcutsOpen = ref(false);
+
+/** 退出确认模态框：关闭守卫等待用户三选一（保存 / 不保存 / 取消）。 */
+const unsavedOpen = ref(false);
+let unsavedResolve: ((choice: "save" | "discard" | "cancel") => void) | null = null;
+
+/** 打开退出确认并返回用户的选择。 */
+function askUnsavedChanges(): Promise<"save" | "discard" | "cancel"> {
+  return new Promise((resolve) => {
+    unsavedResolve = resolve;
+    unsavedOpen.value = true;
+  });
+}
+
+function onUnsavedChoice(choice: "save" | "discard" | "cancel"): void {
+  unsavedOpen.value = false;
+  unsavedResolve?.(choice);
+  unsavedResolve = null;
+}
 
 /** 对话框的初始名：未命名工程留空，让它显示占位符。 */
 const projectBaseName = computed(() => {
@@ -287,15 +305,15 @@ function onKey(e: KeyboardEvent): void {
     layout.devDrawer = false;
     return;
   }
-  // 鼠标模式：与顶栏的三段按钮同一顺序 —— 1 = 框选，2 = 拖拽，3 = 分隔。
+  // 鼠标模式：与顶栏的三段按钮同一顺序 —— 1 = 绘制，2 = 框选，3 = 分隔。
   if (!mod && e.key === "1") {
     e.preventDefault();
-    layout.setTool("select");
+    layout.setTool("draw");
     return;
   }
   if (!mod && e.key === "2") {
     e.preventDefault();
-    layout.setTool("draw");
+    layout.setTool("select");
     return;
   }
   if (!mod && e.key === "3") {
@@ -329,7 +347,7 @@ function onKey(e: KeyboardEvent): void {
 /**
  * 主窗口关闭守卫：有未保存改动时先问一句。
  *
- * 原生三选一：保存 → 写盘后关闭；不保存 → 直接关闭（此刻工作状态已进会话缓存，
+ * 应用内 MD3 模态框三选一：保存 → 写盘后关闭；不保存 → 直接关闭（此刻工作状态已进会话缓存，
  * 下次打开照样还原）；取消 → 什么都不做。从未保存过时「保存」会先弹出工程名/路径对话框，
  * 让用户先落盘，而不是把窗口关掉。
  */
@@ -345,13 +363,9 @@ async function setupCloseGuard(): Promise<(() => void) | null> {
     } catch {
       // 缓存失败不阻断退出。
     }
-    const choice = await message(i18n.t("app.unsavedExit"), {
-      title: i18n.t("app.unsavedExitTitle"),
-      kind: "warning",
-      buttons: "YesNoCancel",
-    });
-    if (choice === "Cancel") return;
-    if (choice === "Yes") {
+    const choice = await askUnsavedChanges();
+    if (choice === "cancel") return;
+    if (choice === "save") {
       // 还没保存过：先让用户起名并选路径；保存完再关。
       if (!project.currentPath) {
         openSaveDialog();
@@ -480,6 +494,9 @@ onUnmounted(() => {
 
   <!-- 快捷键速查表：⌘ 按钮 / `?` / Ctrl+Cmd+/ 打开 -->
   <ShortcutsDialog v-model:open="shortcutsOpen" />
+
+  <!-- 关闭工程前的未保存改动确认：窗口关闭请求会打开它并等待选择 -->
+  <UnsavedChangesDialog v-model:open="unsavedOpen" @choose="onUnsavedChoice" />
 </template>
 
 <style scoped>

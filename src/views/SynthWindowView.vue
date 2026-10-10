@@ -69,13 +69,7 @@ async function applyPreset(values: Record<string, number>): Promise<void> {
 
 <template>
   <div class="synth-window">
-    <header class="head">
-      <div class="titles">
-        <h1 class="title">{{ track ? track.name : i18n.t("synth.windowTitle") }}</h1>
-        <span class="subtitle">{{ i18n.t("synth.windowSubtitle") }}</span>
-      </div>
-    </header>
-
+    <!-- 标题栏已显示「轨道名 - 插件名」，窗口内不再重复一行。 -->
     <div v-if="track" class="body">
       <!-- 预设控件由 SynthPanel 自带（垫子 + 预设条），这里不再单独渲染，避免出现两个预设条。 -->
       <SynthPanel
@@ -103,33 +97,6 @@ async function applyPreset(values: Record<string, number>): Promise<void> {
   overflow: hidden;
   background-color: rgb(var(--md-surface));
   color: rgb(var(--md-on-surface));
-}
-.head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 8px 12px 6px;
-  min-width: 0;
-}
-.titles {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-.title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.subtitle {
-  font-size: 11px;
-  color: rgb(var(--md-on-surface-variant));
-  white-space: nowrap;
 }
 /* 面板自己铺满：这里**不留内边距**——键盘要贴死窗口的左、右、下三边。 */
 .body {

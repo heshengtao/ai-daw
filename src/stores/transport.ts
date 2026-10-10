@@ -9,7 +9,7 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 import * as api from "@/api/tauri";
-import type { TransportSnapshot } from "@/api/types";
+import type { InputDeviceInfo, TransportSnapshot } from "@/api/types";
 import { useLayoutStore } from "@/stores/layout";
 import { useProjectStore } from "@/stores/project";
 import { useI18n } from "@/i18n";
@@ -261,6 +261,90 @@ export const useTransportStore = defineStore("transport", () => {
     teardownPreview();
   }
 
+  // ---- 录音（C2） ----
+
+  /** 是否正在录音。 */
+  const recording = ref(false);
+  /** 可选的输入设备列表。 */
+  const inputDevices = ref<InputDeviceInfo[]>([]);
+  /** 当前选中的输入设备名（null = 未选）。 */
+  const inputDevice = ref<string | null>(null);
+  /** 输入电平表最近一帧的峰值（0..1）。 */
+  const inputLevelPeak = ref(0);
+
+  /** 拉取输入设备列表。 */
+  async function refreshInputDevices(): Promise<void> {
+    try {
+      inputDevices.value = await api.listInputDevices();
+    } catch {
+      inputDevices.value = [];
+    }
+  }
+
+  /** 选择输入设备（null = 关闭输入流）。 */
+  async function selectInput(device: string | null): Promise<void> {
+    inputDevice.value = device;
+    try {
+      await api.setInputDevice(device);
+    } catch (err) {
+      layout.notify(String(err));
+    }
+  }
+
+  /** 输入流是否处于打开（占用麦克风）状态。 */
+  const inputActive = computed(() => recording.value || inputDevice.value !== null);
+
+  /** 读一次输入电平（供界面画条）。输入流没开时直接归零，不打扰后端。 */
+  async function pollInputLevel(points = 64): Promise<void> {
+    if (!inputActive.value) {
+      inputLevelPeak.value = 0;
+      return;
+    }
+    try {
+      const samples = await api.inputLevel(points);
+      inputLevelPeak.value = samples.reduce((peak, v) => Math.max(peak, Math.abs(v)), 0);
+    } catch {
+      inputLevelPeak.value = 0;
+    }
+  }
+
+  /** 关闭输入流（释放麦克风）。失败不打扰：下次开录会重新 arm。 */
+  async function releaseInput(): Promise<void> {
+    try {
+      await api.setInputDevice(null);
+    } catch {
+      /* 释放失败无需提示 */
+    }
+  }
+
+  /** 开始录音：记录起点并走带（后端会一并开始播放）。 */
+  async function startRecording(track: number, startBeat: number): Promise<void> {
+    try {
+      await api.recordStart(track, startBeat, inputDevice.value);
+      recording.value = true;
+      playing.value = true;
+    } catch (err) {
+      layout.notify(String(err));
+    }
+  }
+
+  /** 结束录音：停带并套用返回的工程；没有内容时提示。 */
+  async function stopRecording(): Promise<void> {
+    if (!recording.value) return;
+    recording.value = false;
+    try {
+      const next = await api.recordStop();
+      playing.value = false;
+      if (next) await project.applyRecorded(next);
+      else layout.notify(i18n.t("bottom.recordEmpty"));
+    } catch (err) {
+      layout.notify(i18n.t("error.record", { error: String(err) }));
+    } finally {
+      // 录音前没显式选设备（用的是系统默认）→ 录完就释放输入流，不让麦克风一直开着。
+      if (inputDevice.value === null) await releaseInput();
+    }
+  }
+
   return {
     available,
     error,
@@ -283,5 +367,15 @@ export const useTransportStore = defineStore("transport", () => {
     rewind,
     setLoop,
     dispose,
+    recording,
+    inputDevices,
+    inputDevice,
+    inputLevelPeak,
+    inputActive,
+    refreshInputDevices,
+    selectInput,
+    pollInputLevel,
+    startRecording,
+    stopRecording,
   };
 });

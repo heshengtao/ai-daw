@@ -4,15 +4,15 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
 
-const KEY = "daw-party-layout";
+const KEY = "ai-daw-layout";
 
 /** 右侧面板可打开的窗口类型；后续新增面板只需在此登记。 */
-export type PaneId = "inspector" | "plugins" | "editor";
+export type PaneId = "inspector" | "plugins" | "editor" | "ai";
 
 /**
  * 鼠标模式（顶栏三选一）：
- * - `select`：左键拖动 = 框选；
  * - `draw`：在空白处左键拖动 = 画出片段 / 音符（创建 / 拖动）；
+ * - `select`：左键拖动 = 框选；
  * - `split`：左键点击片段 = 在该处切开（razor）。
  *
  * 三者共用同一个手势，只能靠模式区分，因此必须由用户显式选择。
@@ -20,13 +20,14 @@ export type PaneId = "inspector" | "plugins" | "editor";
 export type Tool = "draw" | "select" | "split";
 
 /** 全部鼠标模式（顺序即顶栏里的展示顺序）。 */
-export const TOOLS: Tool[] = ["select", "draw", "split"];
+export const TOOLS: Tool[] = ["draw", "select", "split"];
 
 /** 全部可用面板的元数据（供"新建标签"选择器展示）。文案是 i18n key，渲染时翻译。 */
 export const PANES: { id: PaneId; labelKey: string; hintKey: string }[] = [
   { id: "inspector", labelKey: "panes.inspector", hintKey: "panes.inspectorHint" },
   { id: "editor", labelKey: "panes.editor", hintKey: "panes.editorHint" },
   { id: "plugins", labelKey: "panes.plugins", hintKey: "panes.pluginsHint" },
+  { id: "ai", labelKey: "panes.ai", hintKey: "panes.aiHint" },
 ];
 
 /**
@@ -57,6 +58,12 @@ interface Persisted {
   tool: Tool;
   /** 钢琴卷帘下方控制器泳道的高度（px）。 */
   laneHeight: number;
+  /** 编排视图底部的自动化曲线编辑器是否打开。 */
+  showAutomation: boolean;
+  /** 自动化曲线编辑器的高度（px）。 */
+  automationHeight: number;
+  /** 钢琴卷帘下方的控制器（力度 / 音量）泳道是否打开。 */
+  showControllerLane: boolean;
 }
 
 function load(): Partial<Persisted> {
@@ -84,6 +91,15 @@ function clampLaneHeight(value: number): number {
   return Math.min(MAX_LANE_HEIGHT, Math.max(MIN_LANE_HEIGHT, Math.round(value)));
 }
 
+/** 自动化曲线编辑器的高度范围（px）。 */
+const MIN_AUTOMATION_HEIGHT = 80;
+const MAX_AUTOMATION_HEIGHT = 360;
+
+function clampAutomationHeight(value: number): number {
+  if (!Number.isFinite(value)) return 150;
+  return Math.min(MAX_AUTOMATION_HEIGHT, Math.max(MIN_AUTOMATION_HEIGHT, Math.round(value)));
+}
+
 export const useLayoutStore = defineStore("layout", () => {
   const saved = load();
   const showTrackHeaders = ref(saved.showTrackHeaders ?? true);
@@ -95,9 +111,13 @@ export const useLayoutStore = defineStore("layout", () => {
   const activeTab = ref<PaneId>(
     saved.activeTab && tabs.value.includes(saved.activeTab) ? saved.activeTab : tabs.value[0],
   );
-  // 默认「拖拽」：创建是最常用的动作，框选 / 切分随时可以切（顶栏按钮 / 快捷键 1 / 2 / 3）。
+  // 默认「绘制」：创建是最常用的动作，框选 / 切分随时可以切（顶栏按钮 / 快捷键 1 / 2 / 3）。
   const tool = ref<Tool>(TOOLS.includes(saved.tool as Tool) ? (saved.tool as Tool) : "draw");
   const laneHeight = ref(clampLaneHeight(saved.laneHeight ?? 92));
+  // 两个底部窗格默认都打开：它们是各自视图的常规工作区，不是可选的调试面板。
+  const showAutomation = ref(saved.showAutomation ?? true);
+  const automationHeight = ref(clampAutomationHeight(saved.automationHeight ?? 150));
+  const showControllerLane = ref(saved.showControllerLane ?? true);
   const devDrawer = ref(false);
 
   /** 当前提示文案（自动消失）。 */
@@ -105,7 +125,19 @@ export const useLayoutStore = defineStore("layout", () => {
   let toastTimer: number | null = null;
 
   watch(
-    [showTrackHeaders, showInspector, trackWidth, inspectorWidth, tabs, activeTab, tool, laneHeight],
+    [
+      showTrackHeaders,
+      showInspector,
+      trackWidth,
+      inspectorWidth,
+      tabs,
+      activeTab,
+      tool,
+      laneHeight,
+      showAutomation,
+      automationHeight,
+      showControllerLane,
+    ],
     () => {
       localStorage.setItem(
         KEY,
@@ -118,6 +150,9 @@ export const useLayoutStore = defineStore("layout", () => {
           activeTab: activeTab.value,
           tool: tool.value,
           laneHeight: laneHeight.value,
+          showAutomation: showAutomation.value,
+          automationHeight: automationHeight.value,
+          showControllerLane: showControllerLane.value,
         } satisfies Persisted),
       );
     },
@@ -132,6 +167,11 @@ export const useLayoutStore = defineStore("layout", () => {
   /** 调整控制器泳道高度（拖拽分隔线时调用）。 */
   function resizeLane(delta: number): void {
     laneHeight.value = clampLaneHeight(laneHeight.value + delta);
+  }
+
+  /** 调整自动化编辑器高度（拖拽分隔线时调用）。 */
+  function resizeAutomation(delta: number): void {
+    automationHeight.value = clampAutomationHeight(automationHeight.value + delta);
   }
 
   // ---- 面板宽度：左右各有自己的上限 ----
@@ -227,8 +267,12 @@ export const useLayoutStore = defineStore("layout", () => {
     activeTab,
     tool,
     laneHeight,
+    showAutomation,
+    automationHeight,
+    showControllerLane,
     setTool,
     resizeLane,
+    resizeAutomation,
     resizeTrack,
     resizeInspector,
     clampPanes,

@@ -4,7 +4,13 @@
  *
  * `side` 指的是**分隔线相邻的那一侧**，也就是「谁的尺寸会随拖动变化」：
  * - `left` / `right`：竖直分隔线，按 X 轴发出增量；
- * - `top` / `bottom`：水平分隔线，按 Y 轴发出增量（`top` = 上方区域变大 = 往上拖）。
+ * - `top` / `bottom`：水平分隔线，按 Y 轴发出增量。
+ *
+ * 发出的增量一律是「**该侧变大**为正」，与鼠标直觉一致：
+ * - `left`（面板在分隔线左侧）：往右拖变大；
+ * - `right`（面板在右侧）：往左拖变大；
+ * - `top`（面板在分隔线上方）：**往下**拖变大；
+ * - `bottom`（面板在分隔线下方）：**往上**拖变大。
  *
  * 拖拽状态用显式标志位而不是 `hasPointerCapture`：捕获在部分情形下会失败
  * （元素被移除、合成事件），而那种时候拖拽本身仍然应该继续工作。
@@ -35,7 +41,8 @@ function onMove(e: PointerEvent): void {
     const delta = e.clientY - startY;
     if (delta === 0) return;
     startY = e.clientY;
-    emit("resize", props.side === "top" ? -delta : delta);
+    // `top` 的面板在分隔线上方：往下拖（delta>0）变大；`bottom` 反之。
+    emit("resize", props.side === "top" ? delta : -delta);
     return;
   }
   const delta = e.clientX - startX;

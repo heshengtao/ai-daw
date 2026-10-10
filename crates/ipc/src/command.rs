@@ -1,4 +1,6 @@
-use crate::model::{AudioSource, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, TrackId};
+use crate::model::{
+    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, Send, TrackId,
+};
 
 /// 命令：期望的状态变更请求。
 ///
@@ -16,6 +18,30 @@ pub enum Command {
     RemoveKeyframe { beat: f64 },
     /// 新增一条轨道。
     AddTrack { name: String },
+    /// 新建一条 MIDI 轨道，并在其上放一个带音符的片段（**一次事务** = 一条撤销记录）。
+    ///
+    /// 与「AddTrack + AddClip + AddNote×N」等价，但轨道 / 片段的 id 在**同一次** `translate` 里
+    /// 分配，所以调用方不必先建轨道再回读 id——「音频转 MIDI」正是这种用法。
+    AddNoteTrack {
+        name: String,
+        start: f64,
+        length: f64,
+        notes: Vec<Note>,
+        /// 新轨道插到第几行（`None` = 追加到末尾）。AI 转 MIDI 时插在源轨道下面。
+        at: Option<usize>,
+    },
+    /// 新建一条音频轨道，并在其上放一个引用素材的片段（**一次事务** = 一条撤销记录）。
+    ///
+    /// 与 `AddNoteTrack` 对称：id 在同一次 `translate` 里分配。「降噪」用它把处理结果放到
+    /// 源轨道**下面**的一条新轨道上，方便和原轨对比试听。
+    AddAudioTrack {
+        name: String,
+        start: f64,
+        length: f64,
+        source: AudioSource,
+        /// 新轨道插到第几行（`None` = 追加到末尾）。
+        at: Option<usize>,
+    },
     /// 删除一条轨道。
     RemoveTrack(TrackId),
     /// 重命名一条轨道。
@@ -60,6 +86,12 @@ pub enum Command {
     SetSolo { track: TrackId, solo: bool },
     /// 设置总输出增益（dB）。
     SetMasterGain(f32),
+    /// 设置轨道的发送列表（**整体替换**；空 = 清空发送）。
+    SetSends { track: TrackId, sends: Vec<Send> },
+    /// 设置一条自动化车道（**整体替换**该参数的曲线；`points` 为空 = 删除该车道）。
+    ///
+    /// `param` 取名如 `"gain_db"` / `"pan"`；未知名字会被保留但求值时忽略。
+    SetAutomation { track: TrackId, param: String, points: Vec<AutomationPoint> },
     /// 设置轨道乐器的某个参数。
     SetParam { track: TrackId, param: String, value: f32 },
     /// 在轨道效果链末尾追加一个效果器。

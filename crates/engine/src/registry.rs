@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use daw_party_plugin_api::{
+use ai_daw_plugin_api::{
     IoLayout, ParamId, ParamInfo, Plugin, PluginDescriptor, PluginError, PluginKind,
     ProcessContext, TimedMidiEvent,
 };
@@ -13,15 +13,15 @@ use crate::model::TrackId;
 pub const BUILTIN_SYNTH: &str = "builtin.synth";
 
 /// 内置延迟的插件 id。
-pub const BUILTIN_DELAY: &str = daw_party_effects::DELAY_ID;
+pub const BUILTIN_DELAY: &str = ai_daw_effects::DELAY_ID;
 /// 内置混响的插件 id。
-pub const BUILTIN_REVERB: &str = daw_party_effects::REVERB_ID;
+pub const BUILTIN_REVERB: &str = ai_daw_effects::REVERB_ID;
 /// 内置合唱的插件 id。
-pub const BUILTIN_CHORUS: &str = daw_party_effects::CHORUS_ID;
+pub const BUILTIN_CHORUS: &str = ai_daw_effects::CHORUS_ID;
 /// 内置过载/失真的插件 id。
-pub const BUILTIN_DRIVE: &str = daw_party_effects::DRIVE_ID;
+pub const BUILTIN_DRIVE: &str = ai_daw_effects::DRIVE_ID;
 /// 内置两段 EQ 的插件 id。
-pub const BUILTIN_EQ: &str = daw_party_effects::EQ_ID;
+pub const BUILTIN_EQ: &str = ai_daw_effects::EQ_ID;
 
 /// 内置合成器的**出厂预设**：同一套信号链，不同的参数补丁。
 ///
@@ -219,15 +219,15 @@ impl PluginRegistry {
         let mut r = PluginRegistry::new();
         for p in BUILTIN_PRESETS {
             r.register(p.id, move |_track| {
-                Box::new(daw_party_synth::SynthPlugin::preset(p.id, p.name, p.patch))
+                Box::new(ai_daw_synth::SynthPlugin::preset(p.id, p.name, p.patch))
             });
         }
         // 内置效果器：以前空间感只能靠外部 VST3，铺底/弦乐/管乐只能干着听。
-        r.register(BUILTIN_DELAY, |_track| Box::new(daw_party_effects::Delay::new()));
-        r.register(BUILTIN_REVERB, |_track| Box::new(daw_party_effects::Reverb::new()));
-        r.register(BUILTIN_CHORUS, |_track| Box::new(daw_party_effects::Chorus::new()));
-        r.register(BUILTIN_DRIVE, |_track| Box::new(daw_party_effects::Drive::new()));
-        r.register(BUILTIN_EQ, |_track| Box::new(daw_party_effects::Eq::new()));
+        r.register(BUILTIN_DELAY, |_track| Box::new(ai_daw_effects::Delay::new()));
+        r.register(BUILTIN_REVERB, |_track| Box::new(ai_daw_effects::Reverb::new()));
+        r.register(BUILTIN_CHORUS, |_track| Box::new(ai_daw_effects::Chorus::new()));
+        r.register(BUILTIN_DRIVE, |_track| Box::new(ai_daw_effects::Drive::new()));
+        r.register(BUILTIN_EQ, |_track| Box::new(ai_daw_effects::Eq::new()));
         r
     }
 
@@ -264,7 +264,7 @@ impl PluginRegistry {
 
 #[cfg(test)]
 mod tests {
-    // `Plugin` 已由上方模块级 `use daw_party_plugin_api::Plugin;` 经 `super::*` 引入。
+    // `Plugin` 已由上方模块级 `use ai_daw_plugin_api::Plugin;` 经 `super::*` 引入。
     use super::*;
 
     #[test]

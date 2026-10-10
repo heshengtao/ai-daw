@@ -1,12 +1,12 @@
 [package]
-name = "daw-party-asset"
+name = "ai-daw-asset"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 # 解码后的素材类型与引擎共用（引擎不依赖本 crate，故无环）。
-daw-party-engine = { path = "../engine" }
+ai-daw-engine = { path = "../engine" }
 # 音频解码：wav / flac / mp3 / ogg-vorbis / aac / m4a。**MPL-2.0**（未修改依赖，见 NOTICE 与 ROADMAP §3）。
 symphonia = { version = "0.6", features = ["all"] }
 thiserror = "1"

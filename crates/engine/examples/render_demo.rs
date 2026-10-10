@@ -1,10 +1,10 @@
-use daw_party_engine::bus::Engine;
-use daw_party_engine::command::Command;
-use daw_party_engine::event::{Actor, Event};
-use daw_party_engine::model::Note;
-use daw_party_engine::registry::PluginRegistry;
-use daw_party_engine::render::{render, RenderOptions};
-use daw_party_engine::wav::write_wav;
+use ai_daw_engine::bus::Engine;
+use ai_daw_engine::command::Command;
+use ai_daw_engine::event::{Actor, Event};
+use ai_daw_engine::model::Note;
+use ai_daw_engine::registry::PluginRegistry;
+use ai_daw_engine::render::{render, RenderOptions};
+use ai_daw_engine::wav::write_wav;
 
 fn main() {
     let mut e = Engine::new("demo");

@@ -1,8 +1,8 @@
 [package]
-name = "daw-party-synth"
+name = "ai-daw-synth"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-daw-party-plugin-api = { path = "../plugin-api" }
+ai-daw-plugin-api = { path = "../plugin-api" }

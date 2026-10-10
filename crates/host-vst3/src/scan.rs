@@ -2,7 +2,7 @@ use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 
 use clack_host::prelude::*;
-use daw_party_plugin_api::{Plugin, PluginKind};
+use ai_daw_plugin_api::{Plugin, PluginKind};
 use serde::{Deserialize, Serialize};
 use vst3_host::Vst3Host;
 

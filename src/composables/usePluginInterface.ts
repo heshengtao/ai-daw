@@ -57,7 +57,7 @@ export function usePluginInterface() {
       // 内置合成器：一台完整的合成器面板，开在它自己的窗口里。
       if (canonicalPluginId(pluginId) === SYNTH_ID) {
         try {
-          await openSynthWindow(trackId);
+          await openSynthWindow(trackId, plugins.name(pluginId));
           return;
         } catch {
           // 没有独立窗口（浏览器预览 / 建窗失败）就退回侧边栏面板，功能不打折。
@@ -70,7 +70,7 @@ export function usePluginInterface() {
     let lastError = "";
     for (let attempt = 0; attempt < OPEN_ATTEMPTS; attempt += 1) {
       try {
-        await openPluginWindow(trackId);
+        await openPluginWindow(trackId, plugins.name(pluginId));
         return;
       } catch (err) {
         lastError = String(err);
@@ -96,7 +96,7 @@ export function usePluginInterface() {
         return;
       }
       try {
-        await openEffectWindow(trackId, pluginId);
+        await openEffectWindow(trackId, pluginId, plugins.name(pluginId));
       } catch (err) {
         // 后端只会在「这个效果器已经不在链上」时失败——明说，而不是开一扇空窗。
         layout.notify(String(err));

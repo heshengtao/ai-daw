@@ -30,8 +30,8 @@
 
 use std::ffi::CStr;
 use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use clack_extensions::gui::{GuiConfiguration, GuiError, GuiSize, HostGui, HostGuiImpl, PluginGui};
 use clack_extensions::params::{
@@ -43,12 +43,26 @@ use clack_extensions::thread_check::{HostThreadCheck, HostThreadCheckImpl};
 use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
 use clack_host::prelude::*;
 
-use daw_party_plugin_api::{
+use ai_daw_plugin_api::{
     IoLayout, MidiEvent as HostEvent, ParamId, ParamInfo, Plugin, PluginCapabilities,
     PluginDescriptor, PluginError, PluginKind, ProcessContext, TimedMidiEvent,
 };
 
 use crate::error::HostError;
+
+/// 线程令牌发号器（从 1 开始；0 表示「还没认领音频线程」）。
+static NEXT_THREAD_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+/// 当前线程的稳定数字身份。
+///
+/// `std::thread::ThreadId` 没有稳定的数值形式，而音频线程身份要放进一个**实时安全**的
+/// 原子量里（`process` 每块都可能读），所以这里自己发号：每条线程首次调用时拿一个。
+fn thread_token() -> u64 {
+    thread_local! {
+        static TOKEN: u64 = NEXT_THREAD_TOKEN.fetch_add(1, Ordering::Relaxed);
+    }
+    TOKEN.with(|token| *token)
+}
 
 /// 引擎侧恒为立体声（`Player` 每轨固定送左右两条平面缓冲）。
 const ENGINE_CHANNELS: usize = 2;
@@ -89,13 +103,16 @@ pub type ResizeFn = Box<dyn Fn(u32, u32) + Send + Sync>;
 /// 宿主共享数据（三个线程共用）。
 struct ClapHostShared {
     gui_closed: Arc<AtomicBool>,
-    /// 音频线程 id。
+    /// 音频线程令牌（0 = 还没认领）。
     ///
     /// **不能在建实例时猜**：实例是在主线程上建的，而 `process` 跑在音频后端的回调线程上
     /// ——猜错的话插件每次 `process` 都会认为「宿主把我叫到了错误的线程」，于是每个音频块
-    /// 都往 stderr 打一行日志，把实时线程堵死。所以由第一次 `process` 记下来（且必须在
-    /// `start_processing` **之前**记，插件会在那里问）。
-    audio_thread: Arc<OnceLock<std::thread::ThreadId>>,
+    /// 都往 stderr 打一行日志，把实时线程堵死。所以由第一次 `process` 认领（且必须在
+    /// `start_processing` **之前**认领，插件会在那里问）。
+    ///
+    /// 用原子量而不是 `OnceLock`：重建播放器时实例会被**复用**，那时要能清零，让**新的**
+    /// 回调线程重新认领（见 `ClapHostedPlugin::prepare`）。
+    audio_thread: Arc<AtomicU64>,
     /// 宿主窗口的缩放回调（嵌入模式下插件会要求改窗口大小）。
     resize: Arc<Mutex<Option<ResizeFn>>>,
     /// 插件请求宿主在主线程上叫它一次（`request_callback`）。
@@ -121,9 +138,8 @@ impl HostThreadCheckImpl for ClapHostShared {
 
     fn is_audio_thread(&self) -> bool {
         THREAD_CHECK_CALLS[1].fetch_add(1, Ordering::Relaxed);
-        self.audio_thread
-            .get()
-            .is_some_and(|id| *id == std::thread::current().id())
+        let claimed = self.audio_thread.load(Ordering::Relaxed);
+        claimed != 0 && claimed == thread_token()
     }
 }
 
@@ -213,7 +229,7 @@ impl HostHandlers for ClapHost {
 
 fn host_info() -> HostInfo {
     // 失败只可能是字符串里有 NUL，这里全是常量。
-    HostInfo::new("daw-party", "daw-party", "https://example.com", env!("CARGO_PKG_VERSION"))
+    HostInfo::new("AI DAW", "AI DAW", "https://example.com", env!("CARGO_PKG_VERSION"))
         .expect("host info 常量应当合法")
 }
 
@@ -233,7 +249,7 @@ pub fn gui_mode(entry: &PluginEntry, plugin_id: &CStr) -> Option<GuiMode> {
     let mut instance = PluginInstance::<ClapHost>::new(
         |_| ClapHostShared {
             gui_closed: Arc::new(AtomicBool::new(false)),
-            audio_thread: Arc::new(OnceLock::new()),
+            audio_thread: Arc::new(AtomicU64::new(0)),
             resize: Arc::new(Mutex::new(None)),
             callback_requested: Arc::new(AtomicBool::new(false)),
             restart_requested: Arc::new(AtomicBool::new(false)),
@@ -271,7 +287,7 @@ pub fn probe_gui(entry: &PluginEntry, plugin_id: &CStr) -> Result<String, HostEr
     let mut instance = PluginInstance::<ClapHost>::new(
         |_| ClapHostShared {
             gui_closed: Arc::new(AtomicBool::new(false)),
-            audio_thread: Arc::new(OnceLock::new()),
+            audio_thread: Arc::new(AtomicU64::new(0)),
             resize: Arc::new(Mutex::new(None)),
             callback_requested: Arc::new(AtomicBool::new(false)),
             restart_requested: Arc::new(AtomicBool::new(false)),
@@ -361,6 +377,21 @@ pub struct ClapEditorHandle {
     callback_requested: Arc<AtomicBool>,
 }
 
+impl ClapEditorHandle {
+    /// 读插件的完整状态（供宿主在重建播放器前抢救、重建后 `load_state` 还原）。
+    ///
+    /// 与 [`Plugin::save_state`](ai_daw_plugin_api::Plugin::save_state) 一样属于主线程专属
+    /// 调用（KR-106 之类会核对线程），所以派发到主线程执行；主线程已退出或插件不支持状态
+    /// 存取时返回空——空状态在恢复时会被忽略。
+    pub fn save_state(&self) -> Vec<u8> {
+        let Some(instance) = self.instance.as_ref().map(Arc::clone) else {
+            return Vec::new();
+        };
+        let instance = SharedInstance(instance);
+        crate::dispatch::on_main_thread(move || save_state_here(&instance)).unwrap_or_default()
+    }
+}
+
 /// 释放：句柄可能正好是实例的**最后一个引用**，而释放会触发 `deactivate` + `destroy`
 /// ——两者都只能在主线程调，所以最后一份引用要搬到主线程去丢。
 impl Drop for ClapEditorHandle {
@@ -410,8 +441,8 @@ pub struct ClapHostedPlugin {
     /// `clap_plugin.destroy()`（以及尚未 `deactivate` 时的 `deactivate`）只能在主线程调。
     instance: ManuallyDrop<Arc<Mutex<PluginInstance<ClapHost>>>>,
     gui_closed: Arc<AtomicBool>,
-    /// 音频线程 id（第一次 `process` 时记下，见 [`ClapHostShared::audio_thread`]）。
-    audio_thread: Arc<OnceLock<std::thread::ThreadId>>,
+    /// 音频线程令牌（第一次 `process` 时认领，见 [`ClapHostShared::audio_thread`]）。
+    audio_thread: Arc<AtomicU64>,
     /// 宿主窗口的缩放回调（嵌入模式下插件会要求改窗口大小）。
     resize: Arc<Mutex<Option<ResizeFn>>>,
     /// 插件请求的主线程回调 / 重开处理旗子（与 `ClapHostShared` 共享）。
@@ -476,7 +507,7 @@ impl ClapHostedPlugin {
 
         let gui_closed = Arc::new(AtomicBool::new(false));
         let shared_flag = Arc::clone(&gui_closed);
-        let audio_thread: Arc<OnceLock<std::thread::ThreadId>> = Arc::new(OnceLock::new());
+        let audio_thread: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         let audio_thread_shared = Arc::clone(&audio_thread);
         let resize: Arc<Mutex<Option<ResizeFn>>> = Arc::new(Mutex::new(None));
         let resize_shared = Arc::clone(&resize);
@@ -546,9 +577,8 @@ impl ClapHostedPlugin {
     ///
     /// 给测试用：「在 A 线程建实例、在 B 线程 `process`」时正确答案是 B。
     pub fn audio_thread_is_current(&self) -> bool {
-        self.audio_thread
-            .get()
-            .is_some_and(|id| *id == std::thread::current().id())
+        let claimed = self.audio_thread.load(Ordering::Relaxed);
+        claimed != 0 && claimed == thread_token()
     }
 
     /// 测试用：实例是否已激活（主线程的 `activate` 是否跑过）。
@@ -599,6 +629,27 @@ fn activate_here(
         .0
         .lock()
         .map_err(|_| HostError::Load("插件实例锁中毒".into()))?;
+    instance
+        .activate(|_, _| (), config)
+        .map_err(|e| HostError::Load(e.to_string()))
+}
+
+/// 在**当前线程**（主线程）上**重新激活**实例：先交回上一次的处理器去激活，再激活。
+///
+/// 复用旧实例（跨重建搬过来的）必须走它——clack 对**已激活**实例的 `activate` 会报
+/// `AlreadyActivated`，直接调会让这条轨道彻底静音。
+fn reactivate_here(
+    instance: &SharedInstance,
+    previous: Option<StoppedPluginAudioProcessor<ClapHost>>,
+    config: PluginAudioConfiguration,
+) -> Result<StoppedPluginAudioProcessor<ClapHost>, HostError> {
+    let mut instance = instance
+        .0
+        .lock()
+        .map_err(|_| HostError::Load("插件实例锁中毒".into()))?;
+    if let Some(processor) = previous {
+        instance.deactivate(processor);
+    }
     instance
         .activate(|_, _| (), config)
         .map_err(|e| HostError::Load(e.to_string()))
@@ -897,20 +948,35 @@ impl Plugin for ClapHostedPlugin {
         // 拿回来的是 `Send` 的 `StoppedPluginAudioProcessor` 句柄——**这里不
         // `start_processing`**：那是音频线程专属，留给第一次 `process`。
         //
-        // 每次重建 Player 都是全新的插件实例，所以不存在「先停掉上一次的处理」。
+        // 实例可能是**复用**来的（重建 Player 时从旧播放器搬过来）：那它仍处于已激活状态，
+        // 必须先 deactivate 再 activate。处理器此时应是 `Stopped`——回调在交出实例前已
+        // `release_processing()`（见该方法）。
+        let previous = self.processor.take().map(|processor| processor.into_stopped());
+        // 令牌作废：重建后 `process` 可能跑在**另一条**回调线程上，让它重新认领。
+        self.audio_thread.store(0, Ordering::Relaxed);
+
         let config = self.audio_config();
         let instance = SharedInstance(Arc::clone(&*self.instance));
         let fallback = SharedInstance(Arc::clone(&*self.instance));
-        let activated = match crate::dispatch::on_main_thread(move || activate_here(&instance, config))
-        {
-            Ok(result) => result,
-            // 主线程已退出：退回就地激活。线程不理想，但总比插件整条加载不出来强。
-            Err(_) => activate_here(&fallback, config),
-        };
+        let activated =
+            match crate::dispatch::on_main_thread(move || reactivate_here(&instance, previous, config))
+            {
+                Ok(result) => result,
+                // 主线程已退出：退回就地激活。线程不理想，但总比插件整条加载不出来强。
+                Err(_) => activate_here(&fallback, config),
+            };
         match activated {
             Ok(stopped) => self.processor = Some(PluginAudioProcessor::Stopped(stopped)),
             // 只在这里报一次（非实时线程）；失败意味着这条轨会静音。
             Err(err) => eprintln!("CLAP 插件激活失败：{err}"),
+        }
+    }
+
+    fn release_processing(&mut self) {
+        // 回调（音频线程）在把实例交给重建方之前调用：停掉处理，实例才能被安全地 deactivate。
+        // `stop_processing` 是音频线程专属，所以这件事只能在这里做。
+        if let Some(processor) = self.processor.as_mut() {
+            let _ = processor.ensure_processing_stopped();
         }
     }
 
@@ -932,9 +998,13 @@ impl Plugin for ClapHostedPlugin {
             return;
         }
         // 这一句是「我（音频后端）在哪个线程调用 process」的权威答案，必须在下面
-        // `start_processing` **之前**落笔：插件会在 `start_processing` 里问
-        // `is_audio_thread`，答错它就会判定宿主乱来。只在第一次真正落笔。
-        let _ = self.audio_thread.set(std::thread::current().id());
+        // `start_processing` **之前**认领：插件会在 `start_processing` 里问
+        // `is_audio_thread`，答错它就会判定宿主乱来。只在没被别人认领过时落笔
+        // （`prepare` 复用旧实例时会先清零，让新的回调线程认领）。
+        let token = thread_token();
+        let _ = self
+            .audio_thread
+            .compare_exchange(0, token, Ordering::Relaxed, Ordering::Relaxed);
 
         let Some(processor) = self.processor.as_mut() else { return };
 

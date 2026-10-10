@@ -10,6 +10,7 @@ import {
   AdjustmentsHorizontalIcon,
   CircleStackIcon,
   MusicalNoteIcon,
+  SparklesIcon,
 } from "@heroicons/vue/24/outline";
 import Tooltip from "@/components/common/Tooltip.vue";
 import { PANES, PICKABLE_PANES, useLayoutStore, type PaneId } from "@/stores/layout";
@@ -27,6 +28,7 @@ const ICONS: Record<PaneId, unknown> = {
   inspector: AdjustmentsHorizontalIcon,
   editor: MusicalNoteIcon,
   plugins: CircleStackIcon,
+  ai: SparklesIcon,
 };
 
 function labelOf(id: PaneId): string {

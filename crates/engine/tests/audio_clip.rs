@@ -1,20 +1,20 @@
 //! 音频片段的端到端验证：定帧对齐、混音求和、按比值重采样（变调）、定位、素材缺失。
 //!
-//! 断言用 `daw-party-analysis` 做**量化**核对（频谱峰 / 采样峰值 / RMS），而不是
+//! 断言用 `ai-daw-analysis` 做**量化**核对（频谱峰 / 采样峰值 / RMS），而不是
 //! 「>0 就算过」——这类测试才抓得住「声音放错位置」或「比值算反」这类错误。
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use daw_party_analysis::{analyze, Report};
-use daw_party_engine::audio::DecodedAudio;
-use daw_party_engine::model::{AudioSource, Clip, ClipId, Note, PluginInstance, Project, Track, TrackId};
-use daw_party_engine::player::Player;
-use daw_party_engine::registry::PluginRegistry;
-use daw_party_engine::render::{render, render_with_assets, RenderOptions};
-use daw_party_engine::schedule::ScheduledEvents;
-use daw_party_engine::transport::TransportCommand;
+use ai_daw_analysis::{analyze, Report};
+use ai_daw_engine::audio::DecodedAudio;
+use ai_daw_engine::model::{AudioSource, Clip, ClipId, Note, PluginInstance, Project, Track, TrackId};
+use ai_daw_engine::player::Player;
+use ai_daw_engine::registry::PluginRegistry;
+use ai_daw_engine::render::{render, render_with_assets, RenderOptions};
+use ai_daw_engine::schedule::ScheduledEvents;
+use ai_daw_engine::transport::TransportCommand;
 
 const SR: f64 = 48_000.0;
 /// 120 BPM 下 1 拍 = 0.5 s = 24000 帧。
@@ -65,6 +65,8 @@ fn project_with_audio(path: &str, start_beats: f64, length_beats: f64) -> Projec
             audio: Some(AudioSource { path: path.into(), offset_frames: 0, frames: None }),
         }],
         mixer: Default::default(),
+        sends: vec![],
+        automation: vec![],
     });
     p
 }

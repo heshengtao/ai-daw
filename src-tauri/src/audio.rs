@@ -13,17 +13,19 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use daw_party_engine::event::Event;
-use daw_party_engine::model::{Project, TrackId};
-use daw_party_engine::realtime::{
+use ai_daw_engine::audio::DecodedAudio;
+use ai_daw_engine::event::Event;
+use ai_daw_engine::model::{Project, TrackId};
+use ai_daw_engine::player::ReusableInstances;
+use ai_daw_engine::realtime::{
     default_output_sample_rate, default_output_signature, device_changed, AudioHost,
     RealtimeOptions, SharedStatus, SharedTransport,
 };
-use daw_party_engine::schedule::ScheduledEvents;
-use daw_party_engine::scope::ScopeBuffer;
-use daw_party_engine::transport::TransportCommand;
-use daw_party_engine::SCOPE_CAPACITY;
-use daw_party_host_vst3::{CatalogPlugin, EditorHandle};
+use ai_daw_engine::schedule::ScheduledEvents;
+use ai_daw_engine::scope::ScopeBuffer;
+use ai_daw_engine::transport::TransportCommand;
+use ai_daw_engine::SCOPE_CAPACITY;
+use ai_daw_host_vst3::{CatalogPlugin, EditorHandle};
 
 use crate::assets::AssetCache;
 use crate::plugins::build_registry;
@@ -46,6 +48,15 @@ enum AudioMessage {
     SetCatalog(Vec<CatalogPlugin>),
     /// 立刻重新探测设备并重建宿主（界面上的「重试」，以及设备变化时的自动重建）。
     Retry,
+    /// 打开（或替换）输入设备；`None` = 用默认输入设备。
+    /// 回复是否成功（`None` = 调用方不等待，见 `arm_input` 的 `wait` 参数）。
+    ArmInput(Option<String>, Option<Sender<Result<(), String>>>),
+    /// 关闭输入流。
+    DisarmInput,
+    /// 开始录制。回复是否成功。
+    StartRecording(Sender<Result<(), String>>),
+    /// 结束录制并把采集内容交回（`None` = 没录到东西）。
+    StopRecording(Sender<Option<DecodedAudio>>),
 }
 
 /// 传输状态快照：界面轮询与事件推送共用。
@@ -78,6 +89,8 @@ pub struct AudioEngine {
     status: Arc<SharedStatus>,
     /// 实时波形缓冲（音频线程写、界面读）。播放器重建时沿用同一个，界面不必重新拿。
     scope: Arc<ScopeBuffer>,
+    /// 输入电平表缓冲（音频线程写、界面读），与输出 `scope` 分开。
+    input_scope: Arc<ScopeBuffer>,
 }
 
 impl AudioEngine {
@@ -95,6 +108,7 @@ impl AudioEngine {
         let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let status = Arc::new(SharedStatus::new());
         let scope = Arc::new(ScopeBuffer::new(SCOPE_CAPACITY));
+        let input_scope = Arc::new(ScopeBuffer::new(SCOPE_CAPACITY));
 
         let engine = AudioEngine {
             tx,
@@ -104,9 +118,10 @@ impl AudioEngine {
             error: Arc::clone(&error),
             status: Arc::clone(&status),
             scope: Arc::clone(&scope),
+            input_scope: Arc::clone(&input_scope),
         };
         thread::Builder::new()
-            .name("daw-party-audio".into())
+            .name("ai-daw-audio".into())
             .spawn(move || {
                 run_audio_thread(
                     rx,
@@ -118,6 +133,7 @@ impl AudioEngine {
                     catalog,
                     editor_handles,
                     scope,
+                    input_scope,
                     assets,
                 )
             })
@@ -143,6 +159,67 @@ impl AudioEngine {
     /// 由 `retry_audio` Tauri 命令调用：设备被拔掉后再插回，用户无需重启应用。
     pub fn retry_audio(&self) {
         let _ = self.tx.send(AudioMessage::Retry);
+    }
+
+    /// 打开（或替换）输入设备；`None` = 用默认输入设备。选定后输入电平表即可工作。
+    ///
+    /// `wait = false` 时**只排队不等待**：界面启动时自动选默认设备就走这条——那时音频线程
+    /// 正在建宿主 / 装载工程（工程里有音频片段时还要解码），等它只会白等出一句
+    /// 「等待音频线程超时」；请求排队后照样会被执行。录音前的挂载用 `wait = true`，
+    /// 这样设备打不开能立刻报给用户。
+    pub fn arm_input(&self, device: Option<String>, wait: bool) -> Result<(), String> {
+        if self.unavailable() {
+            return Err(self.unavailable_reason());
+        }
+        if !wait {
+            return self
+                .tx
+                .send(AudioMessage::ArmInput(device, None))
+                .map_err(|_| "音频线程已退出".to_string());
+        }
+        let (tx, rx) = mpsc::channel();
+        self.tx
+            .send(AudioMessage::ArmInput(device, Some(tx)))
+            .map_err(|_| "音频线程已退出".to_string())?;
+        rx.recv_timeout(std::time::Duration::from_secs(3))
+            .map_err(|_| "等待音频线程超时".to_string())?
+    }
+
+    /// 关闭输入流。
+    pub fn disarm_input(&self) {
+        let _ = self.tx.send(AudioMessage::DisarmInput);
+    }
+
+    /// 开始录制。
+    pub fn start_recording(&self) -> Result<(), String> {
+        if self.unavailable() {
+            return Err(self.unavailable_reason());
+        }
+        let (tx, rx) = mpsc::channel();
+        self.tx
+            .send(AudioMessage::StartRecording(tx))
+            .map_err(|_| "音频线程已退出".to_string())?;
+        rx.recv_timeout(std::time::Duration::from_secs(3))
+            .map_err(|_| "等待音频线程超时".to_string())?
+    }
+
+    /// 结束录制并取回采集内容（`None` = 没录到东西）。
+    pub fn stop_recording(&self) -> Result<Option<DecodedAudio>, String> {
+        let (tx, rx) = mpsc::channel();
+        if self.tx.send(AudioMessage::StopRecording(tx)).is_err() {
+            return Ok(None);
+        }
+        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(captured) => Ok(captured),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// 输入电平表：最近 `points` 个采样（供界面画条）。
+    pub fn input_scope_snapshot(&self, points: usize) -> Vec<f32> {
+        let mut out = vec![0.0f32; points.clamp(16, SCOPE_CAPACITY)];
+        self.input_scope.read_last(&mut out);
+        out
     }
 
     /// 实时播放当前是否不可用：设备未打开，**或**运行期的流已死（设备被拔/切换）。
@@ -263,6 +340,14 @@ impl AudioEngine {
                         value: *value,
                     });
                 }
+                // 自动化是「仅混音」变更：把新曲线直接推给音频线程，逐块求值——不必重建。
+                Event::AutomationChanged { track, param, points, .. } => {
+                    self.queue_if_available(TransportCommand::SetAutomation {
+                        track: *track,
+                        param: param.clone(),
+                        points: points.clone(),
+                    });
+                }
                 other => {
                     // 兜底：任何新增事件默认都走重建，宁可多重建也不要漏掉结构变更。
                     debug_assert!(!other.is_mix_only(), "mix-only event must be handled above");
@@ -303,9 +388,27 @@ impl AudioEngine {
     }
 }
 
+/// 让当前宿主把活着的插件实例交出来（宿主为空时返回空表）。
+///
+/// 必须在**丢弃旧宿主之前**调用：实例（连同插件内部状态与已打开的界面窗口）只存在于
+/// 播放器里，重建后靠它们复用。
+fn take_instances(host: &mut Option<AudioHost>, available: &AtomicBool) -> ReusableInstances {
+    // 离线（没打开流 / 流已死）时回调根本不在跑，别白等：直接返回空表，重建走旧路径。
+    if !available.load(Ordering::Relaxed) {
+        return ReusableInstances::default();
+    }
+    match host.as_mut() {
+        Some(host) => host.take_instances(),
+        None => ReusableInstances::default(),
+    }
+}
+
 /// 用当前插件目录构建并启动一次宿主。
 ///
-/// 失败时记录原因并置 `available = false`，返回 `None`。
+/// `carried` 是上一个宿主交出来的插件实例：新播放器会复用 plugin id 仍匹配的那些，
+/// 插件状态与已打开的界面窗口因此跨重建保留。失败时记录原因并置 `available = false`，
+/// 返回 `None`。
+#[allow(clippy::too_many_arguments)]
 fn start_host(
     project: &Project,
     catalog: &[CatalogPlugin],
@@ -317,6 +420,7 @@ fn start_host(
     error: &Mutex<Option<String>>,
     status: &Arc<SharedStatus>,
     scope: &Arc<ScopeBuffer>,
+    carried: ReusableInstances,
 ) -> Option<AudioHost> {
     let rate = match resolve_sample_rate(sample_rate) {
         Ok(rate) => rate,
@@ -338,7 +442,7 @@ fn start_host(
         scope: Arc::clone(scope),
         status: Arc::clone(status),
     };
-    match AudioHost::start_with(schedule, &registry, options, shared.clone()) {
+    match AudioHost::start_with(schedule, &registry, options, shared.clone(), carried) {
         Ok(host) => {
             available.store(true, Ordering::Relaxed);
             *error.lock().unwrap() = None;
@@ -372,6 +476,7 @@ fn rebuild(
     error: &Mutex<Option<String>>,
     scope: &Arc<ScopeBuffer>,
     reset_rate: bool,
+    carried: ReusableInstances,
 ) -> Option<AudioHost> {
     let project = current.clone()?;
     if reset_rate {
@@ -390,6 +495,7 @@ fn rebuild(
         error,
         status,
         scope,
+        carried,
     )
 }
 
@@ -421,6 +527,7 @@ fn run_audio_thread(
     mut catalog: Vec<CatalogPlugin>,
     editor_handles: EditorHandles,
     scope: Arc<ScopeBuffer>,
+    input_scope: Arc<ScopeBuffer>,
     assets: Arc<AssetCache>,
 ) {
     /// 设备轮询间隔：够快能跟上插拔耳机，又不至于每秒多次查询 CoreAudio 太过分。
@@ -445,7 +552,9 @@ fn run_audio_thread(
                 // 重建前后尽量保持听感连续：记住位置与播放状态。
                 let was_playing = shared.is_playing();
                 let frame = shared.position_frames();
-                // 先释放旧宿主（`Drop` 会暂停底层输出流），避免同时占用设备。
+                // 先把活着的插件实例取出来（重建后复用——插件状态与已打开的界面窗口因此
+                // 跨重建保留），再释放旧宿主。
+                let carried = take_instances(&mut host, &available);
                 drop(host.take());
                 host = rebuild(
                     &current,
@@ -459,6 +568,7 @@ fn run_audio_thread(
                     &error,
                     &scope,
                     false,
+                    carried,
                 );
                 restore_transport(&mut host, frame, was_playing);
                 signature = default_output_signature();
@@ -467,6 +577,9 @@ fn run_audio_thread(
                 current = Some((*project).clone());
                 let was_playing = shared.is_playing();
                 let frame = shared.position_frames();
+                // 先把活着的插件实例取出来，让重建后的播放器复用——插件状态与已打开的
+                // 界面窗口因此跨重建保留（改效果链 / 移动片段不再重置乐器、不再关窗）。
+                let carried = take_instances(&mut host, &available);
                 drop(host.take());
                 host = rebuild(
                     &current,
@@ -481,6 +594,7 @@ fn run_audio_thread(
                     &scope,
                     // 工程变化不改采样率（采样率取决于设备），沿用缓存即可。
                     false,
+                    carried,
                 );
                 restore_transport(&mut host, frame, was_playing);
                 // 重建后记录当前设备身份，避免下一次轮询把同一设备误判为「变化」。
@@ -489,6 +603,8 @@ fn run_audio_thread(
             Ok(AudioMessage::Retry) => {
                 let was_playing = shared.is_playing();
                 let frame = shared.position_frames();
+                // 先把活着的插件实例取出来，让重建后的播放器复用。
+                let carried = take_instances(&mut host, &available);
                 drop(host.take());
                 // 设备可能换了：清采样率缓存后重新探测。
                 host = rebuild(
@@ -503,9 +619,45 @@ fn run_audio_thread(
                     &error,
                     &scope,
                     true,
+                    carried,
                 );
                 restore_transport(&mut host, frame, was_playing);
                 signature = default_output_signature();
+            }
+            Ok(AudioMessage::ArmInput(device, reply)) => {
+                let result = match host.as_mut() {
+                    Some(h) => h
+                        .arm_input(device.clone(), Arc::clone(&input_scope))
+                        .map_err(|e| e.to_string()),
+                    None => Err("音频输出不可用，无法打开输入设备".to_string()),
+                };
+                match reply {
+                    Some(reply) => {
+                        let _ = reply.send(result);
+                    }
+                    // 没人等在对面（界面启动时的自动选设备）：失败了只记一条日志。
+                    None => {
+                        if let Err(e) = result {
+                            eprintln!("[audio] 打开输入设备失败：{e}");
+                        }
+                    }
+                }
+            }
+            Ok(AudioMessage::DisarmInput) => {
+                if let Some(h) = host.as_mut() {
+                    h.disarm_input();
+                }
+            }
+            Ok(AudioMessage::StartRecording(reply)) => {
+                let result = match host.as_mut() {
+                    Some(h) => h.start_recording().map_err(|e| e.to_string()),
+                    None => Err("音频输出不可用，无法录音".to_string()),
+                };
+                let _ = reply.send(result);
+            }
+            Ok(AudioMessage::StopRecording(reply)) => {
+                let captured = host.as_mut().and_then(|h| h.stop_recording());
+                let _ = reply.send(captured);
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 // 设备换了，或上次建流失败/流已死：重建一次（保留位置与播放状态）。
@@ -520,6 +672,9 @@ fn run_audio_thread(
                 }
                 let was_playing = shared.is_playing();
                 let frame = shared.position_frames();
+                // 先把活着的插件实例取出来，让重建后的播放器复用——插件状态与已打开的
+                // 界面窗口因此跨重建保留（改效果链 / 移动片段不再重置乐器、不再关窗）。
+                let carried = take_instances(&mut host, &available);
                 drop(host.take());
                 host = rebuild(
                     &current,
@@ -533,6 +688,7 @@ fn run_audio_thread(
                     &error,
                     &scope,
                     true,
+                    carried,
                 );
                 restore_transport(&mut host, frame, was_playing);
                 // 记录本次探测到（并已据此重建）的设备身份，稳住下一轮判定。

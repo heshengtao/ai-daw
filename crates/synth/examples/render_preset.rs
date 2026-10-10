@@ -1,13 +1,13 @@
 //! 离线渲染一个预设参数集，写成 16-bit WAV。
 //!
 //! 用途：给预设做**客观测量**（频谱重心、起振时间、衰减、混叠量），而不是靠耳朵猜。
-//! 用法：`cargo run -p daw-party-synth --example render_preset -- <presets.json> <outdir>`
+//! 用法：`cargo run -p ai-daw-synth --example render_preset -- <presets.json> <outdir>`
 //!
 //! presets.json 形如 `[{ "id": "...", "params": { "cutoff": 0.7, ... } }, ...]`，
 //! 参数是**完整**的（调用方负责把补丁摊平）。
 
-use daw_party_plugin_api::{MidiEvent, ParamId, Plugin, ProcessContext, TimedMidiEvent};
-use daw_party_synth::SynthPlugin;
+use ai_daw_plugin_api::{MidiEvent, ParamId, Plugin, ProcessContext, TimedMidiEvent};
+use ai_daw_synth::SynthPlugin;
 use std::io::Write;
 
 const SR: f64 = 48_000.0;

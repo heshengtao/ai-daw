@@ -7,10 +7,12 @@ import {
   AdjustmentsHorizontalIcon,
   CircleStackIcon,
   MusicalNoteIcon,
+  SparklesIcon,
 } from "@heroicons/vue/24/outline";
 import InspectorPanel from "./InspectorPanel.vue";
 import PluginEditorPane from "./panes/PluginEditorPane.vue";
 import PluginsPane from "./panes/PluginsPane.vue";
+import AiPanel from "./panes/AiPanel.vue";
 import { PICKABLE_PANES, useLayoutStore, type PaneId } from "@/stores/layout";
 import { useI18n } from "@/i18n";
 
@@ -21,6 +23,7 @@ const ICONS: Record<PaneId, unknown> = {
   inspector: AdjustmentsHorizontalIcon,
   editor: MusicalNoteIcon,
   plugins: CircleStackIcon,
+  ai: SparklesIcon,
 };
 </script>
 
@@ -47,6 +50,7 @@ const ICONS: Record<PaneId, unknown> = {
       <InspectorPanel v-else-if="layout.activeTab === 'inspector'" />
       <PluginEditorPane v-else-if="layout.activeTab === 'editor'" />
       <PluginsPane v-else-if="layout.activeTab === 'plugins'" />
+      <AiPanel v-else-if="layout.activeTab === 'ai'" />
     </div>
   </aside>
 </template>

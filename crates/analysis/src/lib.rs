@@ -1,6 +1,6 @@
 //! 工程音频分析：响度 / 频谱 / 峰值。
 //!
-//! 输入是**交错（interleaved）f32 采样**（与 `daw_party_engine::audio::AudioBuffer::data()`
+//! 输入是**交错（interleaved）f32 采样**（与 `ai_daw_engine::audio::AudioBuffer::data()`
 //! 一致），这里只做纯计算，不认识工程与渲染——因此离线导出与实时回调都能复用。
 //!
 //! - 响度：EBU R128 / ITU-R BS.1770（`ebur128`）——积分响度（LUFS）、短时峰值、响度范围（LU）、

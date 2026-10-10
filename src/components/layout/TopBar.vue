@@ -15,7 +15,7 @@ import {
   Squares2X2Icon,
   PencilSquareIcon,
   AdjustmentsHorizontalIcon,
-  HandRaisedIcon,
+  PaintBrushIcon,
   MusicalNoteIcon,
 } from "@heroicons/vue/24/outline";
 import Tooltip from "@/components/common/Tooltip.vue";
@@ -63,6 +63,20 @@ function isActive(path: string): boolean {
   return route.path === path || route.path.startsWith(`${path}/`);
 }
 
+/** 当前视图是否有底部窗格（编排的自动化车道 / 钢琴卷帘的控制器泳道）。 */
+const hasBottomLane = computed(() => isActive("/arrange") || isActive("/edit"));
+
+/** 底部窗格是否打开：按当前视图取各自的标志（两个视图各记一份）。 */
+const bottomLaneOn = computed(() =>
+  isActive("/edit") ? layout.showControllerLane : layout.showAutomation,
+);
+
+/** 开关**当前视图**的底部窗格。 */
+function toggleBottomLane(): void {
+  if (isActive("/edit")) layout.showControllerLane = !layout.showControllerLane;
+  else layout.showAutomation = !layout.showAutomation;
+}
+
 const projectName = computed(() => {
   const name = projectStore.project?.name;
   return !name || name === "untitled" ? i18n.t("settings.untitled") : name;
@@ -71,10 +85,10 @@ const projectName = computed(() => {
 /** 有未保存改动时在工程名旁显示一个小圆点。 */
 const dirty = computed(() => projectStore.dirty);
 
-/** 三种鼠标模式（顺序即展示顺序）：框选 / 拖拽 / 分隔。 */
+/** 三种鼠标模式（顺序即展示顺序）：绘制 / 框选 / 分隔。 */
 const toolOptions: { id: Tool; icon: unknown; labelKey: string }[] = [
+  { id: "draw", icon: PaintBrushIcon, labelKey: "topbar.toolDraw" },
   { id: "select", icon: MarqueeIcon, labelKey: "topbar.toolSelect" },
-  { id: "draw", icon: HandRaisedIcon, labelKey: "topbar.toolDraw" },
   { id: "split", icon: SplitIcon, labelKey: "topbar.toolSplit" },
 ];
 
@@ -166,7 +180,7 @@ function onMouseDown(e: MouseEvent): void {
 
         <span class="bar-sep" />
 
-        <!-- 鼠标模式三选一：框选 / 拖拽 / 分隔。共用左键手势，必须显式切换。 -->
+        <!-- 鼠标模式三选一：绘制 / 框选 / 分隔。共用左键手势，必须显式切换。 -->
         <div class="tool-seg" role="group" :aria-label="i18n.t('topbar.toolGroup')">
           <Tooltip v-for="t in toolOptions" :key="t.id" :text="i18n.t(t.labelKey)" align="end">
             <button
@@ -180,6 +194,25 @@ function onMouseDown(e: MouseEvent): void {
             </button>
           </Tooltip>
         </div>
+
+        <!-- 底部窗格开关：编排 = 自动化车道；编辑 = 控制器（力度）泳道。
+             **按钮常驻**：其他视图暂时没有底部窗格，就显示为禁用（将来会用得上）。 -->
+        <span class="bar-sep" />
+        <Tooltip
+          :text="hasBottomLane ? i18n.t('topbar.bottomLane') : i18n.t('topbar.bottomLaneUnavailable')"
+          align="end"
+        >
+          <button
+            class="bar-btn"
+            :class="{ on: hasBottomLane && bottomLaneOn }"
+            :disabled="!hasBottomLane"
+            :aria-label="i18n.t('topbar.bottomLaneLabel')"
+            :aria-pressed="hasBottomLane && bottomLaneOn"
+            @click="toggleBottomLane"
+          >
+            <PanelIcon side="bottom" :filled="hasBottomLane && bottomLaneOn" class="bar-icon" />
+          </button>
+        </Tooltip>
 
         <span class="bar-sep" />
 
@@ -361,6 +394,16 @@ function onMouseDown(e: MouseEvent): void {
 .bar-btn.on {
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
+}
+/* 禁用（当前视图暂时没有底部窗格）：变灰、不可点、悬停/按下都不亮 */
+.bar-btn:disabled,
+.bar-btn:disabled:hover,
+.bar-btn:disabled:active {
+  opacity: 0.38;
+  cursor: default;
+  color: rgb(var(--md-on-surface-variant));
+  background-color: transparent;
+  transform: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

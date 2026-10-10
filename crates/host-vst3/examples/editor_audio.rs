@@ -7,15 +7,15 @@
 //! 只要本机装了 KR-106（VST3 / CLAP），就能对比两种格式的表现：
 //!
 //! ```text
-//! cargo run -p daw-party-host-vst3 --example editor_audio -- vst3
-//! cargo run -p daw-party-host-vst3 --example editor_audio -- clap
+//! cargo run -p ai-daw-host-vst3 --example editor_audio -- vst3
+//! cargo run -p ai-daw-host-vst3 --example editor_audio -- clap
 //! ```
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use daw_party_plugin_api::{MidiEvent, ProcessContext, TimedMidiEvent};
+use ai_daw_plugin_api::{MidiEvent, ProcessContext, TimedMidiEvent};
 
 const SR: f64 = 48_000.0;
 const BLOCK: usize = 512;
@@ -24,9 +24,9 @@ const SECONDS: f64 = 6.0;
 
 fn main() {
     let format = std::env::args().nth(1).unwrap_or_else(|| "vst3".to_string());
-    daw_party_host_vst3::mark_main_thread();
+    ai_daw_host_vst3::mark_main_thread();
 
-    let Some(scanned) = daw_party_host_vst3::scan()
+    let Some(scanned) = ai_daw_host_vst3::scan()
         .into_iter()
         .find(|p| p.name.contains("KR-106") && p.format == format)
     else {
@@ -35,7 +35,7 @@ fn main() {
     };
     let entry = scanned.catalog();
 
-    let (plugin, handle) = match daw_party_host_vst3::load_catalog_plugin_with_editor(&entry) {
+    let (plugin, handle) = match ai_daw_host_vst3::load_catalog_plugin_with_editor(&entry) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("加载失败：{e}");

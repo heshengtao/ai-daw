@@ -23,7 +23,7 @@ const FALLBACK: Locale = LOCALES[0].id;
 const MESSAGES: Record<Locale, Record<string, string>> = { zh, en };
 
 /** 语言选择的持久化键。 */
-const KEY = "daw-party-locale";
+const KEY = "ai-daw-locale";
 
 /** 文案里 `{name}` 形式的占位由 `vars` 替换。 */
 export type Vars = Record<string, string | number>;

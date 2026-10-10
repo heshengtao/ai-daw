@@ -1,11 +1,38 @@
 use std::collections::HashMap;
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 
-use daw_party_plugin_api::{MidiEvent, ParamId, Plugin, PluginKind, ProcessContext, TimedMidiEvent};
+use ai_daw_plugin_api::{MidiEvent, ParamId, Plugin, PluginKind, ProcessContext, TimedMidiEvent};
 
 use crate::model::MixerChannel;
 use crate::registry::PluginRegistry;
-use crate::schedule::{ScheduledAudioClip, ScheduledEvents, ScheduledMidi};
+use crate::schedule::{
+    LaneParam, ScheduledAudioClip, ScheduledEvents, ScheduledLane, ScheduledMidi, ScheduledSend,
+};
+use crate::tempo::TempoMap;
 use crate::transport::TransportCommand;
+
+/// 重建播放器时可以**搬过去**的插件实例。
+///
+/// 实例上挂着两样重建会丢掉的东西：外部插件的内部补丁（旋钮 / 预设），以及已打开的原生界面
+/// 窗口（窗口绑定在实例上）。所以结构性变更（改效果链、移动片段……）在重建前先把实例取出来，
+/// 新建播放器时原样复用——**配置不重置、窗口不关闭**。
+#[derive(Default)]
+pub struct ReusableInstances {
+    /// 轨道 → 乐器实例。
+    pub instruments: HashMap<crate::model::TrackId, Box<dyn Plugin>>,
+    /// 轨道 → 效果链实例（整条链）。
+    pub effects: HashMap<crate::model::TrackId, Vec<Box<dyn Plugin>>>,
+}
+
+/// 「回收槽」：宿主在重建前装上一个发送端；回调收到 [`TransportCommand::YieldInstances`]
+/// 时取走它，把实例发送出来。
+pub type YieldSink = Arc<Mutex<Option<Sender<ReusableInstances>>>>;
+
+/// 建一个空的回收槽（离线渲染 / 测试用：没有重建，也就没人来取）。
+fn empty_yield_sink() -> YieldSink {
+    Arc::new(Mutex::new(None))
+}
 
 /// dB → 线性增益。
 pub(crate) fn db_to_linear(db: f32) -> f32 {
@@ -165,6 +192,10 @@ struct TrackVoice {
     cursor: usize,
     /// 音频片段（构造时定长；播放时只推进游标）。
     audio: Vec<AudioPlayback>,
+    /// 自动化车道（可实时更新）。
+    lanes: Vec<ScheduledLane>,
+    /// 发送（目标为轨道下标；可实时更新）。
+    sends: Vec<ScheduledSend>,
     /// 混音参数（可实时更新，不必重建事件表）。
     gain_db: f32,
     pan: f32,
@@ -202,6 +233,18 @@ pub struct Player {
     scratch_events: Vec<TimedMidiEvent>,
     /// 待送达的试听音（界面上的键盘按下的音），下一块开头送进对应轨道。
     audition: Vec<(crate::model::TrackId, MidiEvent)>,
+    /// 重建播放器前，宿主在这里放一个发送端；回调收到 `YieldInstances` 时把实例交出去。
+    yield_sink: YieldSink,
+    /// 每轨的**总线输入**累加缓冲（交错立体声，长度 `2 * max_block`）。
+    ///
+    /// 处理顺序保证「来源在前、目标在后」，于是目标轨看到的总线输入已经汇总完毕。
+    bus_in: Vec<Vec<f32>>,
+    /// 处理顺序（轨道下标）。
+    order: Vec<usize>,
+    /// 速度表（自动化按拍求值）。
+    tempo_map: TempoMap,
+    /// 是否有任何自动化车道（没有就跳过每块的混音重算）。
+    has_automation: bool,
 }
 
 impl Player {
@@ -230,22 +273,65 @@ impl Player {
         sample_rate: f64,
         max_block: usize,
     ) -> Self {
+        Self::with_carried(
+            schedule,
+            registry,
+            sample_rate,
+            max_block,
+            ReusableInstances::default(),
+            empty_yield_sink(),
+        )
+    }
+
+    /// 与 [`Player::new`] 相同，另外复用调用方交来的插件实例，并装上重建用的回收槽。
+    ///
+    /// 「复用」是保住插件状态与界面窗口的关键：只有 **plugin id 一致**的实例才会被搬过来
+    /// （乐器按 id 单个比对，效果链按整条链的 id 序列比对）。对不上的旧实例在**控制侧**释放。
+    pub fn with_carried(
+        schedule: ScheduledEvents,
+        registry: &PluginRegistry,
+        sample_rate: f64,
+        max_block: usize,
+        mut carried: ReusableInstances,
+        yield_sink: YieldSink,
+    ) -> Self {
         let tempo = schedule.tempo;
         let tempo_points = schedule.tempo_points.clone();
         let end_frame = schedule.end_frame;
         let master = schedule.master;
+        let tempo_map = schedule.tempo_map.clone();
+        // 处理顺序：由调度表给出；万一不是完整排列，退回顺序处理（绝不让某轨被漏掉）。
+        let order: Vec<usize> = if schedule.order.len() == schedule.tracks.len() {
+            schedule.order.clone()
+        } else {
+            (0..schedule.tracks.len()).collect()
+        };
+        let has_automation = schedule.tracks.iter().any(|t| !t.lanes.is_empty());
         // 单块内某轨最多发出的事件数 = 该轨事件总数上界（游标单调前进，每块只消费一次）。
         let max_track_events = schedule.tracks.iter().map(|t| t.events.len()).max().unwrap_or(0);
         let mut tracks = Vec::with_capacity(schedule.tracks.len());
         for st in &schedule.tracks {
             // 乐器是**可选**的：没挂乐器（或插件缺失）的轨道仍然存在，只为它的音频片段出声。
             let instrument = st.instrument.as_ref();
-            let mut plugin: Option<Box<dyn Plugin>> =
-                instrument.and_then(|i| registry.create(&i.plugin_id, st.track_id));
+            // 优先复用搬过来的实例（保住插件内部状态与已打开的界面窗口）；id 变了才新建。
+            let mut plugin: Option<Box<dyn Plugin>> = instrument.and_then(|instance| {
+                if let Some(existing) = carried.instruments.remove(&st.track_id) {
+                    if existing.descriptor().id == instance.plugin_id {
+                        return Some(existing);
+                    }
+                    // id 不匹配的旧实例在**控制侧**释放，不带进新播放器。
+                }
+                registry.create(&instance.plugin_id, st.track_id)
+            });
             // 不支持 per-note 音量的插件：把音量折进力度，保住旧听感。
             let mut events = st.events.clone();
             if let (Some(p), Some(instance)) = (plugin.as_mut(), instrument) {
                 p.prepare(sample_rate, max_block);
+                // 先还原**插件自身的状态**（外部插件的内部补丁），再用工程记的参数覆盖。
+                // 状态为空表示「没有可还原的」，跳过即可。
+                if !instance.state.is_empty() {
+                    let _ = p.load_state(&instance.state);
+                }
                 for (id, value) in &instance.params {
                     p.set_param(&id.clone().into(), *value);
                 }
@@ -255,13 +341,39 @@ impl Player {
             }
             // 效果链：只收「效果」类插件。缺失或类型不符的条目直接跳过——
             // 让整条链静音比「少一个效果」糟糕得多。
+            //
+            // 复用旧实例的条件是**整条链的 id 序列完全一致**：顺序或组成一变，实例就对不上号。
+            // 对不上的旧链在这里（控制侧）释放。
+            let mut carried_chain: Vec<Option<Box<dyn Plugin>>> = carried
+                .effects
+                .remove(&st.track_id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(Some)
+                .collect();
+            let reuse_chain = carried_chain.len() == st.effects.len()
+                && carried_chain
+                    .iter()
+                    .flatten()
+                    .zip(&st.effects)
+                    .all(|(plugin, fx)| plugin.descriptor().id == fx.plugin_id);
             let mut effects = Vec::with_capacity(st.effects.len());
-            for fx in &st.effects {
-                let Some(mut fx_plugin) = registry.create(&fx.plugin_id, st.track_id) else { continue };
+            for (index, fx) in st.effects.iter().enumerate() {
+                let mut fx_plugin = if reuse_chain {
+                    carried_chain[index].take().expect("复用链长度已校验")
+                } else {
+                    match registry.create(&fx.plugin_id, st.track_id) {
+                        Some(plugin) => plugin,
+                        None => continue,
+                    }
+                };
                 if fx_plugin.descriptor().kind != PluginKind::Effect {
                     continue;
                 }
                 fx_plugin.prepare(sample_rate, max_block);
+                if !fx.state.is_empty() {
+                    let _ = fx_plugin.load_state(&fx.state);
+                }
                 for (id, value) in &fx.params {
                     fx_plugin.set_param(&id.clone().into(), *value);
                 }
@@ -280,6 +392,13 @@ impl Player {
                 events,
                 cursor: 0,
                 audio,
+                // 预留几格：实时 `SetAutomation` 会 push 新车道，不能因此扩容（音频线程不分配）。
+                lanes: {
+                    let mut lanes = st.lanes.clone();
+                    lanes.reserve(4);
+                    lanes
+                },
+                sends: st.sends.clone(),
                 gain_db: st.mixer.gain_db,
                 pan: st.mixer.pan,
                 mute: st.mixer.mute,
@@ -291,6 +410,7 @@ impl Player {
             });
         }
         let mut player = Player {
+            bus_in: vec![vec![0.0f32; max_block * 2]; tracks.len()],
             tracks,
             sample_rate,
             tempo,
@@ -308,6 +428,10 @@ impl Player {
             scratch_right: vec![0.0; max_block],
             scratch_events: Vec::with_capacity(max_track_events.max(64) + AUDITION_CAPACITY),
             audition: Vec::with_capacity(AUDITION_CAPACITY),
+            yield_sink,
+            order,
+            tempo_map,
+            has_automation,
         };
         player.refresh_mix();
         player
@@ -364,6 +488,8 @@ impl Player {
     ///
     /// 实时安全：只做算术与字段写入，不分配内存。
     fn refresh_mix(&mut self) {
+        // 自动化按「拍」求值：把当前帧位置换算成拍（速度表支持分段速度）。
+        let beats = self.tempo_map.seconds_to_beats(self.position as f64 / self.sample_rate);
         let any_solo = self.tracks.iter().any(|t| t.solo);
         for track in self.tracks.iter_mut() {
             let want = !track.mute && (!any_solo || track.solo);
@@ -373,8 +499,19 @@ impl Player {
                 }
             }
             track.audible = want;
-            let gain = db_to_linear(track.gain_db);
-            let (l, r) = pan_gains(track.pan);
+            // 自动化**覆盖**推子值（读取模式）：有曲线的参数以曲线为准。
+            let mut gain_db = track.gain_db;
+            let mut pan = track.pan;
+            for lane in &track.lanes {
+                if let Some(value) = lane.value_at(beats) {
+                    match lane.param {
+                        LaneParam::GainDb => gain_db = MixerChannel::normalize_gain_db(value),
+                        LaneParam::Pan => pan = MixerChannel::normalize_pan(value),
+                    }
+                }
+            }
+            let gain = db_to_linear(gain_db);
+            let (l, r) = pan_gains(pan);
             track.left_gain = gain * l;
             track.right_gain = gain * r;
         }
@@ -445,10 +582,39 @@ impl Player {
                 self.master_gain_db = MixerChannel::normalize_gain_db(gain_db);
                 self.refresh_mix();
             }
+            TransportCommand::SetAutomation { track, param, points } => {
+                // 未知参数名：忽略（v1 只认 gain_db / pan）。
+                let Some(lane_param) = LaneParam::from_name(&param) else {
+                    return;
+                };
+                // 控制侧已归一化；这里就地过滤 + 排序（`retain` / `sort_unstable_by` 都不分配），
+                // 再整体替换该参数的车道——音频线程因此不必扩容。
+                let mut points = points;
+                points.retain(|p| p.beat.is_finite() && p.value.is_finite());
+                points.sort_unstable_by(|a, b| {
+                    a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let empty = points.is_empty();
+                for voice in self.tracks.iter_mut() {
+                    if voice.track_id == track {
+                        voice.lanes.retain(|lane| lane.param != lane_param);
+                        if !empty {
+                            voice.lanes.push(ScheduledLane {
+                                param: lane_param,
+                                points: std::mem::take(&mut points),
+                            });
+                        }
+                        break;
+                    }
+                }
+                self.has_automation = self.tracks.iter().any(|t| !t.lanes.is_empty());
+                self.refresh_mix();
+            }
             TransportCommand::Audition { track, note, velocity, on } => {
                 self.push_audition(track, note, velocity, on);
             }
             TransportCommand::SetLoop(on) => self.looping = on,
+            TransportCommand::YieldInstances => self.yield_instances(),
             TransportCommand::SetParam { track, effect, param, value } => {
                 // 非有限值会让插件内部出现 NaN，直接拒绝。
                 if !value.is_finite() {
@@ -474,6 +640,33 @@ impl Player {
         }
     }
 
+    /// 把当前**活着的**实例交给宿主预置的回收槽（见 [`ReusableInstances`]）。
+    ///
+    /// 没有回收槽（离线渲染 / 测试）就什么都不做。交出之后本播放器已无插件，但宿主马上会
+    /// 把它连同底层流一起丢弃，所以这段空窗只持续到下一块。
+    fn yield_instances(&mut self) {
+        let Some(sink) = self.yield_sink.lock().unwrap().take() else {
+            return;
+        };
+        let mut carried = ReusableInstances::default();
+        for voice in &mut self.tracks {
+            if let Some(mut plugin) = voice.plugin.take() {
+                // 这里正是**音频线程**：让插件把处理停掉，之后重建方才能安全地复用/重激活它。
+                plugin.release_processing();
+                carried.instruments.insert(voice.track_id, plugin);
+            }
+            if !voice.effects.is_empty() {
+                let mut chain = std::mem::take(&mut voice.effects);
+                for plugin in chain.iter_mut() {
+                    plugin.release_processing();
+                }
+                carried.effects.insert(voice.track_id, chain);
+            }
+        }
+        // 接收端已经走了（宿主放弃等待）也无所谓：实例就地释放，重建照常进行。
+        let _ = sink.send(carried);
+    }
+
     /// 从无锁队列取出所有待处理传输命令并应用。
     pub fn drain_commands(&mut self, receiver: &mut crate::command_queue::CommandReceiver) {
         receiver.drain(|command| self.apply_command(command));
@@ -491,6 +684,11 @@ impl Player {
         debug_assert!(out.len() >= frames * 2);
         let out = &mut out[..frames * 2];
         out.fill(0.0);
+
+        // 有自动化时逐块重算混音（自动化曲线随时间变化）。没有则跳过——省掉每块的遍历。
+        if self.has_automation {
+            self.refresh_mix();
+        }
 
         let playing = self.playing;
         let block_start = self.position;
@@ -514,9 +712,16 @@ impl Player {
             playing,
         };
 
-        let Player { tracks, scratch_left, scratch_right, scratch_events, audition, .. } = self;
+        let Player { tracks, bus_in, order, scratch_left, scratch_right, scratch_events, audition, .. } = self;
 
-        for track in tracks.iter_mut() {
+        // 立体声长度：总线输入缓冲按它切片。
+        let stereo = frames * 2;
+
+        // 按拓扑顺序逐轨处理：**被发送的目标排在其来源之后**，所以轮到一条总线时，
+        // 上游送来的信号已经全部累加进 `bus_in[idx]`。
+        for &idx in order.iter() {
+            let track = &mut tracks[idx];
+
             // 即便本轨当前不可听，也要推进事件游标：否则解除静音时会把积压的历史
             // 音符一次性补发出去。停止时游标原地不动，恢复播放才不会跳音。
             scratch_events.clear();
@@ -542,7 +747,13 @@ impl Player {
                 }
             }
 
+            if bus_in[idx].len() < stereo {
+                bus_in[idx].resize(stereo, 0.0);
+            }
+
             if !track.audible {
+                // 不可听：丢弃累积到的总线输入（被静音的总线不该把上游信号透出去）。
+                bus_in[idx][..stereo].fill(0.0);
                 continue;
             }
 
@@ -556,6 +767,16 @@ impl Player {
             let right = &mut scratch_right[..frames];
             left.fill(0.0);
             right.fill(0.0);
+
+            // 先把「总线输入」并入本轨（本轨作为总线时这里就是上游汇总来的信号）。
+            {
+                let incoming = &mut bus_in[idx][..stereo];
+                for i in 0..frames {
+                    left[i] += incoming[i * 2];
+                    right[i] += incoming[i * 2 + 1];
+                }
+                incoming.fill(0.0);
+            }
 
             // 乐器（可选）与音频片段**相加**（缓冲此前已清零），再一起过效果链：
             // 于是音频片段与 MIDI 一样经过轨道效果、轨道增益/声像与 master 增益。
@@ -574,9 +795,20 @@ impl Player {
                 fx.process(&ctx, &mut [&mut left[..], &mut right[..]], &[]);
             }
 
+            // 推子后的信号：进 master，并按发送**复制**一份到目标总线。
+            let gl = track.left_gain;
+            let gr = track.right_gain;
             for i in 0..frames {
-                out[i * 2] += left[i] * track.left_gain;
-                out[i * 2 + 1] += right[i] * track.right_gain;
+                out[i * 2] += left[i] * gl;
+                out[i * 2 + 1] += right[i] * gr;
+            }
+            for send in &track.sends {
+                let gain = send.gain;
+                let dest = &mut bus_in[send.target_index][..stereo];
+                for i in 0..frames {
+                    dest[i * 2] += left[i] * gl * gain;
+                    dest[i * 2 + 1] += right[i] * gr * gain;
+                }
             }
         }
 
@@ -600,11 +832,14 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Clip, ClipId, Note, PluginInstance, Project, Track, TrackId};
+    use crate::model::{
+        AutomationLane, AutomationPoint, Clip, ClipId, Note, PluginInstance, Project, Send, Track,
+        TrackId,
+    };
     use crate::registry::PluginRegistry;
     use crate::schedule::ScheduledEvents;
     use crate::transport::TransportCommand;
-    use daw_party_plugin_api::{IoLayout, ParamId, ParamInfo, PluginDescriptor, PluginError};
+    use ai_daw_plugin_api::{IoLayout, ParamId, ParamInfo, PluginDescriptor, PluginError};
 
     /// 测试用效果器：把信号砍半（就地处理，与引擎契约一致）。
     struct HalfGain;
@@ -643,6 +878,44 @@ mod tests {
         }
     }
 
+    /// 输出电平由**状态**决定的音源：用来验证「工程里记的插件状态会在创建实例时还原」。
+    struct StateTone {
+        level: f32,
+    }
+
+    impl Plugin for StateTone {
+        fn descriptor(&self) -> PluginDescriptor {
+            PluginDescriptor {
+                id: "test.stateful".into(),
+                name: "Stateful".into(),
+                kind: PluginKind::Instrument,
+                io: IoLayout { inputs: 0, outputs: 2 },
+                capabilities: Default::default(),
+            }
+        }
+        fn params(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn get_param(&self, _id: &ParamId) -> Option<f32> {
+            None
+        }
+        fn set_param(&mut self, _id: &ParamId, _value: f32) {}
+        fn prepare(&mut self, _sample_rate: f64, _block_size: usize) {}
+        fn reset(&mut self) {}
+        fn process(&mut self, _ctx: &ProcessContext, audio: &mut [&mut [f32]], _events: &[TimedMidiEvent]) {
+            for channel in audio.iter_mut() {
+                channel.fill(self.level);
+            }
+        }
+        fn save_state(&self) -> Vec<u8> {
+            vec![(self.level * 255.0) as u8]
+        }
+        fn load_state(&mut self, state: &[u8]) -> Result<(), PluginError> {
+            self.level = state.first().copied().unwrap_or(0) as f32 / 255.0;
+            Ok(())
+        }
+    }
+
     fn project() -> Project {
         let mut p = Project::new("p");
         p.transport.tempo = 120.0;
@@ -659,6 +932,8 @@ mod tests {
                 audio: None,
             }],
             mixer: Default::default(),
+            sends: vec![],
+            automation: vec![],
         });
         p
     }
@@ -709,6 +984,143 @@ mod tests {
         }]);
         assert!(dry > 0.01, "baseline must be audible: {dry}");
         assert!(wet < dry * 0.75, "效果链必须作用在乐器输出上：{dry} -> {wet}");
+    }
+
+    /// 工程里记的 `PluginInstance::state` 必须在新实例创建时还原。
+    ///
+    /// 这是「改效果链 / 移动片段不会再重置乐器配置」的底层保证：结构变更会重建播放器，
+    /// 外部插件的内部补丁只存在于实例里，只能靠这份状态带过去。
+    #[test]
+    fn instrument_state_is_restored_when_the_instance_is_created() {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+
+        let mut p = project();
+        p.tracks[0].instrument = Some(PluginInstance {
+            plugin_id: "test.stateful".into(),
+            params: Default::default(),
+            // 255 → level 1.0：状态被还原时整块输出都是满幅。
+            state: vec![255],
+        });
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+
+        assert!(
+            peak(&out) > 0.9,
+            "工程里记的插件状态没有在实例创建时还原（峰值 {}）",
+            peak(&out)
+        );
+    }
+
+    /// 重建播放器时必须**复用**搬过来的实例：插件的内部补丁与已打开的原生界面窗口都挂在
+    /// 对象身份上，重建出一个新对象等于把它们全丢了。
+    #[test]
+    fn carried_instrument_is_reused_instead_of_recreated() {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+
+        // 旧实例带着**只存在于实例里**的状态（level = 0.8）；工程并没有记它。
+        let mut carried = ReusableInstances::default();
+        carried.instruments.insert(TrackId(1), Box::new(StateTone { level: 0.8 }));
+
+        let mut p = project();
+        p.tracks[0].instrument = Some(PluginInstance {
+            plugin_id: "test.stateful".into(),
+            params: Default::default(),
+            state: vec![],
+        });
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::with_carried(
+            schedule,
+            &registry,
+            48_000.0,
+            512,
+            carried,
+            super::empty_yield_sink(),
+        );
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+
+        assert!(
+            (peak(&out) - 0.8).abs() < 0.05,
+            "应当复用带状态的旧实例，而不是新建默认实例（峰值 {}）",
+            peak(&out)
+        );
+    }
+
+    /// 乐器被换成**另一个 plugin id** 时不能复用旧实例：实例与工程对不上号。
+    #[test]
+    fn carried_instrument_is_dropped_when_the_plugin_id_changed() {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.other", |_track| Box::new(StateTone { level: 0.25 }));
+
+        let mut carried = ReusableInstances::default();
+        carried.instruments.insert(TrackId(1), Box::new(StateTone { level: 0.8 }));
+
+        let mut p = project();
+        p.tracks[0].instrument = Some(PluginInstance {
+            plugin_id: "test.other".into(),
+            params: Default::default(),
+            state: vec![],
+        });
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::with_carried(
+            schedule,
+            &registry,
+            48_000.0,
+            512,
+            carried,
+            super::empty_yield_sink(),
+        );
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+
+        assert!(
+            (peak(&out) - 0.25).abs() < 0.05,
+            "plugin id 变了就必须新建实例（峰值 {}）",
+            peak(&out)
+        );
+    }
+
+    /// 回调收到 `YieldInstances` 时把实例交出来——这是「跨重建保住实例」的通道。
+    #[test]
+    fn yield_instances_hands_the_live_instances_back() {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.5 }));
+
+        let mut p = project();
+        p.tracks[0].instrument = Some(PluginInstance {
+            plugin_id: "test.stateful".into(),
+            params: Default::default(),
+            state: vec![],
+        });
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+
+        let sink: YieldSink = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let (tx, rx) = std::sync::mpsc::channel();
+        *sink.lock().unwrap() = Some(tx);
+
+        let mut player = Player::with_carried(
+            schedule,
+            &registry,
+            48_000.0,
+            512,
+            ReusableInstances::default(),
+            sink,
+        );
+        player.apply_command(TransportCommand::YieldInstances);
+
+        let carried = rx.recv().expect("回调必须把实例交出来");
+        assert!(
+            carried.instruments.contains_key(&TrackId(1)),
+            "乐器实例应当被交出，供重建后的播放器复用"
+        );
     }
 
     /// 效果链里放一个「非效果」插件（如乐器）：必须被跳过，而不是静音整条链。
@@ -1066,6 +1478,8 @@ mod tests {
                 audio: None,
             }],
             mixer: Default::default(),
+            sends: vec![],
+            automation: vec![],
         });
         let registry = PluginRegistry::with_builtins();
         let schedule = ScheduledEvents::from_project(&p, 48_000.0);
@@ -1159,5 +1573,115 @@ mod tests {
         let mut out = vec![0.0f32; 512 * 2];
         player.process_block(&mut out, 512);
         assert!(peak(&out) > 0.01, "不存在的轨道不得影响既有轨道");
+    }
+
+    /// 造一条只有 `test.stateful` 音源的轨道，电平由 `state[0]` 决定（满幅或 0）。
+    fn tone_track(id: u64, name: &str, state: u8) -> Track {
+        Track {
+            id: TrackId(id),
+            name: name.into(),
+            instrument: Some(PluginInstance {
+                plugin_id: "test.stateful".into(),
+                params: Default::default(),
+                state: vec![state],
+            }),
+            effects: vec![],
+            clips: vec![],
+            mixer: Default::default(),
+            sends: vec![],
+            automation: vec![],
+        }
+    }
+
+    /// 发送把**推子后**信号复制进目标总线：master = 源轨直连 + 总线汇总。
+    #[test]
+    fn a_send_copies_the_post_fader_signal_into_the_bus() {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        let mut src = tone_track(1, "Src", 128); // ≈ 0.5
+        src.sends = vec![Send { target: TrackId(2), gain_db: 0.0 }];
+        let bus = tone_track(2, "Bus", 0);
+        let mut bus = bus;
+        bus.instrument = None; // 总线本身不出声，只汇总
+        p.tracks.push(src);
+        p.tracks.push(bus);
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        assert_eq!(schedule.order, vec![0, 1], "总线排在来源之后");
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+        // 源轨 0.5（直连 master）+ 总线 0.5（来自发送）= 1.0。
+        assert!(
+            (peak(&out) - 1.0).abs() < 0.05,
+            "发送应把推子后信号复制进总线（峰值 {}）",
+            peak(&out)
+        );
+    }
+
+    /// 增益自动化**覆盖**推子值。
+    #[test]
+    fn gain_automation_overrides_the_track_fader() {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        let mut t = tone_track(1, "T", 255); // 满幅
+        t.automation = vec![AutomationLane {
+            param: "gain_db".into(),
+            points: vec![AutomationPoint { beat: 0.0, value: -60.0 }],
+        }];
+        p.tracks.push(t);
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+        assert!(
+            peak(&out) < 0.01,
+            "自动化 -60 dB 应把该轨压到几乎无声（峰值 {}）",
+            peak(&out)
+        );
+    }
+
+    /// 实时推入 / 移除自动化曲线：无需重建播放器即生效。
+    #[test]
+    fn set_automation_applies_live_without_a_rebuild() {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        p.tracks.push(tone_track(1, "T", 255));
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+        assert!(peak(&out) > 0.9, "没有自动化时应满幅（峰值 {}）", peak(&out));
+
+        player.apply_command(TransportCommand::SetAutomation {
+            track: TrackId(1),
+            param: "gain_db".into(),
+            points: vec![AutomationPoint { beat: 0.0, value: -60.0 }],
+        });
+        player.process_block(&mut out, 512);
+        assert!(peak(&out) < 0.01, "推入 -60 dB 曲线后应几乎无声（峰值 {}）", peak(&out));
+
+        // 空曲线 = 删除该车道 → 回到推子值。
+        player.apply_command(TransportCommand::SetAutomation {
+            track: TrackId(1),
+            param: "gain_db".into(),
+            points: vec![],
+        });
+        player.process_block(&mut out, 512);
+        assert!(peak(&out) > 0.9, "移除曲线后应恢复满幅（峰值 {}）", peak(&out));
     }
 }

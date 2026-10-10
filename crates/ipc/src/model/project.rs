@@ -74,6 +74,8 @@ mod tests {
             effects: vec![],
             clips: vec![],
             mixer: MixerChannel::default(),
+            sends: vec![],
+            automation: vec![],
         });
         let json = serde_json::to_string_pretty(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();
@@ -91,6 +93,8 @@ mod tests {
             effects: vec![],
             clips: vec![Clip { id: crate::model::ClipId(1), start: 2.0, length: 3.0, notes: vec![], audio: None }],
             mixer: MixerChannel::default(),
+            sends: vec![],
+            automation: vec![],
         });
         assert_eq!(p.length_beats(), 5.0);
     }
@@ -113,11 +117,41 @@ mod tests {
                 audio: None,
             }],
             mixer: MixerChannel::default(),
+            sends: vec![],
+            automation: vec![],
         });
         let v = serde_json::to_value(&p).unwrap();
         assert!(v["tracks"][0]["id"].is_u64(), "TrackId must serialize as a bare number");
         assert!(v["tracks"][0]["clips"][0]["id"].is_u64(), "ClipId must serialize as a bare number");
         assert!(v["transport"]["time_sig_num"].is_u64(), "fields must be snake_case");
         assert!(v["tracks"][0]["mixer"]["gain_db"].is_f64());
+        // 空的发送 / 自动化**不写进 JSON**：老工程形状逐字不变。
+        assert!(v["tracks"][0].get("sends").is_none(), "空发送不该出现");
+        assert!(v["tracks"][0].get("automation").is_none(), "空自动化不该出现");
+    }
+
+    #[test]
+    fn sends_and_automation_roundtrip_and_serialize_when_present() {
+        use crate::model::{AutomationLane, AutomationPoint, Send};
+        let mut p = Project::new("t");
+        p.tracks.push(Track {
+            id: TrackId(1),
+            name: "Bus".into(),
+            instrument: None,
+            effects: vec![],
+            clips: vec![],
+            mixer: MixerChannel::default(),
+            sends: vec![Send { target: TrackId(2), gain_db: -6.0 }],
+            automation: vec![AutomationLane {
+                param: "gain_db".into(),
+                points: vec![AutomationPoint { beat: 0.0, value: 0.0 }],
+            }],
+        });
+        let json = serde_json::to_string(&p).unwrap();
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, back);
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(v["tracks"][0]["sends"][0]["gain_db"], -6.0);
+        assert_eq!(v["tracks"][0]["automation"][0]["param"], "gain_db");
     }
 }

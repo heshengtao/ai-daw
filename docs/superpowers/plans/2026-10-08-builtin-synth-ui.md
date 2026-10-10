@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - 前端**没有测试框架**：前端任务的验证 = `npm run build`（`vue-tsc --noEmit` + `vite build`）通过 + 手动核对。不要引入 vitest/jest。
-- Rust 任务的验证 = `cargo test -p daw-party-synth` / `cargo test -p daw-party-engine --features realtime`。
+- Rust 任务的验证 = `cargo test -p ai-daw-synth` / `cargo test -p ai-daw-engine --features realtime`。
 - 参数表必须与 `crates/synth` 的 `PARAM_TABLE` **逐项一致**（id、范围、默认值）；改动任何默认值必须两侧同步（`crates/synth/src/lib.rs` 与 `src/data/plugins.ts`）。
 - 状态序列化顺序（`PARAM_TABLE` 顺序）不可变；老工程 12 字节状态仍须可读。
 - 前端**不出现原生 `<select>`**；下拉一律用 `Md3Select`。
@@ -69,7 +69,7 @@
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `cargo test -p daw-party-synth default_wave_is_sine`
+Run: `cargo test -p ai-daw-synth default_wave_is_sine`
 Expected: FAIL（`assertion failed: Some(0.0) == Some(2.0)`）
 
 - [ ] **Step 3: 改默认值**
@@ -88,7 +88,7 @@ Expected: FAIL（`assertion failed: Some(0.0) == Some(2.0)`）
 
 - [ ] **Step 4: 运行全套 synth 测试**
 
-Run: `cargo test -p daw-party-synth`
+Run: `cargo test -p ai-daw-synth`
 Expected: PASS（含 `waveforms_differ`、`renders_440hz_within_tolerance` 等；后者本就显式设 `wave=2.0`，不受影响）
 
 - [ ] **Step 5: 提交**
@@ -111,7 +111,7 @@ git commit -m "fix(synth): default oscillator waveform is sine"
 
 - [ ] **Step 1: 写失败测试**
 
-在 `crates/engine/src/registry.rs` 的 `mod tests` 里加（若尚无 `mod tests` 则新建，`use super::*;` + `use daw_party_plugin_api::ParamId;`）：
+在 `crates/engine/src/registry.rs` 的 `mod tests` 里加（若尚无 `mod tests` 则新建，`use super::*;` + `use ai_daw_plugin_api::ParamId;`）：
 
 ```rust
     /// 默认改成正弦后，老预设必须仍保持原来的波形，否则听感会变。
@@ -132,7 +132,7 @@ git commit -m "fix(synth): default oscillator waveform is sine"
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `cargo test -p daw-party-engine factory_presets_pin_their_waveform`
+Run: `cargo test -p ai-daw-engine factory_presets_pin_their_waveform`
 Expected: FAIL（lead/bass/pad 现在是 `Some(2.0)`）
 
 - [ ] **Step 3: 在补丁里钉住波形**
@@ -147,7 +147,7 @@ Expected: FAIL（lead/bass/pad 现在是 `Some(2.0)`）
 
 - [ ] **Step 4: 运行测试**
 
-Run: `cargo test -p daw-party-engine --features realtime`
+Run: `cargo test -p ai-daw-engine --features realtime`
 Expected: PASS
 
 - [ ] **Step 5: 提交**

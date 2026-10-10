@@ -27,6 +27,8 @@ import { useLayoutStore } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
 import ClipWaveform from "@/components/common/ClipWaveform.vue";
+import AutomationLane from "@/components/workspace/AutomationLane.vue";
+import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import { trackHue } from "@/utils/trackColor";
 import { laneScrollTop } from "@/composables/useLaneScroll";
 import { capturePointer } from "@/utils/pointer";
@@ -699,120 +701,144 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div
-    ref="scroller"
-    class="arrange"
-    :style="{ paddingLeft: `${TIMELINE_INSET_PX}px`, '--timeline-inset': `${TIMELINE_INSET_PX}px` }"
-    @scroll="onScroll"
-    @pointermove="onPointerMove"
-    @wheel="onWheel"
-  >
-    <!-- 标尺：与编辑视图同一个组件、同一条时间轴 -->
-    <div class="ruler-wrap" :style="timeline.widthStyle">
-      <TimelineRuler />
-    </div>
-
-    <div ref="lanesEl" class="lanes" :style="timeline.widthStyle" @contextmenu="onLaneContextMenu">
-      <div
-        v-for="(track, ti) in tracks"
-        :key="track.id"
-        class="lane"
-        :class="{ selected: selection.trackId === track.id }"
-        :style="{ height: `${LANE_H}px`, ...timeline.gridStyle }"
-        @pointerdown="onLanePointerDown($event, track)"
-      >
-        <!-- 左侧留白里的轨道色竖线：点它即选中这条音轨 -->
-        <!-- @pointerdown.stop：拦住冒泡，避免留白上的按下触发 lane 的拖拽建片段/框选删除 -->
-        <button
-          class="lane-accent"
-          type="button"
-          :style="{ '--track-hue': String(trackHue(ti)) }"
-          :aria-label="`${i18n.t('arrange.selectTrack')} · ${track.name}`"
-          :aria-pressed="selection.trackId === track.id"
-          @pointerdown.stop
-          @click.stop="selection.selectTrack(track.id)"
-        />
-
-        <!-- 拖拽创建的预览 -->
-        <div
-          v-if="mode === 'create' && create.trackId === track.id"
-          class="clip-ghost"
-          :style="{
-            left: `${Math.min(create.from, create.to) * timeline.zoom}px`,
-            width: `${Math.max(2, Math.abs(create.to - create.from) * timeline.zoom)}px`,
-            '--track-hue': String(trackHue(ti)),
-          }"
-        />
-
-        <!-- 跨轨道拖动的落点预览 -->
-        <div
-          v-if="dragGhost && dragGhost.track === track.id"
-          class="clip-ghost"
-          :style="ghostStyle(track.id, ti)"
-        />
-
-        <template v-for="clip in track.clips" :key="clip.id">
-          <div
-            v-if="!isDraggingAway(clip, track.id)"
-            class="clip"
-            :class="{
-              dragging: moveDrag?.base.some((b) => b.clip === clip.id),
-              selected: isSelected(clip, track.id),
-              'split-cursor': layout.tool === 'split',
-            }"
-            :style="clipStyle(clip, ti)"
-            :data-track="track.id"
-            :data-clip="clip.id"
-            :title="
-              i18n.t('arrange.clipTitle', {
-                start: effStart(clip).toFixed(2),
-                length: effLength(clip).toFixed(2),
-              })
-            "
-            @pointerdown="onClipPointerDown($event, track, clip)"
-            @dblclick.stop="onClipDoubleClick(track, clip)"
-            @contextmenu="onClipContextMenu($event, track, clip)"
-          >
-            <!-- 片段内容：音频片段画波形，MIDI 片段画迷你钢琴卷帘（横轴时间、纵轴音高） -->
-            <ClipWaveform v-if="clip.audio" class="clip-wave" :path="clip.audio.path" />
-            <template v-else>
-              <span
-                v-for="(n, i) in clip.notes"
-                :key="i"
-                class="note-blip"
-                :style="blipStyle(n, clip)"
-              />
-            </template>
-            <span
-              class="clip-handle"
-              aria-hidden="true"
-              @pointerdown="onResizePointerDown($event, track, clip)"
-            />
-          </div>
-        </template>
-      </div>
-
-      <div v-if="tracks.length === 0" class="lane-empty text-body-md">
-        还没有轨道——在左侧点「新增轨道」，然后在网格上拖动即可画出片段
-      </div>
-
-      <div class="playhead" :style="{ left: `${playheadPx}px` }" />
-    </div>
-
-    <!-- 框选矩形：客户端坐标的固定覆盖层 -->
+  <div class="arrange-root">
     <div
-      v-if="mode === 'marquee' || mode === 'marquee-delete'"
-      class="marquee"
-      :class="{ danger: mode === 'marquee-delete' }"
-      :style="marqueeStyle"
-    />
+      ref="scroller"
+      class="arrange"
+      :style="{ paddingLeft: `${TIMELINE_INSET_PX}px`, '--timeline-inset': `${TIMELINE_INSET_PX}px` }"
+      @scroll="onScroll"
+      @pointermove="onPointerMove"
+      @wheel="onWheel"
+    >
+      <!-- 标尺：与编辑视图同一个组件、同一条时间轴 -->
+      <div class="ruler-wrap" :style="timeline.widthStyle">
+        <TimelineRuler />
+      </div>
+
+      <div ref="lanesEl" class="lanes" :style="timeline.widthStyle" @contextmenu="onLaneContextMenu">
+        <div
+          v-for="(track, ti) in tracks"
+          :key="track.id"
+          class="lane"
+          :class="{ selected: selection.trackId === track.id }"
+          :style="{ height: `${LANE_H}px`, ...timeline.gridStyle }"
+          @pointerdown="onLanePointerDown($event, track)"
+        >
+          <!-- 左侧留白里的轨道色竖线：点它即选中这条音轨 -->
+          <!-- @pointerdown.stop：拦住冒泡，避免留白上的按下触发 lane 的拖拽建片段/框选删除 -->
+          <button
+            class="lane-accent"
+            type="button"
+            :style="{ '--track-hue': String(trackHue(ti)) }"
+            :aria-label="`${i18n.t('arrange.selectTrack')} · ${track.name}`"
+            :aria-pressed="selection.trackId === track.id"
+            @pointerdown.stop
+            @click.stop="selection.selectTrack(track.id)"
+          />
+
+          <!-- 拖拽创建的预览 -->
+          <div
+            v-if="mode === 'create' && create.trackId === track.id"
+            class="clip-ghost"
+            :style="{
+              left: `${Math.min(create.from, create.to) * timeline.zoom}px`,
+              width: `${Math.max(2, Math.abs(create.to - create.from) * timeline.zoom)}px`,
+              '--track-hue': String(trackHue(ti)),
+            }"
+          />
+
+          <!-- 跨轨道拖动的落点预览 -->
+          <div
+            v-if="dragGhost && dragGhost.track === track.id"
+            class="clip-ghost"
+            :style="ghostStyle(track.id, ti)"
+          />
+
+          <template v-for="clip in track.clips" :key="clip.id">
+            <div
+              v-if="!isDraggingAway(clip, track.id)"
+              class="clip"
+              :class="{
+                dragging: moveDrag?.base.some((b) => b.clip === clip.id),
+                selected: isSelected(clip, track.id),
+                'split-cursor': layout.tool === 'split',
+              }"
+              :style="clipStyle(clip, ti)"
+              :data-track="track.id"
+              :data-clip="clip.id"
+              :title="
+                i18n.t('arrange.clipTitle', {
+                  start: effStart(clip).toFixed(2),
+                  length: effLength(clip).toFixed(2),
+                })
+              "
+              @pointerdown="onClipPointerDown($event, track, clip)"
+              @dblclick.stop="onClipDoubleClick(track, clip)"
+              @contextmenu="onClipContextMenu($event, track, clip)"
+            >
+              <!-- 片段内容：音频片段画波形，MIDI 片段画迷你钢琴卷帘（横轴时间、纵轴音高） -->
+              <ClipWaveform
+                v-if="clip.audio"
+                class="clip-wave"
+                :path="clip.audio.path"
+                :offset-frames="clip.audio.offset_frames"
+                :frames="clip.audio.frames"
+              />
+              <template v-else>
+                <span
+                  v-for="(n, i) in clip.notes"
+                  :key="i"
+                  class="note-blip"
+                  :style="blipStyle(n, clip)"
+                />
+              </template>
+              <span
+                class="clip-handle"
+                aria-hidden="true"
+                @pointerdown="onResizePointerDown($event, track, clip)"
+              />
+            </div>
+          </template>
+        </div>
+
+        <div v-if="tracks.length === 0" class="lane-empty text-body-md">
+          还没有轨道——在左侧点「新增轨道」，然后在网格上拖动即可画出片段
+        </div>
+
+        <div class="playhead" :style="{ left: `${playheadPx}px` }" />
+      </div>
+
+      <!-- 框选矩形：客户端坐标的固定覆盖层 -->
+      <div
+        v-if="mode === 'marquee' || mode === 'marquee-delete'"
+        class="marquee"
+        :class="{ danger: mode === 'marquee-delete' }"
+        :style="marqueeStyle"
+      />
+    </div>
+
+    <!-- 自动化曲线编辑器：编排视图底部，与网格共用同一条时间轴 -->
+    <template v-if="layout.showAutomation">
+      <PanelResizer side="bottom" @resize="layout.resizeAutomation($event)" />
+      <AutomationLane :height="layout.automationHeight" />
+    </template>
   </div>
 </template>
 
 <style scoped>
+/* 编排视图的纵向容器：上面是可滚动的网格，下面是（可选的）自动化曲线编辑器。 */
+.arrange-root {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: transparent;
+}
 .arrange {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: auto;

@@ -7,11 +7,11 @@
 
 **Goal：** 让音频片段进模型、进时间轴、能出声、能被撤销，并能显示波形。
 
-**Architecture：** 解码隔离在 `daw-party-asset`（symphonia）；引擎新增「素材铺满片段跨度」的播放路径
+**Architecture：** 解码隔离在 `ai-daw-asset`（symphonia）；引擎新增「素材铺满片段跨度」的播放路径
 （`SampleProvider` → `ScheduledAudioClip` → `TrackVoice.audio`）；宿主用 `AssetCache` 把路径变成
 `Arc<DecodedAudio>`；契约改动全部落在 `crates/ipc`。
 
-**Tech Stack：** Rust edition 2021、serde、symphonia（MPL-2.0）、`daw-party-analysis`（仅测试，做量化断言）。
+**Tech Stack：** Rust edition 2021、serde、symphonia（MPL-2.0）、`ai-daw-analysis`（仅测试，做量化断言）。
 
 ## Global Constraints
 
@@ -101,7 +101,7 @@ src/api/*、src/views/*、src/i18n/*            前端（任务 7）
 - **Placeholder 扫描**：无 TODO / 未实现分支；临时缓冲复用而非每次分配。
 - **类型一致性**：`AudioSource`（ipc）与前端 `Clip.audio` 字段同名同形；`DecodedAudio` 只定义在 engine，
   `asset` 负责产出。
-- **偏差**：`crates/asset` 依赖 `daw-party-engine`（只为复用 `DecodedAudio` 类型）。计划原意是「类型放 engine、
+- **偏差**：`crates/asset` 依赖 `ai-daw-engine`（只为复用 `DecodedAudio` 类型）。计划原意是「类型放 engine、
   asset 只产出」，方向一致；代价是 asset 会把 engine 拉进依赖图，可接受（两者本来同在依赖链上）。
 
 ## 执行记录（随进度更新）
@@ -118,7 +118,7 @@ src/api/*、src/views/*、src/i18n/*            前端（任务 7）
 **验证**：
 - `cargo test --workspace` → **157 通过**（改动前 146；含本轮新增的 11 条：7 条音频片段量化断言 +
   3 条播放器断言 + 1 条 asset 空输入）。
-- `cargo test -p daw-party-engine --features realtime` → 全绿；`--test realtime_safety` 的
+- `cargo test -p ai-daw-engine --features realtime` → 全绿；`--test realtime_safety` 的
   **零分配门禁仍然通过**（这是音频路径进实时回调的硬条件）。
 - `cargo check --manifest-path src-tauri/Cargo.toml` → 通过。
 - `crates/engine/tests/audio_clip.rs` 7 条量化断言全通过：1 kHz 素材位置/音准、起点前严格静音、
@@ -143,7 +143,7 @@ src/api/*、src/views/*、src/i18n/*            前端（任务 7）
 - 工程**播完**（未开循环）时同样走 `Pause` → all-notes-off，插件内部的混响尾音会被切掉。
   与「停止即静音」一致；**离线导出不受影响**（`render` 按 `tail_seconds` 继续渲染尾音）。
 - 解码忽略 `Packet::trim_start/trim_end`（mp3 编码器延迟未裁剪）。
-- `crates/asset` 的依赖图里带上了 `daw-party-engine`（只为一个类型）。
+- `crates/asset` 的依赖图里带上了 `ai-daw-engine`（只为一个类型）。
 
 ### Task 5–7 完成（宿主 / 命令 / 前端，2026-10-09）
 

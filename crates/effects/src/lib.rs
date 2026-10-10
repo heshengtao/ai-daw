@@ -5,8 +5,8 @@
 //!
 //! # 线程与分配契约
 //!
-//! 延迟线只在 [`prepare`](daw_party_plugin_api::Plugin::prepare) 里按采样率分配
-//! （`prepare` 只在建宿主时调用，不在音频回调里），[`process`](daw_party_plugin_api::Plugin::process)
+//! 延迟线只在 [`prepare`](ai_daw_plugin_api::Plugin::prepare) 里按采样率分配
+//! （`prepare` 只在建宿主时调用，不在音频回调里），[`process`](ai_daw_plugin_api::Plugin::process)
 //! 内**不分配、不加锁、不查表字符串**。`reset()` 清空延迟线，保证「暂停 = 静音」之后不留尾音。
 
 mod chorus;

@@ -7,19 +7,24 @@
  * 定位与传输按钮，而不需要真的打开音频设备（浏览器里没有声音是预期行为）。
  */
 import type {
+  AiModels,
+  AiStatus,
   AnalysisReport,
+  AutomationPoint,
   BackendParam,
   CatalogPlugin,
   ClipPlacement,
   ClipRef,
   HistoryDepths,
   HistoryState,
+  InputDeviceInfo,
   McpConfig,
   McpStatus,
   Note,
   NoteEdit,
   Preset,
   Project,
+  Send,
   TransportSnapshot,
 } from "./types";
 
@@ -36,6 +41,14 @@ function mockMcpStatus(): McpStatus {
     running: mcpConfig.enabled,
     url: mcpConfig.enabled ? `http://127.0.0.1:${port}/mcp` : null,
   };
+}
+
+/** 预览版的本地 AI：没有真实处理，模拟一段进度供界面演示进度条与停止。 */
+let aiState: AiStatus = { running: false, kind: null, progress: 0, message: null };
+let aiTimer: number | null = null;
+
+function emitAi(): void {
+  window.dispatchEvent(new CustomEvent("ai-daw-mock-ai", { detail: { ...aiState } }));
 }
 
 /** 是否使用假数据。 */
@@ -118,7 +131,7 @@ function empty(): Project {
 }
 
 /**
- * 新建工程的默认分轨，必须与引擎 `daw_party_engine::STARTER_TRACKS` 保持一致
+ * 新建工程的默认分轨，必须与引擎 `ai_daw_engine::STARTER_TRACKS` 保持一致
  * （顺序即自上而下的轨道顺序；`plugin_id` 是内置合成器的预设音色）。
  */
 const STARTER_TRACKS: { name: string; plugin_id: string }[] = [
@@ -241,7 +254,7 @@ function track(id: number) {
  *
  * 桌面端预设落在应用配置目录（跨工程），预览里没有那个目录，用 localStorage 模拟同样的语义。
  */
-const PRESET_KEY = "daw-party-presets";
+const PRESET_KEY = "ai-daw-presets";
 
 function readPresets(): Preset[] {
   try {
@@ -289,7 +302,7 @@ function emitTransport(): void {
   const key = JSON.stringify(transport);
   if (key === lastEmitted) return;
   lastEmitted = key;
-  window.dispatchEvent(new CustomEvent("daw-party-mock-transport", { detail: { ...transport } }));
+  window.dispatchEvent(new CustomEvent("ai-daw-mock-transport", { detail: { ...transport } }));
 }
 
 function tick(): void {
@@ -646,6 +659,27 @@ export const mockApi = {
       state.master.gain_db = gainDb;
     }),
 
+  setSends: (trackId: number, sends: Send[]): Project =>
+    commit(() => {
+      const t = track(trackId);
+      if (t) {
+        // 自发送无意义：与引擎一致地丢弃。
+        t.sends = sends.filter((s) => s.target !== trackId).map((s) => ({ ...s }));
+      }
+    }),
+
+  setAutomation: (trackId: number, param: string, points: AutomationPoint[]): Project =>
+    commit(() => {
+      const t = track(trackId);
+      if (!t) return;
+      const lanes = (t.automation ?? []).filter((l) => l.param !== param);
+      if (points.length > 0) {
+        const sorted = [...points].sort((a, b) => a.beat - b.beat);
+        lanes.push({ param, points: sorted });
+      }
+      t.automation = lanes;
+    }),
+
   historyDepths: (): HistoryDepths => ({ undo: undoStack.length, redo: redoStack.length, dirty }),
 
   undo: (): HistoryState => {
@@ -753,6 +787,54 @@ export const mockApi = {
       }
     }),
 
+  // ---- 录音（浏览器预览没有真实采集：设备是假的，录完如实返回 null）----
+
+  listInputDevices: (): InputDeviceInfo[] => [
+    { name: "内置麦克风", sample_rate: 48000, channels: 1, transport: "builtin", is_default: true },
+  ],
+  setInputDevice: (): void => undefined,
+  inputLevel: (points: number): number[] =>
+    Array.from({ length: Math.max(1, points) }, (_, i) => Math.sin(i / 6) * 0.3),
+  recordStart: (): void => undefined,
+  recordStop: (): Project | null => null,
+
+  // ---- 本地 AI（预览：模拟进度，不真正处理）----
+
+  aiStatus: (): AiStatus => ({ ...aiState }),
+  // 浏览器预览里没有 Rust 侧，模型一律显示为未就位（走内置 DSP 文案）。
+  aiModels: (): AiModels => ({ basic_pitch: false, localvqe: false }),
+  aiStart: (kind: string): void => {
+    if (aiTimer !== null) return;
+    aiState = { running: true, kind, progress: 0, message: null };
+    emitAi();
+    aiTimer = window.setInterval(() => {
+      aiState.progress = Math.min(1, aiState.progress + 0.08);
+      if (aiState.progress >= 1) {
+        window.clearInterval(aiTimer!);
+        aiTimer = null;
+        aiState = { running: false, kind: null, progress: 0, message: "浏览器预览：未做真实处理" };
+      }
+      emitAi();
+    }, 120);
+  },
+  aiCancel: (): void => {
+    if (aiTimer !== null) {
+      window.clearInterval(aiTimer);
+      aiTimer = null;
+    }
+    aiState = { running: false, kind: null, progress: 0, message: "已停止" };
+    emitAi();
+  },
+  onAiEvent: (): (() => void) => {
+    window.setTimeout(emitAi, 0);
+    return () => {
+      if (aiTimer !== null) {
+        window.clearInterval(aiTimer);
+        aiTimer = null;
+      }
+    };
+  },
+
   /** 在第 `beat` 拍切分片段（预览版按拍数近似切音频窗口）。 */
   splitClip: (trackId: number, clipId: number, beat: number): Project =>
     commit(() => {
@@ -849,7 +931,7 @@ export const mockApi = {
   onEngineEvent: (): (() => void) => {
     const t = window.setInterval(() => {
       // 模拟引擎事件，便于预览开发者抽屉与 AI 胶囊。
-      window.dispatchEvent(new CustomEvent("daw-party-mock-event"));
+      window.dispatchEvent(new CustomEvent("ai-daw-mock-event"));
     }, 4000);
     return () => window.clearInterval(t);
   },

@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Rust 任务的验证 = `cargo test -p daw-party-engine --features realtime`（`src-tauri` 是独立 workspace，构建用 `cargo build --manifest-path src-tauri/Cargo.toml`）。
+- Rust 任务的验证 = `cargo test -p ai-daw-engine --features realtime`（`src-tauri` 是独立 workspace，构建用 `cargo build --manifest-path src-tauri/Cargo.toml`）。
 - 前端**没有测试框架**：验证 = `npm run build` 通过 + `npm run dev` 手动核对。
 - 循环开关**不写入工程、不进入撤销历史、不持久化**。
 - 循环范围 = 整首工程内容（第 0 拍 → `end_frame`），**不做** in/out 区间。
@@ -76,7 +76,7 @@
 
 - [ ] **Step 3: 运行确认失败**
 
-Run: `cargo test -p daw-party-engine set_loop_toggles_the_flag_without_touching_playback`
+Run: `cargo test -p ai-daw-engine set_loop_toggles_the_flag_without_touching_playback`
 Expected: 编译失败（`is_looping` 不存在 / `SetLoop` 不存在）
 
 - [ ] **Step 4: 实现**
@@ -107,7 +107,7 @@ Expected: 编译失败（`is_looping` 不存在 / `SetLoop` 不存在）
 
 - [ ] **Step 5: 运行测试**
 
-Run: `cargo test -p daw-party-engine --features realtime`
+Run: `cargo test -p ai-daw-engine --features realtime`
 Expected: PASS（注意 `process_block`/`render` 的既有测试必须仍通过——`Player` 不再新增任何自动回卷）
 
 - [ ] **Step 6: 提交**
@@ -154,7 +154,7 @@ git commit -m "feat(transport): Player remembers the loop toggle"
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `cargo test -p daw-party-engine end_of_project_action_wraps_or_pauses`
+Run: `cargo test -p ai-daw-engine end_of_project_action_wraps_or_pauses`
 Expected: 编译失败（函数/方法不存在）
 
 - [ ] **Step 3: 加共享字段与访问器**
@@ -224,7 +224,7 @@ pub(crate) fn end_of_project_action(looping: bool) -> TransportCommand {
 
 - [ ] **Step 6: 运行测试**
 
-Run: `cargo test -p daw-party-engine --features realtime`
+Run: `cargo test -p ai-daw-engine --features realtime`
 Expected: PASS（含 `start_returns_result_without_panicking` 在无设备环境仍返回 Result）
 
 - [ ] **Step 7: 提交**
@@ -472,7 +472,7 @@ git commit -m "feat(transport): loop button in the bottom bar"
 | 3 | `a72d47a` | `TransportSnapshot.loop`（serde rename）；`transport_set_loop` 命令并注册 |
 | 4 | `56cc37a` | `loop` 类型/命令/mock（回绕）/store（预览 `audio.loop`）/底栏循环按钮 + i18n |
 
-**验证**：`cargo test -p daw-party-engine --features realtime` → 123 通过（含 `set_loop_toggles_the_flag_without_touching_playback`、`end_of_project_action_wraps_or_pauses`、`shared_transport_loop_flag`）；`cargo check --manifest-path src-tauri/Cargo.toml` 通过；`npm run build` 通过；词典中英 422 键一致。
+**验证**：`cargo test -p ai-daw-engine --features realtime` → 123 通过（含 `set_loop_toggles_the_flag_without_touching_playback`、`end_of_project_action_wraps_or_pauses`、`shared_transport_loop_flag`）；`cargo check --manifest-path src-tauri/Cargo.toml` 通过；`npm run build` 通过；词典中英 422 键一致。
 
 **说明**：
 - 循环开关**不写入工程、不进撤销历史、不持久化**（符合 Global Constraints）；编辑工程导致宿主重建时，`SharedTransport.looping` 会把它带回新 `Player`，界面因此不必重新订阅。

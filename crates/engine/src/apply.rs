@@ -25,15 +25,22 @@ pub fn apply(project: &mut Project, event: &Event) {
             }
         }
         Event::KeyframeRemoved { beat, .. } => project.transport.remove_keyframe(*beat),
-        Event::TrackAdded { id, name, .. } => {
-            project.tracks.push(crate::model::Track {
+        Event::TrackAdded { id, name, at, .. } => {
+            let track = crate::model::Track {
                 id: *id,
                 name: name.clone(),
                 instrument: None,
                 effects: vec![],
                 clips: vec![],
                 mixer: MixerChannel::default(),
-            });
+                sends: vec![],
+                automation: vec![],
+            };
+            match at {
+                // 事件自带插入位置：撤销/重放才能重现「插在中间」。
+                Some(index) => project.tracks.insert((*index).min(project.tracks.len()), track),
+                None => project.tracks.push(track),
+            }
         }
         Event::TrackRemoved { id, .. } => project.tracks.retain(|t| t.id != *id),
         Event::TrackRenamed { track, name, .. } => {
@@ -214,6 +221,37 @@ pub fn apply(project: &mut Project, event: &Event) {
         Event::MasterGainChanged { gain_db, .. } => {
             project.master.gain_db = MixerChannel::normalize_gain_db(*gain_db);
         }
+        Event::TrackSendsChanged { track, sends, .. } => {
+            if let Some(t) = project.track_mut(*track) {
+                // 防御：手写 JSON / 旧工程也可能带来越界增益；自发送没有意义，丢掉。
+                t.sends = sends
+                    .iter()
+                    .filter(|s| s.target != *track)
+                    .map(|s| s.normalize())
+                    .collect();
+            }
+        }
+        Event::AutomationChanged { track, param, points, .. } => {
+            if let Some(t) = project.track_mut(*track) {
+                let param = crate::model::AutomationLane::normalize_param(param);
+                if param.is_empty() {
+                    return;
+                }
+                t.automation.retain(|lane| lane.param != param);
+                if !points.is_empty() {
+                    // 点按 beat 升序；非有限值已被 translate 滤掉，这里再兜一层。
+                    let mut points: Vec<crate::model::AutomationPoint> = points
+                        .iter()
+                        .copied()
+                        .filter(|p| p.beat.is_finite() && p.value.is_finite())
+                        .map(|p| crate::model::AutomationPoint { beat: p.beat.max(0.0), value: p.value })
+                        .collect();
+                    points.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
+                    t.automation.push(crate::model::AutomationLane { param, points });
+                    t.automation.sort_by(|a, b| a.param.cmp(&b.param));
+                }
+            }
+        }
         Event::ParamChanged { track, param, value, .. } => {
             if let Some(t) = project.track_mut(*track) {
                 if let Some(inst) = t.instrument.as_mut() {
@@ -278,7 +316,7 @@ mod tests {
     fn project_with_clip() -> (Project, TrackId, ClipId) {
         let mut p = Project::new("t");
         let t = TrackId(1);
-        apply(&mut p, &Event::TrackAdded { actor: Actor::Human, id: t, name: "Keys".into() });
+        apply(&mut p, &Event::TrackAdded { actor: Actor::Human, id: t, name: "Keys".into(), at: None });
         let c = ClipId(1);
         apply(&mut p, &Event::ClipAdded { actor: Actor::Human, track: t, clip: c, start: 0.0, length: 4.0 });
         (p, t, c)

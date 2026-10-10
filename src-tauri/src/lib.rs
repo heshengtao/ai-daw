@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod ai;
 mod audio;
 mod assets;
 mod commands;
@@ -16,7 +17,7 @@ use std::time::Duration;
 
 use tauri::{Emitter, Manager};
 
-use daw_party_host_vst3::EditorHandle;
+use ai_daw_host_vst3::EditorHandle;
 
 use crate::audio::{AudioEngine, TransportSnapshot};
 use crate::state::{AppState, EVENT_PLUGINS, EVENT_TRANSPORT};
@@ -55,7 +56,7 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWind
 /// 变化，于是**不会**有任何无谓的推送。
 fn spawn_transport_ticker(app: tauri::AppHandle, audio: Arc<AudioEngine>) {
     thread::Builder::new()
-        .name("daw-party-transport".into())
+        .name("ai-daw-transport".into())
         .spawn(move || {
             let mut last: Option<TransportSnapshot> = None;
             loop {
@@ -79,9 +80,9 @@ fn spawn_transport_ticker(app: tauri::AppHandle, audio: Arc<AudioEngine>) {
 /// 扫描会 dlopen 每个插件，可能耗时数秒，所以放到后台，不阻塞窗口出现。
 fn spawn_plugin_scan(app: tauri::AppHandle) {
     thread::Builder::new()
-        .name("daw-party-scan".into())
+        .name("ai-daw-scan".into())
         .spawn(move || {
-            let catalog = daw_party_host_vst3::scan_catalog();
+            let catalog = ai_daw_host_vst3::scan_catalog();
             {
                 let state = app.state::<AppState>();
                 state.install_catalog(catalog.clone());
@@ -117,7 +118,7 @@ fn on_host_window_closing(window: &tauri::Window, event: &tauri::WindowEvent) {
 /// 启动插件窗口轮询线程：窗口级的事件（缩放、DPI）必须在主线程泵进插件。
 fn spawn_editor_ticker(app: tauri::AppHandle) {
     thread::Builder::new()
-        .name("daw-party-editors".into())
+        .name("ai-daw-editors".into())
         .spawn(move || loop {
             thread::sleep(EDITOR_TICK);
             let app_for_main = app.clone();
@@ -161,6 +162,12 @@ fn spawn_editor_ticker(app: tauri::AppHandle) {
                     }
                     open.clear();
                     open.extend(windows.keys().copied());
+                    // 窗口记录同样只保留活着的（用户自己关掉的那扇要一并忘掉）。
+                    state
+                        .editor_plugins
+                        .lock()
+                        .unwrap()
+                        .retain(|track, _| windows.contains_key(track));
                 });
 
                 // 关宿主窗口必须在 `with_editor_windows` 的借用**之外**做：关窗会触发
@@ -223,7 +230,7 @@ pub fn run() {
         .manage(AppState::new("untitled"))
         .setup(|app| {
             // CLAP 插件会问宿主「这是主线程吗」——必须在真正的主线程上登记一次。
-            daw_party_host_vst3::mark_main_thread();
+            ai_daw_host_vst3::mark_main_thread();
             // 还得给它一个「把活派到主线程」的手：CLAP 的 init / 参数枚举 / activate 都只能
             // 在主线程做，而这些调用发生在音频线程构建 Player 的时候。
             crate::main_thread::TauriMainThread::install(app.handle());
@@ -281,6 +288,8 @@ pub fn run() {
             commands::set_mute,
             commands::set_solo,
             commands::set_master_gain,
+            commands::set_sends,
+            commands::set_automation,
             commands::monitor_track_mix,
             commands::history_depths,
             commands::undo,
@@ -300,6 +309,11 @@ pub fn run() {
             commands::import_audio,
             commands::add_audio_clip,
             commands::audio_waveform,
+            commands::list_input_devices,
+            commands::set_input_device,
+            commands::input_level,
+            commands::record_start,
+            commands::record_stop,
             commands::list_plugins,
             commands::rescan_plugins,
             commands::plugin_params,
@@ -321,7 +335,11 @@ pub fn run() {
             commands::delete_preset,
             mcp::mcp_status,
             mcp::set_mcp_config,
+            ai::ai_status,
+            ai::ai_models,
+            ai::ai_start,
+            ai::ai_cancel,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running daw-party");
+        .expect("error while running ai-daw");
 }

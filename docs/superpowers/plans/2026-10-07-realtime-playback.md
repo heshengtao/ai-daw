@@ -1,7 +1,7 @@
-# daw-party 实时播放与传输控制实现计划（Plan 2）
+# AI DAW 实时播放与传输控制实现计划（Plan 2）
 
 > **状态（2026-10-08）**：✅ **已全部落地**。对应 `engine/src/{schedule,player,transport,command_queue,realtime}.rs` 与 `examples/play_demo.rs`。
-> UI 侧的「原生实时传输」属 Plan 4b，**尚未接入**（前端目前仍是离线渲染试听）；后续路线见 `../ROADMAP.md` §5 Stage A。
+> UI 侧的「原生实时传输」属 Plan 4b，**✅ 已完成**（前端已接实时命令，离线渲染仅留导出与设备不可用时的回退）。见 `../ROADMAP.md` §5 Stage A / A2。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -44,7 +44,7 @@
 - Modify: `crates/engine/src/lib.rs`（加 `pub mod schedule;`）
 
 **Interfaces:**
-- Consumes: `crate::beats_to_seconds`、`crate::model::{Project, TrackId, MixerChannel, PluginInstance}`、`daw_party_plugin_api::MidiEvent`。
+- Consumes: `crate::beats_to_seconds`、`crate::model::{Project, TrackId, MixerChannel, PluginInstance}`、`ai_daw_plugin_api::MidiEvent`。
 - Produces: `ScheduledMidi { frame: u64, event: MidiEvent }`、`ScheduledTrack { track_id, instrument: Option<PluginInstance>, mixer: MixerChannel, events: Vec<ScheduledMidi> }`、`ScheduledEvents { tracks: Vec<ScheduledTrack>, end_frame: u64, tempo: f64 }`、`ScheduledEvents::from_project(&Project, sample_rate: f64) -> ScheduledEvents`。
 
 - [ ] **Step 1: 写失败测试**
@@ -106,7 +106,7 @@ mod tests {
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-engine schedule::`
+Run: `cargo test -p ai-daw-engine schedule::`
 Expected: 编译失败（`ScheduledEvents` 未定义）。
 
 - [ ] **Step 3: 实现**
@@ -114,7 +114,7 @@ Expected: 编译失败（`ScheduledEvents` 未定义）。
 `crates/engine/src/schedule.rs` 顶部：
 
 ```rust
-use daw_party_plugin_api::MidiEvent;
+use ai_daw_plugin_api::MidiEvent;
 
 use crate::beats_to_seconds;
 use crate::model::{MixerChannel, PluginInstance, Project, TrackId};
@@ -188,7 +188,7 @@ pub mod schedule;
 
 - [ ] **Step 4: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine schedule::`
+Run: `cargo test -p ai-daw-engine schedule::`
 Expected: PASS（3 个测试）。
 
 ```bash
@@ -209,7 +209,7 @@ EOF
 - Modify: `crates/engine/src/lib.rs`
 
 **Interfaces:**
-- Consumes: Task 1 的 `ScheduledEvents`、`crate::registry::PluginRegistry`、`daw_party_plugin_api::{Plugin, ProcessContext, TimedMidiEvent}`。
+- Consumes: Task 1 的 `ScheduledEvents`、`crate::registry::PluginRegistry`、`ai_daw_plugin_api::{Plugin, ProcessContext, TimedMidiEvent}`。
 - Produces: `TransportCommand`；`Player::new(ScheduledEvents, &PluginRegistry, sample_rate: f64, max_block: usize) -> Player`；`process_block(&mut self, out: &mut [f32], frames: usize)`；`play/pause/stop/seek(frame)`；`is_playing() -> bool`；`position_frames() -> u64`；`apply_command(TransportCommand)`。
 
 - [ ] **Step 1: 写失败测试**
@@ -290,7 +290,7 @@ mod tests {
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-engine player::`
+Run: `cargo test -p ai-daw-engine player::`
 Expected: 编译失败（`Player`、`TransportCommand` 未定义）。
 
 - [ ] **Step 3: 实现传输命令**
@@ -313,7 +313,7 @@ pub enum TransportCommand {
 `crates/engine/src/player.rs` 顶部（`#[cfg(test)]` 之前）：
 
 ```rust
-use daw_party_plugin_api::{Plugin, ProcessContext, TimedMidiEvent};
+use ai_daw_plugin_api::{Plugin, ProcessContext, TimedMidiEvent};
 
 use crate::registry::PluginRegistry;
 use crate::schedule::{ScheduledEvents, ScheduledMidi};
@@ -496,7 +496,7 @@ pub mod transport;
 
 - [ ] **Step 5: 运行测试，确认通过并提交**
 
-Run: `cargo test -p daw-party-engine player::`
+Run: `cargo test -p ai-daw-engine player::`
 Expected: PASS（4 个测试）。
 
 ```bash
@@ -555,7 +555,7 @@ mod tests {
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-engine command_queue::`
+Run: `cargo test -p ai-daw-engine command_queue::`
 Expected: 编译失败（`command_queue` 未定义）。
 
 - [ ] **Step 3: 加入依赖**
@@ -680,7 +680,7 @@ EOF
 
 - [ ] **Step 2: 跑这条测试**
 
-Run: `cargo test -p daw-party-engine render::render_matches_player_at_different_block_size`
+Run: `cargo test -p ai-daw-engine render::render_matches_player_at_different_block_size`
 Expected: **PASS**。这是行为保持型重构的一致性测试：重构前它验证旧路径与 `Player` 逐位一致（若不一致，说明存在真实 bug，必须先查明再重构）；重构后它锁定 `render` 即 `Player` 的输出。此步骤不追求"红"，因为本任务不引入新行为。
 
 - [ ] **Step 3: 重写 `render` 为 `Player` 之上的薄循环**
@@ -787,7 +787,7 @@ EOF
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-engine bus::from_`
+Run: `cargo test -p ai-daw-engine bus::from_`
 Expected: 编译失败（`from_project` 未定义）。
 
 - [ ] **Step 3: 实现**
@@ -885,7 +885,7 @@ mod tests {
 
 - [ ] **Step 2: 运行测试，确认失败**
 
-Run: `cargo test -p daw-party-engine --features realtime realtime::`
+Run: `cargo test -p ai-daw-engine --features realtime realtime::`
 Expected: 编译失败（`AudioHost` 未定义 / feature 未配置）。
 
 - [ ] **Step 3: 配置 Cargo feature**
@@ -1052,13 +1052,13 @@ pub mod realtime;
 use std::thread;
 use std::time::Duration;
 
-use daw_party_engine::bus::Engine;
-use daw_party_engine::command::Command;
-use daw_party_engine::event::{Actor, Event};
-use daw_party_engine::model::Note;
-use daw_party_engine::registry::PluginRegistry;
-use daw_party_engine::realtime::{AudioHost, RealtimeOptions};
-use daw_party_engine::schedule::ScheduledEvents;
+use ai_daw_engine::bus::Engine;
+use ai_daw_engine::command::Command;
+use ai_daw_engine::event::{Actor, Event};
+use ai_daw_engine::model::Note;
+use ai_daw_engine::registry::PluginRegistry;
+use ai_daw_engine::realtime::{AudioHost, RealtimeOptions};
+use ai_daw_engine::schedule::ScheduledEvents;
 
 fn main() {
     let mut engine = Engine::new("realtime demo");
@@ -1099,7 +1099,7 @@ fn main() {
 Run: `cargo test --workspace && cargo test --workspace --features realtime`
 Expected: 全绿（`realtime` 测试在无设备环境接受错误路径）。
 
-Run: `cargo run -p daw-party-engine --features realtime --example play_demo`
+Run: `cargo run -p ai-daw-engine --features realtime --example play_demo`
 Expected: 能听到琶音；或打印 "could not start audio: ..."（无设备时）。
 
 ```bash

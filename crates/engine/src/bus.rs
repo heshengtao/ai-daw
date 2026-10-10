@@ -159,6 +159,29 @@ impl Engine {
         self.saved = self.project.clone();
     }
 
+    /// 记下轨道乐器实例的**二进制状态**（不进撤销历史、不广播事件）。
+    ///
+    /// 这不是用户编辑，而是「插件内部补丁」的缓存：外部插件（VST3 / CLAP）的旋钮与预设只
+    /// 活在实例里，重建播放器就会丢。宿主在重建前把它抢救进工程，重建后由播放器
+    /// `load_state` 还原，于是「改效果链 / 移动片段」这类**结构变更不会重置乐器配置**。
+    ///
+    /// 同步写进 `saved` 基线：否则光是开关一次插件窗口就会把工程标成「未保存」。
+    pub fn set_instrument_state(&mut self, track: TrackId, state: Vec<u8>) {
+        let Some(t) = self.project.tracks.iter_mut().find(|t| t.id == track) else {
+            return;
+        };
+        let Some(inst) = t.instrument.as_mut() else { return };
+        if inst.state == state {
+            return;
+        }
+        inst.state = state.clone();
+        if let Some(saved) = self.saved.tracks.iter_mut().find(|t| t.id == track) {
+            if let Some(inst) = saved.instrument.as_mut() {
+                inst.state = state;
+            }
+        }
+    }
+
     /// 可撤销的命令次数。
     pub fn undo_depth(&self) -> usize {
         self.history.len()
@@ -266,7 +289,34 @@ impl Engine {
             }
             Command::AddTrack { name } => {
                 let id = self.alloc_track_id();
-                vec![Event::TrackAdded { actor: actor.clone(), id, name: name.clone() }]
+                vec![Event::TrackAdded { actor: actor.clone(), id, name: name.clone(), at: None }]
+            }
+            Command::AddNoteTrack { name, start, length, notes, at } => {
+                // 轨道 / 片段的 id 在同一次 translate 里分配，整条链只占一个撤销步骤。
+                let track = self.alloc_track_id();
+                let clip = self.alloc_clip_id();
+                let mut events = vec![Event::TrackAdded {
+                    actor: actor.clone(),
+                    id: track,
+                    name: name.clone(),
+                    at: *at,
+                }];
+                events.push(Event::ClipAdded {
+                    actor: actor.clone(),
+                    track,
+                    clip,
+                    start: crate::model::Clip::normalize_start(*start),
+                    length: crate::model::Clip::normalize_length(*length),
+                });
+                for note in notes {
+                    events.push(Event::NoteAdded {
+                        actor: actor.clone(),
+                        track,
+                        clip,
+                        note: crate::model::Note::normalize(*note),
+                    });
+                }
+                events
             }
             Command::RemoveTrack(track) => {
                 vec![Event::TrackRemoved { actor: actor.clone(), id: *track }]
@@ -306,6 +356,23 @@ impl Engine {
                     length: crate::model::Clip::normalize_length(*length),
                     source: source.clone(),
                 }]
+            }
+            Command::AddAudioTrack { name, start, length, source, at } => {
+                // 与 `AddNoteTrack` 同理：轨道 / 片段的 id 在同一次 translate 里分配，
+                // 整条链只占一个撤销步骤，调用方不必先建轨道再回读 id。
+                let track = self.alloc_track_id();
+                let clip = self.alloc_clip_id();
+                vec![
+                    Event::TrackAdded { actor: actor.clone(), id: track, name: name.clone(), at: *at },
+                    Event::AudioClipAdded {
+                        actor: actor.clone(),
+                        track,
+                        clip,
+                        start: crate::model::Clip::normalize_start(*start),
+                        length: crate::model::Clip::normalize_length(*length),
+                        source: source.clone(),
+                    },
+                ]
             }
             Command::SetClipAudio { track, clip, audio } => {
                 vec![Event::ClipAudioChanged {
@@ -511,6 +578,32 @@ impl Engine {
                     gain_db: crate::model::MixerChannel::normalize_gain_db(*gain_db),
                 }]
             }
+            Command::SetSends { track, sends } => {
+                // 自发送无意义，在命令层就丢掉（否则会给总线图引入一个必然被忽略的环）。
+                let sends: Vec<crate::model::Send> = sends
+                    .iter()
+                    .filter(|s| s.target != *track)
+                    .map(|s| s.normalize())
+                    .collect();
+                vec![Event::TrackSendsChanged { actor: actor.clone(), track: *track, sends }]
+            }
+            Command::SetAutomation { track, param, points } => {
+                let param = crate::model::AutomationLane::normalize_param(param);
+                if param.is_empty() {
+                    return vec![];
+                }
+                // 过滤非有限值、夹到非负拍、按拍排序；点数封顶（挡住天文数字的载荷）。
+                const MAX_POINTS: usize = 4096;
+                let mut points: Vec<crate::model::AutomationPoint> = points
+                    .iter()
+                    .copied()
+                    .filter(|p| p.beat.is_finite() && p.value.is_finite())
+                    .map(|p| crate::model::AutomationPoint { beat: p.beat.max(0.0), value: p.value })
+                    .collect();
+                points.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
+                points.truncate(MAX_POINTS);
+                vec![Event::AutomationChanged { actor: actor.clone(), track: *track, param, points }]
+            }
             Command::SetParam { track, param, value } => {
                 // 非有限值会让插件内部出现 NaN；在命令层就丢掉，事件因此不会带毒。
                 if !value.is_finite() {
@@ -577,6 +670,7 @@ impl Engine {
                         actor: actor.clone(),
                         id,
                         name: track_name,
+                        at: None,
                     });
                     events.push(Event::TrackInstrumentSet {
                         actor: actor.clone(),
@@ -846,6 +940,8 @@ mod tests {
                 audio: None,
             }],
             mixer: Default::default(),
+            sends: vec![],
+            automation: vec![],
         });
 
         let mut e = Engine::from_project(loaded);
@@ -1373,5 +1469,174 @@ mod tests {
             assert!(e.execute(Command::SplitClip { track, clip, beat }, Actor::Human).is_empty());
         }
         assert_eq!(e.project().track(track).unwrap().clips.len(), 1);
+    }
+
+    /// 一次事务建「轨道 + 带音符的片段」，只占**一条**撤销记录。
+    #[test]
+    fn add_note_track_is_one_undo_step() {
+        use crate::model::Note;
+        let mut e = Engine::new("demo");
+        let depth = e.undo_depth();
+        let notes = vec![
+            Note { pitch: 60, start: 0.0, duration: 0.5, velocity: 100, volume: 127 },
+            Note { pitch: 64, start: 0.5, duration: 0.5, velocity: 90, volume: 127 },
+        ];
+        e.execute(
+            Command::AddNoteTrack { name: "MIDI".into(), start: 2.0, length: 4.0, notes, at: None },
+            Actor::Human,
+        );
+        assert_eq!(e.undo_depth(), depth + 1, "整条链只占一个撤销步骤");
+        let t = e.project().tracks.last().expect("轨道应已建出");
+        assert_eq!(t.name, "MIDI");
+        assert_eq!(t.clips.len(), 1);
+        assert_eq!(t.clips[0].notes.len(), 2);
+        assert_eq!(t.clips[0].start, 2.0);
+
+        assert!(e.undo());
+        assert!(e.project().tracks.is_empty(), "撤销应把新轨道一并收回");
+    }
+
+    /// 新轨道可以插在指定行号（AI 转 MIDI 就插在源轨道下面），撤销/重做都复原顺序。
+    #[test]
+    fn add_note_track_can_insert_below_the_source_track() {
+        let names = |e: &Engine| -> Vec<String> {
+            e.project().tracks.iter().map(|t| t.name.clone()).collect()
+        };
+        let mut e = Engine::new("demo");
+        e.execute(Command::AddTrack { name: "Audio".into() }, Actor::Human);
+        e.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+
+        e.execute(
+            Command::AddNoteTrack { name: "MIDI".into(), start: 0.0, length: 4.0, notes: vec![], at: Some(1) },
+            Actor::Human,
+        );
+        assert_eq!(names(&e), vec!["Audio", "MIDI", "Bass"], "应插在第 1 行");
+
+        // 越界的位置夹到末尾，不 panic。
+        e.execute(
+            Command::AddNoteTrack { name: "Tail".into(), start: 0.0, length: 1.0, notes: vec![], at: Some(99) },
+            Actor::Human,
+        );
+        assert_eq!(names(&e), vec!["Audio", "MIDI", "Bass", "Tail"]);
+
+        assert!(e.undo());
+        assert_eq!(names(&e), vec!["Audio", "MIDI", "Bass"]);
+        assert!(e.undo());
+        assert_eq!(names(&e), vec!["Audio", "Bass"], "撤销后顺序复原");
+        assert!(e.redo());
+        assert_eq!(names(&e), vec!["Audio", "MIDI", "Bass"], "重做要把轨道放回中间");
+    }
+
+    /// 一次事务建「音频轨道 + 引用素材的片段」（降噪就靠它把结果放到源轨道下面），只占一条撤销记录。
+    #[test]
+    fn add_audio_track_inserts_below_and_is_one_undo_step() {
+        let mut e = Engine::new("demo");
+        e.execute(Command::AddTrack { name: "Audio".into() }, Actor::Human);
+        e.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+        let depth = e.undo_depth();
+
+        e.execute(
+            Command::AddAudioTrack {
+                name: "Audio · 降噪".into(),
+                start: 2.0,
+                length: 4.0,
+                source: crate::model::AudioSource {
+                    path: "clean.wav".into(),
+                    offset_frames: 100,
+                    frames: Some(800),
+                },
+                at: Some(1),
+            },
+            Actor::Human,
+        );
+        assert_eq!(e.undo_depth(), depth + 1, "整条链只占一个撤销步骤");
+
+        let t = &e.project().tracks[1];
+        assert_eq!(t.name, "Audio · 降噪", "应插在源轨道下面");
+        assert_eq!(t.clips.len(), 1);
+        let clip = &t.clips[0];
+        assert!(clip.is_audio(), "必须是音频片段");
+        assert_eq!(clip.start, 2.0);
+        assert_eq!(clip.length, 4.0);
+        let src = clip.audio.as_ref().unwrap();
+        assert_eq!(src.path, "clean.wav");
+        assert_eq!((src.offset_frames, src.frames), (100, Some(800)), "素材窗口原样保留");
+
+        assert!(e.undo());
+        assert_eq!(e.project().tracks.len(), 2, "撤销应把新轨道一并收回");
+    }
+
+    #[test]
+    fn set_sends_normalizes_and_drops_self_sends() {
+        use crate::model::Send;
+        let mut e = Engine::new("demo");
+        let (t1, _) = seeded(&mut e);
+        let ev = e.execute(Command::AddTrack { name: "Bus".into() }, Actor::Human);
+        let t2 = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+
+        e.execute(
+            Command::SetSends {
+                track: t1,
+                sends: vec![
+                    Send { target: t2, gain_db: 999.0 },
+                    Send { target: t1, gain_db: 0.0 }, // 自发送 → 丢弃
+                ],
+            },
+            Actor::Human,
+        );
+        let sends = &e.project().track(t1).unwrap().sends;
+        assert_eq!(sends.len(), 1, "自发送必须被丢弃");
+        assert_eq!(sends[0].target, t2);
+        assert_eq!(sends[0].gain_db, crate::model::MixerChannel::MAX_GAIN_DB, "增益归一化");
+
+        assert!(e.undo(), "发送可撤销");
+        assert!(e.project().track(t1).unwrap().sends.is_empty());
+    }
+
+    #[test]
+    fn set_automation_sorts_filters_and_replaces() {
+        use crate::model::AutomationPoint;
+        let mut e = Engine::new("demo");
+        let (track, _) = seeded(&mut e);
+
+        e.execute(
+            Command::SetAutomation {
+                track,
+                param: "gain_db".into(),
+                points: vec![
+                    AutomationPoint { beat: 4.0, value: -6.0 },
+                    AutomationPoint { beat: 0.0, value: 0.0 },
+                    AutomationPoint { beat: f64::NAN, value: 1.0 }, // 非有限 → 丢弃
+                ],
+            },
+            Actor::Human,
+        );
+        let lanes = &e.project().track(track).unwrap().automation;
+        assert_eq!(lanes.len(), 1);
+        assert_eq!(lanes[0].param, "gain_db");
+        let beats: Vec<f64> = lanes[0].points.iter().map(|p| p.beat).collect();
+        assert_eq!(beats, vec![0.0, 4.0], "点按拍排序且滤掉非有限值");
+
+        // 同一参数整体替换。
+        e.execute(
+            Command::SetAutomation {
+                track,
+                param: "gain_db".into(),
+                points: vec![AutomationPoint { beat: 1.0, value: 1.0 }],
+            },
+            Actor::Human,
+        );
+        assert_eq!(e.project().track(track).unwrap().automation[0].points.len(), 1);
+
+        // 空曲线 = 删除车道。
+        e.execute(Command::SetAutomation { track, param: "gain_db".into(), points: vec![] }, Actor::Human);
+        assert!(e.project().track(track).unwrap().automation.is_empty());
+
+        // 空参数名 = 无效命令，不产事件、不进历史。
+        let depth = e.undo_depth();
+        assert!(e
+            .execute(Command::SetAutomation { track, param: "  ".into(), points: vec![] }, Actor::Human)
+            .is_empty());
+        assert_eq!(e.undo_depth(), depth);
     }
 }

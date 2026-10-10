@@ -67,7 +67,7 @@ function onAccent(a: AccentColor): void {
 /** 配置与运行状态；加载失败（预览 / 后端不可用）时保持 null。 */
 const mcp = ref<McpStatus | null>(null);
 /** 端口输入框的草稿值（数字输入在编辑过程中不应该被后端回写打断）。 */
-const mcpPort = ref("0");
+const mcpPort = ref("50562");
 const mcpSaving = ref(false);
 /** 上一次应用的失败原因，供界面提示。 */
 const mcpError = ref("");
@@ -484,7 +484,7 @@ onMounted(loadMcp);
                   <span class="row-title">{{ i18n.t("settings.about.engine") }}</span>
                   <span class="row-sub">{{ i18n.t("settings.about.engineHint") }}</span>
                 </div>
-                <span class="row-value">daw-party-engine</span>
+                <span class="row-value">ai-daw-engine</span>
               </div>
             </div>
           </div>

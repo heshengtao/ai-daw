@@ -10,7 +10,8 @@
  *
  * 未选中轨道时退回工程概览。
  */
-import { computed, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
+import { ArrowDownIcon, ArrowUpIcon, XMarkIcon } from "@heroicons/vue/24/outline";
 import Md3Slider from "@/components/common/Md3Slider.vue";
 import Md3Select, { type SelectOption } from "@/components/common/Md3Select.vue";
 import PluginBrowser from "@/components/common/PluginBrowser.vue";
@@ -20,6 +21,7 @@ import { useLayoutStore } from "@/stores/layout";
 import { usePluginsStore } from "@/stores/plugins";
 import { usePluginInterface } from "@/composables/usePluginInterface";
 import { canonicalPluginId } from "@/data/plugins";
+import type { Send } from "@/api/types";
 import { useI18n } from "@/i18n";
 
 const store = useProjectStore();
@@ -235,6 +237,70 @@ async function commitPan(value: number): Promise<void> {
   }
 }
 
+// ---- 发送（aux send → 总线） ----
+
+/** 每路发送的增益草稿（拖动中显示，松手提交）。 */
+const sendDrafts = reactive<Record<number, number>>({});
+
+/** 本轨的发送列表。 */
+const sends = computed<Send[]>(() => track.value?.sends ?? []);
+
+/** 可选的发送目标：除自己以外的所有轨道（含总线）。 */
+const sendTargets = computed<SelectOption[]>(() =>
+  (store.project?.tracks ?? [])
+    .filter((t) => t.id !== track.value?.id)
+    .map((t) => ({ id: String(t.id), label: t.name })),
+);
+
+/** 发送目标的显示名。 */
+function targetName(id: number): string {
+  return (store.project?.tracks ?? []).find((t) => t.id === id)?.name ?? `#${id}`;
+}
+
+/** 拖动中的发送增益（否则滑块把手不跟手）。 */
+function shownSendGain(send: Send): number {
+  return sendDrafts[send.target] ?? send.gain_db;
+}
+
+/** 新增一路发送到 `targetId`（已在列表里则忽略）。 */
+async function addSend(targetId: string): Promise<void> {
+  const t = track.value;
+  if (!t) return;
+  const target = Number(targetId);
+  if (!Number.isFinite(target) || sends.value.some((s) => s.target === target)) return;
+  try {
+    await store.setSends(t.id, [...sends.value, { target, gain_db: 0 }]);
+  } catch (err) {
+    layout.notify(i18n.t("error.setSends", { error: String(err) }));
+  }
+}
+
+/** 提交一路发送的增益（一次编辑 = 一条撤销记录）。 */
+async function commitSendGain(target: number, value: number): Promise<void> {
+  const t = track.value;
+  delete sendDrafts[target];
+  if (!t) return;
+  try {
+    await store.setSends(
+      t.id,
+      sends.value.map((s) => (s.target === target ? { ...s, gain_db: value } : s)),
+    );
+  } catch (err) {
+    layout.notify(i18n.t("error.setSends", { error: String(err) }));
+  }
+}
+
+/** 移除一路发送。 */
+async function removeSend(target: number): Promise<void> {
+  const t = track.value;
+  if (!t) return;
+  try {
+    await store.setSends(t.id, sends.value.filter((s) => s.target !== target));
+  } catch (err) {
+    layout.notify(i18n.t("error.setSends", { error: String(err) }));
+  }
+}
+
 async function toggleMute(): Promise<void> {
   const t = track.value;
   if (!t) return;
@@ -322,7 +388,7 @@ async function toggleSolo(): Promise<void> {
               </button>
               <div class="strip-buttons">
                 <button class="mini" :disabled="i === 0" :aria-label="i18n.t('inspector.fxUp')" @click="moveFx(i, i - 1)">
-                  ↑
+                  <ArrowUpIcon class="mini-icon" />
                 </button>
                 <button
                   class="mini"
@@ -330,9 +396,11 @@ async function toggleSolo(): Promise<void> {
                   :aria-label="i18n.t('inspector.fxDown')"
                   @click="moveFx(i, i + 1)"
                 >
-                  ↓
+                  <ArrowDownIcon class="mini-icon" />
                 </button>
-                <button class="mini" :aria-label="i18n.t('inspector.fxRemove')" @click="removeFx(i)">×</button>
+                <button class="mini danger" :aria-label="i18n.t('inspector.fxRemove')" @click="removeFx(i)">
+                  <XMarkIcon class="mini-icon" />
+                </button>
               </div>
             </div>
           </div>
@@ -406,6 +474,46 @@ async function toggleSolo(): Promise<void> {
                 S
               </button>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="group">
+        <div class="group-title">{{ i18n.t("inspector.sends") }}</div>
+        <div class="card">
+          <p v-if="sends.length === 0" class="hint">{{ i18n.t("inspector.sendsEmpty") }}</p>
+          <div v-for="send in sends" :key="send.target" class="row send-row">
+            <span class="row-label send-name" :title="targetName(send.target)">
+              {{ targetName(send.target) }}
+            </span>
+            <Md3Slider
+              class="param-slider"
+              :model-value="shownSendGain(send)"
+              :min="MIN_DB"
+              :max="MAX_DB"
+              :step="0.5"
+              :label="i18n.t('inspector.sendGain')"
+              @update:model-value="(v: number) => (sendDrafts[send.target] = v)"
+              @commit="(v: number) => commitSendGain(send.target, v)"
+            />
+            <span class="row-value tabular">{{ shownSendGain(send).toFixed(1) }} dB</span>
+            <button
+              class="mini danger"
+              :aria-label="i18n.t('inspector.removeSend')"
+              @click="removeSend(send.target)"
+            >
+              <XMarkIcon class="mini-icon" />
+            </button>
+          </div>
+          <div class="row">
+            <span class="row-label">{{ i18n.t("inspector.addSend") }}</span>
+            <Md3Select
+              :model-value="null"
+              :options="sendTargets"
+              :label="i18n.t('inspector.chooseSend')"
+              :placeholder="i18n.t('inspector.chooseSend')"
+              @update:model-value="addSend"
+            />
           </div>
         </div>
       </section>
@@ -542,6 +650,27 @@ async function toggleSolo(): Promise<void> {
 .mini:hover {
   background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
 }
+/* 图标用 SVG（不靠字形，天然居中）。 */
+.mini-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+.mini:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.mini:disabled:hover {
+  background-color: transparent;
+}
+/* 删除键：红色（危险动作的惯例）。 */
+.mini.danger {
+  color: rgb(var(--md-error));
+  border-color: rgb(var(--md-error) / 0.5);
+}
+.mini.danger:hover:not(:disabled) {
+  background-color: rgb(var(--md-error) / 0.12);
+}
 .mini.on {
   background-color: rgb(var(--md-error));
   border-color: rgb(var(--md-error));
@@ -551,6 +680,21 @@ async function toggleSolo(): Promise<void> {
   background-color: rgb(var(--md-primary));
   border-color: rgb(var(--md-primary));
   color: rgb(var(--md-on-primary));
+}
+/* 发送行：与增益/声像**同一套列宽**（52 / 1fr / 62），滑块左边缘因此严格对齐；
+   第 4 列是删除键。不要套 `.param-row`——那是 3 列，第 4 个元素会被挤到下一行。 */
+.send-row {
+  display: grid;
+  grid-template-columns: 52px 1fr 62px 24px;
+  gap: 8px;
+  align-items: center;
+}
+/* 发送目标名可能很长：单行省略号，不挤坏滑块。 */
+.send-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .hint {
   margin: 0 8px;

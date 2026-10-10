@@ -5,7 +5,7 @@
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:executing-plans。
 
-**Goal：** 把 `Command` / `Event` / `Project` 的 serde schema 抽成独立 crate `daw-party-ipc`，
+**Goal：** 把 `Command` / `Event` / `Project` 的 serde schema 抽成独立 crate `ai-daw-ipc`，
 成为「引擎 ↔ Tauri ↔ 未来 MCP」的唯一契约，且**零行为变化**。
 
 **Architecture：** 新 crate 只放纯数据与纯函数；engine 保留同名薄壳模块（`pub use`），
@@ -52,8 +52,8 @@ Modify 根 `Cargo.toml`（members）。
 **Files:** Modify `crates/engine/Cargo.toml`、`crates/engine/src/{command.rs,event.rs,model/mod.rs}`；
 Delete `crates/engine/src/model/{clip,project,track,transport}.rs`。
 
-- [ ] **Step 1**：engine 依赖 `daw-party-ipc`。
-- [ ] **Step 2**：三个模块改为 `pub use daw_party_ipc::…::*;`。
+- [ ] **Step 1**：engine 依赖 `ai-daw-ipc`。
+- [ ] **Step 2**：三个模块改为 `pub use ai_daw_ipc::…::*;`。
 - [ ] **Step 3**：删除旧文件，`cargo test --workspace`。
 
 ## Task 3: 契约测试
@@ -86,19 +86,19 @@ Delete `crates/engine/src/model/{clip,project,track,transport}.rs`。
 | 任务 | 内容 |
 | --- | --- |
 | 1 | `crates/ipc` 建立；`model/{clip,track,transport,project}.rs` + `command.rs` + `event.rs` 逐字搬入 |
-| 2 | engine 三个模块改为 `pub use` 薄壳；删除旧的 4 个模型文件；加 `daw-party-ipc` 依赖 |
+| 2 | engine 三个模块改为 `pub use` 薄壳；删除旧的 4 个模型文件；加 `ai-daw-ipc` 依赖 |
 | 3 | wire-shape 测试随类型搬入；新增 `event_wire_shape_is_externally_tagged` |
 | 4 | ROADMAP §3 加 MPL-2.0；新增 `deny.toml`；`NOTICE` 增补 symphonia |
 
 **验证**：
-- `cargo test --workspace` → 全绿。engine 库 106 → **90**，新增 `daw-party-ipc` **17**（16 搬移 + 1 新增）。
-- `cargo test -p daw-party-engine --features realtime` → **107**（原 123 − 16 搬移）。
+- `cargo test --workspace` → 全绿。engine 库 106 → **90**，新增 `ai-daw-ipc` **17**（16 搬移 + 1 新增）。
+- `cargo test -p ai-daw-engine --features realtime` → **107**（原 123 − 16 搬移）。
   两组数字与「恰好搬走 16 个用例」完全吻合。
 - `cargo check --manifest-path src-tauri/Cargo.toml` → 通过；`src-tauri` **一行未改**，
-  证明 `pub use` 薄壳对既有外部路径（`daw_party_engine::model::…` 等，含子模块）完全兼容。
+  证明 `pub use` 薄壳对既有外部路径（`ai_daw_engine::model::…` 等，含子模块）完全兼容。
 
 **说明**：
-- 薄壳用 glob `pub use daw_party_ipc::model::*;` 能连**子模块**一起带出（`engine::model::clip` 可用），
+- 薄壳用 glob `pub use ai_daw_ipc::model::*;` 能连**子模块**一起带出（`engine::model::clip` 可用），
   这一点由 src-tauri 与 engine 的全量编译通过直接证明，无需逐个子模块写薄壳。
 - 本轮**零行为变化**：没有新增/删除字段，没有改归一化，没有改 serde 属性。
 - 未做：CI 接入 `cargo-deny`（本机也未安装该工具，`deny.toml` 只保证配置就位）。

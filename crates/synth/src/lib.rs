@@ -2,7 +2,7 @@
 
 mod voice;
 
-use daw_party_plugin_api::{
+use ai_daw_plugin_api::{
     IoLayout, MidiEvent, ParamId, ParamInfo, Plugin, PluginCapabilities, PluginDescriptor,
     PluginError, PluginKind, ProcessContext, TimedMidiEvent,
 };
@@ -93,7 +93,7 @@ fn lfo_hz(rate: f32) -> f64 {
 /// 内置合成器：DCO（主振 + 副振）→ HPF → VCF → VCA 的复音减法合成器。
 ///
 /// 「预设」不是另一套 DSP，而是同一套信号链配上不同的默认参数——注册表按预设 id 各注册一个
-/// 工厂（见 `daw_party_engine::registry`），工程里保存的 `params` 再覆盖默认值。
+/// 工厂（见 `ai_daw_engine::registry`），工程里保存的 `params` 再覆盖默认值。
 pub struct SynthPlugin {
     voices: [Voice; MAX_VOICES],
     sample_rate: f64,
@@ -392,7 +392,7 @@ impl Plugin for SynthPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use daw_party_plugin_api::{MidiEvent, Plugin, ProcessContext, TimedMidiEvent};
+    use ai_daw_plugin_api::{MidiEvent, Plugin, ProcessContext, TimedMidiEvent};
 
     fn ctx(block: usize) -> ProcessContext {
         ProcessContext { sample_rate: 48_000.0, block_size: block, tempo: 120.0, playing: true }

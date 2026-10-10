@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn roundtrips_through_the_file() {
-        let dir = std::env::temp_dir().join(format!("daw-party-presets-{}", now_millis()));
+        let dir = std::env::temp_dir().join(format!("ai-daw-presets-{}", now_millis()));
         let path = dir.join("presets.json");
 
         let mut store = PresetStore::load(Some(path.clone()));

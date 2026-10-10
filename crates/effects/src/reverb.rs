@@ -1,4 +1,4 @@
-use daw_party_plugin_api::{
+use ai_daw_plugin_api::{
     IoLayout, ParamId, ParamInfo, Plugin, PluginCapabilities, PluginDescriptor, PluginError,
     PluginKind, ProcessContext, TimedMidiEvent,
 };

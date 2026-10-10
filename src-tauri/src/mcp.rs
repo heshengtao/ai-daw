@@ -27,10 +27,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use tokio_util::sync::CancellationToken;
 
-use daw_party_engine::command::Command;
-use daw_party_engine::event::Event;
-use daw_party_engine::model::{AudioSource, Clip, ClipId, Note, TrackId};
-use daw_party_engine::transport::TransportCommand;
+use ai_daw_engine::command::Command;
+use ai_daw_engine::event::Event;
+use ai_daw_engine::model::{AudioSource, Clip, ClipId, Note, TrackId};
+use ai_daw_engine::transport::TransportCommand;
 
 use crate::commands;
 use crate::state::AppState;
@@ -172,6 +172,62 @@ struct GainArgs {
     /// 增益（dB）。
     gain_db: f32,
 }
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SendArg {
+    /// 目标轨道 id（通常是一条总线轨道）。
+    target: u64,
+    /// 发送增益（dB）。
+    gain_db: f32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SetSendsArgs {
+    /// 轨道 id。
+    track: u64,
+    /// 发送列表（整体替换；空数组 = 清空）。
+    sends: Vec<SendArg>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct PointArg {
+    /// 位置（拍）。
+    beat: f64,
+    /// 参数值。
+    value: f32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SetAutomationArgs {
+    /// 轨道 id。
+    track: u64,
+    /// 参数名：`gain_db` 或 `pan`。
+    param: String,
+    /// 关键点（整体替换；空数组 = 删除该车道）。
+    points: Vec<PointArg>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct HelpArgs {
+    /// 能力域：`project` / `track` / `clip` / `note` / `mix` / `audio` / `transport` / `analysis` / `plugin`；
+    /// 留空返回索引。
+    #[serde(default)]
+    topic: Option<String>,
+}
+
+/// 技能文档（编译期内嵌，无需资源打包）：`topic` → markdown。空 topic 是索引。
+const SKILL_DOCS: &[(&str, &str)] = &[
+    ("", include_str!("../../skills/README.md")),
+    ("project", include_str!("../../skills/project.md")),
+    ("track", include_str!("../../skills/track.md")),
+    ("clip", include_str!("../../skills/clip.md")),
+    ("note", include_str!("../../skills/note.md")),
+    ("mix", include_str!("../../skills/mix.md")),
+    ("audio", include_str!("../../skills/audio.md")),
+    ("transport", include_str!("../../skills/transport.md")),
+    ("analysis", include_str!("../../skills/analysis.md")),
+    ("plugin", include_str!("../../skills/plugin.md")),
+];
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct PanArgs {
@@ -424,6 +480,48 @@ impl DawMcpServer {
         Ok(format!("总输出增益已设为 {} dB", args.gain_db))
     }
 
+    #[tool(description = "设置轨道发送列表（整体替换；空数组 = 清空）。目标通常是一条总线轨道。")]
+    fn set_sends(&self, Parameters(args): Parameters<SetSendsArgs>) -> Result<String, ErrorData> {
+        let sends = args
+            .sends
+            .into_iter()
+            .map(|s| ai_daw_engine::model::Send { target: TrackId(s.target), gain_db: s.gain_db })
+            .collect();
+        commands::run_agent(&self.app, Command::SetSends { track: TrackId(args.track), sends });
+        Ok(format!("轨道 {} 的发送已更新", args.track))
+    }
+
+    #[tool(description = "设置一条自动化车道（参数 `gain_db` / `pan`；整体替换该曲线，空 points = 删除）。")]
+    fn set_automation(&self, Parameters(args): Parameters<SetAutomationArgs>) -> Result<String, ErrorData> {
+        let points = args
+            .points
+            .into_iter()
+            .map(|p| ai_daw_engine::model::AutomationPoint { beat: p.beat, value: p.value })
+            .collect();
+        commands::run_agent(
+            &self.app,
+            Command::SetAutomation { track: TrackId(args.track), param: args.param.clone(), points },
+        );
+        Ok(format!("轨道 {} 的自动化（{}）已更新", args.track, args.param))
+    }
+
+    #[tool(description = "取回某个能力域的用法文档（渐进式披露）：留空给索引，按域取细则。")]
+    fn aidaw_help(&self, Parameters(args): Parameters<HelpArgs>) -> Result<String, ErrorData> {
+        let topic = args.topic.unwrap_or_default().trim().to_ascii_lowercase();
+        match SKILL_DOCS.iter().find(|(key, _)| *key == topic) {
+            Some((_, text)) => Ok((*text).to_string()),
+            None => {
+                let known: Vec<&str> =
+                    SKILL_DOCS.iter().map(|(k, _)| *k).filter(|k| !k.is_empty()).collect();
+                Ok(format!(
+                    "未知能力域「{topic}」。可选：{}。下面是索引：\n\n{}",
+                    known.join(" / "),
+                    SKILL_DOCS[0].1
+                ))
+            }
+        }
+    }
+
     // ---- 历史 ----
 
     #[tool(description = "撤销最后一次编辑。")]
@@ -450,7 +548,7 @@ impl DawMcpServer {
         let report = tauri::async_runtime::spawn_blocking(move || {
             // 只分析工程正文，不加尾音。
             let buffer = commands::render_offline(inputs, sample_rate, 0.0);
-            daw_party_analysis::analyze(buffer.data(), buffer.channels(), sample_rate as f64)
+            ai_daw_analysis::analyze(buffer.data(), buffer.channels(), sample_rate as f64)
         })
         .await
         .map_err(|e| fail(e.to_string()))?
@@ -468,7 +566,7 @@ impl DawMcpServer {
         };
         tauri::async_runtime::spawn_blocking(move || {
             let buffer = commands::render_offline(inputs, sample_rate, 0.5);
-            daw_party_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| fail(e.to_string()))?;
+            ai_daw_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| fail(e.to_string()))?;
             Ok::<String, ErrorData>(format!("已导出到 {path}"))
         })
         .await
@@ -565,7 +663,7 @@ struct ToggleNoTrackArgs {
 impl ServerHandler for DawMcpServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "daw-party 的内嵌 MCP 服务器。所有写操作与人在界面上的操作走同一条管线：\
+            "AI DAW 的内嵌 MCP 服务器。所有写操作与人在界面上的操作走同一条管线：\
              会进入撤销历史、在界面上留痕，人随时可以撤销。先用 get_project 了解现状，\
              改完可以用 analyze_project 听感确认。",
         )
@@ -576,20 +674,23 @@ impl ServerHandler for DawMcpServer {
 // 配置与运行时
 // ---------------------------------------------------------------------------
 
+/// MCP 服务器的**默认监听端口**。设置页预填这个值；只有它被占用时才退回临时端口。
+pub const DEFAULT_MCP_PORT: u16 = 50562;
+
 /// 采样率无关的服务器配置：落到应用配置目录的 `mcp.json`，设置页可改。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpConfig {
     /// 是否运行（随应用启动，也可在设置里即时开关）。
     pub enabled: bool,
-    /// 监听端口；`0` = 每次启动由系统分配临时端口。
+    /// 监听端口；默认 [`DEFAULT_MCP_PORT`]；`0` = 每次启动由系统分配临时端口。
     pub port: u16,
 }
 
 impl Default for McpConfig {
     fn default() -> Self {
-        // 默认开启、临时端口——与本功能引入时的行为一致。
-        Self { enabled: true, port: 0 }
+        // 默认开启、固定端口（被占用时才退回临时端口）。
+        Self { enabled: true, port: DEFAULT_MCP_PORT }
     }
 }
 
@@ -694,7 +795,15 @@ impl McpRuntime {
         if already_running {
             return Ok(());
         }
-        let listener = bind_loopback(port)?;
+        // 首选配置端口；**只有它被别的进程占用时**才退回系统临时端口（0）。
+        let listener = match bind_loopback(port) {
+            Ok(listener) => listener,
+            Err(err) if port != 0 => {
+                eprintln!("[mcp] 端口 {port} 不可用（{err}），改用临时端口");
+                bind_loopback(0)?
+            }
+            Err(err) => return Err(err),
+        };
         let addr = listener.local_addr().map_err(|e| e.to_string())?;
         let cancel = CancellationToken::new();
         let token = cancel.clone();
@@ -797,6 +906,9 @@ mod tests {
             "set_mute",
             "set_solo",
             "set_master_gain",
+            "set_sends",
+            "set_automation",
+            "aidaw_help",
             "undo",
             "redo",
             "analyze_project",
@@ -812,10 +924,25 @@ mod tests {
     }
 
     #[test]
-    fn config_defaults_are_enabled_on_an_ephemeral_port() {
+    fn config_defaults_to_the_standard_port() {
         let config = McpConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.port, 0);
+        assert_eq!(config.port, DEFAULT_MCP_PORT, "默认端口应是 {DEFAULT_MCP_PORT}");
+        assert_eq!(DEFAULT_MCP_PORT, 50562);
+    }
+
+    /// skills 包必须覆盖每个能力域，且每篇都有内容。
+    #[test]
+    fn skill_docs_cover_every_domain() {
+        let keys: Vec<&str> = SKILL_DOCS.iter().map(|(k, _)| *k).collect();
+        for expected in [
+            "", "project", "track", "clip", "note", "mix", "audio", "transport", "analysis", "plugin",
+        ] {
+            assert!(keys.contains(&expected), "缺少技能域「{expected}」");
+        }
+        for (topic, text) in SKILL_DOCS {
+            assert!(!text.trim().is_empty(), "技能域「{topic}」内容为空");
+        }
     }
 
     #[test]

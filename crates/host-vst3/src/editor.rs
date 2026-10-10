@@ -41,6 +41,20 @@ impl EditorHandle {
         }
     }
 
+    /// 读插件的完整状态（供宿主在**重建播放器前**抢救、重建后 `load_state` 还原）。
+    ///
+    /// 在控制侧线程调用即可：CLAP 会自行派发到主线程，VST3 直接在当前线程取。
+    /// 插件不支持状态存取（或读取失败）时返回空——空状态在恢复时会被忽略。
+    pub fn save_state(&self) -> Vec<u8> {
+        match self {
+            EditorHandle::Vst3(handle) => handle
+                .lock()
+                .map(|plugin| plugin.save_state().unwrap_or_default())
+                .unwrap_or_default(),
+            EditorHandle::Clap(handle) => handle.save_state(),
+        }
+    }
+
     /// 服务插件发起的宿主回调请求（CLAP 的 `request_callback` → `on_main_thread`）。
     ///
     /// 由编辑器 ticker 定期调用，**与窗口是否打开无关**：插件可能在还没开界面时就请求

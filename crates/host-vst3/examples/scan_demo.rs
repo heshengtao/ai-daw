@@ -1,8 +1,8 @@
 //! 扫描本机 VST3 / CLAP 插件并打印清单。
 //!
-//! 用法：`cargo run -p daw-party-host-vst3 --example scan_demo`
+//! 用法：`cargo run -p ai-daw-host-vst3 --example scan_demo`
 
-use daw_party_host_vst3::scan;
+use ai_daw_host_vst3::scan;
 
 fn main() {
     let plugins = scan();

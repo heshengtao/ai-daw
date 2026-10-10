@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Rust 验证 = `cargo test -p daw-party-engine --features realtime`；`src-tauri` 构建用 `cargo build --manifest-path src-tauri/Cargo.toml`。
+- Rust 验证 = `cargo test -p ai-daw-engine --features realtime`；`src-tauri` 构建用 `cargo build --manifest-path src-tauri/Cargo.toml`。
   > ⚠️ **必须带 `--features realtime`**：`realtime` 模块被 `#[cfg(feature = "realtime")]` 门控（`crates/engine/src/lib.rs:13`），`default = []`。不带 feature 时 `realtime.rs` 根本不编译，会「全绿」但漏掉 `Player` 构造签名变化等错误（本计划的 `tempo_points` 就会改到它）。
 - 前端**没有测试框架**：验证 = `npm run build` + `npm run dev` 手动核对。
 - **向后兼容**：无关键点时，拍↔秒换算与现状**逐位一致**（`render`/`schedule` 输出不变）。这是硬性回归要求。
@@ -105,7 +105,7 @@
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `cargo test -p daw-party-engine keyframes_are_normalized`
+Run: `cargo test -p ai-daw-engine keyframes_are_normalized`
 Expected: 编译失败（`Keyframe` 不存在）
 
 - [ ] **Step 3: 实现**
@@ -174,7 +174,7 @@ pub struct Keyframe {
 
 - [ ] **Step 4: 运行测试**
 
-Run: `cargo test -p daw-party-engine keyframes_are_normalized transport_without_keyframes`
+Run: `cargo test -p ai-daw-engine keyframes_are_normalized transport_without_keyframes`
 Expected: PASS
 
 - [ ] **Step 5: 提交**
@@ -250,7 +250,7 @@ mod tests {
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `cargo test -p daw-party-engine --lib tempo`
+Run: `cargo test -p ai-daw-engine --lib tempo`
 Expected: 编译失败（`TempoMap` 不存在）
 
 - [ ] **Step 3: 实现**
@@ -386,7 +386,7 @@ pub mod tempo;
 
 - [ ] **Step 4: 运行测试**
 
-Run: `cargo test -p daw-party-engine --lib tempo`
+Run: `cargo test -p ai-daw-engine --lib tempo`
 Expected: PASS
 
 - [ ] **Step 5: 提交**
@@ -458,7 +458,7 @@ git commit -m "feat(tempo): piecewise beat<->second TempoMap"
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `cargo test -p daw-party-engine keyframe_shifts_later_event_frames render_length_follows_tempo_keyframes`
+Run: `cargo test -p ai-daw-engine keyframe_shifts_later_event_frames render_length_follows_tempo_keyframes`
 Expected: 编译失败（`tempo_points` / `upsert_keyframe` 未接）
 
 - [ ] **Step 3: `schedule.rs` 接入**
@@ -537,7 +537,7 @@ Expected: 编译失败（`tempo_points` / `upsert_keyframe` 未接）
 
 - [ ] **Step 6: 运行测试**
 
-Run: `cargo test -p daw-party-engine --features realtime`
+Run: `cargo test -p ai-daw-engine --features realtime`
 Expected: PASS（含既有的 `render_matches_player_at_different_block_size`、`render_is_deterministic_and_audible` 等）
 
 - [ ] **Step 7: 提交**
@@ -604,7 +604,7 @@ git commit -m "feat(tempo): schedule, render and player follow the tempo map"
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `cargo test -p daw-party-engine keyframe_commands_are_normalized`
+Run: `cargo test -p ai-daw-engine keyframe_commands_are_normalized`
 Expected: 编译失败（Command/Event 变体不存在）
 
 - [ ] **Step 3: 加命令变体**
@@ -679,7 +679,7 @@ Expected: 编译失败（Command/Event 变体不存在）
 
 - [ ] **Step 7: 运行测试**
 
-Run: `cargo test -p daw-party-engine --features realtime`
+Run: `cargo test -p ai-daw-engine --features realtime`
 Expected: PASS
 
 - [ ] **Step 8: 提交**
@@ -1572,7 +1572,7 @@ git commit -m "feat(tempo): edit view and readouts follow meter segments"
 
 ### 已完成
 
-- **Task 1 — 完成**（commit `d1ad221`，复审通过无 Critical/Important）。`Keyframe { beat, tempo, time_sig_num, time_sig_den }` + `Transport.keyframes`（`#[serde(default, skip_serializing_if = "Vec::is_empty")]`）+ `normalize_keyframe` / `upsert_keyframe`（同 beat 覆盖）/ `remove_keyframe`（按 beat）。`cargo test -p daw-party-engine --features realtime` → 113 通过。
+- **Task 1 — 完成**（commit `d1ad221`，复审通过无 Critical/Important）。`Keyframe { beat, tempo, time_sig_num, time_sig_den }` + `Transport.keyframes`（`#[serde(default, skip_serializing_if = "Vec::is_empty")]`）+ `normalize_keyframe` / `upsert_keyframe`（同 beat 覆盖）/ `remove_keyframe`（按 beat）。`cargo test -p ai-daw-engine --features realtime` → 113 通过。
 
 ### 后续任务必须注意（来自 Task 1 的复审）
 
@@ -1600,7 +1600,7 @@ git commit -m "feat(tempo): edit view and readouts follow meter segments"
 - **Task 12 — 完成**（commit `a0f11aa`）。`timeline.ts` 加 `gridStyle` 分段叠层，`ArrangeView`/`EditView`/`ControllerLane` 改用内联样式，删除 `gridBackground`。
 - **Task 13 — 完成**（commit `a0f11aa`）。`EditView` 的 `beatsPerBar`/`gridLabel`/拖动吸附按所在分段；`BottomBar` 的 `bars`/`positionText` 按分段读数。
 
-**验证**：`cargo test -p daw-party-engine --features realtime` → 120 通过；`cargo check --manifest-path src-tauri/Cargo.toml` 通过；`npm run build`（`vue-tsc` + `vite build`）通过。
+**验证**：`cargo test -p ai-daw-engine --features realtime` → 120 通过；`cargo check --manifest-path src-tauri/Cargo.toml` 通过；`npm run build`（`vue-tsc` + `vite build`）通过。
 
 **与计划的实现差异（供后续参考）**：
 - `BottomBar` 的 BPM 自触发防护未用计划里的 `syncing` 标志（该写法在「同步值未变化、watcher 不触发」时会残留标志位、吞掉下一次真实编辑），改为「新值等于该处生效值则视为同步、不回写」。

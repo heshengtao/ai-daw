@@ -3,5 +3,5 @@
 #![forbid(unsafe_code)]
 
 fn main() {
-    daw_party_app_lib::run()
+    ai_daw_app_lib::run()
 }

@@ -62,6 +62,13 @@ pub trait Plugin: Send {
     fn take_param_changes(&mut self) -> Vec<(ParamId, f32)> {
         Vec::new()
     }
+
+    /// 在**丢弃宿主之前**把音频处理停掉（默认无需处理）。
+    ///
+    /// 宿主重建播放器时会把实例「搬」到新播放器复用（保住插件状态与已打开的界面窗口）。
+    /// CLAP 要求 `stop_processing` 只在音频线程调用，所以由**回调**在交出实例前调它；
+    /// 纯 DSP 插件与 VST3 不需要（默认空操作）。
+    fn release_processing(&mut self) {}
 }
 
 #[cfg(test)]

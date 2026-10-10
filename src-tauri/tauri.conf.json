@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "daw-party",
+  "productName": "AI DAW",
   "version": "0.1.0",
-  "identifier": "com.dawparty.app",
+  "identifier": "com.aidaw.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "daw-party",
+        "title": "AI DAW",
         "width": 1280,
         "height": 800,
         "minWidth": 720,

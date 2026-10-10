@@ -7,3 +7,6 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+
+# 本地 AI 的 ONNX 权重（不进仓库，见 tools/fetch-models.sh）
+models/

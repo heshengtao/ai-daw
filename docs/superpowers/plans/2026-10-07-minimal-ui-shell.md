@@ -1,7 +1,7 @@
-# daw-party 最小桌面外壳实现计划（Plan 4a）
+# AI DAW 最小桌面外壳实现计划（Plan 4a）
 
 > **状态（2026-10-08）**：✅ **已落地，但实现栈与本文不同**——最终采用 **Vue 3 + Pinia + Vue Router + Tailwind（Material You token 适配自 Exameow）**，而非本文所写的 React 18 + `@m3e/react`；文件布局亦不同（`src/main.ts`、`*.vue`、`src/api/`、`src/stores/`、`src/composables/`）。功能范围（窗口、工程操作、离线渲染试听、导出 WAV）均已实现。
-> 「原生实时传输」属 Plan 4b，**尚未开始**；后续路线见 `../ROADMAP.md` §5 Stage A。
+> 「原生实时传输」属 Plan 4b，**✅ 已完成**（见 `../ROADMAP.md` §5 Stage A / A2）。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -18,7 +18,7 @@
 - 因此 `cargo test --workspace` 仍只覆盖 `crates/*`，必须保持全绿、无 warning；Tauri 应用通过 `npm run tauri dev` 验证。
 - 后端 Rust：`edition = "2021"`、`license = "Apache-2.0"`、`#![forbid(unsafe_code)]`（`src-tauri` 同）。
 - 前端 TypeScript 严格模式；组件与函数加 `///`/JSDoc 注释（沿用"接口可暴露"原则）。
-- 应用标识 `identifier` 用 `com.dawparty.app`，`productName` 用 `daw-party`。
+- 应用标识 `identifier` 用 `com.aidaw.app`，`productName` 用 `AI DAW`。
 - 每个任务末尾：`cargo test --workspace` 全绿；涉及前端时 `npm run build`（tsc + vite build）通过。
 - 提交信息前缀 `feat:` / `fix:` / `chore:`，结尾固定带：
   `Co-authored-by: CommandCodeBot <noreply@commandcode.ai>`
@@ -50,24 +50,24 @@
 
 ```bash
 export HTTPS_PROXY=http://127.0.0.1:7892 HTTP_PROXY=http://127.0.0.1:7892 CARGO_HTTP_PROXY=http://127.0.0.1:7892
-cd "$(mktemp -d)" && npm create tauri-app@latest daw-party-ui -- --template react-ts
+cd "$(mktemp -d)" && npm create tauri-app@latest ai-daw-ui -- --template react-ts
 ```
 
-可选：若 npm 的额外 `--` 形式不生效，改用 `npx create-tauri-app@latest daw-party-ui --template react-ts`。
+可选：若 npm 的额外 `--` 形式不生效，改用 `npx create-tauri-app@latest ai-daw-ui --template react-ts`。
 
 - [ ] **Step 2: 把模板并入仓库根**
 
-把生成目录里的这些内容复制到仓库根（`/Users/ailm32442/Documents/github/daw-party`）：`src/`、`src-tauri/`、`index.html`、`package.json`、`vite.config.ts`、`tsconfig.json`、`tsconfig.node.json`（若模板有 `public/` 也一并复制）。
+把生成目录里的这些内容复制到仓库根（`/Users/ailm32442/Documents/github/ai-daw`）：`src/`、`src-tauri/`、`index.html`、`package.json`、`vite.config.ts`、`tsconfig.json`、`tsconfig.node.json`（若模板有 `public/` 也一并复制）。
 
 然后修改：
-- `src-tauri/Cargo.toml`：把 `name` 改为 `daw-party-app`；在文件末尾追加
+- `src-tauri/Cargo.toml`：把 `name` 改为 `ai-daw-app`；在文件末尾追加
 
 ```toml
 [workspace]
 ```
 （空 workspace 表，令其脱离根 workspace。）
-- `src-tauri/tauri.conf.json`：`productName` → `"daw-party"`，`identifier` → `"com.dawparty.app"`。
-- `package.json`：把 `"name"` 改为 `"daw-party"`。
+- `src-tauri/tauri.conf.json`：`productName` → `"AI DAW"`，`identifier` → `"com.aidaw.app"`。
+- `package.json`：把 `"name"` 改为 `"ai-daw"`。
 - 根 `.gitignore` 追加：
 
 ```
@@ -110,7 +110,7 @@ EOF
 - Modify: `src-tauri/src/lib.rs`、`src-tauri/Cargo.toml`
 
 **Interfaces:**
-- Consumes: `daw_party_engine::{bus::Engine, command::Command, event::{Actor, Event}, model::{Project, Note}}`。
+- Consumes: `ai_daw_engine::{bus::Engine, command::Command, event::{Actor, Event}, model::{Project, Note}}`。
 - Produces: `AppState`；Tauri 命令 `get_project`、`add_track`、`set_tempo`、`load_demo`、`clear_project`；事件名常量 `EVENT_ENGINE`（`"engine://event"`）。
 
 - [ ] **Step 1: 给引擎事件加 serde 派生（核心 crate，含测试）**
@@ -127,7 +127,7 @@ EOF
     }
 ```
 
-Run: `cargo test -p daw-party-engine event::`
+Run: `cargo test -p ai-daw-engine event::`
 Expected: PASS。
 
 - [ ] **Step 2: 加依赖并写状态**
@@ -135,7 +135,7 @@ Expected: PASS。
 `src-tauri/Cargo.toml` 的 `[dependencies]` 增加：
 
 ```toml
-daw-party-engine = { path = "../crates/engine" }
+ai-daw-engine = { path = "../crates/engine" }
 serde_json = "1"
 ```
 
@@ -144,7 +144,7 @@ serde_json = "1"
 ```rust
 use std::sync::Mutex;
 
-use daw_party_engine::bus::Engine;
+use ai_daw_engine::bus::Engine;
 
 /// 应用共享状态：进程内持有唯一的引擎实例。
 pub struct AppState {
@@ -166,10 +166,10 @@ pub const EVENT_ENGINE: &str = "engine://event";
 ```rust
 use tauri::{Emitter, State};
 
-use daw_party_engine::bus::Engine;
-use daw_party_engine::command::Command;
-use daw_party_engine::event::{Actor, Event};
-use daw_party_engine::model::{Note, Project};
+use ai_daw_engine::bus::Engine;
+use ai_daw_engine::command::Command;
+use ai_daw_engine::event::{Actor, Event};
+use ai_daw_engine::model::{Note, Project};
 
 use crate::state::{AppState, EVENT_ENGINE};
 
@@ -263,7 +263,7 @@ pub fn run() {
             commands::load_demo,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running daw-party");
+        .expect("error while running ai-daw");
 }
 ```
 
@@ -399,7 +399,7 @@ export function AppShell({ onLoadDemo, onClear, children }: AppShellProps) {
   return (
     <div className="app-shell">
       <header className="app-bar">
-        <h1>daw-party</h1>
+        <h1>AI DAW</h1>
         <div className="app-bar-actions">
           <M3eButton onClick={onLoadDemo}>Load demo</M3eButton>
           <M3eButton onClick={onClear}>New</M3eButton>
@@ -550,7 +550,7 @@ EOF
 - Modify: `src-tauri/src/commands.rs`、`src-tauri/src/lib.rs`、`src/lib/api.ts`、`src/App.tsx`、`src/components/TransportBar.tsx`
 
 **Interfaces:**
-- Consumes: `daw_party_engine::{registry::PluginRegistry, render::{render, RenderOptions}, audio::AudioBuffer, wav}`。
+- Consumes: `ai_daw_engine::{registry::PluginRegistry, render::{render, RenderOptions}, audio::AudioBuffer, wav}`。
 - Produces: Tauri 命令 `render_preview(sampleRate: u32) -> tauri::ipc::Response`（返回 WAV 字节）；前端 `renderPreview()` 返回 `Blob`。
 
 - [ ] **Step 1: 后端渲染命令（返回 WAV 字节）**
@@ -635,7 +635,7 @@ EOF
 - Modify: `src-tauri/src/commands.rs`、`src-tauri/src/lib.rs`、`src/lib/api.ts`、`src/App.tsx`、`src/components/AppShell.tsx`
 
 **Interfaces:**
-- Consumes: Task 5 的渲染路径与 `daw_party_engine::wav::write_wav`。
+- Consumes: Task 5 的渲染路径与 `ai_daw_engine::wav::write_wav`。
 - Produces: Tauri 命令 `export_wav(path: String, sampleRate: u32) -> Result<String, String>`。
 
 - [ ] **Step 1: 后端导出命令**
@@ -648,7 +648,7 @@ pub fn export_wav(state: State<'_, AppState>, path: String, sample_rate: u32) ->
     let registry = PluginRegistry::with_builtins();
     let options = RenderOptions { sample_rate: sample_rate as f64, tail_seconds: 0.5 };
     let buffer = render(&project, &registry, &options);
-    daw_party_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| e.to_string())?;
+    ai_daw_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| e.to_string())?;
     Ok(path)
 }
 ```
@@ -658,7 +658,7 @@ pub fn export_wav(state: State<'_, AppState>, path: String, sample_rate: u32) ->
 - [ ] **Step 2: 前端导出**
 
 `api.ts` 增加 `exportWav(path, sampleRate = 44100): Promise<string>`。
-`AppShell.tsx` 增加一个文本框（默认 `~/Documents/daw-party-export.wav`，用 `@tauri-apps/api/path` 的 `documentDir()` 拼默认值）与 "Export WAV" 按钮；成功后把返回路径显示在活动列表里。
+`AppShell.tsx` 增加一个文本框（默认 `~/Documents/ai-daw-export.wav`，用 `@tauri-apps/api/path` 的 `documentDir()` 拼默认值）与 "Export WAV" 按钮；成功后把返回路径显示在活动列表里。
 
 - [ ] **Step 3: 验证**
 
@@ -721,7 +721,7 @@ EOF
 - "AI 操作可视化"的最小雏形 → Task 4 的活动列表（订阅引擎事件流；完整可视化留 Plan 7）。
 - 未覆盖（显式留到 4b）：原生实时传输（`AudioHost` + 专用音频线程）、时间线/钢琴卷帘/混音台、保存/打开工程文件、文件保存对话框插件。
 
-**类型一致性：** 前端 `types.ts` 的 `Project/Track/Clip/Note` 必须与 `daw_party_engine::model` 的 serde 形状一致（注意 `TrackId`/`ClipId` 是裸 `number`、字段名是 snake_case）；`EVENT_ENGINE` 常量前后端一致（`"engine://event"`）；命令名与 `generate_handler!` 注册名一致。
+**类型一致性：** 前端 `types.ts` 的 `Project/Track/Clip/Note` 必须与 `ai_daw_engine::model` 的 serde 形状一致（注意 `TrackId`/`ClipId` 是裸 `number`、字段名是 snake_case）；`EVENT_ENGINE` 常量前后端一致（`"engine://event"`）；命令名与 `generate_handler!` 注册名一致。
 
 **已知取舍：**
 - 试听是"渲染后播放"，不是走原生引擎的实时传输——按下 Play 到出声之间有一段渲染延迟；这是 4a 为了绕开 `cpal::Stream` 的 `!Send` 与线程架构问题而做的取舍，**4b 用专用音频线程 + `AudioHost` 换成真正的实时传输**。

@@ -1,5 +1,5 @@
 [package]
-name = "daw-party-analysis"
+name = "ai-daw-analysis"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

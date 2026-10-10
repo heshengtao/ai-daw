@@ -827,7 +827,9 @@
   }
 
   .m3-switch.on::after {
-    left: 26px;
+    /* 轨道内宽 = 52 − 2×2(border) = 48；把手 24，右侧留 2（与 AI 面板的开关同一比例） →
+       left = 48 − 24 − 2 = 22。（原值 26 会把把手压在右边框上、18 又离得太远。） */
+    left: 22px;
     width: 24px;
     height: 24px;
     margin-top: -12px;
@@ -993,7 +995,7 @@
   border-radius: 8px;
 }
 
-/* ===== daw-party overrides ===== */
+/* ===== AI DAW overrides ===== */
 
 /* 按钮文字永不换行（窄屏请改用隐藏/图标化，而不是让它换行）。 */
 .btn-filled,

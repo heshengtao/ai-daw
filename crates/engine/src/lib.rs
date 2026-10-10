@@ -12,6 +12,8 @@ pub mod registry;
 pub mod render;
 #[cfg(feature = "realtime")]
 pub mod realtime;
+#[cfg(feature = "realtime")]
+pub mod recorder;
 pub mod schedule;
 pub mod scope;
 pub mod tempo;
@@ -20,6 +22,8 @@ pub mod wav;
 
 pub use bus::Engine;
 pub use registry::PluginRegistry;
+/// 采集环的 SPSC 类型：`capture_block` / `drain_into` 的公开签名用到它，集成测试也要用。
+pub use rtrb;
 
 /// 界面实时波形缓冲的容量（采样数）。
 ///

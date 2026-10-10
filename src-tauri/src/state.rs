@@ -3,9 +3,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use daw_party_engine::bus::Engine;
-use daw_party_host_vst3::{CatalogPlugin, EditorHandle, PluginEditorWindow};
+use ai_daw_engine::bus::Engine;
+use ai_daw_engine::model::TrackId;
+use ai_daw_host_vst3::{CatalogPlugin, EditorHandle, PluginEditorWindow};
 
+use crate::ai::AiRuntime;
 use crate::audio::AudioEngine;
 use crate::assets::AssetCache;
 use crate::presets::PresetStore;
@@ -23,6 +25,15 @@ pub fn with_editor_windows<R>(f: impl FnOnce(&mut HashMap<u64, PluginEditorWindo
     EDITOR_WINDOWS.with(|windows| f(&mut windows.borrow_mut()))
 }
 
+/// 一次录音的目标位置。
+#[derive(Debug, Clone, Copy)]
+pub struct RecordingTarget {
+    /// 录音落在哪条轨道。
+    pub track: TrackId,
+    /// 录音起点（拍）。
+    pub start: f64,
+}
+
 /// 应用共享状态：进程内持有唯一的引擎实例与音频引擎句柄。
 pub struct AppState {
     /// 领域引擎（工程模型 + 撤销历史）。所有编辑都必须经过它。
@@ -35,6 +46,11 @@ pub struct AppState {
     pub editor_handles: Arc<Mutex<HashMap<u64, EditorHandle>>>,
     /// 哪几条轨道开着插件窗口（主线程那张表的**可跨线程镜像**，供界面查询）。
     pub open_editors: Arc<Mutex<HashSet<u64>>>,
+    /// 已开窗口是**为哪个乐器插件**开的（轨道 → plugin id）。
+    ///
+    /// 重建播放器时插件实例会被「搬」到新播放器复用，所以只要这条轨道的乐器没换，窗口就
+    /// 依旧有效、不该关；只有乐器被换掉（或轨道被删）时窗口才真的失效。判定要靠这份记录。
+    pub editor_plugins: Arc<Mutex<HashMap<u64, String>>>,
     /// 其中哪些轨道的窗口是**宿主建的**（插件只支持嵌入模式）。用户关掉那扇窗就等于关界面。
     pub host_windows: Arc<Mutex<HashSet<u64>>>,
     /// 用户预设（跨工程；文件位置由 `init_presets` 装上）。
@@ -45,6 +61,10 @@ pub struct AppState {
     ///
     /// 这是界面「保存」要知道的目标；它随会话缓存一起持久化，下次启动能接着用。
     pub session_path: Mutex<Option<String>>,
+    /// 正在进行的一次录音的目标：`record_start` 记下，`record_stop` 取走。
+    pub recording: Mutex<Option<RecordingTarget>>,
+    /// 本地 AI 任务（后台线程 + 进度 + 取消）。
+    pub ai: AiRuntime,
 }
 
 impl AppState {
@@ -68,11 +88,24 @@ impl AppState {
             catalog: Mutex::new(Vec::new()),
             editor_handles,
             open_editors: Arc::new(Mutex::new(HashSet::new())),
+            editor_plugins: Arc::new(Mutex::new(HashMap::new())),
             host_windows: Arc::new(Mutex::new(HashSet::new())),
             presets: Mutex::new(PresetStore::load(None)),
             assets,
             session_path: Mutex::new(None),
+            recording: Mutex::new(None),
+            ai: AiRuntime::new(),
         }
+    }
+
+    /// 记下本次录音的目标。
+    pub fn set_recording(&self, target: Option<RecordingTarget>) {
+        *self.recording.lock().unwrap() = target;
+    }
+
+    /// 取走（并清空）本次录音的目标。
+    pub fn take_recording(&self) -> Option<RecordingTarget> {
+        self.recording.lock().unwrap().take()
     }
 
     /// 记下当前工程对应的文件路径（保存到新路径 / 打开文件时调用）。

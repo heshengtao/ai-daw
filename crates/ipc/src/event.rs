@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::{AudioSource, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, TrackId};
+use crate::model::{
+    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, Send, TrackId,
+};
 
 /// 变更来源。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,7 +25,16 @@ pub enum Event {
     /// 关键点被删除。
     KeyframeRemoved { actor: Actor, beat: f64 },
     /// 轨道新增。
-    TrackAdded { actor: Actor, id: TrackId, name: String },
+    TrackAdded {
+        actor: Actor,
+        id: TrackId,
+        name: String,
+        /// 插入位置（`None` = 追加到末尾）。越界会被夹到末尾。
+        ///
+        /// 事件里带位置，撤销/重放才能重现「插在中间」而不只是「加在最后」。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<usize>,
+    },
     /// 轨道删除。
     TrackRemoved { actor: Actor, id: TrackId },
     /// 轨道被重命名。
@@ -83,6 +94,10 @@ pub enum Event {
     SoloChanged { actor: Actor, track: TrackId, solo: bool },
     /// 总输出增益改变（dB）。
     MasterGainChanged { actor: Actor, gain_db: f32 },
+    /// 轨道发送被改写（整体替换；空 = 清空）。
+    TrackSendsChanged { actor: Actor, track: TrackId, sends: Vec<Send> },
+    /// 轨道自动化被改写（整体替换某参数的曲线；`points` 为空 = 删除该车道）。
+    AutomationChanged { actor: Actor, track: TrackId, param: String, points: Vec<AutomationPoint> },
     /// 乐器参数改变。
     ParamChanged { actor: Actor, track: TrackId, param: String, value: f32 },
     /// 效果器被追加到轨道效果链末尾。
@@ -131,6 +146,8 @@ impl Event {
             | Event::MuteChanged { actor, .. }
             | Event::SoloChanged { actor, .. }
             | Event::MasterGainChanged { actor, .. }
+            | Event::TrackSendsChanged { actor, .. }
+            | Event::AutomationChanged { actor, .. }
             | Event::ParamChanged { actor, .. }
             | Event::EffectAdded { actor, .. }
             | Event::EffectRemoved { actor, .. }
@@ -154,6 +171,7 @@ impl Event {
                 | Event::MuteChanged { .. }
                 | Event::SoloChanged { .. }
                 | Event::MasterGainChanged { .. }
+                | Event::AutomationChanged { .. }
         )
     }
 }
@@ -165,7 +183,7 @@ mod tests {
 
     #[test]
     fn event_roundtrips_through_json() {
-        let e = Event::TrackAdded { actor: Actor::Agent("claude".into()), id: crate::model::TrackId(3), name: "Bass".into() };
+        let e = Event::TrackAdded { actor: Actor::Agent("claude".into()), id: crate::model::TrackId(3), name: "Bass".into(), at: None };
         let json = serde_json::to_string(&e).unwrap();
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(e, back);
@@ -239,7 +257,7 @@ mod tests {
         assert!(Event::SoloChanged { actor: Actor::Human, track: crate::model::TrackId(1), solo: true }.is_mix_only());
         assert!(Event::MasterGainChanged { actor: Actor::Human, gain_db: 0.0 }.is_mix_only());
         // 结构性变更不能走"仅混音"通道。
-        assert!(!Event::TrackAdded { actor: Actor::Human, id: crate::model::TrackId(1), name: "A".into() }.is_mix_only());
+        assert!(!Event::TrackAdded { actor: Actor::Human, id: crate::model::TrackId(1), name: "A".into(), at: None }.is_mix_only());
         assert!(!Event::ClipMoved { actor: Actor::Human, track: crate::model::TrackId(1), clip: crate::model::ClipId(1), start: 1.0 }.is_mix_only());
         assert!(!Event::TempoChanged { actor: Actor::Human, tempo: 90.0 }.is_mix_only());
     }

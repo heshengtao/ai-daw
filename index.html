@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>daw-party</title>
+    <title>AI DAW</title>
   </head>
 
   <body>
@@ -14,7 +14,7 @@
       // 这段判断必须与 `composables/useTheme` 保持一致（同一个 localStorage 键、同一个默认值）。
       (function () {
         try {
-          var mode = localStorage.getItem("daw-party-theme") || "dark";
+          var mode = localStorage.getItem("ai-daw-theme") || "dark";
           var dark =
             mode === "dark" ||
             (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);

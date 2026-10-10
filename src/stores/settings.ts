@@ -7,7 +7,7 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
 
-const KEY = "daw-party-settings";
+const KEY = "ai-daw-settings";
 
 /** 与工程的速度范围一致（`project.setTempo` / 引擎都夹在这个区间）。 */
 export const MIN_DEFAULT_TEMPO = 20;

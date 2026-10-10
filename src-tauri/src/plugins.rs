@@ -5,9 +5,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use daw_party_engine::model::Project;
-use daw_party_engine::registry::{missing_plugin, PluginRegistry};
-use daw_party_host_vst3::{load_catalog_plugin_with_editor, CatalogPlugin, EditorHandle};
+use ai_daw_engine::model::Project;
+use ai_daw_engine::registry::{missing_plugin, PluginRegistry};
+use ai_daw_host_vst3::{load_catalog_plugin_with_editor, CatalogPlugin, EditorHandle};
 
 /// 依据扫描目录构建注册表：内置合成器 + 外部插件工厂 + 缺失占位。
 ///
@@ -71,12 +71,12 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
 
-    use daw_party_engine::bus::Engine;
-    use daw_party_engine::command::Command;
-    use daw_party_engine::event::{Actor, Event};
-    use daw_party_engine::model::Note;
-    use daw_party_engine::render::{render, RenderOptions};
-    use daw_party_host_vst3::MainThreadDispatch;
+    use ai_daw_engine::bus::Engine;
+    use ai_daw_engine::command::Command;
+    use ai_daw_engine::event::{Actor, Event};
+    use ai_daw_engine::model::Note;
+    use ai_daw_engine::render::{render, RenderOptions};
+    use ai_daw_host_vst3::MainThreadDispatch;
 
     /// 假主线程上执行过的任务数（证明 CLAP 的初始化确实被派到主线程了）。
     static MAIN_THREAD_TASKS: AtomicUsize = AtomicUsize::new(0);
@@ -109,7 +109,7 @@ mod tests {
             std::thread::Builder::new()
                 .name("fake-main-thread".into())
                 .spawn(move || {
-                    daw_party_host_vst3::mark_main_thread();
+                    ai_daw_host_vst3::mark_main_thread();
                     let _ = ready_tx.send(());
                     while let Ok(task) = rx.recv() {
                         task();
@@ -117,7 +117,7 @@ mod tests {
                 })
                 .expect("起假主线程");
             ready_rx.recv().expect("假主线程必须完成登记");
-            daw_party_host_vst3::set_main_thread_dispatch(Arc::new(FakeMainThread { tx }));
+            ai_daw_host_vst3::set_main_thread_dispatch(Arc::new(FakeMainThread { tx }));
         });
     }
 
@@ -130,7 +130,7 @@ mod tests {
     fn renders_a_track_hosting_the_clap_kr106() {
         // 先装派发器再扫描：扫描阶段也会实例化插件问它有没有界面。
         install_fake_main_thread();
-        let catalog = daw_party_host_vst3::scan_catalog();
+        let catalog = ai_daw_host_vst3::scan_catalog();
         let Some(kr106) = catalog
             .iter()
             .find(|p| p.format == "clap" && p.name.contains("KR-106"))

@@ -1,6 +1,6 @@
 # 音频片段（C1）— 设计
 
-> **状态（2026-10-09）**：后端部分（解码 + 模型 + 排程/播放）已实现；宿主接线与前端见计划。
+> **状态（2026-10-10 校准）**：**已完成** —— 后端（解码 + 模型 + 排程/播放）、宿主接线、前端波形与「导入音频…」入口、真机端到端均已落地。保音高变速等仍按 §2 非目标不做。
 
 ## 1 背景
 
@@ -75,7 +75,7 @@ cursor(源帧) 每过一个输出帧 += ratio
   向一侧偏则衰减另一侧。
 - `render_with_assets(...)`；`render(...)` 委托（空素材）。
 
-## 6 解码（新 crate `daw-party-asset`）
+## 6 解码（新 crate `ai-daw-asset`）
 
 - `symphonia`（wav / flac / mp3 / ogg-vorbis / aac / m4a），**MPL-2.0**，仅作未修改依赖（见 NOTICE）。
 - `decode(path) -> DecodedAudio`：声道收敛到 1/2（>2 取前两声道）；**保留素材自身采样率**；
@@ -102,8 +102,8 @@ cursor(源帧) 每过一个输出帧 += ratio
 
 ```
 cargo test --workspace
-cargo test -p daw-party-engine --features realtime
-cargo test -p daw-party-engine --features realtime --test realtime_safety
+cargo test -p ai-daw-engine --features realtime
+cargo test -p ai-daw-engine --features realtime --test realtime_safety
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
 

@@ -10,9 +10,9 @@
 
 ## Global Constraints
 
-- 引擎 crate = `daw-party-engine`（`crates/engine`）；`src-tauri` 包 = `daw-party-app`，**自成一个 workspace**（`--manifest-path src-tauri/Cargo.toml`）。
+- 引擎 crate = `ai-daw-engine`（`crates/engine`）；`src-tauri` 包 = `ai-daw-app`，**自成一个 workspace**（`--manifest-path src-tauri/Cargo.toml`）。
 - **验证引擎必须带 feature**：`realtime` 模块被 `#[cfg(feature = "realtime")]` 门控（`crates/engine/src/lib.rs:13`），而 `default = []`。所以命令一律是
-  `cargo test -p daw-party-engine --features realtime`——**不带 `--features realtime` 时 `realtime.rs` 根本不会被编译，测试会「全绿」但什么也没验证**（这是本计划第一轮踩过的坑）。
+  `cargo test -p ai-daw-engine --features realtime`——**不带 `--features realtime` 时 `realtime.rs` 根本不会被编译，测试会「全绿」但什么也没验证**（这是本计划第一轮踩过的坑）。
 - 前端仍**没有测试框架**：验证 = `npm run build`。
 - 实时回调里**不得加锁、不得分配**（既有约定）。`SharedStatus` 的 `Mutex` 只允许在 cpal 的**错误回调**（非实时线程）里用。
 - 注释与文案用中文；界面文案必须 i18n（zh + en 各一份）。
@@ -112,7 +112,7 @@
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cargo test -p daw-party-engine --features realtime realtime`
+Run: `cargo test -p ai-daw-engine --features realtime realtime`
 Expected: 编译失败（`OutputFormat` / `choose_output_format` / `device_changed` 未定义）
 
 - [ ] **Step 3: 实现**
@@ -197,7 +197,7 @@ pub fn device_changed(previous: Option<&DeviceSignature>, current: Option<&Devic
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `cargo test -p daw-party-engine --features realtime`
+Run: `cargo test -p ai-daw-engine --features realtime`
 Expected: 全部通过（含既有 13 个）
 
 - [ ] **Step 5: 提交**
@@ -308,7 +308,7 @@ fn supported_formats(device: &cpal::Device) -> Vec<OutputFormatRange> {
 
 - [ ] **Step 3: 验证**
 
-Run: `cargo test -p daw-party-engine --features realtime`（应通过，含依赖真实设备的冒烟测试 `start_returns_result_without_panicking`）
+Run: `cargo test -p ai-daw-engine --features realtime`（应通过，含依赖真实设备的冒烟测试 `start_returns_result_without_panicking`）
 Run: `cargo build --manifest-path src-tauri/Cargo.toml`（应通过）
 
 - [ ] **Step 4: 提交**
@@ -350,7 +350,7 @@ git commit -m "fix(audio): pick any supported f32 output format and fall back on
     }
 ```
 
-Run: `cargo test -p daw-party-engine --features realtime shared_status` → 编译失败。
+Run: `cargo test -p ai-daw-engine --features realtime shared_status` → 编译失败。
 
 - [ ] **Step 2: 实现 SharedStatus**
 
@@ -437,7 +437,7 @@ impl SharedStatus {
 
 - [ ] **Step 5: 验证**
 
-Run: `cargo test -p daw-party-engine --features realtime`（含新测试）
+Run: `cargo test -p ai-daw-engine --features realtime`（含新测试）
 Run: `cargo build --manifest-path src-tauri/Cargo.toml`
 
 - [ ] **Step 6: 提交**
@@ -594,7 +594,7 @@ enum AudioMessage {
 
 - [ ] **Step 4: 验证**
 
-Run: `cargo test -p daw-party-engine --features realtime`
+Run: `cargo test -p ai-daw-engine --features realtime`
 Run: `cargo build --manifest-path src-tauri/Cargo.toml`
 Run: `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`（若项目原本 clippy 干净；不干净则跳过并说明）
 
@@ -741,8 +741,8 @@ git commit -m "fix(transport): drop the offline preview when realtime audio reco
 ### 必须知道的坑（第一轮踩过）
 
 - **`realtime` 模块被 feature 门控**：`crates/engine/src/lib.rs:13` 是 `#[cfg(feature = "realtime")] pub mod realtime;`，而 `default = []`。因此
-  **`cargo test -p daw-party-engine --features realtime` 不会编译 `realtime.rs`**——它会报「96 passed」但实际上一个 realtime 测试都没跑。
-  正确命令：`cargo test -p daw-party-engine --features realtime`（当前 107 个 lib 测试，含 11 个 realtime 测试）。
+  **`cargo test -p ai-daw-engine --features realtime` 不会编译 `realtime.rs`**——它会报「96 passed」但实际上一个 realtime 测试都没跑。
+  正确命令：`cargo test -p ai-daw-engine --features realtime`（当前 107 个 lib 测试，含 11 个 realtime 测试）。
   这条已同步进上面的 Global Constraints 与各任务的验证步骤。
 
 ### 遗留（不阻塞，但别忘）

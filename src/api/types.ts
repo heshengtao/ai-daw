@@ -1,4 +1,4 @@
-/** 与引擎 `daw_party_engine::model` 对应的前端视图类型（snake_case，id 为裸数字）。 */
+/** 与引擎 `ai_daw_engine::model` 对应的前端视图类型（snake_case，id 为裸数字）。 */
 
 export interface Note {
   pitch: number;
@@ -63,6 +63,30 @@ export interface MixerChannel {
   solo: boolean;
 }
 
+/** 一路发送（aux send）：把本轨推子后的信号按增益送进目标轨道。 */
+export interface Send {
+  /** 目标轨道 id（通常是一条总线轨道）。 */
+  target: number;
+  /** 发送增益（dB）。 */
+  gain_db: number;
+}
+
+/** 自动化曲线上的一个关键点。 */
+export interface AutomationPoint {
+  /** 位置（拍）。 */
+  beat: number;
+  /** 参数值。 */
+  value: number;
+}
+
+/** 一条自动化车道（参数 + 折线）。 */
+export interface AutomationLane {
+  /** 参数名：`gain_db` 或 `pan`。 */
+  param: string;
+  /** 关键点（按 beat 升序）。 */
+  points: AutomationPoint[];
+}
+
 export interface PluginInstance {
   plugin_id: string;
   params: Record<string, number>;
@@ -77,6 +101,10 @@ export interface Track {
   effects: PluginInstance[];
   clips: Clip[];
   mixer: MixerChannel;
+  /** 发送（aux send）；空数组时后端不写这个键，所以是可选。 */
+  sends?: Send[];
+  /** 自动化车道；空数组时后端不写这个键。 */
+  automation?: AutomationLane[];
 }
 
 /** 时间轴上的一个关键点：从 `beat` 起 BPM 与拍号切换。 */
@@ -230,4 +258,54 @@ export interface McpStatus extends McpConfig {
   running: boolean;
   /** 正在监听时的接入地址（形如 `http://127.0.0.1:8787/mcp`），否则为 `null`。 */
   url: string | null;
+}
+
+/** 一个音频输入设备（与后端 `recorder::InputDeviceInfo` 一一对应）。 */
+export interface InputDeviceInfo {
+  /** 设备显示名。 */
+  name: string;
+  /** 默认输入采样率（Hz）。 */
+  sample_rate: number;
+  /** 默认输入声道数。 */
+  channels: number;
+  /** 连接类型（仅 macOS 尽力提供）：见 `InputTransport`；取不到为 `null`。 */
+  transport: InputTransport | null;
+  /** 是否系统默认输入设备。 */
+  is_default: boolean;
+}
+
+/** 输入设备的连接类型（后端的稳定短名）。 */
+export type InputTransport =
+  | "builtin"
+  | "bluetooth"
+  | "usb"
+  | "virtual"
+  | "aggregate"
+  | "airplay"
+  | "network"
+  | "hdmi"
+  | "displayport"
+  | "thunderbolt"
+  | "firewire"
+  | "pci"
+  | "other";
+
+/** 本地 AI 任务状态（与后端 `ai::AiStatus` 一一对应）。 */
+export interface AiStatus {
+  /** 是否有任务在跑。 */
+  running: boolean;
+  /** 任务类型：`"to_midi"` / `"enhance"`。 */
+  kind: string | null;
+  /** 进度（0..1）。 */
+  progress: number;
+  /** 结束后的摘要或错误。 */
+  message: string | null;
+}
+
+/** 本地 AI 的 ONNX 权重是否已就位。 */
+export interface AiModels {
+  /** Basic Pitch（音频转 MIDI）权重已下载。 */
+  basic_pitch: boolean;
+  /** LocalVQE（降噪）权重已下载。 */
+  localvqe: boolean;
 }

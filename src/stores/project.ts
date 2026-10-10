@@ -9,7 +9,7 @@ import { ref } from "vue";
 import * as api from "@/api/tauri";
 import { useI18n } from "@/i18n";
 import { useSettingsStore } from "@/stores/settings";
-import type { ClipPlacement, ClipRef, HistoryState, Keyframe, MixerState, Note, NoteEdit, Project } from "@/api/types";
+import type { AutomationPoint, ClipPlacement, ClipRef, HistoryState, Keyframe, MixerState, Note, NoteEdit, Project, Send } from "@/api/types";
 import { meterAt, meterBeatAt, tempoAt } from "@/utils/tempo";
 
 /**
@@ -200,6 +200,16 @@ export const useProjectStore = defineStore("project", () => {
     return edit(() => api.splitClip(track, clip, beat));
   }
 
+  /**
+   * 套用一次录音返回的工程快照。
+   *
+   * 录音已经是后端的一次可撤销编辑（`AddAudioClip`），这里只把新快照装上并刷新历史深度。
+   */
+  async function applyRecorded(next: Project): Promise<void> {
+    project.value = next;
+    await refreshDepths();
+  }
+
   /** 删除片段。 */
   function removeClip(track: number, clip: number): Promise<void> {
     return edit(() => api.removeClip(track, clip));
@@ -284,6 +294,20 @@ export const useProjectStore = defineStore("project", () => {
   /** 设置总输出增益。 */
   function setMasterGain(gainDb: number): Promise<void> {
     return edit(() => api.setMasterGain(gainDb));
+  }
+
+  /** 设置轨道的发送列表（整体替换；空数组 = 清空）。 */
+  function setSends(track: number, sends: Send[]): Promise<void> {
+    return edit(() => api.setSends(track, sends));
+  }
+
+  /**
+   * 设置一条自动化车道（整体替换；空 `points` = 删除该车道）。
+   *
+   * 自动化是「仅混音」变更，后端会把它直接推给音频线程逐块求值，不会打断音频。
+   */
+  function setAutomation(track: number, param: string, points: AutomationPoint[]): Promise<void> {
+    return edit(() => api.setAutomation(track, param, points));
   }
 
   /**
@@ -456,6 +480,7 @@ export const useProjectStore = defineStore("project", () => {
     moveClips,
     resizeClip,
     splitClip,
+    applyRecorded,
     addNote,
     setNote,
     setNotes,
@@ -467,6 +492,8 @@ export const useProjectStore = defineStore("project", () => {
     setMute,
     setSolo,
     setMasterGain,
+    setSends,
+    setAutomation,
     monitorMix,
     setTempo,
     setTimeSignature,

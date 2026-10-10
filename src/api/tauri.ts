@@ -8,19 +8,24 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { mockApi, mockEnabled } from "./mock";
 import type {
+  AiModels,
+  AiStatus,
   AnalysisReport,
+  AutomationPoint,
   BackendParam,
   CatalogPlugin,
   ClipPlacement,
   ClipRef,
   HistoryDepths,
   HistoryState,
+  InputDeviceInfo,
   McpStatus,
   MixerState,
   Note,
   NoteEdit,
   Preset,
   Project,
+  Send,
   TransportSnapshot,
 } from "./types";
 
@@ -28,6 +33,8 @@ import type {
 export const EVENT_ENGINE = "engine://event";
 /** 传输状态广播通道名，与后端 `state::EVENT_TRANSPORT` 保持一致。 */
 export const EVENT_TRANSPORT = "engine://transport";
+/** 本地 AI 状态广播通道名，与后端 `ai::EVENT_AI` 保持一致。 */
+export const EVENT_AI = "engine://ai";
 
 /** 读取当前工程。 */
 export function getProject(): Promise<Project> {
@@ -227,6 +234,22 @@ export function setMasterGain(gainDb: number): Promise<Project> {
   return invoke<Project>("set_master_gain", { gainDb });
 }
 
+/** 设置轨道的发送列表（整体替换；空数组 = 清空）。 */
+export function setSends(track: number, sends: Send[]): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setSends(track, sends));
+  return invoke<Project>("set_sends", { track, sends });
+}
+
+/** 设置一条自动化车道（整体替换该参数的曲线；空 `points` = 删除）。 */
+export function setAutomation(
+  track: number,
+  param: string,
+  points: AutomationPoint[],
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setAutomation(track, param, points));
+  return invoke<Project>("set_automation", { track, param, points });
+}
+
 /**
  * 实时监听用的混音预览：不写入工程、不进入撤销历史。
  * 拖动推子/声像时高频调用，松手时才发一条真正的编辑命令。
@@ -387,10 +410,95 @@ export function splitClip(track: number, clip: number, beat: number): Promise<Pr
   return invoke<Project>("split_clip", { track, clip, beat });
 }
 
-/** 取某个音频文件的波形包络（每桶 min/max 各一个值，长度 = `buckets * 2`）。 */
-export function audioWaveform(path: string, buckets: number): Promise<number[]> {
+/**
+ * 取某个音频文件的波形包络（每桶 min/max 各一个值，长度 = `buckets * 2`）。
+ *
+ * `offsetFrames` / `frames` 只取素材的**窗口**（片段引用窗口而不是整段素材）；缺省 = 整段。
+ */
+export function audioWaveform(
+  path: string,
+  buckets: number,
+  offsetFrames?: number,
+  frames?: number,
+): Promise<number[]> {
   if (mockEnabled()) return Promise.resolve(mockApi.audioWaveform(path, buckets));
-  return invoke<number[]>("audio_waveform", { path, buckets });
+  return invoke<number[]>("audio_waveform", { path, buckets, offsetFrames, frames });
+}
+
+// ---------------------------------------------------------------------------
+// 录音（C2）
+// ---------------------------------------------------------------------------
+
+/** 本机可用的音频输入设备。 */
+export function listInputDevices(): Promise<InputDeviceInfo[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.listInputDevices());
+  return invoke<InputDeviceInfo[]>("list_input_devices");
+}
+
+/** 选择输入设备（`null` = 关闭输入流）。选定后输入电平表即可工作。 */
+export function setInputDevice(device: string | null): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setInputDevice());
+  return invoke<void>("set_input_device", { device });
+}
+
+/** 输入电平表：最近 `points` 个采样。 */
+export function inputLevel(points: number): Promise<number[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.inputLevel(points));
+  return invoke<number[]>("input_level", { points });
+}
+
+/** 开始录音（从 `start` 拍起，后端同时走带播放）。 */
+export function recordStart(track: number, start: number, device: string | null): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.recordStart());
+  return invoke<void>("record_start", { track, start, device });
+}
+
+/** 结束录音；返回带新片段的工程，没录到内容则为 `null`。 */
+export function recordStop(): Promise<Project | null> {
+  if (mockEnabled()) return Promise.resolve(mockApi.recordStop());
+  return invoke<Project | null>("record_stop");
+}
+
+// ---------------------------------------------------------------------------
+// 本地 AI（音频转 MIDI / 降噪）
+// ---------------------------------------------------------------------------
+
+/** 当前 AI 任务状态。 */
+export function aiStatus(): Promise<AiStatus> {
+  if (mockEnabled()) return Promise.resolve(mockApi.aiStatus());
+  return invoke<AiStatus>("ai_status");
+}
+
+/** 查询两个本地 AI 模型（ONNX 权重）是否已就位。 */
+export function aiModels(): Promise<AiModels> {
+  if (mockEnabled()) return Promise.resolve(mockApi.aiModels());
+  return invoke<AiModels>("ai_models");
+}
+
+/** 开始一个本地 AI 任务：`kind` 为 `"to_midi"` / `"enhance"`，作用于 `track` 的音频片段。 */
+export function aiStart(kind: string, track: number): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.aiStart(kind));
+  return invoke<void>("ai_start", { kind, track });
+}
+
+/** 停止当前 AI 任务。 */
+export function aiCancel(): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.aiCancel());
+  return invoke<void>("ai_cancel");
+}
+
+/** 订阅 AI 任务状态。 */
+export function onAiEvent(handler: (status: AiStatus) => void): Promise<UnlistenFn> {
+  if (mockEnabled()) {
+    const onMock = (e: Event): void => handler((e as CustomEvent<AiStatus>).detail);
+    window.addEventListener("ai-daw-mock-ai", onMock);
+    const off = mockApi.onAiEvent();
+    return Promise.resolve(() => {
+      window.removeEventListener("ai-daw-mock-ai", onMock);
+      off();
+    });
+  }
+  return listen<AiStatus>(EVENT_AI, (e) => handler(e.payload));
 }
 
 // ---------------------------------------------------------------------------
@@ -411,10 +519,10 @@ export function onEngineEvent(handler: (payload: unknown) => void): Promise<Unli
       handler(samples[i % samples.length]);
       i += 1;
     };
-    window.addEventListener("daw-party-mock-event", onMock);
+    window.addEventListener("ai-daw-mock-event", onMock);
     const off = mockApi.onEngineEvent();
     return Promise.resolve(() => {
-      window.removeEventListener("daw-party-mock-event", onMock);
+      window.removeEventListener("ai-daw-mock-event", onMock);
       off();
     });
   }
@@ -427,10 +535,10 @@ export function onTransportEvent(handler: (snapshot: TransportSnapshot) => void)
     const onMock = (e: Event): void => {
       handler((e as CustomEvent<TransportSnapshot>).detail);
     };
-    window.addEventListener("daw-party-mock-transport", onMock);
+    window.addEventListener("ai-daw-mock-transport", onMock);
     const off = mockApi.onTransportEvent();
     return Promise.resolve(() => {
-      window.removeEventListener("daw-party-mock-transport", onMock);
+      window.removeEventListener("ai-daw-mock-transport", onMock);
       off();
     });
   }
@@ -501,10 +609,15 @@ export function onPluginsEvent(handler: (plugins: CatalogPlugin[]) => void): Pro
 // 插件原生界面（独立窗口，仅桌面端）
 // ---------------------------------------------------------------------------
 
-/** 为某条轨道打开插件的原生界面（插件自己的窗口）。 */
-export function openPluginWindow(track: number): Promise<void> {
+/**
+ * 为某条轨道打开插件的原生界面（插件自己的窗口）。
+ *
+ * `title` 是插件展示名（按当前语言）；后端会拼成「轨道名 - 插件名」作为窗口标题。
+ * 已经开着就把它带到最前面，不再开新窗。
+ */
+export function openPluginWindow(track: number, title: string): Promise<void> {
   if (mockEnabled()) return mockApi.openPluginWindow();
-  return invoke<void>("open_plugin_window", { track });
+  return invoke<void>("open_plugin_window", { track, title });
 }
 
 /** 关闭某条轨道的插件窗口。 */
@@ -519,10 +632,10 @@ export function pluginWindowOpen(track: number): Promise<boolean> {
   return invoke<boolean>("plugin_window_open", { track });
 }
 
-/** 打开内置合成器的独立窗口（已经开着就聚焦）。 */
-export function openSynthWindow(track: number): Promise<void> {
+/** 打开内置合成器的独立窗口（已经开着就聚焦）。`title` = 插件展示名。 */
+export function openSynthWindow(track: number, title: string): Promise<void> {
   if (mockEnabled()) return mockApi.openSynthWindow();
-  return invoke<void>("open_synth_window", { track });
+  return invoke<void>("open_synth_window", { track, title });
 }
 
 /**
@@ -531,9 +644,9 @@ export function openSynthWindow(track: number): Promise<void> {
  * 传的是 **plugin id**，序号由后端在**权威的**效果链里现算——调用方可能拿着一条过时的链
  * （别的窗口刚改过），按序号开窗会开到不存在的槽位上。
  */
-export function openEffectWindow(track: number, pluginId: string): Promise<void> {
+export function openEffectWindow(track: number, pluginId: string, title: string): Promise<void> {
   if (mockEnabled()) return mockApi.openEffectWindow();
-  return invoke<void>("open_effect_window", { track, pluginId });
+  return invoke<void>("open_effect_window", { track, pluginId, title });
 }
 
 /** 一次设置效果器的多个参数（「恢复默认值」走它：一次事务，一个撤销步骤）。 */

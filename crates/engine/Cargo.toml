@@ -1,5 +1,5 @@
 [package]
-name = "daw-party-engine"
+name = "ai-daw-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,21 +9,27 @@ default = []
 realtime = ["dep:cpal"]
 
 [dependencies]
-daw-party-ipc = { path = "../ipc" }
-daw-party-plugin-api = { path = "../plugin-api" }
-daw-party-synth = { path = "../synth" }
-daw-party-effects = { path = "../effects" }
+ai-daw-ipc = { path = "../ipc" }
+ai-daw-plugin-api = { path = "../plugin-api" }
+ai-daw-synth = { path = "../synth" }
+ai-daw-effects = { path = "../effects" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
 hound = "3"
 rtrb = "0.4"
 cpal = { version = "0.18", optional = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# 仅用于给输入设备标注连接类型（内置 / 蓝牙 / 虚拟…）；cpal 的 DeviceDescription
+# 在 macOS 上拿不到 transport，只能直接问 CoreAudio。cpal 已开启同一套 feature，
+# 所以这里不会多编译一份。
+coreaudio-rs = { version = "0.14", default-features = false, features = ["audio_unit"] }
+
 [dev-dependencies]
 serde_json = "1"
 tempfile = "3"
 # 「听感」断言用：把渲染结果做频谱/峰值/RMS 的量化核对，而不是「>0 就算过」。
-daw-party-analysis = { path = "../analysis" }
+ai-daw-analysis = { path = "../analysis" }
 
 [[example]]
 name = "play_demo"

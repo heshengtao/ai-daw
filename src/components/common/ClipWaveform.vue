@@ -11,13 +11,23 @@ import { audioWaveform } from "@/api/tauri";
 /** 固定桶数：换宽度只影响绘制，不影响请求，因此拖拽时不会反复打后端。 */
 const BUCKETS = 512;
 
-const props = defineProps<{ path: string }>();
+const props = defineProps<{
+  path: string;
+  /** 素材内的起始帧（片段窗口的起点）。 */
+  offsetFrames?: number;
+  /** 窗口长度（源帧）；缺省 = 到素材结尾。 */
+  frames?: number;
+}>();
 
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const peaks = ref<number[]>([]);
 
-/** 路径 → 包络（`[min, max, min, max, …]`）。 */
+/** 「路径 + 窗口」→ 包络（`[min, max, min, max, …]`）。切分出来的两半各有各的窗口。 */
 const cache = new Map<string, number[]>();
+
+function cacheKey(): string {
+  return `${props.path}:${props.offsetFrames ?? 0}:${props.frames ?? ""}`;
+}
 
 function themeColor(el: HTMLElement, name: string, fallback: string): string {
   const v = getComputedStyle(el).getPropertyValue(name).trim();
@@ -66,15 +76,17 @@ function draw(): void {
 }
 
 async function load(): Promise<void> {
-  const cached = cache.get(props.path);
+  const key = cacheKey();
+  const cached = cache.get(key);
   if (cached) {
     peaks.value = cached;
     draw();
     return;
   }
   try {
-    const data = await audioWaveform(props.path, BUCKETS);
-    cache.set(props.path, data);
+    // 只取这个片段的**窗口**：否则切分/裁剪过的片段会画出整段素材（看着像被压缩的完整波形）。
+    const data = await audioWaveform(props.path, BUCKETS, props.offsetFrames ?? 0, props.frames);
+    cache.set(key, data);
     peaks.value = data;
   } catch {
     // 素材缺失/不可解码：留白。片段本身仍然存在（后端按静音处理）。
@@ -90,7 +102,7 @@ onMounted(() => {
   if (canvasEl.value) ro.observe(canvasEl.value);
 });
 onUnmounted(() => ro?.disconnect());
-watch(() => props.path, () => void load());
+watch(() => cacheKey(), () => void load());
 </script>
 
 <template>

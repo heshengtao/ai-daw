@@ -1,6 +1,6 @@
 //! VST3 / CLAP 插件宿主。
 //!
-//! 把 [`truce_rack`] 的插件实例适配成本项目统一的 [`daw_party_plugin_api::Plugin`] trait：
+//! 把 [`truce_rack`] 的插件实例适配成本项目统一的 [`ai_daw_plugin_api::Plugin`] trait：
 //! 引擎其余部分不认识 VST3 / CLAP，只认那一套 ABI。
 //!
 //! 本 crate 是工作区里唯一允许 `unsafe` 的地方（原生窗口 / 裸指针），对上层只暴露安全 API。

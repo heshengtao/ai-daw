@@ -26,7 +26,7 @@ import {
   segments as tempoSegments,
 } from "@/utils/tempo";
 
-const KEY = "daw-party-timeline";
+const KEY = "ai-daw-timeline";
 
 /** 每拍像素的允许范围。 */
 export const MIN_ZOOM = 10;
