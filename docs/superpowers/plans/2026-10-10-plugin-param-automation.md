@@ -165,13 +165,17 @@ pub struct ScheduledLane {
 ```rust
         // 自动化**覆盖**推子值（读取模式）：有曲线的参数以曲线为准。
         // 拆字段借用：车道只读、插件实例可变，两者是不同字段，可以同时借。
-        let (gain_db, pan) = {
+        //
+        // 覆盖只作用于**本次混音计算**：`gain_db` / `pan` 字段本身绝不能被写回——那条车道
+        // 被移除（或曲线求值失败）后必须回到用户的推子值，写回会把推子值永久吃掉。
+        let (mix_gain_db, mix_pan) = {
             let TrackVoice { lanes, plugin, effects, gain_db, pan, .. } = track;
+            let (mut mix_gain_db, mut mix_pan) = (*gain_db, *pan);
             for lane in lanes.iter() {
                 let Some(value) = lane.value_at(beats) else { continue };
                 match &lane.param {
-                    LaneTarget::GainDb => *gain_db = MixerChannel::normalize_gain_db(value),
-                    LaneTarget::Pan => *pan = MixerChannel::normalize_pan(value),
+                    LaneTarget::GainDb => mix_gain_db = MixerChannel::normalize_gain_db(value),
+                    LaneTarget::Pan => mix_pan = MixerChannel::normalize_pan(value),
                     LaneTarget::Instrument(param) => {
                         if let Some(p) = plugin.as_mut() {
                             p.set_param(param, value);
@@ -184,10 +188,10 @@ pub struct ScheduledLane {
                     }
                 }
             }
-            (*gain_db, *pan)
+            (mix_gain_db, mix_pan)
         };
-        let gain = db_to_linear(gain_db);
-        let (l, r) = pan_gains(pan);
+        let gain = db_to_linear(mix_gain_db);
+        let (l, r) = pan_gains(mix_pan);
         track.left_gain = gain * l;
         track.right_gain = gain * r;
 ```
