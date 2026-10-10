@@ -4,7 +4,7 @@
 
 **Goal：** 修掉"自动化车道下拉把插件全部参数摊开、长到没法用"的问题：新增一个可点击打开的**参数页**（翻页 + 查找 + 排序 + 筛选，每行可绑定/解绑），车道下拉只列 `增益` / `声像` + 已绑定的 + 已经有曲线的参数。
 
-**Architecture：** 绑定集合是**纯前端 UI 偏好**（新 Pinia store + localStorage，按「工程 + 轨道」隔离），不进工程模型、不动 IPC/MCP、零 Rust 改动。`utils/automation.ts` 保持"全量"取数，新增 `curateTargets` 做"给车道看"的收窄；参数页是一个模态，外壳克隆 `PluginBrowser.vue`，挂到 `App.vue` 根部，由两个入口（车道下拉的 action 行、检查器的「参数…」按钮）打开。
+**Architecture：** 绑定集合是**纯前端 UI 偏好**（新 Pinia store + localStorage，按「工程 + 轨道」隔离），不进工程模型、不动 IPC/MCP、零 Rust 改动。`utils/automation.ts` 保持"全量"取数，新增 `curateTargets` 做"给车道看"的收窄；参数页是一个模态，外壳由**共享件 `ModalShell` / `ListToolbar`** 拼出（这两个从 `PluginBrowser.vue` 抽出、并让 `PluginBrowser` 也改用，不是克隆一份 CSS），挂到 `App.vue` 根部，由两个入口（车道**表头常驻**的「＋ 添加参数…」按钮、检查器的「参数…」按钮）打开。
 
 **Tech Stack：** Vue 3 + Pinia + vue-router、MD3 自绘组件、`localStorage` 偏好存储。无新依赖。
 

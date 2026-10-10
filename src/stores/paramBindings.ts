@@ -26,7 +26,12 @@ type Bindings = Record<string, string[]>;
 function load(): Bindings {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as Bindings) : {};
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    // 合法 JSON 但形状不对（手工写进 `"null"` / 数组 / 标量）一律当空记录：否则
+    // `bindings.value[scope]` 会在调用方的 computed 里对着 `null` 抛。
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    return parsed as Bindings;
   } catch {
     return {};
   }
@@ -108,6 +113,7 @@ export const useParamBindingsStore = defineStore("paramBindings", () => {
     if (oldScope === newScope) return;
     if (!Object.hasOwn(bindings.value, oldScope)) return;
     if (!Object.hasOwn(bindings.value, newScope)) {
+      // 目标键已有记录则**不覆盖**——这个 tie-break 是有意的：另存为时优先保留（目标）新路径下的记录。
       bindings.value[newScope] = bindings.value[oldScope] ?? [];
     }
     delete bindings.value[oldScope];

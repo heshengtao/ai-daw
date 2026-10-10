@@ -363,8 +363,8 @@ async function toggleSolo(): Promise<void> {
           <div v-if="track.instrument" class="row">
             <span class="row-value plugin-name">{{ plugins.name(track.instrument.plugin_id) }}</span>
             <button
-              class="open-editor small"
-              :aria-label="i18n.t('inspector.params')"
+              class="open-editor"
+              :aria-label="i18n.t('inspector.paramsFor', { name: plugins.name(track.instrument.plugin_id) })"
               @click="paramBrowser.open({ trackId: track!.id, pluginId: track!.instrument!.plugin_id })"
             >
               {{ i18n.t("inspector.params") }}
@@ -391,7 +391,7 @@ async function toggleSolo(): Promise<void> {
               <span class="fx-name">{{ plugins.name(fx.plugin_id) }}</span>
               <button
                 class="open-editor small"
-                :aria-label="i18n.t('inspector.params')"
+                :aria-label="i18n.t('inspector.paramsFor', { name: plugins.name(fx.plugin_id) })"
                 @click="paramBrowser.open({ trackId: track!.id, pluginId: fx.plugin_id })"
               >
                 {{ i18n.t("inspector.params") }}

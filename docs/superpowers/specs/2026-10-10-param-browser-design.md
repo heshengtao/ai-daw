@@ -116,7 +116,7 @@ export const useParamBindingsStore = defineStore("paramBindings", () => {
 
 ### 4.3 组件
 
-- `src/components/common/ParameterBrowser.vue`（新）：模态。props `{ open, trackId, focusPluginId?, scopeLabel? }`，emit `update:open`。
+- `src/components/common/ParameterBrowser.vue`（新）：模态，**无 props**——作用域（`trackId`）与预选插件（`pluginId`）取自 `paramBrowser` store，关闭走 `ModalShell` 的 `@update:open` → `browser.close()`；`App.vue` 用 `v-if="browser.isOpen"` 挂载，每次打开都是新实例（预选据此重算）。
   - 内部：`projectStore.track(trackId)` 取轨道 → `ensureParams` → `automationTargetsFor` 拿全量 → 应用搜索/筛选/排序 → 切片翻页 → 行。
   - 行 = `<div class="row">`（**不要**把按钮嵌在 button 里，照 `InspectorPanel.vue:378-405` 的效果器行写法）：显示名 + 原始 id + 单位/范围 + 当前值 + 绑定按钮（已绑 = 主色实心，未绑 = 描边）。
   - `automatable === false` 的行：可见但**禁用**，并注明"该插件声明此参数不可自动化"。
@@ -130,7 +130,7 @@ export const useParamBindingsStore = defineStore("paramBindings", () => {
 
 - 内置/默认目标：手写文案，照 `lane.velocityHint` 的做法。`gain_db`、`pan`、`velocity` 各一条；合成器那 8 个精选参数可各配一句（和 `SYNTH_PARAM_LABELS` 并列一张表）。
 - 插件参数：**不写散文**，自动拼「名称 · 单位 · 范围（默认 x）」——这正是真实 DAW 的做法（插件只给名字、单位、范围）。
-- 车道头部在曲线模式下也渲染 `hint`（现在只渲染 `label`）。
+- 车道头部在曲线模式下也渲染 `hint`（没有 `hint` 时回落 `label`）。**已实现**（见 §7 偏离记录第 4 条）。
 
 ## 5 与引擎 / AI 的关系
 
@@ -175,6 +175,9 @@ export const useParamBindingsStore = defineStore("paramBindings", () => {
    参数页刚绑上的参数**不会**出现在车道下拉里，要**整页刷新**才看得到。改成无条件读一次
    `bindings.value[scope]`（`toggle()` 同理）。保存路径的 re-key 也不再调用单条原语，而是走新增的
    `rekeyProject(fromPath, toPath)`（遍历本 store 自己的键、覆盖旧基下每一条轨道记录，见 §4.1）。
+4. **§4.4 的「车道头部渲染 `hint`」在 Task 1–4 里漏做**：两条车道的表头仍只显示显示名 / 操作读数。
+   最终（合并前）回修补齐——`ControllerLane` 的曲线模式读数改成目标的 `hint`（无 `hint` 回落 `label`），
+   `AutomationLane` 表头也补上同一段说明。§4.4 **已满足**。
 
 ### 本分支未做（待补）
 

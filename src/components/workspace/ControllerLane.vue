@@ -300,7 +300,7 @@ onUnmounted(() => {
         />
       </div>
 
-      <span v-if="curveTarget" class="readout muted">{{ curveTarget.label }}</span>
+      <span v-if="curveTarget" class="readout muted">{{ curveTarget.hint ?? curveTarget.label }}</span>
       <span v-else-if="readout" class="readout">
         {{ i18n.t("lane.selected", { count: readout.count }) }} · {{ i18n.t("lane.velocity") }}
         <strong class="tabular">{{ readout.value }}</strong>

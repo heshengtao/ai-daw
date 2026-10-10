@@ -158,6 +158,9 @@ watch(targets, (list) => {
       </div>
       <span class="auto-name text-label-sm">{{ i18n.t("auto.title") }}</span>
 
+      <!-- 曲线模式：表头渲染当前目标的说明（`hint`），没有 `hint` 时回落显示名——与卷帘下方参数车道对齐 -->
+      <span v-if="current" class="auto-readout">{{ current.hint ?? current.label }}</span>
+
       <span v-if="!track" class="auto-readout muted">{{ i18n.t("auto.noTrack") }}</span>
       <span v-else-if="stored.length === 0" class="auto-readout muted">{{ i18n.t("auto.hint") }}</span>
       <span v-else class="auto-readout">

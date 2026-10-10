@@ -355,6 +355,7 @@ const zh: Record<string, string> = {
   "inspector.timbre": "音色",
   "inspector.openInterface": "打开 {name} 的界面",
   "inspector.params": "参数…",
+  "inspector.paramsFor": "{name} 的参数…",
   "inspector.fxChain": "效果器链",
   "inspector.fxEmpty": "还没有效果器。从下面选一个加到链尾。",
   "inspector.fxUp": "上移效果器",
