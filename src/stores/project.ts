@@ -8,6 +8,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import * as api from "@/api/tauri";
 import { useI18n } from "@/i18n";
+import { useParamBindingsStore } from "@/stores/paramBindings";
 import { useSettingsStore } from "@/stores/settings";
 import type { AutomationPoint, ClipPlacement, ClipRef, HistoryState, Keyframe, MixerState, Note, NoteEdit, Project, Send } from "@/api/types";
 import { meterAt, meterBeatAt, tempoAt } from "@/utils/tempo";
@@ -416,10 +417,19 @@ export const useProjectStore = defineStore("project", () => {
     await refreshDepths();
   }
 
-  /** 把当前工程保存到文件，返回写入路径；成功后不再是 dirty。 */
+  /**
+   * 把当前工程保存到文件，返回写入路径；成功后不再是 dirty。
+   *
+   * 路径**变了**就把参数绑定记录搬过去（`rekeyProject`）：未保存的工程用 `untitled` 当工程标识
+   * （见 `paramBindings.scopeKey`），首次保存后作用域键从 `untitled::<id>` 变成 `<path>::<id>`——
+   * 不搬的话用户刚绑好的参数会「变回默认」。另存为（旧路径 → 新路径）同理；同路径写回则无事可做
+   * （`rekeyProject` 自己判 `from === to`）。打开既有工程不走这里，它的键本来就按路径现算。
+   */
   async function saveTo(target: string): Promise<string> {
+    const from = currentPath.value;
     const written = await api.saveProject(target);
     currentPath.value = written;
+    useParamBindingsStore().rekeyProject(from, written);
     await refreshDepths();
     return written;
   }

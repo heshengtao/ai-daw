@@ -51,8 +51,8 @@ export const useParamBindingsStore = defineStore("paramBindings", () => {
   /**
    * 当前作用域键：工程路径（未保存时用 `untitled`）+ 轨道 id。
    *
-   * `useProjectStore()` 在**函数里**取（不在 store 顶层）：`project.ts` 将来要在保存路径里调
-   * `rekey`，两边互相 import——只有延迟取用才不成环。
+   * `useProjectStore()` 在**函数里**取（不在 store 顶层）：`project.ts` 的保存路径要调
+   * `rekeyProject`，两边互相 import——只有延迟取用才不成环。
    */
   function scopeKey(trackId: number): string {
     return `${useProjectStore().currentPath ?? UNTITLED}::${trackId}`;
@@ -113,5 +113,26 @@ export const useParamBindingsStore = defineStore("paramBindings", () => {
     delete bindings.value[oldScope];
   }
 
-  return { bindings, scopeKey, explicit, isBound, toggle, rekey };
+  /**
+   * 保存工程后把**旧工程基下**的**每一条**轨道记录搬到**新工程基**——`project.ts` 的保存路径调用它。
+   *
+   * 未保存的工程用 `untitled` 当工程标识（见 `scopeKey`）：用户一保存，作用域键就从
+   * `untitled::<trackId>` 变成 `<path>::<trackId>`，不搬的话刚绑好的参数会「变回默认」。
+   * 另存为（`<旧 path>` → `<新 path>`）同理。
+   *
+   * 遍历**本 store 自己的键**（调用方只给两个工程基，不列轨道）：把 `${fromBase}::<trackId>` 逐条
+   * 交给 `rekey`（新基已有同名轨道记录则**不覆盖**，只丢旧的），把该基下的所有轨道一次搬完。
+   * 走的是私有常量 `UNTITLED` —— 调用方不需要知道「未保存」的基叫什么。
+   */
+  function rekeyProject(fromPath: string | null, toPath: string): void {
+    const fromBase = fromPath ?? UNTITLED;
+    if (fromBase === toPath) return;
+    const prefix = `${fromBase}::`;
+    // `Object.keys` 先取快照再改：搬进来的新键（`${toPath}::…`）前缀不同，不会被这轮再遍历到。
+    for (const key of Object.keys(bindings.value)) {
+      if (key.startsWith(prefix)) rekey(key, `${toPath}::${key.slice(prefix.length)}`);
+    }
+  }
+
+  return { bindings, scopeKey, explicit, isBound, toggle, rekey, rekeyProject };
 });
