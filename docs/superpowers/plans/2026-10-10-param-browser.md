@@ -291,21 +291,24 @@ git commit -m "feat(ui): 检查器加“参数…”入口（与插件界面区�
 ## Task 5: 文档 + 端到端验收
 
 **Files:**
-- Modify: `docs/superpowers/ROADMAP.md`、`docs/superpowers/specs/2026-10-10-param-browser-design.md`
+- Modify: `docs/superpowers/specs/2026-10-10-param-browser-design.md`
+- **本分支不动 `docs/superpowers/ROADMAP.md`**：工作区里那份 ROADMAP 有用户未提交的 Stage F 改向（`aidaw` CLI 改 MCP 薄客户端、F1 降级 F5），另有他新写的 `plans/2026-10-10-aidaw-cli-mcp-client.md`。整目录 `git add` 会把它们卷进本分支的提交，所以这里的每一步都必须**逐文件 add**。ROADMAP 里"参数浏览器"那一行等他的改向落到 main 之后再补。
 
 - [ ] **Step 1: 走一遍设计 §6 的 7 条验收**，逐条记录结果（尤其是第 5 条"换工程不串"与"保存后 re-key"）。
   保存 re-key 若还没接上，**在这里接**：在 `stores/project.ts` 的保存/另存路径里，`currentPath` 由 `null` 变成路径时调用 `bindings.rekey(untitledScope, newScope)`。
 
-- [ ] **Step 2: ROADMAP 记一笔**（C3 段落后面加一行："参数浏览器：车道下拉可绑定/解绑插件参数"）。
+- [ ] **Step 2: ROADMAP 那一行 —— 本分支不做**（理由见 Files）。记进设计文档 §7 的"待补"即可，等用户的 Stage F 改向提交到 main 之后再补那一行。
 
 - [ ] **Step 3: 设计文档状态行**改成 `✅ 完成（2026-10-10）`，并把实现中偏离设计的地方记进 §7。
 
 - [ ] **Step 4: 提交**
 
 ```bash
-git add docs/
+git add docs/superpowers/specs/2026-10-10-param-browser-design.md docs/superpowers/plans/2026-10-10-param-browser.md
 git commit -m "docs: 参数浏览器的执行结果与验收记录"
 ```
+
+**逐文件 add，永远不要 `git add docs/`**：工作区里有用户未提交的 ROADMAP 改向和一份他新写的 plan，整目录 add 会把它们卷进本分支的提交。
 
 ---
 
