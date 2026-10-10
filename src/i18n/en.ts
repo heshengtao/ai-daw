@@ -440,6 +440,7 @@ const en: Record<string, string> = {
   "topbar.bottomLaneUnavailable": "This view has no bottom lane yet",
   "auto.title": "Automation",
   "auto.param": "Parameter",
+  "auto.browse": "＋ Add parameter…",
   "auto.gain": "Gain",
   "auto.pan": "Pan",
   "auto.points": "{count} points",

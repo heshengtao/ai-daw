@@ -56,7 +56,7 @@ const props = defineProps<{
   selectedIndices: number[];
   /** 当前选中的目标键：`"velocity"` 或自动化目标键（`gain_db` / `inst:cutoff` / `fx0:mix` …）。 */
   targetKey: string;
-  /** 可选目标（力度由本组件自己加在最前面）。 */
+  /** 可选目标（**外壳已收窄**；力度由本组件自己加在最前面）。 */
   targets: AutomationTarget[];
   /** 片段在时间轴上的起点（拍）：音符坐标是相对片段的，这里换算成绝对时间。 */
   offsetBeats: number;
@@ -72,6 +72,8 @@ const emit = defineEmits<{
   (e: "apply", patch: Partial<Note>): void;
   (e: "delete", indices: number[]): void;
   (e: "applyCurve", points: AutomationPoint[]): void;
+  /** 下拉底部的「＋ 添加参数…」：本组件不认识工程，交回外壳去打开参数页。 */
+  (e: "browse"): void;
 }>();
 
 const timeline = useTimelineStore();
@@ -98,6 +100,11 @@ const chooserOptions = computed(() => [
 
 function onChoose(id: string): void {
   emit("update:targetKey", id);
+}
+
+/** 「＋ 添加参数…」：交回外壳（`EditView`）打开参数页。 */
+function onBrowse(): void {
+  emit("browse");
 }
 
 /** 拖动中的值（预览用）；松手才提交。 */
@@ -283,13 +290,15 @@ onUnmounted(() => {
   <div class="lane-block">
     <!-- 头部：目标选择 + 读数 -->
     <div class="lane-head">
-      <!-- 目标选择：下拉（力度 + 该轨道可自动化的全部插件参数），说明文字在菜单里 -->
+      <!-- 目标选择：下拉（力度 + 该轨道收窄后的插件参数），说明文字在菜单里 -->
       <div class="lane-chooser">
         <Md3Select
           :model-value="targetKey"
           :options="chooserOptions"
           :label="i18n.t('lane.property')"
+          :action="{ label: i18n.t('auto.browse') }"
           @select="onChoose"
+          @action="onBrowse"
         />
       </div>
 

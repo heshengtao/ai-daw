@@ -8,7 +8,6 @@
 import type { AutomationPoint, Track } from "@/api/types";
 import {
   canonicalPluginId,
-  COMMON_INSTRUMENT_PARAMS,
   defaultBoundParamIds,
   type ParamSpec,
   SYNTH_ID,
@@ -39,8 +38,9 @@ export interface AutomationTarget {
   /**
    * 插件是否**声明**这个参数可自动化（缺省视为可自动化）。
    *
-   * 只在 `{ curatedOnly: false }`（默认，参数页用的全量口径）时可能出现 `false`：那类参数在
-   * 参数页里**可见但按钮禁用**（要能解释「为什么它不能自动化」）。收窄口径会先把它们丢掉。
+   * `false` 的目标会在参数页里**可见但按钮禁用**（要能解释「为什么它不能自动化」）。注意
+   * `curateTargets` **不**据它过滤：已绑定的、已经有曲线的照常收下——MCP 的 `set_automation`
+   * 接受任何键，那里可能已经有曲线；参数页那颗禁用按钮才是守卫，车道下拉不是。
    */
   automatable?: boolean;
 }
@@ -49,24 +49,14 @@ type Translate = (key: string, vars?: Record<string, string | number>) => string
 type ParamsOf = (pluginId: string | null | undefined) => ParamSpec[];
 
 /**
- * 某插件的参数。
+ * 某插件的参数：**永远是全量**——这是参数页与车道下拉共用的唯一口径（设计 §4.2）。
  *
- * - 默认（`curatedOnly === false`）给**全部**参数——这是**参数页**要的"全量"口径（设计 §4.2）：
- *   精选表之外的参数（例如合成器的 `wave` / `lfoPitch`）也要能绑，"插件声明不可自动化"的也要
- *   看得见（在目标上标 `automatable: false`，参数页把它们的按钮禁用）。
- * - `curatedOnly === true` 保留旧口径：有精选表就只取表里的（按表顺序），并丢掉不可自动化的。
- *   车道下拉在**改用 `curateTargets` 之前**要这个口径（那只收窄是 Task 3 落地后由 `curateTargets`
- *   接手的），所以那两个调用点暂时显式传它——接完就该删掉那些传参。
+ * 精选表之外的参数（例如合成器的 `wave` / `lfoPitch`）也在这里，"插件声明不可自动化"的也在
+ * （在目标上标 `automatable: false`，参数页把它们的按钮禁用）。给车道下拉看的收窄是
+ * `curateTargets` 的事，与这里无关；精选表剩下的唯一用处是经 `defaultBoundKeys` 当**默认绑定集**。
  */
-function paramsFor(pluginId: string, paramsOf: ParamsOf, curatedOnly: boolean): ParamSpec[] {
-  const id = canonicalPluginId(pluginId);
-  const all = paramsOf(id);
-  if (!curatedOnly) return all;
-  const automatable = all.filter((p) => p.automatable !== false);
-  const common = COMMON_INSTRUMENT_PARAMS[id];
-  if (!common) return automatable;
-  const byId = new Map(automatable.map((p) => [p.id, p]));
-  return common.map((pid) => byId.get(pid)).filter((p): p is ParamSpec => p !== undefined);
+function paramsFor(pluginId: string, paramsOf: ParamsOf): ParamSpec[] {
+  return paramsOf(canonicalPluginId(pluginId));
 }
 
 /** 参数显示名：内置合成器走 i18n（英文界面才不会是中文名），其余用插件自报的名字。 */
@@ -118,12 +108,9 @@ function specHint(pluginId: string, label: string, spec: ParamSpec, t: Translate
 /**
  * 一条轨道当前可自动化的全部目标，顺序：轨道混音 → 乐器 → 效果器 1..n。
  *
- * **默认是"全量"口径**（设计 §4.2）：每个插件的**全部**参数都在，含精选表之外的，含插件声明
+ * **唯一口径就是"全量"**（设计 §4.2）：每个插件的**全部**参数都在，含精选表之外的，含插件声明
  * 不可自动化的（后者在目标上标 `automatable: false`）。参数页要用它列出一切；给车道下拉看的
  * 收窄是 `curateTargets` 的事。
- *
- * `opts.curatedOnly === true` 保留旧口径（精选表 / 仅可自动化），只给**还没改用 `curateTargets`**
- * 的车道下拉过渡用——那些调用点接完后应删掉这个传参。
  *
  * `paramsOf` 传 `usePluginsStore().paramsOf`（内置已就绪、外部插件可能还没加载完，
  * 调用方负责对乐器与每个效果器调用一次 `ensureParams`）。
@@ -132,10 +119,8 @@ export function automationTargetsFor(
   track: Track | null,
   paramsOf: ParamsOf,
   t: Translate,
-  opts: { curatedOnly?: boolean } = {},
 ): AutomationTarget[] {
   if (!track) return [];
-  const curatedOnly = opts.curatedOnly ?? false;
   const out: AutomationTarget[] = [
     { key: "gain_db", label: t("auto.gain"), group: t("auto.group.track"), min: -60, max: 12, step: 0.5, digits: 1, unit: "dB", hint: t("param.hint.gain_db"), automatable: true },
     { key: "pan", label: t("auto.pan"), group: t("auto.group.track"), min: -1, max: 1, step: 0.05, digits: 2, hint: t("param.hint.pan"), automatable: true },
@@ -143,7 +128,7 @@ export function automationTargetsFor(
 
   const instrumentId = track.instrument?.plugin_id;
   if (instrumentId) {
-    for (const spec of paramsFor(instrumentId, paramsOf, curatedOnly)) {
+    for (const spec of paramsFor(instrumentId, paramsOf)) {
       const label = paramLabel(instrumentId, spec, t);
       out.push(fromSpec(`inst:${spec.id}`, label, t("auto.group.instrument"), spec, specHint(instrumentId, label, spec, t)));
     }
@@ -151,7 +136,7 @@ export function automationTargetsFor(
 
   track.effects.forEach((fx, i) => {
     const group = t("auto.group.effect", { n: i + 1 });
-    for (const spec of paramsFor(fx.plugin_id, paramsOf, curatedOnly)) {
+    for (const spec of paramsFor(fx.plugin_id, paramsOf)) {
       const label = paramLabel(fx.plugin_id, spec, t);
       out.push(fromSpec(`fx${i}:${spec.id}`, label, group, spec, specHint(fx.plugin_id, label, spec, t)));
     }

@@ -20,7 +20,14 @@ import { usePluginsStore } from "@/stores/plugins";
 import { useSelectionStore } from "@/stores/selection";
 import { useTransportStore } from "@/stores/transport";
 import { useLayoutStore } from "@/stores/layout";
-import { automationTargetsFor, laneValueAtOrNull } from "@/utils/automation";
+import { useParamBindingsStore } from "@/stores/paramBindings";
+import { useParamBrowserStore } from "@/stores/paramBrowser";
+import {
+  automationTargetsFor,
+  curateTargets,
+  defaultBoundKeys,
+  laneValueAtOrNull,
+} from "@/utils/automation";
 import type { AutomationPoint } from "@/api/types";
 
 const props = defineProps<{
@@ -35,6 +42,8 @@ const plugins = usePluginsStore();
 const selection = useSelectionStore();
 const transport = useTransportStore();
 const layout = useLayoutStore();
+const bindings = useParamBindingsStore();
+const browser = useParamBrowserStore();
 const i18n = useI18n();
 
 /** 当前选中的目标键（`Track.automation[].param` 里存的就是它）。 */
@@ -43,15 +52,23 @@ const param = ref<string>("gain_db");
 const track = computed(() => selection.track);
 const trackId = computed(() => track.value?.id ?? null);
 
-/**
- * 该轨道现在可自动化的全部目标（轨道混音 / 乐器 / 效果器）。
- *
- * `curatedOnly: true` = 仍在用旧口径（精选表 / 仅可自动化）：本车道**还没**改用 `curateTargets`，
- * 传它是为了在参数页那次改动里保持下拉逐项不变。改用 `curateTargets` 后应删掉这个传参
- * （`automationTargetsFor` 的默认已经是"全量"，那才是 `curateTargets` 要喂的）。
- */
+/** 该轨道可自动化的**全部**目标（轨道混音 / 乐器 / 效果器）——下拉的取数面，全量口径。 */
+const all = computed(() => automationTargetsFor(track.value, plugins.paramsOf, i18n.t));
+/** 显式绑定的键；`null` = 没有记录 → 用默认精选（`[]` = 用户显式全解绑，不回落）。 */
+const bound = computed(() => (trackId.value === null ? null : bindings.explicit(trackId.value)));
+/** 默认绑定集（精选表拼上 `inst:` / `fx<i>:` 前缀）：没有显式记录时用它。 */
+const fallback = computed(() => defaultBoundKeys(track.value));
+/** 已经有曲线的键（已用但可能已解绑）——这些必须一直留在下拉里。 */
+const used = computed(() =>
+  (track.value?.automation ?? []).filter((l) => l.points.length > 0).map((l) => l.param),
+);
+/** 下拉里实际看到的收窄结果：增益 / 声像 + 已绑定 + 已有曲线。 */
 const targets = computed(() =>
-  automationTargetsFor(track.value, plugins.paramsOf, i18n.t, { curatedOnly: true }),
+  curateTargets(all.value, {
+    bound: bound.value,
+    fallbackBound: fallback.value,
+    usedKeys: used.value,
+  }),
 );
 const chooserOptions = computed(() =>
   targets.value.map((t) => ({ id: t.key, label: t.label, group: t.group })),
@@ -101,6 +118,13 @@ function onChoose(id: string): void {
   param.value = id;
 }
 
+/** 下拉底部的「＋ 添加参数…」：打开参数页，作用域是当前轨道（没有轨道就什么也不做）。 */
+function onBrowse(): void {
+  const id = trackId.value;
+  if (id === null) return;
+  browser.open({ trackId: id });
+}
+
 // 外部插件是懒加载的：进车道时确保**乐器与整条效果链**的参数表已在（`ensureParams` 对已缓存
 // 的表是空操作）。外部效果器的参数表也要在，否则目标下拉里会缺项。
 watch(
@@ -114,7 +138,7 @@ watch(
   { immediate: true },
 );
 
-/** 选中的目标被删掉时（乐器/效果器没了）回落到 gain_db。 */
+/** 选中的目标消失时（乐器 / 效果器没了、或被解绑且没曲线）回落到 gain_db。 */
 watch(targets, (list) => {
   if (!list.some((t) => t.key === param.value)) param.value = "gain_db";
 });
@@ -129,7 +153,9 @@ watch(targets, (list) => {
           :model-value="param"
           :options="chooserOptions"
           :label="i18n.t('auto.param')"
+          :action="{ label: i18n.t('auto.browse') }"
           @select="onChoose"
+          @action="onBrowse"
         />
       </div>
       <span class="auto-name text-label-sm">{{ i18n.t("auto.title") }}</span>

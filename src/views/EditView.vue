@@ -27,11 +27,13 @@ import { useLayoutStore } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
 import { usePluginsStore } from "@/stores/plugins";
+import { useParamBindingsStore } from "@/stores/paramBindings";
+import { useParamBrowserStore } from "@/stores/paramBrowser";
 import ControllerLane from "@/components/workspace/ControllerLane.vue";
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
 import { capturePointer } from "@/utils/pointer";
-import { automationTargetsFor } from "@/utils/automation";
+import { automationTargetsFor, curateTargets, defaultBoundKeys } from "@/utils/automation";
 import { auditionNote } from "@/api/tauri";
 import { useI18n } from "@/i18n";
 import type { AutomationPoint, Note, NoteEdit } from "@/api/types";
@@ -44,6 +46,8 @@ const layout = useLayoutStore();
 const timeline = useTimelineStore();
 const transport = useTransportStore();
 const plugins = usePluginsStore();
+const bindings = useParamBindingsStore();
+const browser = useParamBrowserStore();
 const router = useRouter();
 
 const LOW = 36; // C2
@@ -509,14 +513,30 @@ async function deleteNotes(indices: number[]): Promise<void> {
 
 /** 卷帘下方泳道当前选中的目标键（`velocity` = 逐音符力度）。 */
 const controllerTargetKey = ref<string>("velocity");
+/** 该轨道可自动化的**全部**目标（轨道混音 / 乐器 / 效果器）——与编排视图的自动化车道同一份列表。 */
+const controllerAllTargets = computed(() =>
+  automationTargetsFor(selection.track, plugins.paramsOf, i18n.t),
+);
+/** 显式绑定的键；`null` = 没有记录 → 用默认精选（`[]` = 用户显式全解绑，不回落）。 */
+const controllerBound = computed(() =>
+  selection.trackId === null ? null : bindings.explicit(selection.trackId),
+);
+/** 默认绑定集（精选表拼上 `inst:` / `fx<i>:` 前缀）：没有显式记录时用它。 */
+const controllerFallback = computed(() => defaultBoundKeys(selection.track));
+/** 已经有曲线的键（已用但可能已解绑）——这些必须一直留在下拉里。 */
+const controllerUsed = computed(() =>
+  (selection.track?.automation ?? []).filter((l) => l.points.length > 0).map((l) => l.param),
+);
 /**
- * 可自动化的目标：轨道混音 + 乐器 + 效果器（与编排视图的自动化车道同一份列表）。
- *
- * `curatedOnly: true` = 仍用旧口径，理由与 `AutomationLane` 那里同：这条泳道还没改用
- * `curateTargets`，传它是为了让参数页那一次改动不动这里的下拉。改用后删掉这个传参。
+ * 泳道下拉里实际看到的收窄结果：增益 / 声像 + 已绑定 + 已有曲线（`力度` 由 `ControllerLane`
+ * 自己加在最前面，不在这里）。
  */
 const controllerTargets = computed(() =>
-  automationTargetsFor(selection.track, plugins.paramsOf, i18n.t, { curatedOnly: true }),
+  curateTargets(controllerAllTargets.value, {
+    bound: controllerBound.value,
+    fallbackBound: controllerFallback.value,
+    usedKeys: controllerUsed.value,
+  }),
 );
 /** 选中目标当前的曲线点（就是 `Track.automation` 里那条，与编排视图共用）。 */
 const controllerCurvePoints = computed<AutomationPoint[]>(() => {
@@ -534,6 +554,13 @@ async function applyControllerCurve(points: AutomationPoint[]): Promise<void> {
   } catch (err) {
     layout.notify(i18n.t("error.setAutomation", { error: String(err) }));
   }
+}
+
+/** 泳道下拉底部的「＋ 添加参数…」：打开参数页，作用域是当前轨道（没有轨道就什么也不做）。 */
+function onBrowseLane(): void {
+  const t = selection.trackId;
+  if (t === null) return;
+  browser.open({ trackId: t });
 }
 
 // 进视图 / 换轨道时确保**乐器与整条效果链**的参数表已在（外部插件懒加载；
@@ -896,6 +923,7 @@ onUnmounted(() => {
         @apply="applyToSelection"
         @delete="deleteNotes"
         @apply-curve="applyControllerCurve"
+        @browse="onBrowseLane"
       />
     </template>
 

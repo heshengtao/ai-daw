@@ -439,6 +439,7 @@ const zh: Record<string, string> = {
   "topbar.bottomLaneUnavailable": "当前视图还没有底部窗格",
   "auto.title": "自动化",
   "auto.param": "参数",
+  "auto.browse": "＋ 添加参数…",
   "auto.gain": "增益",
   "auto.pan": "声像",
   "auto.points": "{count} 个点",
