@@ -5,13 +5,13 @@
  * 编辑对象是**当前选中轨道**上的一条参数曲线，键取自共享的目标列表
  * （`gain_db` / `pan` / `inst:<id>` / `fx<i>:<id>`，见 `utils/automation.ts`）。曲线本身由
  * `AutomationCurve` 画（与钢琴卷帘下的参数车道共用）；这里只管表头：目标下拉、读数、清空、
- * 收起，以及把曲线交回的编辑结果提交给工程（提交失败在这里提示）。
+ * 添加参数、收起，以及把曲线交回的编辑结果提交给工程（提交失败在这里提示）。
  *
  * 横向与编排视图共用同一条时间轴：坐标原点从编排视图的 `TIMELINE_INSET_PX` 起算并按共享滚动
  * 位置平移（由 `insetPx` 传进曲线），所以曲线的小节线严格压在编排网格的小节线上。
  */
 import { computed, ref, watch } from "vue";
-import { XMarkIcon } from "@heroicons/vue/24/outline";
+import { PlusIcon, XMarkIcon } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
 import AutomationCurve from "./AutomationCurve.vue";
 import { useI18n } from "@/i18n";
@@ -118,7 +118,7 @@ function onChoose(id: string): void {
   param.value = id;
 }
 
-/** 下拉底部的「＋ 添加参数…」：打开参数页，作用域是当前轨道（没有轨道就什么也不做）。 */
+/** 表头的「＋ 添加参数…」：打开参数页，作用域是当前轨道（没有轨道就什么也不做）。 */
 function onBrowse(): void {
   const id = trackId.value;
   if (id === null) return;
@@ -146,16 +146,14 @@ watch(targets, (list) => {
 
 <template>
   <div class="auto-lane">
-    <!-- 表头：目标选择 + 读数 + 清空 / 收起 -->
+    <!-- 表头：目标选择 + 读数 + 清空 / 添加参数 / 收起 -->
     <div class="auto-head">
       <div class="auto-chooser">
         <Md3Select
           :model-value="param"
           :options="chooserOptions"
           :label="i18n.t('auto.param')"
-          :action="{ label: i18n.t('auto.browse') }"
           @select="onChoose"
-          @action="onBrowse"
         />
       </div>
       <span class="auto-name text-label-sm">{{ i18n.t("auto.title") }}</span>
@@ -174,6 +172,15 @@ watch(targets, (list) => {
 
       <button v-if="track && stored.length > 0" class="auto-btn" @click="clearLane">
         {{ i18n.t("auto.clear") }}
+      </button>
+      <!-- 「＋ 添加参数…」：常驻在表头，不藏进下拉（下拉可能被压出视口） -->
+      <button
+        class="auto-btn icon"
+        type="button"
+        :aria-label="i18n.t('auto.browse')"
+        @click="onBrowse"
+      >
+        <PlusIcon class="auto-icon" />
       </button>
       <button
         class="auto-btn icon"

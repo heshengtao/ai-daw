@@ -14,7 +14,7 @@
  * 落实提交。可选目标由外壳经 `targets` 传入（本组件只在最前面补上「力度」这一项）。
  */
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
-import { XMarkIcon } from "@heroicons/vue/24/outline";
+import { PlusIcon, XMarkIcon } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
 import AutomationCurve from "@/components/workspace/AutomationCurve.vue";
 import { capturePointer } from "@/utils/pointer";
@@ -72,7 +72,7 @@ const emit = defineEmits<{
   (e: "apply", patch: Partial<Note>): void;
   (e: "delete", indices: number[]): void;
   (e: "applyCurve", points: AutomationPoint[]): void;
-  /** 下拉底部的「＋ 添加参数…」：本组件不认识工程，交回外壳去打开参数页。 */
+  /** 表头的「＋ 添加参数…」：本组件不认识工程，交回外壳去打开参数页。 */
   (e: "browse"): void;
 }>();
 
@@ -102,7 +102,7 @@ function onChoose(id: string): void {
   emit("update:targetKey", id);
 }
 
-/** 「＋ 添加参数…」：交回外壳（`EditView`）打开参数页。 */
+/** 表头的「＋ 添加参数…」：交回外壳（`EditView`）打开参数页。 */
 function onBrowse(): void {
   emit("browse");
 }
@@ -288,7 +288,7 @@ onUnmounted(() => {
 
 <template>
   <div class="lane-block">
-    <!-- 头部：目标选择 + 读数 -->
+    <!-- 头部：目标选择 + 读数 + 添加参数 / 收起 -->
     <div class="lane-head">
       <!-- 目标选择：下拉（力度 + 该轨道收窄后的插件参数），说明文字在菜单里 -->
       <div class="lane-chooser">
@@ -296,9 +296,7 @@ onUnmounted(() => {
           :model-value="targetKey"
           :options="chooserOptions"
           :label="i18n.t('lane.property')"
-          :action="{ label: i18n.t('auto.browse') }"
           @select="onChoose"
-          @action="onBrowse"
         />
       </div>
 
@@ -311,14 +309,22 @@ onUnmounted(() => {
 
       <span class="lane-spacer" />
 
-      <!-- 右上角的收起按钮：与编排视图自动化车道的那颗同款（由顶栏开关再打开） -->
+      <!-- 右上角的两颗小药丸按钮：添加参数 / 收起（与编排视图自动化车道的同款） -->
       <button
-        class="lane-close"
+        class="lane-btn"
+        type="button"
+        :aria-label="i18n.t('auto.browse')"
+        @click="onBrowse"
+      >
+        <PlusIcon class="lane-btn-icon" />
+      </button>
+      <button
+        class="lane-btn"
         type="button"
         :aria-label="i18n.t('lane.hide')"
         @click="layout.showControllerLane = false"
       >
-        <XMarkIcon class="lane-close-icon" />
+        <XMarkIcon class="lane-btn-icon" />
       </button>
     </div>
 
@@ -429,12 +435,12 @@ onUnmounted(() => {
   color: rgb(var(--md-on-surface));
   margin-left: 4px;
 }
-/* 把右上角的收起按钮顶到最右 */
+/* 把右上角的两颗按钮顶到最右 */
 .lane-spacer {
   flex: 1 1 auto;
 }
-/* 收起按钮：与编排视图自动化车道的那颗同款（22px 药丸 + 14px 图标） */
-.lane-close {
+/* 头部按钮（添加参数 / 收起）：与编排视图自动化车道的那颗同款（22px 药丸 + 14px 图标） */
+.lane-btn {
   flex: 0 0 auto;
   width: 22px;
   height: 22px;
@@ -449,15 +455,15 @@ onUnmounted(() => {
   cursor: pointer;
   transition: background-color 0.14s ease, color 0.14s ease;
 }
-.lane-close:hover {
+.lane-btn:hover {
   background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
   color: rgb(var(--md-on-surface));
 }
-.lane-close:focus-visible {
+.lane-btn:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 1px;
 }
-.lane-close-icon {
+.lane-btn-icon {
   width: 14px;
   height: 14px;
 }

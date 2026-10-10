@@ -556,7 +556,7 @@ async function applyControllerCurve(points: AutomationPoint[]): Promise<void> {
   }
 }
 
-/** 泳道下拉底部的「＋ 添加参数…」：打开参数页，作用域是当前轨道（没有轨道就什么也不做）。 */
+/** 泳道表头的「＋ 添加参数…」：打开参数页，作用域是当前轨道（没有轨道就什么也不做）。 */
 function onBrowseLane(): void {
   const t = selection.trackId;
   if (t === null) return;
