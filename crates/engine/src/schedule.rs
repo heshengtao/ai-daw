@@ -55,6 +55,14 @@ pub struct ScheduledLane {
     pub param: LaneTarget,
     /// 关键点（拍，升序）。
     pub points: Vec<AutomationPoint>,
+    /// **插件参数**车道在自动化接管**之前**的值（`get_param` 的快照）。
+    ///
+    /// 只有 `Instrument` / `Effect` 目标会填它；`GainDb` / `Pan` 恒为 `None`（它们的自动化值活在
+    /// 混音计算的局部变量里，移除曲线即回到推子值，不需要快照）。插件参数是直接写进插件实例的，
+    /// 移除车道时若不用这个快照写回，插件会停在最后一次求值处——与「读取模式」语义不符。
+    ///
+    /// 值放在车道里而不是单独的 map：map 要以**克隆的** `ParamId` 作键，会在音频线程上分配。
+    pub static_value: Option<f32>,
 }
 
 impl ScheduledLane {
@@ -291,7 +299,8 @@ impl ScheduledEvents {
                         _ => {}
                     }
                     let points = lane.points.clone();
-                    Some(ScheduledLane { param, points })
+                    // 静态值快照由播放器在构造时从**活实例**上采集（这里拿不到插件实例）。
+                    Some(ScheduledLane { param, points, static_value: None })
                 })
                 .collect();
             // 发送：目标解析成下标；指向不存在轨道或指向自己的发送丢弃。

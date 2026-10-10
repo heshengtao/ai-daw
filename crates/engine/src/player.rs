@@ -434,6 +434,24 @@ impl Player {
                 .iter()
                 .map(|clip| AudioPlayback { clip: clip.clone(), cursor: audio_cursor(clip, 0) })
                 .collect();
+            // 自动化车道：克隆 + 预留几格，实时 `SetAutomation` 会 push 新车道，不能因此扩容
+            // （音频线程不分配）。
+            let mut lanes = st.lanes.clone();
+            lanes.reserve(4);
+            // 插件参数车道在这里（**控制侧**，可以分配）采集「自动化接管前」的静态值：此刻实
+            // 例已就绪、静态参数也已写入。移除曲线时靠它把参数写回——否则插件会停在最后一次
+            // 求值处（`GainDb` / `Pan` 的快照恒为 `None`，无需采集）。
+            for lane in lanes.iter_mut() {
+                match &lane.param {
+                    LaneTarget::Instrument(param) => {
+                        lane.static_value = plugin.as_ref().and_then(|p| p.get_param(param));
+                    }
+                    LaneTarget::Effect { index, param } => {
+                        lane.static_value = effects.get(*index).and_then(|fx| fx.get_param(param));
+                    }
+                    LaneTarget::GainDb | LaneTarget::Pan => {}
+                }
+            }
             tracks.push(TrackVoice {
                 track_id: st.track_id,
                 plugin,
@@ -441,12 +459,7 @@ impl Player {
                 events,
                 cursor: 0,
                 audio,
-                // 预留几格：实时 `SetAutomation` 会 push 新车道，不能因此扩容（音频线程不分配）。
-                lanes: {
-                    let mut lanes = st.lanes.clone();
-                    lanes.reserve(4);
-                    lanes
-                },
+                lanes,
                 sends: st.sends.clone(),
                 gain_db: st.mixer.gain_db,
                 pan: st.mixer.pan,
@@ -650,6 +663,11 @@ impl Player {
             TransportCommand::SetAutomation { track, target, points } => {
                 // 目标已在控制侧解析好；这里就地过滤 + 排序（`retain` / `sort_unstable_by`
                 // 都不分配），再整体替换该目标的车道——音频线程因此不必扩容。
+                //
+                // 插件参数（`inst:` / `fx<i>:`）是**直接写进插件实例**的，所以移除车道时要先按
+                // 车道上记的静态值写回插件，否则插件会停在最后一次求值处——与设计要求的「读取模式」
+                // （移除曲线即回到参数静态值）不符。替换（新 points）**不**写回：曲线接管期间插件
+                // 不该被静态值打断。
                 let mut points = points;
                 points.retain(|p| p.beat.is_finite() && p.value.is_finite());
                 points.sort_unstable_by(|a, b| {
@@ -657,16 +675,59 @@ impl Player {
                 });
                 let empty = points.is_empty();
                 for voice in self.tracks.iter_mut() {
-                    if voice.track_id == track {
-                        voice.lanes.retain(|lane| lane.param != target);
-                        if !empty {
-                            voice.lanes.push(ScheduledLane {
-                                param: target,
-                                points: std::mem::take(&mut points),
-                            });
-                        }
-                        break;
+                    if voice.track_id != track {
+                        continue;
                     }
+                    // 拆字段借用：车道只读 / 只 retain，插件实例可变，两者是不同字段，可同时借。
+                    let TrackVoice { lanes, plugin, effects, .. } = voice;
+                    if empty {
+                        // 移除：先按快照把静态值写回活实例，再丢弃车道。
+                        for lane in lanes.iter() {
+                            if lane.param != target {
+                                continue;
+                            }
+                            let Some(value) = lane.static_value else { continue };
+                            match &lane.param {
+                                LaneTarget::Instrument(param) => {
+                                    if let Some(p) = plugin.as_mut() {
+                                        p.set_param(param, value);
+                                    }
+                                }
+                                LaneTarget::Effect { index, param } => {
+                                    if let Some(fx) = effects.get_mut(*index) {
+                                        fx.set_param(param, value);
+                                    }
+                                }
+                                LaneTarget::GainDb | LaneTarget::Pan => {}
+                            }
+                        }
+                        lanes.retain(|lane| lane.param != target);
+                    } else {
+                        // 替换 / 新增：保留已有车道的静态值快照；新车道就地采集当前插件值
+                        // （`get_param` 返回 `f32`，不分配，值随车道 push 进预留好的容量）。
+                        let mut static_value = lanes
+                            .iter()
+                            .find(|lane| lane.param == target)
+                            .and_then(|lane| lane.static_value);
+                        if static_value.is_none() {
+                            static_value = match &target {
+                                LaneTarget::Instrument(param) => {
+                                    plugin.as_ref().and_then(|p| p.get_param(param))
+                                }
+                                LaneTarget::Effect { index, param } => {
+                                    effects.get(*index).and_then(|fx| fx.get_param(param))
+                                }
+                                LaneTarget::GainDb | LaneTarget::Pan => None,
+                            };
+                        }
+                        lanes.retain(|lane| lane.param != target);
+                        lanes.push(ScheduledLane {
+                            param: target,
+                            points: std::mem::take(&mut points),
+                            static_value,
+                        });
+                    }
+                    break;
                 }
                 self.has_automation = self.tracks.iter().any(|t| !t.lanes.is_empty());
                 self.refresh_mix();
@@ -1916,5 +1977,115 @@ mod tests {
         let mut out = vec![0.0f32; 512 * 2];
         player.process_block(&mut out, 512);
         assert!((peak(&out) - 0.5).abs() < 0.05, "效果器参数自动化应覆盖静态值（峰值 {}）", peak(&out));
+    }
+
+    /// 移除插件参数曲线必须把参数**写回静态值**（读取模式）：`gain_db` / `pan` 的自动化值只活在
+    /// 混音计算的局部变量里，插件参数则是直接写进插件实例——不移除就把最后一次求值留在了插件上。
+    #[test]
+    fn removing_a_plugin_param_lane_restores_the_static_value() {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.param.instrument", |_track| {
+            Box::new(ParamLevel { level: 0.0, kind: PluginKind::Instrument })
+        });
+
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        p.tracks.push(Track {
+            id: TrackId(1),
+            name: "T".into(),
+            instrument: Some(PluginInstance {
+                plugin_id: "test.param.instrument".into(),
+                // 静态值 0.2；曲线要求 0.8。
+                params: [("level".to_string(), 0.2)].into_iter().collect(),
+                state: vec![],
+            }),
+            effects: vec![],
+            clips: vec![],
+            mixer: Default::default(),
+            sends: vec![],
+            automation: vec![],
+        });
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+
+        // 静态值 0.2：没有曲线时插件的电平就是它。
+        player.process_block(&mut out, 512);
+        assert!((peak(&out) - 0.2).abs() < 0.05, "无曲线时应为静态值 0.2（峰值 {}）", peak(&out));
+
+        // 实时推入 inst:level = 0.8 → 覆盖静态值。
+        let target = LaneTarget::from_key("inst:level").expect("键能解析");
+        player.apply_command(TransportCommand::SetAutomation {
+            track: TrackId(1),
+            target: target.clone(),
+            points: vec![AutomationPoint { beat: 0.0, value: 0.8 }],
+        });
+        player.process_block(&mut out, 512);
+        assert!((peak(&out) - 0.8).abs() < 0.05, "曲线 0.8 应覆盖静态值（峰值 {}）", peak(&out));
+
+        // 空 points = 删除该车道 → 必须写回静态值 0.2，而不是停在 0.8。
+        player.apply_command(TransportCommand::SetAutomation {
+            track: TrackId(1),
+            target,
+            points: vec![],
+        });
+        player.process_block(&mut out, 512);
+        assert!(
+            (peak(&out) - 0.2).abs() < 0.05,
+            "移除插件参数曲线后应回到静态值 0.2，而不是留在 0.8（峰值 {}）",
+            peak(&out)
+        );
+    }
+
+    /// 效果器参数车道的移除同理：必须把参数写回静态值。
+    #[test]
+    fn removing_an_effect_param_lane_restores_the_static_value() {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.param.effect", |_track| {
+            Box::new(ParamLevel { level: 1.0, kind: PluginKind::Effect })
+        });
+
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        let mut t = tone_track(1, "T", 255); // 乐器满幅 1.0
+        t.effects = vec![PluginInstance {
+            plugin_id: "test.param.effect".into(),
+            // 静态 0.25；曲线要求 0.5。
+            params: [("level".to_string(), 0.25)].into_iter().collect(),
+            state: vec![],
+        }];
+        p.tracks.push(t);
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+
+        player.process_block(&mut out, 512);
+        assert!((peak(&out) - 0.25).abs() < 0.05, "无曲线时应为静态值 0.25（峰值 {}）", peak(&out));
+
+        let target = LaneTarget::from_key("fx0:level").expect("键能解析");
+        player.apply_command(TransportCommand::SetAutomation {
+            track: TrackId(1),
+            target: target.clone(),
+            points: vec![AutomationPoint { beat: 0.0, value: 0.5 }],
+        });
+        player.process_block(&mut out, 512);
+        assert!((peak(&out) - 0.5).abs() < 0.05, "曲线 0.5 应覆盖静态值（峰值 {}）", peak(&out));
+
+        player.apply_command(TransportCommand::SetAutomation {
+            track: TrackId(1),
+            target,
+            points: vec![],
+        });
+        player.process_block(&mut out, 512);
+        assert!(
+            (peak(&out) - 0.25).abs() < 0.05,
+            "移除效果器参数曲线后应回到静态值 0.25（峰值 {}）",
+            peak(&out)
+        );
     }
 }
