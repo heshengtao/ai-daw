@@ -19,6 +19,7 @@ import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
 import { usePluginsStore } from "@/stores/plugins";
+import { useParamBrowserStore } from "@/stores/paramBrowser";
 import { usePluginInterface } from "@/composables/usePluginInterface";
 import { canonicalPluginId } from "@/data/plugins";
 import type { Send } from "@/api/types";
@@ -30,6 +31,8 @@ const layout = useLayoutStore();
 const plugins = usePluginsStore();
 const i18n = useI18n();
 const pluginInterface = usePluginInterface();
+/** 参数页（模态）的打开状态：挂载在 `App.vue` 根部，检查器只负责「打开哪条轨道、预选哪个插件」。 */
+const paramBrowser = useParamBrowserStore();
 
 const track = computed(() => selection.track);
 
@@ -360,6 +363,13 @@ async function toggleSolo(): Promise<void> {
           <div v-if="track.instrument" class="row">
             <span class="row-value plugin-name">{{ plugins.name(track.instrument.plugin_id) }}</span>
             <button
+              class="open-editor small"
+              :aria-label="i18n.t('inspector.params')"
+              @click="paramBrowser.open({ trackId: track!.id, pluginId: track!.instrument!.plugin_id })"
+            >
+              {{ i18n.t("inspector.params") }}
+            </button>
+            <button
               class="open-editor"
               :aria-label="i18n.t('inspector.openInterface', { name: plugins.name(track.instrument.plugin_id) })"
               @click="pluginInterface.open(track!.id, track!.instrument!.plugin_id)"
@@ -379,6 +389,13 @@ async function toggleSolo(): Promise<void> {
             <div class="row">
               <span class="row-label">{{ i + 1 }}</span>
               <span class="fx-name">{{ plugins.name(fx.plugin_id) }}</span>
+              <button
+                class="open-editor small"
+                :aria-label="i18n.t('inspector.params')"
+                @click="paramBrowser.open({ trackId: track!.id, pluginId: fx.plugin_id })"
+              >
+                {{ i18n.t("inspector.params") }}
+              </button>
               <button
                 class="open-editor small"
                 :aria-label="i18n.t('inspector.openInterface', { name: plugins.name(fx.plugin_id) })"

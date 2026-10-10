@@ -355,6 +355,7 @@ const en: Record<string, string> = {
   "inspector.instrument": "Instrument",
   "inspector.timbre": "Sound",
   "inspector.openInterface": "Open the interface for {name}",
+  "inspector.params": "Parameters…",
   "inspector.fxChain": "Effect chain",
   "inspector.fxEmpty": "No effects yet. Pick one below to add it to the chain.",
   "inspector.fxUp": "Move effect up",
