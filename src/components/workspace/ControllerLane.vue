@@ -87,12 +87,16 @@ const curveTarget = computed(() => props.targets.find((t) => t.key === props.tar
 const scaleMin = computed(() => curveTarget.value?.min ?? spec.min);
 const scaleMax = computed(() => curveTarget.value?.max ?? spec.max);
 
-/** 下拉选项：`力度` 单独一组（逐音符），其余按 `props.targets` 的 `group` 分组。 */
+/**
+ * 下拉选项：`力度` 单独一组（逐音符），其余按 `props.targets` 的 `group` 分组。
+ *
+ * 选项一律**只有一行**（不给 `hint`）：`力度` 曾经带第二行小字，于是它成了整个列表里唯一有描述的
+ * 一项。说明文字只出现在表头——那里每条目标（含 `力度`）都会显示自己的 `hint`。
+ */
 const chooserOptions = computed(() => [
   {
     id: "velocity",
     label: i18n.t("lane.velocity"),
-    hint: i18n.t("lane.velocityHint"),
     group: i18n.t("auto.group.note"),
   },
   ...props.targets.map((t) => ({ id: t.key, label: t.label, group: t.group })),
