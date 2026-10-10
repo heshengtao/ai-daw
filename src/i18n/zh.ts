@@ -452,6 +452,20 @@ const zh: Record<string, string> = {
   "auto.group.effect": "效果器 {n}",
   "auto.group.note": "音符属性",
 
+  // ---- 自动化目标说明（车道头部 / 参数页）----
+  "param.hint.gain_db": "轨道推子：整体音量（dB）。自动化覆盖推子值——曲线拿掉就回到推子。",
+  "param.hint.pan": "轨道声像：左右位置（-1 全左、0 居中、+1 全右）。",
+  "param.hint.inst.cutoff": "低通截止：往下压变暗、变闷，往上开变亮。",
+  "param.hint.inst.resonance": "截止频率附近的共振峰：推高会有尖锐的「哨音」味。",
+  "param.hint.inst.attack": "起音时长：音符从无声到最大音量的时间，越长越「软」。",
+  "param.hint.inst.decay": "衰减时长：起音之后掉到延音电平所需的时间。",
+  "param.hint.inst.sustain": "延音电平：按住键时维持的音量。",
+  "param.hint.inst.release": "释音时长：松开键后余音消失的时间。",
+  "param.hint.inst.detune": "失谐：多个振荡器之间的音高偏差，用来加厚、加宽。",
+  "param.hint.inst.lfoRate": "LFO 速率：颤音 / 滤波摆动的快慢。",
+  "param.hint.plugin": "{name} · {unit} · {min}–{max}（默认 {default}）",
+  "param.hint.pluginNoUnit": "{name} · {min}–{max}（默认 {default}）",
+
   // ---- 音色浏览器 ----
   "browser.title": "选择音色",
   "browser.searchPlaceholder": "搜索音色、分类或关键词…",

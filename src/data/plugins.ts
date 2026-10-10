@@ -731,6 +731,24 @@ export const SYNTH_PARAM_LABELS: Record<string, string> = {
 };
 
 /**
+ * 内置合成器参数的**说明文案**（参数 id → i18n 键）。
+ *
+ * 与 `SYNTH_PARAM_LABELS` 并列：那张表给「名字」，这张给「这句参数是干什么的」。
+ * 只覆盖精选参数（`COMMON_INSTRUMENT_PARAMS`）——它们最常出现在下拉里；其余参数
+ * 由 `automationTargetsFor` 自动拼「名称 · 单位 · 范围（默认 x）」。
+ */
+export const SYNTH_PARAM_HINTS: Record<string, string> = {
+  cutoff: "param.hint.inst.cutoff",
+  resonance: "param.hint.inst.resonance",
+  attack: "param.hint.inst.attack",
+  decay: "param.hint.inst.decay",
+  sustain: "param.hint.inst.sustain",
+  release: "param.hint.inst.release",
+  detune: "param.hint.inst.detune",
+  lfoRate: "param.hint.inst.lfoRate",
+};
+
+/**
  * 自动化下拉里**精选**的参数（插件 id → 参数 id 数组）。
  *
  * 有表就只列表里的（顺序即展示顺序），没有表的插件列全部可自动化参数。
@@ -739,6 +757,16 @@ export const SYNTH_PARAM_LABELS: Record<string, string> = {
 export const COMMON_INSTRUMENT_PARAMS: Record<string, string[]> = {
   [SYNTH_ID]: ["cutoff", "resonance", "attack", "decay", "sustain", "release", "detune", "lfoRate"],
 };
+
+/**
+ * 某插件**默认绑定**的目标键（**只给参数 id**，`inst:` / `fx<i>:` 前缀由调用方拼）。
+ *
+ * 这就是「精选集」（`COMMON_INSTRUMENT_PARAMS`）——内置合成器 8 个，其他插件空。
+ * 走 `canonicalPluginId`，所以老工程的预设音色 id（`builtin.synth.lead` 等）也算内置合成器。
+ */
+export function defaultBoundParamIds(pluginId: string): string[] {
+  return COMMON_INSTRUMENT_PARAMS[canonicalPluginId(pluginId)] ?? [];
+}
 
 /** 内置合成器的参数默认值（摊平预设补丁用）。 */
 export const SYNTH_DEFAULTS: Record<string, number> = Object.fromEntries(

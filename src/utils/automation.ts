@@ -9,8 +9,10 @@ import type { AutomationPoint, Track } from "@/api/types";
 import {
   canonicalPluginId,
   COMMON_INSTRUMENT_PARAMS,
+  defaultBoundParamIds,
   type ParamSpec,
   SYNTH_ID,
+  SYNTH_PARAM_HINTS,
   SYNTH_PARAM_LABELS,
 } from "@/data/plugins";
 
@@ -27,6 +29,13 @@ export interface AutomationTarget {
   step: number;
   digits: number;
   unit?: string;
+  /**
+   * 一句话说明（构建时**已本地化**，和 `label` 一样）。
+   *
+   * 内置目标（增益 / 声像）与合成器精选参数走手写文案；插件参数自动拼
+   * 「名称 · 单位 · 范围（默认 x）」。`velocity` 不在本列表里，它的说明见 `lane.velocityHint`。
+   */
+  hint?: string;
 }
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string;
@@ -48,7 +57,13 @@ function paramLabel(pluginId: string, spec: ParamSpec, t: Translate): string {
   return canonicalPluginId(pluginId) === SYNTH_ID && key ? t(key) : spec.name;
 }
 
-function fromSpec(key: string, label: string, group: string, spec: ParamSpec): AutomationTarget {
+function fromSpec(
+  key: string,
+  label: string,
+  group: string,
+  spec: ParamSpec,
+  hint: string,
+): AutomationTarget {
   return {
     key,
     label,
@@ -58,7 +73,27 @@ function fromSpec(key: string, label: string, group: string, spec: ParamSpec): A
     step: spec.step,
     digits: spec.digits ?? 2,
     unit: spec.unit,
+    hint,
   };
+}
+
+/** 插件参数的自动说明：「名称 · 单位 · 范围（默认 x）」（没有单位就不带那一段）。 */
+function pluginHint(label: string, spec: ParamSpec, t: Translate): string {
+  const vars = {
+    name: label,
+    unit: spec.unit ?? "",
+    min: spec.min,
+    max: spec.max,
+    default: spec.default,
+  };
+  return spec.unit ? t("param.hint.plugin", vars) : t("param.hint.pluginNoUnit", vars);
+}
+
+/** 目标的说明：合成器**精选参数**用手写文案，其余插件参数自动拼。 */
+function specHint(pluginId: string, label: string, spec: ParamSpec, t: Translate): string {
+  const key = SYNTH_PARAM_HINTS[spec.id];
+  if (canonicalPluginId(pluginId) === SYNTH_ID && key) return t(key);
+  return pluginHint(label, spec, t);
 }
 
 /**
@@ -74,21 +109,23 @@ export function automationTargetsFor(
 ): AutomationTarget[] {
   if (!track) return [];
   const out: AutomationTarget[] = [
-    { key: "gain_db", label: t("auto.gain"), group: t("auto.group.track"), min: -60, max: 12, step: 0.5, digits: 1, unit: "dB" },
-    { key: "pan", label: t("auto.pan"), group: t("auto.group.track"), min: -1, max: 1, step: 0.05, digits: 2 },
+    { key: "gain_db", label: t("auto.gain"), group: t("auto.group.track"), min: -60, max: 12, step: 0.5, digits: 1, unit: "dB", hint: t("param.hint.gain_db") },
+    { key: "pan", label: t("auto.pan"), group: t("auto.group.track"), min: -1, max: 1, step: 0.05, digits: 2, hint: t("param.hint.pan") },
   ];
 
   const instrumentId = track.instrument?.plugin_id;
   if (instrumentId) {
     for (const spec of automatableParams(instrumentId, paramsOf)) {
-      out.push(fromSpec(`inst:${spec.id}`, paramLabel(instrumentId, spec, t), t("auto.group.instrument"), spec));
+      const label = paramLabel(instrumentId, spec, t);
+      out.push(fromSpec(`inst:${spec.id}`, label, t("auto.group.instrument"), spec, specHint(instrumentId, label, spec, t)));
     }
   }
 
   track.effects.forEach((fx, i) => {
     const group = t("auto.group.effect", { n: i + 1 });
     for (const spec of automatableParams(fx.plugin_id, paramsOf)) {
-      out.push(fromSpec(`fx${i}:${spec.id}`, paramLabel(fx.plugin_id, spec, t), group, spec));
+      const label = paramLabel(fx.plugin_id, spec, t);
+      out.push(fromSpec(`fx${i}:${spec.id}`, label, group, spec, specHint(fx.plugin_id, label, spec, t)));
     }
   });
 
@@ -112,4 +149,66 @@ export function laneValueAtOrNull(points: AutomationPoint[], beat: number): numb
     }
   }
   return last.value;
+}
+
+/** 该参数在这条轨道上是否**已经有曲线**（「已用」判定：车道存在且至少一个点）。 */
+export function laneHasPoints(track: Track | null | undefined, key: string): boolean {
+  return (track?.automation ?? []).some((l) => l.param === key && l.points.length > 0);
+}
+
+/**
+ * 一条轨道**默认绑定**的目标键：把乐器（`inst:<id>`）与每个效果器（`fx<i>:<id>`）的
+ * 精选参数 id 拼上前缀（`defaultBoundParamIds` 只给 id）。
+ *
+ * `curateTargets` 的 `fallbackBound` 输入就是它——Task 3 直接调用，不要另写一份拼前缀的逻辑。
+ */
+export function defaultBoundKeys(track: Track | null | undefined): string[] {
+  if (!track) return [];
+  const out: string[] = [];
+  const instrumentId = track.instrument?.plugin_id;
+  if (instrumentId) {
+    for (const id of defaultBoundParamIds(instrumentId)) out.push(`inst:${id}`);
+  }
+  track.effects.forEach((fx, i) => {
+    for (const id of defaultBoundParamIds(fx.plugin_id)) out.push(`fx${i}:${id}`);
+  });
+  return out;
+}
+
+/**
+ * 收窄给车道下拉用的目标列表：增益 / 声像 + 已绑定 + **已经有曲线的**。
+ *
+ * 规则（设计 §3.3）：
+ * 1. `gain_db` / `pan` 永远在最前（按 `all` 里的原始顺序）。
+ * 2. 然后 `bound ?? fallbackBound` 中能在 `all` 里找到的键（**保持绑定顺序**；表里不存在的键忽略）。
+ * 3. 最后 `usedKeys` 里还没出现的键（已用但已解绑）——同样要在 `all` 里存在。
+ * 4. 目标对象原样透传（含 `hint`）。
+ *
+ * `bound === null` 表示「没有显式记录」→ 用 `fallbackBound`（默认精选）；
+ * `bound === []` 表示「用户显式全解绑」→ **只剩增益 / 声像**，绝不回落默认。
+ */
+export function curateTargets(
+  all: AutomationTarget[],
+  opts: { bound: string[] | null; fallbackBound: string[]; usedKeys: string[] },
+): AutomationTarget[] {
+  const byKey = new Map(all.map((target) => [target.key, target]));
+  const out: AutomationTarget[] = [];
+  const seen = new Set<string>();
+
+  /** 按 `all` 里的目标原样收下（表里没有的键忽略、重复的忽略）。 */
+  const push = (key: string): void => {
+    if (seen.has(key)) return;
+    const target = byKey.get(key);
+    if (!target) return;
+    seen.add(key);
+    out.push(target);
+  };
+
+  for (const target of all) {
+    if (target.key === "gain_db" || target.key === "pan") push(target.key);
+  }
+  for (const key of opts.bound ?? opts.fallbackBound) push(key);
+  for (const key of opts.usedKeys) push(key);
+
+  return out;
 }

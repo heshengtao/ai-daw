@@ -453,6 +453,20 @@ const en: Record<string, string> = {
   "auto.group.effect": "Effect {n}",
   "auto.group.note": "Note properties",
 
+  // ---- Automation target descriptions (lane header / parameter page) ----
+  "param.hint.gain_db": "Track fader — overall level (dB). Automation overrides the fader; remove the curve and it returns to the fader.",
+  "param.hint.pan": "Track pan — left/right position (-1 hard left, 0 centre, +1 hard right).",
+  "param.hint.inst.cutoff": "Low-pass cutoff — lower is darker and muffled, higher is brighter.",
+  "param.hint.inst.resonance": "Resonance around the cutoff — higher gives a sharper, whistling peak.",
+  "param.hint.inst.attack": "Attack time — how long the note takes to reach full level; longer is softer.",
+  "param.hint.inst.decay": "Decay time — how long the level takes to fall from the attack to the sustain level.",
+  "param.hint.inst.sustain": "Sustain level — the level held while the key is down.",
+  "param.hint.inst.release": "Release time — how long the tail takes to fade after the key is released.",
+  "param.hint.inst.detune": "Detune — pitch spread between oscillators, for thickness and width.",
+  "param.hint.inst.lfoRate": "LFO rate — speed of the vibrato / filter wobble.",
+  "param.hint.plugin": "{name} · {unit} · {min}–{max} (default {default})",
+  "param.hint.pluginNoUnit": "{name} · {min}–{max} (default {default})",
+
   // ---- Sound browser ----
   "browser.title": "Choose a sound",
   "browser.searchPlaceholder": "Search sounds, categories or keywords…",
