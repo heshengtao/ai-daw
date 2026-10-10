@@ -43,8 +43,16 @@ const param = ref<string>("gain_db");
 const track = computed(() => selection.track);
 const trackId = computed(() => track.value?.id ?? null);
 
-/** 该轨道现在可自动化的全部目标（轨道混音 / 乐器 / 效果器）。 */
-const targets = computed(() => automationTargetsFor(track.value, plugins.paramsOf, i18n.t));
+/**
+ * 该轨道现在可自动化的全部目标（轨道混音 / 乐器 / 效果器）。
+ *
+ * `curatedOnly: true` = 仍在用旧口径（精选表 / 仅可自动化）：本车道**还没**改用 `curateTargets`，
+ * 传它是为了在参数页那次改动里保持下拉逐项不变。改用 `curateTargets` 后应删掉这个传参
+ * （`automationTargetsFor` 的默认已经是"全量"，那才是 `curateTargets` 要喂的）。
+ */
+const targets = computed(() =>
+  automationTargetsFor(track.value, plugins.paramsOf, i18n.t, { curatedOnly: true }),
+);
 const chooserOptions = computed(() =>
   targets.value.map((t) => ({ id: t.key, label: t.label, group: t.group })),
 );

@@ -259,7 +259,10 @@ onUnmounted(() => {
 /* 菜单 Teleport 到 body，所以不能写在 scoped 里 */
 .md3-select-menu {
   position: fixed;
-  z-index: 95;
+  /* 必须在**模态遮罩之上**：参数页里的下拉（插件筛选 / 每页）就挂在这个模态里，
+     而 `ModalShell` 的 `.scrim` 是 120、其它对话框是 130。菜单是 Teleport 到 body 的
+     `.scrim` 的兄弟节点，压在它下面的话既看不见、点击还会被遮罩的 `pointerdown.self` 吃掉。 */
+  z-index: 140;
   display: flex;
   flex-direction: column;
   gap: 2px;

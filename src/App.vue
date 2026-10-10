@@ -12,6 +12,7 @@ import ToastHost from "@/components/common/ToastHost.vue";
 import ProjectDialog from "@/components/common/ProjectDialog.vue";
 import ShortcutsDialog from "@/components/common/ShortcutsDialog.vue";
 import UnsavedChangesDialog from "@/components/common/UnsavedChangesDialog.vue";
+import ParameterBrowser from "@/components/common/ParameterBrowser.vue";
 import { useProjectSync } from "@/composables/useProjectSync";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
@@ -20,6 +21,7 @@ import { useTransportStore } from "@/stores/transport";
 import { usePluginsStore } from "@/stores/plugins";
 import { usePresetsStore } from "@/stores/presets";
 import { useSelectionStore } from "@/stores/selection";
+import { useParamBrowserStore } from "@/stores/paramBrowser";
 import { useTimelineStore } from "@/stores/timeline";
 import { useI18n } from "@/i18n";
 import { exportWav, onPluginsEvent } from "@/api/tauri";
@@ -33,6 +35,7 @@ const transport = useTransportStore();
 const plugins = usePluginsStore();
 const presets = usePresetsStore();
 const selection = useSelectionStore();
+const paramBrowser = useParamBrowserStore();
 const timeline = useTimelineStore();
 const i18n = useI18n();
 const route = useRoute();
@@ -497,6 +500,9 @@ onUnmounted(() => {
 
   <!-- 关闭工程前的未保存改动确认：窗口关闭请求会打开它并等待选择 -->
   <UnsavedChangesDialog v-model:open="unsavedOpen" @choose="onUnsavedChoice" />
+
+  <!-- 参数页（挑参数给自动化用）：挂在根部，车道下拉与检查器两个入口共用 -->
+  <ParameterBrowser v-if="paramBrowser.isOpen" />
 </template>
 
 <style scoped>

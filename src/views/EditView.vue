@@ -509,9 +509,14 @@ async function deleteNotes(indices: number[]): Promise<void> {
 
 /** 卷帘下方泳道当前选中的目标键（`velocity` = 逐音符力度）。 */
 const controllerTargetKey = ref<string>("velocity");
-/** 可自动化的目标：轨道混音 + 乐器 + 效果器（与编排视图的自动化车道同一份列表）。 */
+/**
+ * 可自动化的目标：轨道混音 + 乐器 + 效果器（与编排视图的自动化车道同一份列表）。
+ *
+ * `curatedOnly: true` = 仍用旧口径，理由与 `AutomationLane` 那里同：这条泳道还没改用
+ * `curateTargets`，传它是为了让参数页那一次改动不动这里的下拉。改用后删掉这个传参。
+ */
 const controllerTargets = computed(() =>
-  automationTargetsFor(selection.track, plugins.paramsOf, i18n.t),
+  automationTargetsFor(selection.track, plugins.paramsOf, i18n.t, { curatedOnly: true }),
 );
 /** 选中目标当前的曲线点（就是 `Track.automation` 里那条，与编排视图共用）。 */
 const controllerCurvePoints = computed<AutomationPoint[]>(() => {
