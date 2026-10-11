@@ -5,6 +5,7 @@
  * 面板开关按钮固定放在那里，展开/收起时鼠标不用移动。
  */
 import TopBar from "./TopBar.vue";
+import ImportProgressBar from "./ImportProgressBar.vue";
 import BottomBar from "./BottomBar.vue";
 import WindowControls from "./WindowControls.vue";
 import DevDrawer from "./DevDrawer.vue";
@@ -45,6 +46,9 @@ const showWindowControls = isTauri() && (isWindows() || isLinux());
           @rename="emit('rename')"
           @shortcuts="emit('shortcuts')"
         />
+
+        <!-- 导入进度条：绝对定位贴住顶栏下边缘，不占布局 -->
+        <ImportProgressBar />
 
         <div class="app-row">
           <main class="app-main">
@@ -91,6 +95,7 @@ const showWindowControls = isTauri() && (isWindows() || isLinux());
   display: flex;
 }
 .app-stack {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;

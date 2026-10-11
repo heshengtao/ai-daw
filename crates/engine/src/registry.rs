@@ -148,12 +148,24 @@ pub struct Preset {
     pub patch: &'static [(&'static str, f32)],
 }
 
-/// 插件工厂：按「轨道」创建实例。
+/// 一条轨道上插件实例所在的位置：乐器位，还是效果链的第几个槽位。
 ///
-/// 之所以把轨道 id 交给工厂：宿主侧需要在实例创建时把它登记到「轨道 → 插件句柄」的表里，
-/// 这样界面才能为**正在发声的那个实例**打开原生编辑器（编辑器必须附着在同一个实例上）。
+/// 宿主侧据此把「正在发声的那个实例」登记进编辑器句柄表，界面才能为**指定槽位**打开原生
+/// 编辑器——一轨只有一个乐器、但可以有多个效果器，只按轨道寻址会互相顶掉。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PluginSlot {
+    /// 轨道乐器。
+    Instrument,
+    /// 效果链中下标为 `n` 的效果器。
+    Effect(usize),
+}
+
+/// 插件工厂：按「轨道 + 槽位」创建实例。
+///
+/// 之所以把轨道 id 与槽位交给工厂：宿主侧需要在实例创建时把它登记到「槽位 → 插件句柄」的
+/// 表里，这样界面才能为**正在发声的那个实例**打开原生编辑器（编辑器必须附着在同一个实例上）。
 /// 内置插件用不到它，忽略即可。
-type Factory = Box<dyn Fn(TrackId) -> Box<dyn Plugin> + Send + Sync>;
+type Factory = Box<dyn Fn(TrackId, PluginSlot) -> Box<dyn Plugin> + Send + Sync>;
 
 /// 未安装插件的占位：静音、惰性。
 ///
@@ -218,24 +230,24 @@ impl PluginRegistry {
     pub fn with_builtins() -> Self {
         let mut r = PluginRegistry::new();
         for p in BUILTIN_PRESETS {
-            r.register(p.id, move |_track| {
+            r.register(p.id, move |_track, _slot| {
                 Box::new(ai_daw_synth::SynthPlugin::preset(p.id, p.name, p.patch))
             });
         }
         // 内置效果器：以前空间感只能靠外部 VST3，铺底/弦乐/管乐只能干着听。
-        r.register(BUILTIN_DELAY, |_track| Box::new(ai_daw_effects::Delay::new()));
-        r.register(BUILTIN_REVERB, |_track| Box::new(ai_daw_effects::Reverb::new()));
-        r.register(BUILTIN_CHORUS, |_track| Box::new(ai_daw_effects::Chorus::new()));
-        r.register(BUILTIN_DRIVE, |_track| Box::new(ai_daw_effects::Drive::new()));
-        r.register(BUILTIN_EQ, |_track| Box::new(ai_daw_effects::Eq::new()));
+        r.register(BUILTIN_DELAY, |_track, _slot| Box::new(ai_daw_effects::Delay::new()));
+        r.register(BUILTIN_REVERB, |_track, _slot| Box::new(ai_daw_effects::Reverb::new()));
+        r.register(BUILTIN_CHORUS, |_track, _slot| Box::new(ai_daw_effects::Chorus::new()));
+        r.register(BUILTIN_DRIVE, |_track, _slot| Box::new(ai_daw_effects::Drive::new()));
+        r.register(BUILTIN_EQ, |_track, _slot| Box::new(ai_daw_effects::Eq::new()));
         r
     }
 
-    /// 注册一个插件工厂，同 id 覆盖旧值。工厂会收到「这条轨道的 id」。
+    /// 注册一个插件工厂，同 id 覆盖旧值。工厂会收到「这条轨道的 id」与「槽位」。
     pub fn register(
         &mut self,
         id: &str,
-        factory: impl Fn(TrackId) -> Box<dyn Plugin> + Send + Sync + 'static,
+        factory: impl Fn(TrackId, PluginSlot) -> Box<dyn Plugin> + Send + Sync + 'static,
     ) {
         self.factories.insert(id.to_string(), Box::new(factory));
     }
@@ -246,12 +258,12 @@ impl PluginRegistry {
     /// 用户也分不清是「插件没装」还是「工程坏了」。
     pub fn register_missing(&mut self, id: &str) {
         let stored = id.to_string();
-        self.register(id, move |_track| missing_plugin(&stored));
+        self.register(id, move |_track, _slot| missing_plugin(&stored));
     }
 
-    /// 按 id + 轨道创建插件实例；未知 id 返回 `None`。
-    pub fn create(&self, id: &str, track: TrackId) -> Option<Box<dyn Plugin>> {
-        self.factories.get(id).map(|f| f(track))
+    /// 按 id + 轨道 + 槽位创建插件实例；未知 id 返回 `None`。
+    pub fn create(&self, id: &str, track: TrackId, slot: PluginSlot) -> Option<Box<dyn Plugin>> {
+        self.factories.get(id).map(|f| f(track, slot))
     }
 
     /// 已注册的全部插件 id（升序排列）。
@@ -278,7 +290,7 @@ mod tests {
     fn builtins_include_the_effects() {
         let r = PluginRegistry::with_builtins();
         for id in [BUILTIN_DELAY, BUILTIN_REVERB, BUILTIN_CHORUS, BUILTIN_DRIVE, BUILTIN_EQ] {
-            let p = r.create(id, TrackId(1)).unwrap_or_else(|| panic!("{id} 未注册"));
+            let p = r.create(id, TrackId(1), PluginSlot::Instrument).unwrap_or_else(|| panic!("{id} 未注册"));
             let d = p.descriptor();
             assert_eq!(d.kind, PluginKind::Effect, "{id} 应当是效果器");
             assert_eq!(d.io.inputs, 2, "{id} 需要立体声输入");
@@ -298,7 +310,7 @@ mod tests {
     #[test]
     fn preset_instances_carry_their_own_identity_and_defaults() {
         let r = PluginRegistry::with_builtins();
-        let p = r.create("builtin.synth.pad", TrackId(1)).expect("pad preset exists");
+        let p = r.create("builtin.synth.pad", TrackId(1), PluginSlot::Instrument).expect("pad preset exists");
         assert_eq!(p.descriptor().id, "builtin.synth.pad");
         // 断言「实例拿到的是**这条预设自己的补丁值**」：所以从补丁表里把值读出来比对，
         // 不把某个具体数字写死在这里——音色会调，这个测试不该跟着碎。
@@ -318,7 +330,7 @@ mod tests {
     fn factory_presets_pin_their_waveform() {
         let reg = PluginRegistry::with_builtins();
         let wave_of = |id: &str| -> Option<f32> {
-            let p = reg.create(id, crate::model::TrackId(0))?;
+            let p = reg.create(id, crate::model::TrackId(0), PluginSlot::Instrument)?;
             p.get_param(&ParamId::from("wave"))
         };
         assert_eq!(wave_of("builtin.synth"), Some(2.0), "默认音色 = 正弦");
@@ -347,7 +359,7 @@ mod tests {
     #[test]
     fn create_returns_configured_instance() {
         let r = PluginRegistry::with_builtins();
-        let p = r.create("builtin.synth", TrackId(1)).expect("synth exists");
+        let p = r.create("builtin.synth", TrackId(1), PluginSlot::Instrument).expect("synth exists");
         assert_eq!(p.descriptor().id, "builtin.synth");
         assert_eq!(p.get_param(&"gain".into()), Some(0.8));
     }
@@ -355,14 +367,14 @@ mod tests {
     #[test]
     fn create_unknown_returns_none() {
         let r = PluginRegistry::with_builtins();
-        assert!(r.create("nope", TrackId(1)).is_none());
+        assert!(r.create("nope", TrackId(1), PluginSlot::Instrument).is_none());
     }
 
     #[test]
     fn missing_placeholder_is_silent_and_keeps_its_id() {
         let mut r = PluginRegistry::new();
         r.register_missing("vst3:deadbeef");
-        let mut p = r.create("vst3:deadbeef", TrackId(1)).expect("占位已注册");
+        let mut p = r.create("vst3:deadbeef", TrackId(1), PluginSlot::Instrument).expect("占位已注册");
         assert_eq!(p.descriptor().id, "vst3:deadbeef");
 
         let ctx = ProcessContext { sample_rate: 48_000.0, block_size: 4, tempo: 120.0, playing: true };

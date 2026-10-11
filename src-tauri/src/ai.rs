@@ -1,18 +1,20 @@
-//! 本地 AI 任务：后台线程里跑 DSP，带**进度**与**取消**。
+//! 本地 AI 任务：后台线程里跑 DSP / 模型，带**进度**与**取消**。
 //!
-//! 两条能力（`crates/local-ai`）：`to_midi`（音频转 MIDI）、`enhance`（降噪）。
-//! 都不依赖外部模型，因此**随应用即可用**；重活放在后台线程，界面显示进度条并随时可停。
+//! 能力（`crates/local-ai`）：`to_midi`（音频转 MIDI）、`enhance`（降噪）、`separate`（音源分离）、
+//! `master`（母带）。重活放在后台线程，界面显示进度条并随时可停。
 //!
 //! 结果落地都走**同一条命令管线**（可撤销）：转 MIDI → `AddNoteTrack`（一次事务）；
-//! 降噪 → 写 WAV + 素材缓存 + `AddAudioClip`。
+//! 降噪 / 音源分离 → 写 WAV + 素材缓存 + `AddAudioTrack`（分离一次建四条轨，仍是一条撤销记录）；
+//! 母带 → 整个工程离线渲染后落到一条新音频轨。
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tauri::{Emitter, Manager};
 
-use ai_daw_engine::audio::DecodedAudio;
+use ai_daw_engine::audio::{AudioBuffer, DecodedAudio};
 use ai_daw_engine::command::Command;
+use ai_daw_engine::event::Event;
 use ai_daw_engine::model::{AudioSource, Note, TrackId};
 
 use crate::state::AppState;
@@ -26,9 +28,41 @@ pub const KIND_TO_MIDI: &str = "to_midi";
 pub const KIND_ENHANCE: &str = "enhance";
 /// 乐器 / 素材底噪降噪：**始终走内置 DSP**（全带宽，只在接近底噪处衰减）。
 pub const KIND_ENHANCE_DSP: &str = "enhance_dsp";
+/// 母带处理：**作用于整个工程的离线混音**（不针对某条轨道），纯 DSP、无需模型。
+pub const KIND_MASTER: &str = "master";
+/// 音源分离：把所选轨道的音频拆成**鼓 / 贝斯 / 其他 / 人声**四条分轨（HTDemucs 模型，无 DSP 兜底）。
+pub const KIND_SEPARATE: &str = "separate";
 
 /// 降噪的过减系数（越大越激进）。
 const ENHANCE_STRENGTH: f32 = 2.0;
+
+/// 母带渲染用的采样率（与其余离线路径一致）。
+const MASTER_SAMPLE_RATE: u32 = 44_100;
+/// 母带渲染保留的尾音秒数（混响 / 延迟的尾巴不能被切掉）。
+const MASTER_TAIL_SECONDS: f64 = 0.5;
+
+/// 母带参数（来自界面；都省略时用 crate 的默认值）。
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct MasterArgs {
+    /// 目标积分响度（LUFS）。
+    pub target_lufs: Option<f64>,
+    /// 真峰值上限（dBTP）。
+    pub ceiling_dbtp: Option<f64>,
+    /// 立体声宽度（1.0 = 原样，0 = 单声道）。
+    pub stereo_width: Option<f32>,
+}
+
+impl MasterArgs {
+    /// 缺省项补上默认值（范围由 `MasterOptions::sanitized` 兜底）。
+    fn into_options(self) -> ai_daw_mastering::MasterOptions {
+        let defaults = ai_daw_mastering::MasterOptions::default();
+        ai_daw_mastering::MasterOptions {
+            target_lufs: self.target_lufs.unwrap_or(defaults.target_lufs),
+            ceiling_dbtp: self.ceiling_dbtp.unwrap_or(defaults.ceiling_dbtp),
+            stereo_width: self.stereo_width.unwrap_or(defaults.stereo_width),
+        }
+    }
+}
 
 /// 广播给界面的任务状态。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -88,13 +122,15 @@ pub fn ai_status(state: tauri::State<'_, AppState>) -> AiStatus {
     state.ai.status()
 }
 
-/// 两个本地 AI 模型是否已经就位（界面据此显示「模型 / 内置 DSP」）。
+/// 三个本地 AI 模型是否已经就位（界面据此显示「模型 / 内置 DSP」）。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AiModels {
     /// Basic Pitch 权重是否已下载。
     pub basic_pitch: bool,
     /// LocalVQE 权重是否已下载。
     pub localvqe: bool,
+    /// HTDemucs 音源分离权重是否已下载。
+    pub separate: bool,
 }
 
 /// 查询本地 AI 模型的可用情况（权重放在 `models/` 目录，见 `tools/fetch-models.sh`）。
@@ -104,6 +140,7 @@ pub fn ai_models() -> AiModels {
     AiModels {
         basic_pitch: available.basic_pitch.is_some(),
         localvqe: available.localvqe.is_some(),
+        separate: available.htdemucs.is_some(),
     }
 }
 
@@ -113,44 +150,29 @@ pub fn ai_cancel(state: tauri::State<'_, AppState>) {
     state.ai.cancel.store(true, Ordering::Relaxed);
 }
 
-/// 开始一个本地 AI 任务：作用于 `track` 上**第一个音频片段**。
+/// 开始一个本地任务。
+///
+/// `to_midi` / `enhance` / `enhance_dsp` / `separate` 作用于 `track` 上的**第一个音频片段**；
+/// `master` 作用于**整个工程的离线混音**（不看 `track`，`master` 参数只在它身上有意义）。
+/// `model` 只在 `separate` 上有意义：选择用哪个分离模型（缺省 = 4 分轨的 HTDemucs）。
 #[tauri::command]
 pub fn ai_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     kind: String,
     track: u64,
+    master: Option<MasterArgs>,
+    model: Option<String>,
 ) -> Result<(), String> {
-    if kind != KIND_TO_MIDI && kind != KIND_ENHANCE && kind != KIND_ENHANCE_DSP {
+    if !matches!(
+        kind.as_str(),
+        KIND_TO_MIDI | KIND_ENHANCE | KIND_ENHANCE_DSP | KIND_MASTER | KIND_SEPARATE
+    ) {
         return Err(format!("未知的 AI 任务：{kind}"));
     }
     if state.ai.running.swap(true, Ordering::SeqCst) {
         return Err("已有 AI 任务在跑".into());
     }
-    // 先把要用的输入取出来（锁只在此刻短暂持有）。
-    // 除了素材本身，还要记下**源轨道在工程里的行号**：两条能力都要把结果轨道插在它下面。
-    let (source, clip_start, clip_length, track_name, track_index) = {
-        let engine = state.engine.lock().unwrap();
-        let project = engine.project();
-        let index = project
-            .tracks
-            .iter()
-            .position(|t| t.id == TrackId(track))
-            .ok_or("轨道不存在")?;
-        let t = &project.tracks[index];
-        let clip = t
-            .clips
-            .iter()
-            .find(|c| c.audio.is_some())
-            .ok_or("这条轨道没有音频片段（先录音或导入音频）")?;
-        (
-            clip.audio.clone().expect("已确认是音频片段"),
-            clip.start,
-            clip.length,
-            t.name.clone(),
-            index,
-        )
-    };
 
     let runtime = state.ai.clone();
     runtime.cancel.store(false, Ordering::Relaxed);
@@ -158,31 +180,32 @@ pub fn ai_start(
     *runtime.kind.lock().unwrap() = Some(kind.clone());
     *runtime.message.lock().unwrap() = None;
 
-    let app2 = app.clone();
-    let runtime_thread = runtime.clone();
+    // 母带：输入是整个工程，与轨道无关，走单独一条线程路径。
+    if kind == KIND_MASTER {
+        let options = master.unwrap_or_default().into_options();
+        let thread_app = app.clone();
+        let thread_runtime = runtime.clone();
+        std::thread::Builder::new()
+            .name("ai-daw-master".into())
+            .spawn(move || {
+                let outcome = run_master_job(&thread_app, &thread_runtime, &options);
+                finish(&thread_app, &thread_runtime, outcome);
+            })
+            .map_err(|e| e.to_string())?;
+        let _ = app.emit(EVENT_AI, runtime.status());
+        return Ok(());
+    }
+
+    // 先把要用的输入取出来（锁只在此刻短暂持有）。找不到轨道/音频片段就报错。
+    let input = track_input(&state, track)?;
+
+    let thread_app = app.clone();
+    let thread_runtime = runtime.clone();
     std::thread::Builder::new()
         .name("ai-daw-ai".into())
         .spawn(move || {
-            let outcome = run_job(
-                &app2,
-                &runtime_thread,
-                &kind,
-                track_index,
-                &source,
-                clip_start,
-                clip_length,
-                &track_name,
-            );
-            {
-                let mut msg = runtime_thread.message.lock().unwrap();
-                *msg = Some(match &outcome {
-                    Ok(text) => text.clone(),
-                    Err(err) => format!("失败：{err}"),
-                });
-            }
-            runtime_thread.running.store(false, Ordering::SeqCst);
-            runtime_thread.progress.store(0, Ordering::Relaxed);
-            let _ = app2.emit(EVENT_AI, runtime_thread.status());
+            let outcome = run_job(&thread_app, &thread_runtime, &kind, &input, model.as_deref());
+            finish(&thread_app, &thread_runtime, outcome);
         })
         .map_err(|e| e.to_string())?;
 
@@ -190,20 +213,68 @@ pub fn ai_start(
     Ok(())
 }
 
+/// 一条轨道的「第一个音频片段」输入，以及结果轨道要插入的行号。
+pub(crate) struct TrackInput {
+    /// 源音频片段。
+    pub source: AudioSource,
+    /// 源片段起始拍。
+    pub clip_start: f64,
+    /// 源片段长度（拍）。
+    pub clip_length: f64,
+    /// 源轨道名。
+    pub track_name: String,
+    /// 源轨道在工程里的行号（结果插在它下面）。
+    pub track_index: usize,
+}
+
+/// 取一条轨道上的第一个音频片段（`track` 不存在或没有音频片段都会报错）。
+pub(crate) fn track_input(state: &AppState, track: u64) -> Result<TrackInput, String> {
+    let engine = state.engine.lock().unwrap();
+    let project = engine.project();
+    let index = project
+        .tracks
+        .iter()
+        .position(|t| t.id == TrackId(track))
+        .ok_or("轨道不存在")?;
+    let t = &project.tracks[index];
+    let clip = t
+        .clips
+        .iter()
+        .find(|c| c.audio.is_some())
+        .ok_or("这条轨道没有音频片段（先录音或导入音频）")?;
+    Ok(TrackInput {
+        source: clip.audio.clone().expect("已确认是音频片段"),
+        clip_start: clip.start,
+        clip_length: clip.length,
+        track_name: t.name.clone(),
+        track_index: index,
+    })
+}
+
+/// 任务收尾：写摘要、清运行标志、广播一次终态。
+fn finish(app: &tauri::AppHandle, runtime: &AiRuntime, outcome: Result<String, String>) {
+    {
+        let mut message = runtime.message.lock().unwrap();
+        *message = Some(match outcome {
+            Ok(text) => text,
+            Err(err) => format!("失败：{err}"),
+        });
+    }
+    runtime.running.store(false, Ordering::SeqCst);
+    runtime.progress.store(0, Ordering::Relaxed);
+    let _ = app.emit(EVENT_AI, runtime.status());
+}
+
 /// 后台线程里跑的实际工作。
-#[allow(clippy::too_many_arguments)]
 fn run_job(
     app: &tauri::AppHandle,
     runtime: &AiRuntime,
     kind: &str,
-    track_index: usize,
-    source: &AudioSource,
-    clip_start: f64,
-    clip_length: f64,
-    track_name: &str,
+    input: &TrackInput,
+    model: Option<&str>,
 ) -> Result<String, String> {
     let state = app.state::<AppState>();
-    let audio = state.assets.load(&source.path)?;
+    let audio = state.assets.load(&input.source.path)?;
     let channels = audio.channels;
     let sample_rate = audio.sample_rate;
     let frames = audio.frames();
@@ -211,6 +282,11 @@ fn run_job(
     if frames == 0 || sample_rate <= 0.0 {
         return Err("素材是空的".into());
     }
+    let track_name = input.track_name.as_str();
+    let track_index = input.track_index;
+    let clip_start = input.clip_start;
+    let clip_length = input.clip_length;
+    let source = &input.source;
 
     // 进度回调：更新原子量 + 广播 + 检查取消。
     let rt = runtime.clone();
@@ -253,6 +329,17 @@ fn run_job(
             },
         );
         return Ok(format!("已生成 {count} 个音符（{backend}）"));
+    }
+
+    // 音源分离：按选定的模型把音频拆成 N 条新轨（4 分轨或 6 分轨），一次事务。
+    // 没有模型权重时给明确错误——分离没有内置 DSP 近似。
+    if kind == KIND_SEPARATE {
+        let stems = separate_with_model(model, &samples, channels, sample_rate, &progress)?;
+        if runtime.cancel.load(Ordering::Relaxed) {
+            return Ok("已取消".into());
+        }
+        let count = place_stems(app, input, &stems, channels, sample_rate, frames)?;
+        return Ok(format!("已生成 {count} 条分轨（HTDemucs）"));
     }
 
     // 降噪：产出新素材，再把它作为**下面一条新轨道**放进去（原轨不动，便于对比）。
@@ -349,11 +436,205 @@ fn enhance_audio(
     )
 }
 
+/// stem 名（模型输出里的稳定标识）→ 显示名。
+fn stem_title(name: &str) -> &'static str {
+    match name {
+        "drums" => "鼓",
+        "bass" => "贝斯",
+        "other" => "其他",
+        "vocals" => "人声",
+        "guitar" => "吉他",
+        "piano" => "钢琴",
+        _ => "分轨",
+    }
+}
+
+/// 按模型 id 选一个分离后端（缺省 = 4 分轨；未知 id 直接报错）。
+fn separate_with_model(
+    model: Option<&str>,
+    samples: &[f32],
+    channels: usize,
+    sample_rate: f64,
+    progress: ai_daw_local_ai::Progress<'_>,
+) -> Result<ai_daw_local_ai::models::Stems, String> {
+    use ai_daw_local_ai::models;
+    match model.unwrap_or("htdemucs-ort-v1") {
+        "" | "htdemucs-ort-v1" => models::demucs::separate(samples, channels, sample_rate, progress),
+        "htdemucs-6s" => models::demucs6s::separate(samples, channels, sample_rate, progress),
+        other => Err(format!("未知的音源分离模型：{other}")),
+    }
+}
+
+/// 把分离出的各条分轨写成 WAV（各自缓存）并作为**源轨道下面**的新轨插入。
+///
+/// 一次事务提交全部 `AddAudioTrack`，因此一次撤销即可整体回退。返回新建轨道数。
+fn place_stems(
+    app: &tauri::AppHandle,
+    input: &TrackInput,
+    stems: &ai_daw_local_ai::models::Stems,
+    channels: usize,
+    sample_rate: f64,
+    frames: usize,
+) -> Result<usize, String> {
+    let rate = sample_rate.round().max(1.0) as u32;
+
+    let state = app.state::<AppState>();
+    let mut commands: Vec<Command> = Vec::with_capacity(stems.stems.len());
+    for (i, (name, part)) in stems.stems.iter().enumerate() {
+        let file = ai_output_path(app, &format!("separate-{name}"))?;
+        {
+            let mut buffer = AudioBuffer::silence(channels, frames);
+            let len = buffer.data().len();
+            buffer.data_mut().copy_from_slice(&part[..len]);
+            ai_daw_engine::wav::write_wav(&file, &buffer, rate).map_err(|e| e.to_string())?;
+        }
+        state.assets.insert(
+            &file,
+            Arc::new(DecodedAudio {
+                samples: part.to_vec().into(),
+                channels,
+                sample_rate,
+            }),
+        );
+        commands.push(Command::AddAudioTrack {
+            name: format!("{} · {}", input.track_name, stem_title(name)),
+            start: input.clip_start,
+            length: input.clip_length,
+            source: AudioSource {
+                path: file,
+                offset_frames: input.source.offset_frames,
+                frames: input.source.frames,
+            },
+            at: Some(input.track_index + 1 + i),
+        });
+    }
+    let (_, events) = crate::commands::run_agent_all(app, commands);
+    Ok(events
+        .iter()
+        .filter(|e| matches!(e, Event::TrackAdded { .. }))
+        .count())
+}
+
+/// 同步分离一条轨道（供 MCP 工具用；无进度回调，整体阻塞在调用线程）。
+///
+/// `model` 选择模型（缺省 4 分轨）。返回新建轨道数。行为与界面一致（同一条命令管线、一次事务）。
+pub(crate) fn separate_track(
+    app: &tauri::AppHandle,
+    track: u64,
+    model: Option<String>,
+) -> Result<usize, String> {
+    let state = app.state::<AppState>();
+    let input = track_input(&state, track)?;
+    let audio = state.assets.load(&input.source.path)?;
+    let channels = audio.channels;
+    let sample_rate = audio.sample_rate;
+    let frames = audio.frames();
+    let samples: Vec<f32> = audio.samples.to_vec();
+    if frames == 0 || sample_rate <= 0.0 {
+        return Err("素材是空的".into());
+    }
+    let stems =
+        separate_with_model(model.as_deref(), &samples, channels, sample_rate, &|_| true)?;
+    place_stems(app, &input, &stems, channels, sample_rate, frames)
+}
+
 /// 走与界面/代理同一条命令管线（会广播事件、进撤销历史）。
 fn commands_run(app: &tauri::AppHandle, command: Command) -> Result<(), String> {
     // `run_agent` 署名 `Agent("mcp")`；这里也用代理署名——它是「AI 动作」，会点亮 AI 指示。
     let _ = crate::commands::run_agent(app, command);
     Ok(())
+}
+
+/// 粗粒度进度：渲染与母带都是一整段不可打断的调用，只能报里程碑。
+fn step(runtime: &AiRuntime, app: &tauri::AppHandle, progress: f32) {
+    runtime
+        .progress
+        .store((progress.clamp(0.0, 1.0) * 1000.0) as u32, Ordering::Relaxed);
+    let _ = app.emit(EVENT_AI, runtime.status());
+}
+
+/// **母带**：把整个工程离线渲染成混音 → 跑一遍母带链 → 落到**末尾的一条新音频轨**。
+///
+/// 为什么是「新轨道」而不是直接改文件：与降噪同一套理由——原混音不动，两条轨道可以 A/B
+/// 试听，而且这是一次**可撤销的事务**。要交付文件就用「导出」。
+///
+/// 母带链本身是纯 DSP（`crates/mastering`）：响度归一 + 真峰值限幅 + 立体声宽度。
+fn run_master_job(
+    app: &tauri::AppHandle,
+    runtime: &AiRuntime,
+    options: &ai_daw_mastering::MasterOptions,
+) -> Result<String, String> {
+    let state = app.state::<AppState>();
+
+    step(runtime, app, 0.05);
+    if runtime.cancel.load(Ordering::Relaxed) {
+        return Ok("已取消".into());
+    }
+
+    // 渲染整个工程。渲染本身不支持取消，所以这一段只能等它跑完。
+    let inputs = crate::commands::render_inputs(&state);
+    let project = inputs.project.clone();
+    let buffer = crate::commands::render_offline(inputs, MASTER_SAMPLE_RATE, MASTER_TAIL_SECONDS);
+    let channels = buffer.channels();
+    step(runtime, app, 0.6);
+    if runtime.cancel.load(Ordering::Relaxed) {
+        return Ok("已取消".into());
+    }
+
+    let (processed, report) =
+        ai_daw_mastering::master(buffer.data(), channels, MASTER_SAMPLE_RATE as f64, options)
+            .map_err(|e| e.to_string())?;
+    drop(buffer);
+    step(runtime, app, 0.85);
+    if runtime.cancel.load(Ordering::Relaxed) {
+        return Ok("已取消".into());
+    }
+
+    let frames = processed.len() / channels;
+    let seconds = frames as f64 / MASTER_SAMPLE_RATE as f64;
+    let path = ai_output_path(app, "master")?;
+    {
+        let mut out = ai_daw_engine::audio::AudioBuffer::silence(channels, frames);
+        out.data_mut().copy_from_slice(&processed);
+        ai_daw_engine::wav::write_wav(&path, &out, MASTER_SAMPLE_RATE).map_err(|e| e.to_string())?;
+    }
+    // 先把要用的数字与长度算出来，再交出 `processed` 的所有权。
+    let length = crate::commands::natural_length_beats(&project, 0.0, seconds);
+    state.assets.insert(
+        &path,
+        Arc::new(DecodedAudio {
+            samples: processed.into(),
+            channels,
+            sample_rate: MASTER_SAMPLE_RATE as f64,
+        }),
+    );
+
+    let _ = commands_run(
+        app,
+        Command::AddAudioTrack {
+            name: "母带".into(),
+            start: 0.0,
+            length,
+            source: AudioSource {
+                path,
+                offset_frames: 0,
+                frames: Some(frames as u64),
+            },
+            at: None,
+        },
+    );
+
+    Ok(format!(
+        "母带完成：{:.1} → {:.1} LUFS，真峰值 {:.1} dBTP{}",
+        report.input_lufs,
+        report.output_lufs,
+        report.output_true_peak_dbtp,
+        if report.reduced_db > 0.05 {
+            format!("，限幅 {:.1} dB", report.reduced_db)
+        } else {
+            String::new()
+        }
+    ))
 }
 
 /// AI 产出的文件路径：应用数据目录 `local-ai/<kind>-<epochms>.wav`。

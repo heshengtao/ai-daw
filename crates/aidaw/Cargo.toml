@@ -1,0 +1,18 @@
+[package]
+name = "aidaw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AI DAW 的 MCP 薄客户端：软件开着就转发命令，没开就先启动。"
+
+[[bin]]
+name = "aidaw"
+path = "src/main.rs"
+
+[dependencies]
+# 子命令解析。
+clap = { version = "4", features = ["derive"] }
+# MCP 的 JSON-RPC 正文与 `--json` 参数直通。
+serde_json = "1"
+# 只连本机回环 HTTP，不需要 TLS：关掉默认特性（rustls / gzip）以缩小依赖。
+ureq = { version = "3", default-features = false }

@@ -10,6 +10,7 @@ import {
   AdjustmentsHorizontalIcon,
   CircleStackIcon,
   MusicalNoteIcon,
+  PuzzlePieceIcon,
   SparklesIcon,
 } from "@heroicons/vue/24/outline";
 import Tooltip from "@/components/common/Tooltip.vue";
@@ -28,6 +29,7 @@ const ICONS: Record<PaneId, unknown> = {
   inspector: AdjustmentsHorizontalIcon,
   editor: MusicalNoteIcon,
   plugins: CircleStackIcon,
+  manager: PuzzlePieceIcon,
   ai: SparklesIcon,
 };
 

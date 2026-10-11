@@ -182,6 +182,27 @@ impl Engine {
         }
     }
 
+    /// 记下轨道**效果器**实例的二进制状态（不进撤销历史、不广播事件）。
+    ///
+    /// 与 [`Self::set_instrument_state`] 同理：外部效果器的旋钮与预设只活在实例里，重建播放器
+    /// 就会丢。宿主在重建前按**效果链下标** `index` 把状态抢救进工程，重建后由播放器
+    /// `load_state` 还原。同步写进 `saved` 基线，避免开关一次界面就把工程标成「未保存」。
+    pub fn set_effect_state(&mut self, track: TrackId, index: usize, state: Vec<u8>) {
+        let Some(t) = self.project.tracks.iter_mut().find(|t| t.id == track) else {
+            return;
+        };
+        let Some(fx) = t.effects.get_mut(index) else { return };
+        if fx.state == state {
+            return;
+        }
+        fx.state = state.clone();
+        if let Some(saved) = self.saved.tracks.iter_mut().find(|t| t.id == track) {
+            if let Some(fx) = saved.effects.get_mut(index) {
+                fx.state = state;
+            }
+        }
+    }
+
     /// 可撤销的命令次数。
     pub fn undo_depth(&self) -> usize {
         self.history.len()

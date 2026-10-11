@@ -3,8 +3,9 @@
  * 插件界面：把当前轨道音色的编辑区放进右侧面板（一个独立标签页）。
  *
  * - **内置合成器**：直接由它自报的参数表渲染控件——这就是内置音色的「界面」。
- * - **外部插件（VST3 / CLAP）**：同样渲染参数表。插件**自带的原生界面**是一个原生窗口，
- *   没法嵌进网页视图里，因此这里给参数面板；原生窗口接入后会在这里提供「打开界面」入口。
+ * - **外部插件（VST3 / CLAP）**：同样渲染参数表。插件**自带的原生界面**是原生窗口，没法嵌进
+ *   网页视图，所以每个卡片给一个「打开界面」入口：有原生界面就开原生窗口（对着正在发声的
+ *   实例），没有就开我们自己的参数窗口。
  *
  * 之所以占一个标签页（而不是塞进检查器）：复杂插件参数动辄几十上百个，
  * 侧边栏可以拖到很宽，正好用来慢慢调。
@@ -19,12 +20,20 @@ import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
 import { usePluginsStore } from "@/stores/plugins";
 import { useI18n } from "@/i18n";
-import { closePluginWindow, openPluginWindow, pluginWindowOpen } from "@/api/tauri";
+import { usePluginInterface } from "@/composables/usePluginInterface";
+import {
+  closeEffectPluginWindow,
+  closePluginWindow,
+  effectPluginWindowOpen,
+  openPluginWindow,
+  pluginWindowOpen,
+} from "@/api/tauri";
 
 const store = useProjectStore();
 const selection = useSelectionStore();
 const layout = useLayoutStore();
 const plugins = usePluginsStore();
+const pluginInterface = usePluginInterface();
 
 const track = computed(() => selection.track);
 const i18n = useI18n();
@@ -73,10 +82,65 @@ async function toggleEditorWindow(): Promise<void> {
   }
 }
 
+// ---- 效果器链的原生窗口 ----
+
+/** 每个效果器的原生窗口是否开着（按链内下标记）。只有自带界面的外部效果器才会有值。 */
+const effectOpen = ref<Record<number, boolean>>({});
+
+/** 这个效果器有没有**自带**的原生界面（内置效果器与无界面的外部效果器都走参数窗口）。 */
+function fxHasNative(fx: { plugin_id: string }): boolean {
+  const info = plugins.info(fx.plugin_id);
+  return !!info && !info.builtin && !!info.hasEditor;
+}
+
+async function refreshEffectOpen(fx: { plugin_id: string }, i: number): Promise<void> {
+  const t = track.value;
+  if (!t || !fxHasNative(fx)) {
+    effectOpen.value[i] = false;
+    return;
+  }
+  try {
+    effectOpen.value[i] = await effectPluginWindowOpen(t.id, fx.plugin_id);
+  } catch {
+    effectOpen.value[i] = false;
+  }
+}
+
+/** 打开 / 关闭某个效果器的界面（有原生界面就开原生，否则开参数窗口）。 */
+async function toggleEffectWindow(fx: { plugin_id: string }, i: number): Promise<void> {
+  const t = track.value;
+  if (!t) return;
+  try {
+    if (effectOpen.value[i]) {
+      await closeEffectPluginWindow(t.id, fx.plugin_id);
+      effectOpen.value[i] = false;
+      return;
+    }
+    await pluginInterface.openEffect(t.id, fx.plugin_id);
+    // 原生窗口是异步打开的，稍后再对齐状态；参数窗口没有可查的开合状态，保持 false 即可。
+    await refreshEffectOpen(fx, i);
+  } catch (err) {
+    layout.notify(`插件界面：${String(err)}`);
+  }
+}
+
+/** 对齐所有链上效果器的原生窗口状态（用 `track.effects` 的当前下标，与按钮一致）。 */
+async function refreshEffectOpens(): Promise<void> {
+  const t = track.value;
+  if (!t) return;
+  for (let i = 0; i < t.effects.length; i += 1) {
+    await refreshEffectOpen(t.effects[i], i);
+  }
+}
+
 onMounted(() => {
   void refreshEditorOpen();
-  // 用户可能自己关掉那个窗口，定期对齐一下状态。
-  statusTimer = window.setInterval(() => void refreshEditorOpen(), 1000);
+  void refreshEffectOpens();
+  // 用户可能自己关掉那些窗口，定期对齐一下状态。
+  statusTimer = window.setInterval(() => {
+    void refreshEditorOpen();
+    void refreshEffectOpens();
+  }, 1000);
 });
 onUnmounted(() => {
   if (statusTimer !== null) window.clearInterval(statusTimer);
@@ -221,7 +285,16 @@ async function commitEffectMany(index: number, params: Record<string, number>): 
       <section v-if="track.effects.length > 0" class="group">
         <div class="group-title">{{ i18n.t("inspector.fxChain") }}</div>
         <div v-for="(fx, i) in track.effects" :key="i" class="card">
-          <div class="plugin-name">{{ i + 1 }} · {{ plugins.name(fx.plugin_id) }}</div>
+          <div class="name-row">
+            <span class="plugin-name">{{ i + 1 }} · {{ plugins.name(fx.plugin_id) }}</span>
+            <button
+              class="editor-btn"
+              :class="{ on: effectOpen[i] }"
+              @click="toggleEffectWindow(fx, i)"
+            >
+              {{ effectOpen[i] ? i18n.t("editor.closeWindow") : i18n.t("editor.openWindow") }}
+            </button>
+          </div>
           <PresetBar
             :plugin-id="fx.plugin_id"
             :params="fxParams(fx)"

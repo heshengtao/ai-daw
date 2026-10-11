@@ -30,6 +30,8 @@ ai-daw-analysis = { path = "../crates/analysis" }
 ai-daw-asset = { path = "../crates/asset" }
 # 本地 AI（音频转 MIDI / 降噪）：内置 DSP，不依赖外部模型。
 ai-daw-local-ai = { path = "../crates/local-ai" }
+# 母带处理（响度归一 + 真峰值限幅 + 立体声宽度）：纯 DSP，不依赖模型。
+ai-daw-mastering = { path = "../crates/mastering" }
 # 内嵌 MCP 服务器（Streamable HTTP，只监听回环）。
 rmcp = { version = "3", features = [
     "server",
@@ -41,6 +43,22 @@ axum = "0.8"
 tokio = { version = "1", features = ["net"] }
 tokio-util = "0.7"
 schemars = "1"
+
+# 插件管理器：拉取开放注册表（HTTPS）、校验、解压归档。
+# `ureq` 已在依赖树里（`ort` 的传递依赖），这里启用 `native-tls` 复用系统 TLS，
+# 不引入 rustls 那棵树；`gzip` 让注册表（1.9 MB → 约 280 KB）传输快一个量级；
+# `socks-proxy` 让「手动代理」能填 `socks5://`（只跑 SOCKS 的隧道很常见）。
+# **注意**：`ureq` 的 TLS provider 默认是 Rustls，必须在代码里显式选 `NativeTls`（见 manager.rs）。
+ureq = { version = "3", default-features = false, features = ["native-tls", "gzip", "socks-proxy"] }
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1"
+
+# Windows：把安装目录写进**用户** PATH（`HKCU\Environment`），让 `aidaw` 随处可敲。
+# 该 crate 已在锁文件里（tauri 构建链的传递依赖），加为直接依赖不引入新包。
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

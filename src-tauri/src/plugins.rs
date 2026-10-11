@@ -6,17 +6,19 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use ai_daw_engine::model::Project;
-use ai_daw_engine::registry::{missing_plugin, PluginRegistry};
-use ai_daw_host_vst3::{load_catalog_plugin_with_editor, CatalogPlugin, EditorHandle};
+use ai_daw_engine::registry::{missing_plugin, PluginRegistry, PluginSlot};
+use ai_daw_host_vst3::{load_catalog_plugin_with_editor, CatalogPlugin};
+
+use crate::audio::EditorSlot;
 
 /// 依据扫描目录构建注册表：内置合成器 + 外部插件工厂 + 缺失占位。
 ///
 /// 外部插件工厂在加载失败时退回静音占位，绝不让一条坏轨拖垮整首曲子；
-/// 创建实例时顺带把「轨道 → 编辑器句柄」登记进 `editor_handles`，供界面打开原生窗口。
+/// 创建实例时顺带把「(轨道, 槽位) → 编辑器句柄」登记进 `editor_handles`，供界面打开原生窗口。
 pub fn build_registry(
     catalog: &[CatalogPlugin],
     project: &Project,
-    editor_handles: Arc<Mutex<HashMap<u64, EditorHandle>>>,
+    editor_handles: Arc<Mutex<HashMap<(u64, PluginSlot), EditorSlot>>>,
 ) -> PluginRegistry {
     let mut registry = PluginRegistry::with_builtins();
 
@@ -24,11 +26,15 @@ pub fn build_registry(
         let id = entry.id.clone();
         let fallback_id = id.clone();
         let entry = entry.clone();
+        let plugin_id = id.clone();
         let handles = Arc::clone(&editor_handles);
-        registry.register(&id, move |track| {
+        registry.register(&id, move |track, slot| {
             match load_catalog_plugin_with_editor(&entry) {
                 Ok((plugin, Some(handle))) => {
-                    handles.lock().unwrap().insert(track.0, handle);
+                    handles.lock().unwrap().insert(
+                        (track.0, slot),
+                        EditorSlot { handle, plugin_id: plugin_id.clone() },
+                    );
                     plugin
                 }
                 Ok((plugin, None)) => plugin,

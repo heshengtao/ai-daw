@@ -100,6 +100,15 @@ struct TrackArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SeparateArgs {
+    /// 轨道 id。
+    track: u64,
+    /// 分离模型：`htdemucs-ort-v1`（4 分轨，默认）或 `htdemucs-6s`（6 分轨）。
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct NameArgs {
     /// 轨道名。
     name: String,
@@ -216,17 +225,20 @@ struct HelpArgs {
 }
 
 /// 技能文档（编译期内嵌，无需资源打包）：`topic` → markdown。空 topic 是索引。
+///
+/// 目录结构 = 一个标准 Agent Skill：`skills/aidaw/SKILL.md`（入口，带 frontmatter）
+/// + `skills/aidaw/references/*.md`（9 个能力域，按需加载）。
 const SKILL_DOCS: &[(&str, &str)] = &[
-    ("", include_str!("../../skills/README.md")),
-    ("project", include_str!("../../skills/project.md")),
-    ("track", include_str!("../../skills/track.md")),
-    ("clip", include_str!("../../skills/clip.md")),
-    ("note", include_str!("../../skills/note.md")),
-    ("mix", include_str!("../../skills/mix.md")),
-    ("audio", include_str!("../../skills/audio.md")),
-    ("transport", include_str!("../../skills/transport.md")),
-    ("analysis", include_str!("../../skills/analysis.md")),
-    ("plugin", include_str!("../../skills/plugin.md")),
+    ("", include_str!("../../skills/aidaw/SKILL.md")),
+    ("project", include_str!("../../skills/aidaw/references/project.md")),
+    ("track", include_str!("../../skills/aidaw/references/track.md")),
+    ("clip", include_str!("../../skills/aidaw/references/clip.md")),
+    ("note", include_str!("../../skills/aidaw/references/note.md")),
+    ("mix", include_str!("../../skills/aidaw/references/mix.md")),
+    ("audio", include_str!("../../skills/aidaw/references/audio.md")),
+    ("transport", include_str!("../../skills/aidaw/references/transport.md")),
+    ("analysis", include_str!("../../skills/aidaw/references/analysis.md")),
+    ("plugin", include_str!("../../skills/aidaw/references/plugin.md")),
 ];
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -269,6 +281,25 @@ struct ExportArgs {
     path: String,
     /// 采样率（Hz）；省略则用 44100。
     sample_rate: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct MasterExportArgs {
+    /// 目标 WAV 文件的绝对路径。
+    path: String,
+    /// 目标积分响度（LUFS）；省略则用 -14。
+    target_lufs: Option<f64>,
+    /// 真峰值上限（dBTP）；省略则用 -1。
+    ceiling_dbtp: Option<f64>,
+    /// 立体声宽度（0–2，1 = 原样）；省略则用 1。
+    stereo_width: Option<f32>,
+}
+
+/// 母带导出的返回体：写到哪 + 前后观测。
+#[derive(serde::Serialize)]
+struct MasterExport {
+    path: String,
+    report: ai_daw_mastering::MasterReport,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -573,6 +604,47 @@ impl DawMcpServer {
         .map_err(|e| fail(e.to_string()))?
     }
 
+    #[tool(description = "对整个工程做一次母带处理（响度归一 + 真峰值限幅 + 立体声宽度），把结果写成 WAV 文件；返回处理前后的响度与真峰值，以及写入路径。")]
+    async fn master_project(&self, Parameters(args): Parameters<MasterExportArgs>) -> Result<String, ErrorData> {
+        let path = args.path.clone();
+        let options = ai_daw_mastering::MasterOptions {
+            target_lufs: args.target_lufs.unwrap_or(ai_daw_mastering::DEFAULT_TARGET_LUFS),
+            ceiling_dbtp: args.ceiling_dbtp.unwrap_or(ai_daw_mastering::DEFAULT_CEILING_DBTP),
+            stereo_width: args.stereo_width.unwrap_or(ai_daw_mastering::DEFAULT_WIDTH),
+        };
+        let sample_rate = FALLBACK_SAMPLE_RATE;
+        let inputs = {
+            let state = self.state();
+            commands::render_inputs(&state)
+        };
+        let (report, path) = tauri::async_runtime::spawn_blocking(move || {
+            let buffer = commands::render_offline(inputs, sample_rate, 0.5);
+            let channels = buffer.channels();
+            let (processed, report) =
+                ai_daw_mastering::master(buffer.data(), channels, sample_rate as f64, &options)
+                    .map_err(|e| fail(e.to_string()))?;
+            let mut out = ai_daw_engine::audio::AudioBuffer::silence(channels, processed.len() / channels);
+            out.data_mut().copy_from_slice(&processed);
+            ai_daw_engine::wav::write_wav(&path, &out, sample_rate).map_err(|e| fail(e.to_string()))?;
+            Ok::<_, ErrorData>((report, path))
+        })
+        .await
+        .map_err(|e| fail(e.to_string()))??;
+        json(&MasterExport { path, report })
+    }
+
+    #[tool(description = "音源分离：把指定轨道的第一段音频拆成多条分轨，插到源轨道下面（一次事务，可整体撤销）。`model` 缺省为 4 分轨的 `htdemucs-ort-v1`；`htdemucs-6s` 出 6 分轨（+吉他/钢琴）。需要已安装对应模型（在「管理器 → 可下载」下载）。")]
+    async fn separate_stems(&self, Parameters(args): Parameters<SeparateArgs>) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        let count = tauri::async_runtime::spawn_blocking(move || {
+            crate::ai::separate_track(&app, args.track, args.model)
+        })
+        .await
+        .map_err(|e| fail(e.to_string()))?
+        .map_err(fail)?;
+        Ok(format!("已生成 {count} 条分轨（HTDemucs）"))
+    }
+
     #[tool(description = "把本机的一个音频文件导入成音频片段（wav/flac/mp3/ogg/m4a）；返回新片段 id。")]
     async fn import_audio(&self, Parameters(args): Parameters<ImportAudioArgs>) -> Result<String, ErrorData> {
         let assets = { Arc::clone(&self.state().assets) };
@@ -747,12 +819,23 @@ impl McpRuntime {
         }
     }
 
+    /// 运行时**发现文件**：应用配置目录下的 `mcp-url`，内容是**实际**监听地址。
+    ///
+    /// 与配置 `mcp.json` 分开：这是运行时状态、不进版本控制。端口被占用而退回临时端口时，
+    /// 只有这里能告诉外部 `aidaw` CLI 真正的地址。
+    fn url_file(&self) -> Option<PathBuf> {
+        self.path.as_ref().and_then(|p| p.parent()).map(|dir| dir.join("mcp-url"))
+    }
+
     /// 按已存配置启动（启动时调用；未启用则什么都不做）。
     pub fn autostart(&self) {
         if self.inner.lock().unwrap().config.enabled {
             if let Err(err) = self.start() {
                 eprintln!("[mcp] 启动失败：{err}");
             }
+        } else if let Some(path) = self.url_file() {
+            // 未启用时清掉上一次残留的发现文件，免得 CLI 以为软件还开着。
+            let _ = std::fs::remove_file(path);
         }
     }
 
@@ -827,13 +910,25 @@ impl McpRuntime {
         });
         eprintln!("[mcp] 已启动：http://{addr}/mcp（仅本机）");
         self.inner.lock().unwrap().running = Some(Running { addr, cancel });
+        // 把**实际**地址写给外部 CLI（薄客户端）——端口退回临时端口时也只有这里知道。
+        if let Some(path) = self.url_file() {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if let Err(err) = std::fs::write(&path, format!("http://{addr}/mcp")) {
+                eprintln!("[mcp] 写入发现文件失败：{err}");
+            }
+        }
         Ok(())
     }
 
-    /// 停服务器：取消令牌会让 axum 优雅退出。
+    /// 停服务器：取消令牌会让 axum 优雅退出；同时清掉发现文件。
     fn stop(&self) {
         if let Some(running) = self.inner.lock().unwrap().running.take() {
             running.cancel.cancel();
+        }
+        if let Some(path) = self.url_file() {
+            let _ = std::fs::remove_file(path);
         }
     }
 }
@@ -913,6 +1008,8 @@ mod tests {
             "redo",
             "analyze_project",
             "export_wav",
+            "master_project",
+            "separate_stems",
             "import_audio",
             "audio_waveform",
             "apply_preset",

@@ -8,5 +8,6 @@ dist/
 src-tauri/target/
 src-tauri/gen/
 
-# 本地 AI 的 ONNX 权重（不进仓库，见 tools/fetch-models.sh）
-models/
+# 本地 AI 的 ONNX 权重（不进仓库，见 tools/fetch-models.sh）。
+# 只忽略**仓库根**的 `models/`——否则会连 `crates/local-ai/src/models/`（源码目录）一起忽略。
+/models/

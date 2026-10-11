@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
+    "build:aidaw": "bash tools/build-aidaw.sh",
     "preview": "vite preview",
     "tauri": "tauri"
   },

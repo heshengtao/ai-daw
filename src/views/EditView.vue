@@ -50,8 +50,8 @@ const bindings = useParamBindingsStore();
 const browser = useParamBrowserStore();
 const router = useRouter();
 
-const LOW = 36; // C2
-const HIGH = 84; // C6
+const LOW = 21; // A0 —— 88 键钢琴最低音
+const HIGH = 108; // C8 —— 88 键钢琴最高音
 const ROW_H = 14;
 /** 新音符的最短时长（拍）：低于它视为「原地点击」。 */
 const MIN_CREATE_BEATS = 1 / 32;
@@ -707,8 +707,8 @@ watch(
 /**
  * 纵向滚到「这个片段的音符所在的地方」。
  *
- * 卷帘的可视音域是 C2..C6（49 行 ≈ 686px），而低音片段可能在第 500px 处——
- * 不做这件事，进低音片段的卷帘会是一片空白，用户以为音符丢了。
+ * 卷帘铺满整个钢琴音域 A0..C8（88 行 ≈ 1232px），可视窗远小于内容——
+ * 不做这件事，进任意片段的卷帘都可能停在空白处，用户以为音符丢了。
  */
 function revealNotes(): void {
   const el = scroller.value;

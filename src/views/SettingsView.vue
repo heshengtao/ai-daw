@@ -21,18 +21,37 @@ import NumberField from "@/components/common/NumberField.vue";
 import { usePluginsStore } from "@/stores/plugins";
 import { useI18n } from "@/i18n";
 import { lastWorkspace } from "@/router";
-import { mcpStatus, setMcpConfig } from "@/api/tauri";
-import type { McpStatus } from "@/api/types";
+import {
+  cliStatus,
+  installCli,
+  managerNetwork,
+  managerProbeProxy,
+  managerProxyStatus,
+  managerSetNetwork,
+  mcpStatus,
+  setMcpConfig,
+  uninstallCli,
+} from "@/api/tauri";
+import type { CliStatus, McpStatus, ProxyMode } from "@/api/types";
 
-type Section = "general" | "appearance" | "layout" | "plugins" | "mcp" | "about";
+type Section = "general" | "appearance" | "layout" | "plugins" | "network" | "mcp" | "cli" | "about";
 
 const SECTIONS: { id: Section; labelKey: string; captionKey: string }[] = [
   { id: "general", labelKey: "settings.section.general", captionKey: "settings.section.general.caption" },
   { id: "appearance", labelKey: "settings.section.appearance", captionKey: "settings.section.appearance.caption" },
   { id: "layout", labelKey: "settings.section.layout", captionKey: "settings.section.layout.caption" },
   { id: "plugins", labelKey: "settings.section.plugins", captionKey: "settings.section.plugins.caption" },
+  { id: "network", labelKey: "settings.section.network", captionKey: "settings.section.network.caption" },
   { id: "mcp", labelKey: "settings.section.mcp", captionKey: "settings.section.mcp.caption" },
+  { id: "cli", labelKey: "settings.section.cli", captionKey: "settings.section.cli.caption" },
   { id: "about", labelKey: "settings.section.about", captionKey: "settings.section.about.caption" },
+];
+
+/** 代理三种取用方式（顺序即界面顺序）。 */
+const PROXY_MODES: { id: ProxyMode; labelKey: string }[] = [
+  { id: "direct", labelKey: "settings.proxy.modeDirect" },
+  { id: "system", labelKey: "settings.proxy.modeSystem" },
+  { id: "manual", labelKey: "settings.proxy.modeManual" },
 ];
 
 const APP_VERSION = "0.1.0";
@@ -54,6 +73,11 @@ const projectName = computed(() => {
 });
 
 function back(): void {
+  void router.push(lastWorkspace.value);
+}
+/** 打开右侧栏的「插件管理器」面板并回到工作区（设置页里只是入口）。 */
+function openManager(): void {
+  layout.openTab("manager");
   void router.push(lastWorkspace.value);
 }
 function onTheme(t: Theme): void {
@@ -112,17 +136,185 @@ function clampPort(raw: string): number {
   return Math.min(Math.max(n, 0), 65535);
 }
 
-async function copyEndpoint(): Promise<void> {
-  const url = mcp.value?.url;
-  if (!url) return;
+// ---- aidaw 命令行工具 ----
+/** 安装状态；加载失败（预览 / 后端不可用）时保持 null。 */
+const cli = ref<CliStatus | null>(null);
+const cliBusy = ref(false);
+/** 上一次操作的失败原因，供界面提示。 */
+const cliError = ref("");
+
+async function loadCli(): Promise<void> {
   try {
-    await navigator.clipboard.writeText(url);
+    cli.value = await cliStatus();
   } catch {
-    // 剪贴板不可用（无权限 / 非安全上下文）时静默：地址就在旁边，用户可以手抄。
+    cli.value = null;
   }
 }
 
-onMounted(loadMcp);
+/** 挂载 / 卸载共用：忙标志 + 错误 + 成功 toast。 */
+async function runCli(action: () => Promise<CliStatus>, toastKey: string): Promise<void> {
+  cliBusy.value = true;
+  cliError.value = "";
+  try {
+    cli.value = await action();
+    layout.notify(i18n.t(toastKey));
+  } catch (err) {
+    cliError.value = String(err);
+  } finally {
+    cliBusy.value = false;
+  }
+}
+
+/** 状态文案（`missing` → `settings.cli.state.missing`）。 */
+const cliStateLabel = computed(() =>
+  cli.value ? i18n.t(`settings.cli.state.${cli.value.state}`) : "—",
+);
+
+/** 状态说明：错误 > 环境原因 > 重名冲突 > 一般提示。 */
+const cliMessage = computed(() => {
+  if (cliError.value) return cliError.value;
+  const status = cli.value;
+  if (!status) return i18n.t("settings.cli.statusHint");
+  if (status.hint) return i18n.t(`settings.cli.hint.${status.hint}`);
+  if (status.state === "conflict") return i18n.t("settings.cli.hint.conflict");
+  return i18n.t("settings.cli.statusHint");
+});
+
+/** 命令现在指向哪里（或包内位置）。 */
+const cliLocation = computed(() => {
+  const status = cli.value;
+  if (!status) return "—";
+  if (status.state === "conflict") return status.conflict ?? "—";
+  return status.target ?? status.bundled ?? i18n.t("settings.cli.notBundled");
+});
+
+/** 开关状态：已挂载（含 Linux 系统包）为「开」。 */
+const cliOn = computed(() => {
+  const state = cli.value?.state;
+  return state === "installed" || state === "system";
+});
+
+/** 能操作才给开关；「装不了」的两种状态是灰的。 */
+const cliToggleable = computed(() => {
+  const state = cli.value?.state;
+  return state === "missing" || state === "conflict" || state === "installed";
+});
+
+/** 开关是**唯一**入口——不做任何自动挂载。 */
+function onToggleCli(): void {
+  const turningOn = !cliOn.value;
+  void runCli(
+    turningOn ? installCli : uninstallCli,
+    turningOn ? "settings.cli.mountedToast" : "settings.cli.unmountedToast",
+  );
+}
+
+/** 复制一段文本；剪贴板不可用（无权限 / 非安全上下文）时静默——内容就在旁边。 */
+async function copy(text: string | null | undefined): Promise<void> {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // 用户可以手抄。
+  }
+}
+
+// ---- 网络：代理 / 镜像 / 地址重写 ----
+/** 注册表镜像：多行文本，一行一个地址（按顺序在官方源之前尝试）。 */
+const storeMirrors = ref("");
+/** 下载地址重写前缀（只对 GitHub 地址生效）；可用 `{url}` 占位。 */
+const storePrefix = ref("");
+/** 模型权重镜像 / 前置代理：多行文本，一行一个前缀。 */
+const storeModels = ref("");
+/** 代理取用方式；默认跟随系统。 */
+const proxyMode = ref<ProxyMode>("system");
+/** 手动模式的代理地址。 */
+const proxyUrl = ref("");
+/** 当前解析出的代理来源（打开页面时由后端解析，**不联网**）。 */
+const proxySource = ref("");
+/** 「测试」按钮的结果（会真的发一次请求）。 */
+const proxyProbe = ref("");
+const proxyTesting = ref(false);
+const storeSaving = ref(false);
+
+async function refreshProxyStatus(): Promise<void> {
+  try {
+    const status = await managerProxyStatus();
+    proxySource.value = status.source;
+  } catch {
+    proxySource.value = "";
+  }
+}
+
+async function loadStoreNetwork(): Promise<void> {
+  try {
+    const net = await managerNetwork();
+    storeMirrors.value = net.registry_mirrors.join("\n");
+    storePrefix.value = net.download_prefix;
+    storeModels.value = net.model_mirrors.join("\n");
+    proxyMode.value = net.proxy_mode;
+    proxyUrl.value = net.proxy_url;
+  } catch {
+    // 预览 / 后端不可用：保持空白（等于直连）。
+  }
+  await refreshProxyStatus();
+}
+
+async function saveStoreNetwork(): Promise<void> {
+  storeSaving.value = true;
+  try {
+    const mirrors = storeMirrors.value
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const modelMirrors = storeModels.value
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const net = await managerSetNetwork(
+      mirrors,
+      storePrefix.value.trim(),
+      proxyMode.value,
+      proxyUrl.value.trim(),
+      modelMirrors,
+    );
+    storeMirrors.value = net.registry_mirrors.join("\n");
+    storePrefix.value = net.download_prefix;
+    storeModels.value = net.model_mirrors.join("\n");
+    proxyMode.value = net.proxy_mode;
+    proxyUrl.value = net.proxy_url;
+    proxyProbe.value = "";
+    await refreshProxyStatus();
+    layout.notify(i18n.t("settings.store.saved"));
+  } catch (err) {
+    layout.notify(i18n.t("settings.store.saveFailed", { error: String(err) }));
+  } finally {
+    storeSaving.value = false;
+  }
+}
+
+/** 测的是**输入框里**的设置（非保存后的），且不会写盘。 */
+async function testProxy(): Promise<void> {
+  proxyTesting.value = true;
+  proxyProbe.value = "";
+  try {
+    const probe = await managerProbeProxy(proxyMode.value, proxyUrl.value.trim());
+    const where = probe.proxy ?? i18n.t("settings.proxy.direct");
+    proxyProbe.value = probe.ok
+      ? i18n.t("settings.proxy.probeOk", { proxy: where, detail: probe.detail })
+      : i18n.t("settings.proxy.probeFail", { proxy: where, detail: probe.detail });
+  } catch (err) {
+    proxyProbe.value = String(err);
+  } finally {
+    proxyTesting.value = false;
+  }
+}
+
+onMounted(() => {
+  void loadMcp();
+  void loadCli();
+  void loadStoreNetwork();
+});
 </script>
 
 <template>
@@ -394,6 +586,139 @@ onMounted(loadMcp);
               </div>
             </div>
           </div>
+
+          <div class="group">
+            <div class="group-title">{{ i18n.t("settings.plugins.managerGroup") }}</div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.plugins.manager") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.plugins.managerHint") }}</span>
+                </div>
+                <button class="scan-btn" @click="openManager">
+                  {{ i18n.t("settings.plugins.managerOpen") }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 网络设置已独立成一节，这里给个指路牌（免得按老位置找不到）。 -->
+          <div class="group">
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.plugins.networkMoved") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.plugins.networkMovedHint") }}</span>
+                </div>
+                <button class="scan-btn" @click="active = 'network'">
+                  {{ i18n.t("settings.section.network") }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- 网络：代理 / 镜像 / 地址重写 -->
+        <template v-else-if="active === 'network'">
+          <!-- 代理：插件与模型下载都走它 -->
+          <div class="group">
+            <div class="group-title">{{ i18n.t("settings.proxy.group") }}</div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.proxy.mode") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.proxy.modeHint") }}</span>
+                </div>
+                <div class="m3-seg" role="group" :aria-label="i18n.t('settings.proxy.mode')">
+                  <button
+                    v-for="m in PROXY_MODES"
+                    :key="m.id"
+                    class="m3-seg-btn"
+                    :class="{ on: proxyMode === m.id }"
+                    :aria-pressed="proxyMode === m.id"
+                    @click="proxyMode = m.id"
+                  >
+                    {{ i18n.t(m.labelKey) }}
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="proxyMode === 'manual'" class="col-row">
+                <span class="row-title">{{ i18n.t("settings.proxy.url") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.proxy.urlHint") }}</span>
+                <input
+                  v-model="proxyUrl"
+                  class="net-input"
+                  type="text"
+                  spellcheck="false"
+                  :placeholder="i18n.t('settings.proxy.urlPlaceholder')"
+                />
+              </div>
+
+              <!-- 当前会走哪个代理：打开页面就显示（后端只解析、不联网） -->
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.proxy.current") }}</span>
+                  <span class="row-sub">{{ proxySource || i18n.t("settings.proxy.currentUnknown") }}</span>
+                </div>
+                <button class="scan-btn" :disabled="proxyTesting || storeSaving" @click="testProxy">
+                  {{ proxyTesting ? i18n.t("settings.proxy.testing") : i18n.t("settings.proxy.test") }}
+                </button>
+              </div>
+
+              <div v-if="proxyProbe" class="col-row">
+                <span class="row-sub">{{ proxyProbe }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 镜像 / 地址重写：解决国内拉不动注册表与插件二进制的问题。 -->
+          <div class="group">
+            <div class="group-title">{{ i18n.t("settings.store.group") }}</div>
+            <div class="card">
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.store.mirrors") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.store.mirrorsHint") }}</span>
+                <textarea
+                  v-model="storeMirrors"
+                  class="net-input"
+                  rows="2"
+                  spellcheck="false"
+                  :placeholder="i18n.t('settings.store.mirrorsPlaceholder')"
+                />
+              </div>
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.store.prefix") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.store.prefixHint") }}</span>
+                <input
+                  v-model="storePrefix"
+                  class="net-input"
+                  type="text"
+                  spellcheck="false"
+                  :placeholder="i18n.t('settings.store.prefixPlaceholder')"
+                />
+              </div>
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.store.models") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.store.modelsHint") }}</span>
+                <textarea
+                  v-model="storeModels"
+                  class="net-input"
+                  rows="2"
+                  spellcheck="false"
+                  :placeholder="i18n.t('settings.store.modelsPlaceholder')"
+                />
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-sub">{{ i18n.t("settings.store.saveHint") }}</span>
+                </div>
+                <button class="scan-btn" :disabled="storeSaving" @click="saveStoreNetwork">
+                  {{ storeSaving ? i18n.t("settings.store.saving") : i18n.t("settings.store.save") }}
+                </button>
+              </div>
+            </div>
+          </div>
         </template>
 
         <!-- AI / MCP -->
@@ -453,7 +778,7 @@ onMounted(loadMcp);
                   <span class="row-title">{{ i18n.t("settings.mcp.endpoint") }}</span>
                   <span class="row-sub">{{ mcp?.url ?? i18n.t("settings.mcp.notListening") }}</span>
                 </div>
-                <button class="scan-btn" :disabled="!mcp?.url" @click="copyEndpoint">
+                <button class="scan-btn" :disabled="!mcp?.url" @click="copy(mcp?.url)">
                   {{ i18n.t("settings.mcp.copy") }}
                 </button>
               </div>
@@ -462,6 +787,61 @@ onMounted(loadMcp);
                   <span class="row-title">{{ i18n.t("settings.mcp.security") }}</span>
                   <span class="row-sub">{{ i18n.t("settings.mcp.securityHint") }}</span>
                 </div>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- 命令行工具（aidaw） -->
+        <template v-else-if="active === 'cli'">
+          <div class="group">
+            <div class="group-title">{{ i18n.t("settings.cli.group") }}</div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.cli.mount") }}</span>
+                  <span class="row-sub">{{ cliMessage }}</span>
+                </div>
+                <button
+                  class="m3-switch"
+                  :class="{ on: cliOn }"
+                  role="switch"
+                  :aria-checked="cliOn"
+                  :aria-label="i18n.t('settings.cli.mount')"
+                  :disabled="cliBusy || !cliToggleable"
+                  @click="onToggleCli"
+                />
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.cli.status") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.cli.mountHint") }}</span>
+                </div>
+                <span class="row-value">{{ cliBusy ? i18n.t("settings.cli.busy") : cliStateLabel }}</span>
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.cli.command") }}</span>
+                  <span class="row-sub">{{ cliLocation }}</span>
+                </div>
+              </div>
+              <div v-if="cli?.full_path && !cliOn" class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.cli.fullPath") }}</span>
+                  <span class="row-sub">{{ cli.full_path }}</span>
+                </div>
+                <button class="scan-btn" @click="copy(cli?.full_path)">
+                  {{ i18n.t("settings.cli.copy") }}
+                </button>
+              </div>
+              <div v-if="cli?.manual_command" class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.cli.manual") }}</span>
+                  <span class="row-sub">{{ cli.manual_command }}</span>
+                </div>
+                <button class="scan-btn" @click="copy(cli?.manual_command)">
+                  {{ i18n.t("settings.cli.copy") }}
+                </button>
               </div>
             </div>
           </div>
@@ -676,6 +1056,34 @@ onMounted(loadMcp);
   flex-direction: column;
   gap: 3px;
   min-width: 0;
+}
+/* 竖向排布的设置行（网络输入那种：标题在上、控件占满一整行）。 */
+.col-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 0;
+}
+.col-row + .col-row,
+.col-row + .row {
+  border-top: 1px solid rgb(var(--md-outline-variant) / 0.3);
+}
+.net-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+  border-radius: 10px;
+  background-color: var(--app-card);
+  color: rgb(var(--md-on-surface));
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.net-input:focus {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 0;
 }
 .row-title {
   font-size: 14px;

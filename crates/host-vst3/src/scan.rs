@@ -128,14 +128,30 @@ pub fn load_clap_plugin(
 /// 会遍历标准安装目录并**实例化**每个插件来读元数据，可能耗时数秒——**不可**在音频线程调用。
 /// 单个插件出错会被跳过，不影响整体结果。
 pub fn scan() -> Vec<ScannedPlugin> {
-    let mut out = scan_vst3();
-    out.extend(scan_clap());
+    scan_with(&[], &[])
+}
+
+/// 同 [`scan`]，但额外扫描给定的目录。
+///
+/// 宿主用它把「插件管理器安装/导入的库」也纳入扫描：那些插件由应用自己管在应用数据目录里，
+/// 不在系统标准目录下，所以必须显式传进来。
+pub fn scan_with(vst3_extra: &[PathBuf], clap_extra: &[PathBuf]) -> Vec<ScannedPlugin> {
+    let mut out = scan_vst3(vst3_extra);
+    out.extend(scan_clap(clap_extra));
     out
 }
 
 /// 扫描并产出可持久化的目录。
 pub fn scan_catalog() -> Vec<CatalogPlugin> {
-    scan().iter().map(ScannedPlugin::catalog).collect()
+    scan_catalog_with(&[], &[])
+}
+
+/// 同 [`scan_catalog`]，但额外扫描给定的目录（宿主传入插件管理器的托管目录）。
+pub fn scan_catalog_with(vst3_extra: &[PathBuf], clap_extra: &[PathBuf]) -> Vec<CatalogPlugin> {
+    scan_with(vst3_extra, clap_extra)
+        .iter()
+        .map(ScannedPlugin::catalog)
+        .collect()
 }
 
 /// 按目录条目加载插件（已适配成引擎的 [`Plugin`]）。
@@ -170,8 +186,12 @@ pub fn load_catalog_plugin_with_editor(
 // VST3
 // ---------------------------------------------------------------------------
 
-fn scan_vst3() -> Vec<ScannedPlugin> {
-    let Ok(mut host) = Vst3Host::builder().scan_default_paths().build() else {
+fn scan_vst3(extra: &[PathBuf]) -> Vec<ScannedPlugin> {
+    let mut builder = Vst3Host::builder().scan_default_paths();
+    for dir in extra {
+        builder = builder.add_scan_path(dir);
+    }
+    let Ok(mut host) = builder.build() else {
         return Vec::new();
     };
     let Ok(infos) = host.discover_plugins() else {
@@ -223,9 +243,15 @@ fn clap_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn scan_clap() -> Vec<ScannedPlugin> {
+fn scan_clap(extra: &[PathBuf]) -> Vec<ScannedPlugin> {
     let mut out = Vec::new();
-    for dir in clap_dirs() {
+    let mut dirs = clap_dirs();
+    for dir in extra {
+        if !dirs.contains(dir) {
+            dirs.push(dir.clone());
+        }
+    }
+    for dir in dirs {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
             let path = entry.path();

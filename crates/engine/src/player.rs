@@ -8,7 +8,7 @@ use ai_daw_plugin_api::{
 };
 
 use crate::model::MixerChannel;
-use crate::registry::PluginRegistry;
+use crate::registry::{PluginRegistry, PluginSlot};
 use crate::schedule::{
     LaneTarget, ScheduledAudioClip, ScheduledEvents, ScheduledLane, ScheduledMidi, ScheduledSend,
 };
@@ -363,7 +363,7 @@ impl Player {
                     }
                     // id 不匹配的旧实例在**控制侧**释放，不带进新播放器。
                 }
-                registry.create(&instance.plugin_id, st.track_id)
+                registry.create(&instance.plugin_id, st.track_id, PluginSlot::Instrument)
             });
             // 不支持 per-note 音量的插件：把音量折进力度，保住旧听感。
             let mut events = st.events.clone();
@@ -405,7 +405,7 @@ impl Player {
                 let mut fx_plugin = if reuse_chain {
                     carried_chain[index].take().expect("复用链长度已校验")
                 } else {
-                    match registry.create(&fx.plugin_id, st.track_id) {
+                    match registry.create(&fx.plugin_id, st.track_id, PluginSlot::Effect(index)) {
                         Some(plugin) => plugin,
                         // 装不上（注册表里没有）：占位，别丢——见 [`Bypass`] 的说明。
                         None => {
@@ -1150,7 +1150,7 @@ mod tests {
     #[test]
     fn effect_chain_processes_the_instrument_output() {
         let mut registry = PluginRegistry::with_builtins();
-        registry.register("test.half", |_track| Box::new(HalfGain));
+        registry.register("test.half", |_track, _slot| Box::new(HalfGain));
 
         let peak_with = |effects: Vec<PluginInstance>| {
             let mut p = project();
@@ -1180,7 +1180,7 @@ mod tests {
     #[test]
     fn instrument_state_is_restored_when_the_instance_is_created() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
 
         let mut p = project();
         p.tracks[0].instrument = Some(PluginInstance {
@@ -1207,7 +1207,7 @@ mod tests {
     #[test]
     fn carried_instrument_is_reused_instead_of_recreated() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
 
         // 旧实例带着**只存在于实例里**的状态（level = 0.8）；工程并没有记它。
         let mut carried = ReusableInstances::default();
@@ -1243,8 +1243,8 @@ mod tests {
     #[test]
     fn carried_instrument_is_dropped_when_the_plugin_id_changed() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
-        registry.register("test.other", |_track| Box::new(StateTone { level: 0.25 }));
+        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.other", |_track, _slot| Box::new(StateTone { level: 0.25 }));
 
         let mut carried = ReusableInstances::default();
         carried.instruments.insert(TrackId(1), Box::new(StateTone { level: 0.8 }));
@@ -1279,7 +1279,7 @@ mod tests {
     #[test]
     fn yield_instances_hands_the_live_instances_back() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.5 }));
+        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.5 }));
 
         let mut p = project();
         p.tracks[0].instrument = Some(PluginInstance {
@@ -1332,8 +1332,8 @@ mod tests {
     fn a_missing_effect_keeps_the_following_effects_index_stable() {
         // 声明链：[装不上的效果器, test.param.effect]——`fx1:level` 必须落到**第二个**（有效的）那个。
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
-        registry.register("test.param.effect", |_track| {
+        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.param.effect", |_track, _slot| {
             Box::new(ParamLevel { level: 1.0, kind: PluginKind::Effect })
         });
         // 刻意不注册 "test.missing.effect"。
@@ -1502,7 +1502,7 @@ mod tests {
         }
 
         let mut registry = PluginRegistry::new();
-        registry.register("test.drone", |_track| Box::new(Drone));
+        registry.register("test.drone", |_track, _slot| Box::new(Drone));
         let mut p = project();
         p.tracks[0].instrument =
             Some(PluginInstance { plugin_id: "test.drone".into(), params: Default::default(), state: vec![] });
@@ -1822,7 +1822,7 @@ mod tests {
     #[test]
     fn a_send_copies_the_post_fader_signal_into_the_bus() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
 
         let mut p = Project::new("p");
         p.transport.tempo = 120.0;
@@ -1852,7 +1852,7 @@ mod tests {
     #[test]
     fn gain_automation_overrides_the_track_fader() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
 
         let mut p = Project::new("p");
         p.transport.tempo = 120.0;
@@ -1879,7 +1879,7 @@ mod tests {
     #[test]
     fn set_automation_applies_live_without_a_rebuild() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
 
         let mut p = Project::new("p");
         p.transport.tempo = 120.0;
@@ -1913,7 +1913,7 @@ mod tests {
     #[test]
     fn instrument_param_automation_overrides_the_static_value() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.param.instrument", |_track| {
+        registry.register("test.param.instrument", |_track, _slot| {
             Box::new(ParamLevel { level: 0.0, kind: PluginKind::Instrument })
         });
 
@@ -1950,8 +1950,8 @@ mod tests {
     #[test]
     fn effect_param_automation_overrides_the_static_value() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
-        registry.register("test.param.effect", |_track| {
+        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.param.effect", |_track, _slot| {
             Box::new(ParamLevel { level: 1.0, kind: PluginKind::Effect })
         });
 
@@ -1984,7 +1984,7 @@ mod tests {
     #[test]
     fn removing_a_plugin_param_lane_restores_the_static_value() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.param.instrument", |_track| {
+        registry.register("test.param.instrument", |_track, _slot| {
             Box::new(ParamLevel { level: 0.0, kind: PluginKind::Instrument })
         });
 
@@ -2043,8 +2043,8 @@ mod tests {
     #[test]
     fn removing_an_effect_param_lane_restores_the_static_value() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track| Box::new(StateTone { level: 0.0 }));
-        registry.register("test.param.effect", |_track| {
+        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.param.effect", |_track, _slot| {
             Box::new(ParamLevel { level: 1.0, kind: PluginKind::Effect })
         });
 

@@ -19,7 +19,7 @@ pub use dispatch::{
 pub use editor::{EditorHandle, PluginEditorWindow};
 pub use error::HostError;
 pub use scan::{
-    load_catalog_plugin, load_catalog_plugin_with_editor, scan, scan_catalog, CatalogPlugin,
-    ScannedPlugin,
+    load_catalog_plugin, load_catalog_plugin_with_editor, scan, scan_catalog, scan_catalog_with,
+    scan_with, CatalogPlugin, ScannedPlugin,
 };
 pub use vst3::{Vst3EditorHandle, Vst3HostedPlugin};

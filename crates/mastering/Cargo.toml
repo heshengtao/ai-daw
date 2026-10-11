@@ -1,0 +1,10 @@
+[package]
+name = "ai-daw-mastering"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# 响度观测（LUFS / 真峰值）复用既有分析层，不重复实现 EBU R128。
+ai-daw-analysis = { path = "../analysis" }
+serde = { version = "1", features = ["derive"] }

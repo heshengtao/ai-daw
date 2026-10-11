@@ -39,12 +39,38 @@ pub enum AssetError {
     Decode(String),
 }
 
+/// 解码进度：已解出的帧数，以及（容器头能预知时的）总帧数。
+///
+/// `total_frames` 来自轨道头里的帧数——wav / flac / m4a / 带 Xing 头的 mp3 都能预知，于是界面
+/// 可以画**确定进度**；预知不了时给 `None`，界面改画不确定态。
+#[derive(Debug, Clone, Copy)]
+pub struct DecodeProgress {
+    /// 已解出的帧数（每声道采样数）。
+    pub frames: u64,
+    /// 总帧数；`None` = 容器头没给，进度不可预知。
+    pub total_frames: Option<u64>,
+}
+
+/// 进度回调的最小间隔（按墙钟节流）：无论格式与文件长短，都不会刷出成百上千条事件。
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// 预分配采样的上限，防止头部帧数离谱的文件一次性申请巨量内存（超过就让它自然增长）。
+const MAX_PREALLOC_SAMPLES: u64 = 64 << 20;
+
 /// 解码一个音频文件为交错 f32 素材。
 ///
 /// - 声道数收敛到 1 或 2：多声道（5.1 等）取前两个声道当 L/R（v1 不做真正的下混）。
 /// - 采样率**保持素材自身的**：调用方按需换算，绝不在这里重采样。
 /// - 单个坏帧会被跳过（`DecodeError`）；只有致命错误才让整段素材失败。
 pub fn decode(path: impl AsRef<Path>) -> Result<DecodedAudio, AssetError> {
+    decode_with_progress(path, |_| {})
+}
+
+/// 同 [`decode`]，但解码过程中按 [`PROGRESS_INTERVAL`] 节流回调进度（供界面画进度条）。
+pub fn decode_with_progress(
+    path: impl AsRef<Path>,
+    mut on_progress: impl FnMut(DecodeProgress),
+) -> Result<DecodedAudio, AssetError> {
     let path = path.as_ref();
     let file = std::fs::File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -61,6 +87,7 @@ pub fn decode(path: impl AsRef<Path>) -> Result<DecodedAudio, AssetError> {
 
     let track = format.default_track(TrackType::Audio).ok_or(AssetError::NoAudioTrack)?;
     let track_id = track.id;
+    let total_frames = track.num_frames.filter(|n| *n > 0);
     let params = match track.codec_params.as_ref() {
         Some(CodecParameters::Audio(p)) => p.clone(),
         _ => return Err(AssetError::MissingParams),
@@ -71,11 +98,13 @@ pub fn decode(path: impl AsRef<Path>) -> Result<DecodedAudio, AssetError> {
         .make_audio_decoder(&params, &AudioDecoderOptions::default())
         .map_err(|e| AssetError::Decode(e.to_string()))?;
 
-    let mut samples: Vec<f32> = Vec::new();
-    // `copy_to_vec_interleaved` 是**覆盖**语义（会把目标 resize 成本次的长度），
-    // 所以每个包先拷进这个临时缓冲，再追加到总缓冲。
-    let mut packet_samples: Vec<f32> = Vec::new();
     let mut channels = params.channels.as_ref().map(|c| c.count()).unwrap_or(0);
+    // 头里给了总帧数就一次性备好缓冲：避免解码途中反复 realloc（大文件能省下几十次整块 memcpy）。
+    let expected = total_frames
+        .map(|n| n.saturating_mul(channels.max(1) as u64).min(MAX_PREALLOC_SAMPLES))
+        .unwrap_or(0) as usize;
+    let mut samples: Vec<f32> = Vec::with_capacity(expected);
+    let mut last_report = std::time::Instant::now();
     loop {
         let packet = match format.next_packet() {
             Ok(Some(packet)) => packet,
@@ -88,9 +117,16 @@ pub fn decode(path: impl AsRef<Path>) -> Result<DecodedAudio, AssetError> {
         match decoder.decode(&packet) {
             Ok(decoded) => {
                 channels = decoded.spec().channels().count();
-                packet_samples.clear();
-                decoded.copy_to_vec_interleaved(&mut packet_samples);
-                samples.extend_from_slice(&packet_samples);
+                // 直接把这一包写进总缓冲的**尾部**：省掉「先写临时缓冲、再整块追加」的那次多余 memcpy。
+                let n = decoded.samples_interleaved();
+                let start = samples.len();
+                samples.resize(start + n, 0.0);
+                decoded.copy_to_slice_interleaved(&mut samples[start..]);
+                if last_report.elapsed() >= PROGRESS_INTERVAL {
+                    let frames = samples.len() as u64 / channels.max(1) as u64;
+                    on_progress(DecodeProgress { frames, total_frames });
+                    last_report = std::time::Instant::now();
+                }
             }
             // 坏帧跳过：宁可缺一小段，也不要整段素材报废。
             Err(symphonia::core::errors::Error::DecodeError(_)) => continue,
@@ -114,6 +150,7 @@ pub fn decode(path: impl AsRef<Path>) -> Result<DecodedAudio, AssetError> {
         (2, stereo)
     };
 
+    on_progress(DecodeProgress { frames: out_samples.len() as u64 / out_channels as u64, total_frames });
     Ok(DecodedAudio {
         samples: out_samples.into(),
         channels: out_channels,
@@ -229,6 +266,22 @@ mod tests {
         assert_eq!(audio.sample_rate, 48_000.0);
         assert_eq!(audio.frames(), 4_800);
         assert_eq!(audio.samples.len(), 9_600, "交错：帧数 × 声道数");
+    }
+
+    #[test]
+    fn decode_reports_progress_ending_at_the_track_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_wav(dir.path(), "progress.wav", 44_100, 2, 0.5, 1_000.0);
+
+        let mut reports: Vec<DecodeProgress> = Vec::new();
+        let audio = decode_with_progress(&path, |p| reports.push(p)).unwrap();
+        assert_eq!(audio.frames(), 22_050, "0.5 s @ 44.1 kHz");
+
+        let last = reports.last().expect("至少要回调一次进度");
+        assert_eq!(last.frames, 22_050, "最终报告应落在素材总长上");
+        assert!(reports.iter().all(|p| p.frames <= 22_050), "进度只增不减、不越界");
+        // wav 头里有总帧数：给值时必须等于真实长度（拿不到也属正常，界面画不确定态）。
+        assert!(matches!(last.total_frames, None | Some(22_050)));
     }
 
     #[test]

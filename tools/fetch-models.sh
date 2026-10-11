@@ -5,12 +5,14 @@
 #   ./tools/fetch-models.sh                  # 直连
 #   AIDAW_MODEL_PROXY=http://127.0.0.1:7892 ./tools/fetch-models.sh   # 走代理
 #
-# 两个模型：
+# 三个模型：
 #   models/basic-pitch-nmp.onnx  Basic Pitch（Spotify, Apache-2.0）—— 官方 ONNX 导出的镜像
+#   models/htdemucs.ort          HTDemucs v4（音源分离, Apache-2.0）—— 209 MB，不随包，正式版由
+#                                应用内「管理器 → 模型」下载；这里只是开发路径
 #   models/localvqe-ns.onnx      LocalVQE v1.2（Apache-2.0）—— 上游只发 .pt/GGUF，
 #                                ONNX 是本地用 tools/export-localvqe-onnx.py 从官方权重导出的
 #
-# LocalVQE 那一步需要 python3 + torch；缺依赖时会跳过并打印手动步骤，Basic Pitch 仍然可用。
+# LocalVQE 那一步需要 python3 + torch；缺依赖时会跳过并打印手动步骤，其余模型仍然可用。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,6 +29,25 @@ echo "==> Basic Pitch (nmp.onnx)"
 "${CURL[@]}" -o "$DEST/basic-pitch-nmp.onnx" \
   "https://huggingface.co/AEmotionStudio/basic-pitch-onnx-models/resolve/main/nmp.onnx"
 ls -l "$DEST/basic-pitch-nmp.onnx"
+
+echo "==> HTDemucs v4（音源分离，209 MB）"
+HTDEMUCS_SHA="09dc165512d8ef7480bcb2cacea9dda82d571f8dbf421d8c44a2ca5568bec729"
+"${CURL[@]}" -o "$DEST/htdemucs.ort" \
+  "https://huggingface.co/gentij/htdemucs-ort/resolve/main/htdemucs.ort"
+# sha256 硬门禁：字节对不上就报错（与运行时下载器的立场一致）。
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    sha256sum "$1" | awk '{print $1}'
+  fi
+}
+got="$(sha256_of "$DEST/htdemucs.ort")"
+[[ "$got" == "$HTDEMUCS_SHA" ]] || {
+  echo "    sha256 校验失败：期望 $HTDEMUCS_SHA，实际 $got" >&2
+  exit 1
+}
+ls -l "$DEST/htdemucs.ort"
 
 echo "==> LocalVQE v1.2（.pt → ONNX 导出）"
 python3 -c "import torch" 2>/dev/null || {

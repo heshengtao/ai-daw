@@ -22,6 +22,7 @@ import { usePluginsStore } from "@/stores/plugins";
 import { usePresetsStore } from "@/stores/presets";
 import { useSelectionStore } from "@/stores/selection";
 import { useParamBrowserStore } from "@/stores/paramBrowser";
+import { useImportingStore } from "@/stores/importing";
 import { useTimelineStore } from "@/stores/timeline";
 import { useI18n } from "@/i18n";
 import { exportWav, onPluginsEvent } from "@/api/tauri";
@@ -36,6 +37,7 @@ const plugins = usePluginsStore();
 const presets = usePresetsStore();
 const selection = useSelectionStore();
 const paramBrowser = useParamBrowserStore();
+const importing = useImportingStore();
 const timeline = useTimelineStore();
 const i18n = useI18n();
 const route = useRoute();
@@ -73,6 +75,7 @@ const aiTracks = ref<number[]>([]);
 const exporting = ref(false);
 let pollTimer: number | null = null;
 let unlistenPlugins: (() => void) | null = null;
+let unlistenImport: (() => void) | null = null;
 let unlistenClose: (() => void) | null = null;
 let autosaveTimer: number | null = null;
 
@@ -394,6 +397,8 @@ onMounted(async () => {
   // 插件目录：先取一次当前值，再等后端的后台扫描完成推送。
   await plugins.refresh().catch(() => {});
   unlistenPlugins = await onPluginsEvent(() => void plugins.refresh());
+  // 音频导入解码进度：顶栏下边缘的进度条据此更新。
+  unlistenImport = importing.watchProgress();
   pollTimer = window.setInterval(() => {
     // 只统计**代理**发起的事件：人类自己的编辑不该点亮「AI 正在写」。
     aiActive.value = events.agentActive();
@@ -415,6 +420,7 @@ onUnmounted(() => {
   if (autosaveTimer !== null) window.clearInterval(autosaveTimer);
   unlistenClose?.();
   unlistenPlugins?.();
+  unlistenImport?.();
   events.stop();
   transport.dispose();
 });

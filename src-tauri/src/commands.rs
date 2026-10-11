@@ -11,7 +11,7 @@ use ai_daw_engine::model::{
     AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, Project, Send,
     TrackId,
 };
-use ai_daw_engine::registry::PluginRegistry;
+use ai_daw_engine::registry::{PluginRegistry, PluginSlot};
 use ai_daw_engine::render::{render_with_assets, RenderOptions};
 use ai_daw_engine::tempo::TempoMap;
 use ai_daw_engine::transport::TransportCommand;
@@ -19,10 +19,10 @@ use ai_daw_engine::wav::wav_bytes;
 use ai_daw_host_vst3::{CatalogPlugin, EditorHandle};
 use ai_daw_plugin_api::ParamInfo;
 
-use crate::audio::TransportSnapshot;
+use crate::audio::{EditorSlot, TransportSnapshot};
 use crate::plugins::build_registry;
 use crate::presets::Preset;
-use crate::state::{with_editor_windows, AppState, EVENT_ENGINE, EVENT_PLUGINS};
+use crate::state::{with_editor_windows, AppState, EVENT_ENGINE, EVENT_IMPORT};
 
 /// 撤销/重做之后返回的历史状态（让界面能立刻更新按钮可用性）。
 #[derive(serde::Serialize)]
@@ -97,34 +97,57 @@ fn run_all(
 ///
 /// 外部插件（VST3 / CLAP）的旋钮与预设只存在于实例内部，重建播放器就会丢。宿主在重建
 /// **之前**调用它，把状态写进 `PluginInstance::state`；重建后的实例启动时会 `load_state`
-/// 还原。于是「改效果链 / 移动片段」这类结构性变更不会再让乐器回到默认配置。
+/// 还原。于是「改效果链 / 移动片段」这类结构性变更不会再让乐器或效果器回到默认配置。
 ///
 /// 只处理**登记过编辑器句柄**的实例——句柄是宿主与实例共享的那份引用，没有句柄就无从读取。
 /// 读取失败返回空，会被忽略：绝不用空状态覆盖已有的好状态。
+///
+/// **效果器按 plugin id 回写、而不是按链内下标**：结构性变更（增删 / 移动效果器）会在写回
+/// 之前就把下标挪了位，按键里的下标写回会串味。同一条轨道上出现多个同名效果器时，按出现
+/// 次序一一对应。
 fn capture_plugin_states(state: &AppState) {
-    let handles: Vec<(u64, EditorHandle)> = state
-        .editor_handles
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|(track, handle)| (*track, handle.clone()))
-        .collect();
-    if handles.is_empty() {
-        return;
-    }
-    let captured: Vec<(TrackId, Vec<u8>)> = handles
+    let entries: Vec<((u64, PluginSlot), EditorHandle, String)> = {
+        let handles = state.editor_handles.lock().unwrap();
+        handles
+            .iter()
+            .map(|(key, entry)| (*key, entry.handle.clone(), entry.plugin_id.clone()))
+            .collect()
+    };
+    // `save_state` 可能派发到主线程，别在持锁时做。
+    let captured: Vec<((u64, PluginSlot), String, Vec<u8>)> = entries
         .into_iter()
-        .filter_map(|(track, handle)| {
+        .filter_map(|(key, handle, plugin_id)| {
             let bytes = handle.save_state();
-            (!bytes.is_empty()).then_some((TrackId(track), bytes))
+            (!bytes.is_empty()).then_some((key, plugin_id, bytes))
         })
         .collect();
     if captured.is_empty() {
         return;
     }
+
     let mut engine = state.engine.lock().unwrap();
-    for (track, bytes) in captured {
-        engine.set_instrument_state(track, bytes);
+    // 各轨道当前效果链的 plugin id 序列（按下标），供效果器按 id 定位。
+    let chain_ids: HashMap<u64, Vec<String>> = engine
+        .project()
+        .tracks
+        .iter()
+        .map(|t| (t.id.0, t.effects.iter().map(|fx| fx.plugin_id.clone()).collect()))
+        .collect();
+    // (轨道, plugin id) → 本次已匹配到的次数，用于消歧同名效果器。
+    let mut cursor: HashMap<(u64, String), usize> = HashMap::new();
+    for ((track, slot), plugin_id, bytes) in captured {
+        match slot {
+            PluginSlot::Instrument => engine.set_instrument_state(TrackId(track), bytes),
+            PluginSlot::Effect(_) => {
+                let Some(ids) = chain_ids.get(&track) else { continue };
+                let start = *cursor.get(&(track, plugin_id.clone())).unwrap_or(&0);
+                if let Some(rel) = ids.iter().skip(start).position(|pid| *pid == plugin_id) {
+                    let index = start + rel;
+                    cursor.insert((track, plugin_id), index + 1);
+                    engine.set_effect_state(TrackId(track), index, bytes);
+                }
+            }
+        }
     }
 }
 
@@ -141,6 +164,13 @@ pub(crate) fn run_agent(app: &tauri::AppHandle, command: Command) -> (Project, V
     run_as(app, &state, Actor::Agent("mcp".into()), command)
 }
 
+/// 以代理身份执行**一批**命令（**合成一个撤销步骤**）：用于一次产出多条轨道的 AI 动作
+/// （如音源分离一次生成鼓/贝斯/其他/人声四条分轨），一次撤销即可整体回退。
+pub(crate) fn run_agent_all(app: &tauri::AppHandle, commands: Vec<Command>) -> (Project, Vec<Event>) {
+    let state = app.state::<AppState>();
+    run_all(app, &state, Actor::Agent("mcp".into()), commands)
+}
+
 /// 渲染一份快照所需的全部输入。
 ///
 /// **音频素材在这里（命令线程）就解码好**：渲染与音频回调都不做任何 IO。
@@ -148,7 +178,7 @@ pub(crate) fn run_agent(app: &tauri::AppHandle, command: Command) -> (Project, V
 pub(crate) struct RenderInputs {
     pub project: Project,
     pub catalog: Vec<CatalogPlugin>,
-    pub editor_handles: Arc<Mutex<HashMap<u64, EditorHandle>>>,
+    pub editor_handles: Arc<Mutex<HashMap<(u64, PluginSlot), EditorSlot>>>,
     pub samples: HashMap<String, Arc<DecodedAudio>>,
 }
 
@@ -185,14 +215,14 @@ fn is_structural(event: &Event) -> bool {
         && !matches!(event, Event::ParamChanged { .. } | Event::EffectParamChanged { .. })
 }
 
-/// 关掉指定轨道的插件窗口（须在主线程执行创建/销毁，所以走 `run_on_main_thread`）。
+/// 关掉指定槽位的插件窗口（须在主线程执行创建/销毁，所以走 `run_on_main_thread`）。
 ///
-/// 只清**这几条轨道**的编辑器句柄：别处的实例会被重建**复用**，句柄仍然有效，不能一起清。
+/// 只清**这几个槽位**的编辑器句柄：别处的实例会被重建**复用**，句柄仍然有效，不能一起清。
 ///
 /// 清句柄**必须在主线程上做**：句柄可能正好是实例的最后一个引用，而释放会触发
 /// `clap_plugin.destroy()`——那是主线程专属调用。
-fn close_plugin_windows_for(app: &tauri::AppHandle, tracks: Vec<u64>) {
-    if tracks.is_empty() {
+fn close_plugin_windows_for(app: &tauri::AppHandle, keys: Vec<(u64, PluginSlot)>) {
+    if keys.is_empty() {
         return;
     }
     let (tx, rx) = std::sync::mpsc::channel();
@@ -201,18 +231,18 @@ fn close_plugin_windows_for(app: &tauri::AppHandle, tracks: Vec<u64>) {
         .run_on_main_thread(move || {
             let state = app_for_main.state::<AppState>();
             with_editor_windows(|windows| {
-                for track in &tracks {
+                for key in &keys {
                     // 走 `close()` 而不是直接丢：它会先 hide + destroy 插件的界面。
-                    if let Some(window) = windows.remove(track) {
+                    if let Some(window) = windows.remove(key) {
                         window.close();
                     }
                 }
             });
             // 嵌入模式的宿主窗口也一并收掉，别留下一扇空窗。
-            for track in &tracks {
-                if state.host_windows.lock().unwrap().remove(track) {
+            for key in &keys {
+                if state.host_windows.lock().unwrap().remove(key) {
                     if let Some(window) =
-                        app_for_main.get_webview_window(&host_window_label(*track))
+                        app_for_main.get_webview_window(&host_window_label(key.0, key.1))
                     {
                         let _ = window.close();
                     }
@@ -220,16 +250,16 @@ fn close_plugin_windows_for(app: &tauri::AppHandle, tracks: Vec<u64>) {
             }
             {
                 let mut handles = state.editor_handles.lock().unwrap();
-                for track in &tracks {
-                    handles.remove(track);
+                for key in &keys {
+                    handles.remove(key);
                 }
             }
             {
                 let mut open = state.open_editors.lock().unwrap();
                 let mut meta = state.editor_plugins.lock().unwrap();
-                for track in &tracks {
-                    open.remove(track);
-                    meta.remove(track);
+                for key in &keys {
+                    open.remove(key);
+                    meta.remove(key);
                 }
             }
             let _ = tx.send(());
@@ -242,38 +272,47 @@ fn close_plugin_windows_for(app: &tauri::AppHandle, tracks: Vec<u64>) {
 
 /// 关掉**全部**插件窗口（整个工程被替换时用，例如打开另一个工程）。
 fn close_all_plugin_windows(app: &tauri::AppHandle, state: &AppState) {
-    let tracks: Vec<u64> = state.open_editors.lock().unwrap().iter().copied().collect();
-    close_plugin_windows_for(app, tracks);
+    let keys: Vec<(u64, PluginSlot)> =
+        state.open_editors.lock().unwrap().iter().copied().collect();
+    close_plugin_windows_for(app, keys);
 }
 
 /// 关掉**实例已经不在**的插件窗口，其余保持不动。
 ///
-/// 重建播放器时插件实例会被搬进新播放器复用（见 `ReusableInstances`），所以只要某条轨道的
-/// **乐器没换**，它的窗口（以及插件内部状态）就照旧有效——**不要关**。只有乐器被换掉、轨道被
-/// 删除、或整个工程被替换时，旧窗口才真的失效，必须关掉，否则窗口会指着一个已销毁的实例。
+/// 重建播放器时插件实例会被搬进新播放器复用（见 `ReusableInstances`），所以只要某条轨道某
+/// 个**槽位的插件没换**，它的窗口（以及插件内部状态）就照旧有效——**不要关**。只有插件被
+/// 换掉、轨道/效果槽位被删、或整个工程被替换时，旧窗口才真的失效，必须关掉，否则窗口会指着
+/// 一个已销毁的实例。
 fn close_stale_plugin_windows(app: &tauri::AppHandle, state: &AppState) {
     let project = { state.engine.lock().unwrap().project().clone() };
 
-    let mut stale: Vec<u64> = {
+    /// 某个槽位当前应当承载的 plugin id（轨道/槽位不存在时返回 None）。
+    fn slot_plugin_id(project: &Project, track: u64, slot: PluginSlot) -> Option<String> {
+        let t = project.track(TrackId(track))?;
+        match slot {
+            PluginSlot::Instrument => t.instrument.as_ref().map(|i| i.plugin_id.clone()),
+            PluginSlot::Effect(index) => t.effects.get(index).map(|fx| fx.plugin_id.clone()),
+        }
+    }
+
+    let mut stale: Vec<(u64, PluginSlot)> = {
         let opened = state.editor_plugins.lock().unwrap().clone();
         opened
             .into_iter()
-            .filter(|(track, opened_for)| {
-                project
-                    .track(TrackId(*track))
-                    .and_then(|t| t.instrument.as_ref())
-                    .map(|instrument| instrument.plugin_id != *opened_for)
-                    .unwrap_or(true) // 轨道已经不在了
+            .filter(|((track, slot), opened_for)| {
+                slot_plugin_id(&project, *track, *slot)
+                    .map(|current| current != *opened_for)
+                    .unwrap_or(true) // 轨道或槽位已经不在了
             })
-            .map(|(track, _)| track)
+            .map(|(key, _)| key)
             .collect()
     };
-    // 已删除轨道遗留的编辑器句柄也一并收掉，免得实例（连同它的界面）迟迟不释放。
+    // 已删除槽位遗留的编辑器句柄也一并收掉，免得实例（连同它的界面）迟迟不释放。
     {
         let handles = state.editor_handles.lock().unwrap();
-        for track in handles.keys() {
-            if project.track(TrackId(*track)).is_none() && !stale.contains(track) {
-                stale.push(*track);
+        for key in handles.keys() {
+            if slot_plugin_id(&project, key.0, key.1).is_none() && !stale.contains(key) {
+                stale.push(*key);
             }
         }
     }
@@ -1074,9 +1113,46 @@ pub(crate) fn natural_length_beats(project: &Project, start: f64, seconds: f64) 
     map.seconds_to_beats(start_sec + seconds) - start
 }
 
+/// 音频导入的解码进度（与前端 `ImportProgress` 一一对应）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportProgress {
+    /// 正在解码的素材路径。
+    pub path: String,
+    /// 阶段：`decoding` / `done` / `error`。
+    pub state: String,
+    /// 已解出的帧数（`decoding` 时有意义）。
+    pub frames: u64,
+    /// 总帧数；容器头预知不到时为 `None`（界面据此画不确定态进度条）。
+    pub total_frames: Option<u64>,
+    /// 失败原因（仅 `error` 有意义）。
+    pub message: Option<String>,
+}
+
+/// 广播一次导入解码进度。
+fn emit_import(
+    app: &tauri::AppHandle,
+    path: &str,
+    state: &str,
+    frames: u64,
+    total_frames: Option<u64>,
+    message: Option<String>,
+) {
+    let _ = app.emit(
+        EVENT_IMPORT,
+        ImportProgress {
+            path: path.to_string(),
+            state: state.to_string(),
+            frames,
+            total_frames,
+            message,
+        },
+    );
+}
+
 /// 导入一个音频文件为音频片段（wav / flac / mp3 / ogg-vorbis / aac / m4a）。
 ///
-/// 解码放到阻塞线程池：它既慢又可能失败，绝不能占住命令线程。
+/// 解码放到阻塞线程池：它既慢又可能失败，绝不能占住命令线程。解码途中经 `engine://import`
+/// 推送进度（顶栏下边缘的进度条据此绘制）；解码完成后才落片段。
 #[tauri::command]
 pub async fn import_audio(
     app: tauri::AppHandle,
@@ -1085,21 +1161,42 @@ pub async fn import_audio(
     track: u64,
     start: f64,
 ) -> Result<Project, String> {
+    // 立刻发一条「开始解码」：总帧数还没探测出来，界面先画一条不确定态进度条。
+    emit_import(&app, &path, "decoding", 0, None, None);
+
     let assets = Arc::clone(&state.assets);
     let path_for_load = path.clone();
-    let audio = tauri::async_runtime::spawn_blocking(move || assets.load(&path_for_load))
-        .await
-        .map_err(|e| e.to_string())??;
+    let progress_app = app.clone();
+    let progress_path = path.clone();
+    let loaded = tauri::async_runtime::spawn_blocking(move || {
+        assets.load_with_progress(&path_for_load, |p| {
+            emit_import(&progress_app, &progress_path, "decoding", p.frames, p.total_frames, None);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
+    let audio = match loaded {
+        Ok(audio) => audio,
+        Err(err) => {
+            emit_import(&app, &path, "error", 0, None, Some(err.clone()));
+            return Err(err);
+        }
+    };
+
+    let frames = audio.frames() as u64;
     let seconds = audio.frames() as f64 / audio.sample_rate;
     if !(seconds.is_finite() && seconds > 0.0) {
-        return Err(format!("音频素材没有可用长度：{path}"));
+        let err = format!("音频素材没有可用长度：{path}");
+        emit_import(&app, &path, "error", 0, None, Some(err.clone()));
+        return Err(err);
     }
     let start = ai_daw_engine::model::Clip::normalize_start(start);
     let length = {
         let engine = state.engine.lock().unwrap();
         natural_length_beats(engine.project(), start, seconds)
     };
+    emit_import(&app, &path, "done", frames, Some(frames), None);
     Ok(run(
         &app,
         &state,
@@ -1108,7 +1205,7 @@ pub async fn import_audio(
             start,
             length,
             // 记下素材总帧数：切分时才知道「左半段到哪停」（否则会一路播到结尾、被拉伸）。
-            source: AudioSource { path, offset_frames: 0, frames: Some(audio.frames() as u64) },
+            source: AudioSource { path, offset_frames: 0, frames: Some(frames) },
         },
     ))
 }
@@ -1326,17 +1423,13 @@ pub fn list_plugins(state: State<'_, AppState>) -> Vec<CatalogPlugin> {
 }
 
 /// 重新扫描本机插件（慢，放到阻塞线程池）；完成后广播事件。
+///
+/// 一并扫描**插件管理器**的托管目录，所以「装完新插件点重扫」能看到新装的东西。
 #[tauri::command]
-pub async fn rescan_plugins(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Vec<CatalogPlugin>, String> {
-    let catalog = tauri::async_runtime::spawn_blocking(ai_daw_host_vst3::scan_catalog)
+pub async fn rescan_plugins(app: tauri::AppHandle) -> Result<Vec<CatalogPlugin>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::manager::rescan_with_managed(&app))
         .await
-        .map_err(|e| e.to_string())?;
-    state.install_catalog(catalog.clone());
-    let _ = app.emit(EVENT_PLUGINS, &catalog);
-    Ok(catalog)
+        .map_err(|e| e.to_string())
 }
 
 /// 取某个插件的参数表（内置插件从注册表拿，外部插件按目录加载）。
@@ -1347,7 +1440,7 @@ pub async fn plugin_params(
 ) -> Result<Vec<ParamInfo>, String> {
     let catalog = state.catalog_snapshot();
     tauri::async_runtime::spawn_blocking(move || {
-        if let Some(plugin) = PluginRegistry::with_builtins().create(&plugin_id, TrackId(0)) {
+        if let Some(plugin) = PluginRegistry::with_builtins().create(&plugin_id, TrackId(0), PluginSlot::Instrument) {
             return Ok(plugin.params());
         }
         let entry = catalog
@@ -1442,14 +1535,30 @@ pub fn set_effect_params(
 // 插件原生界面（独立窗口）
 // ---------------------------------------------------------------------------
 
-/// 宿主给「只能嵌入」的插件开的那扇窗的 label。
-pub fn host_window_label(track: u64) -> String {
-    format!("plugin-ui-{track}")
+/// 槽位在宿主窗口 label 里的短标记：`i` = 乐器，`f<n>` = 效果链第 n 个。
+fn slot_tag(slot: PluginSlot) -> String {
+    match slot {
+        PluginSlot::Instrument => "i".to_string(),
+        PluginSlot::Effect(index) => format!("f{index}"),
+    }
 }
 
-/// [`host_window_label`] 的反函数：从窗口 label 认回轨道号。
-pub fn host_window_track(label: &str) -> Option<u64> {
-    label.strip_prefix("plugin-ui-")?.parse().ok()
+/// 宿主给「只能嵌入」的插件开的那扇窗的 label（含槽位，一轨可同时开多个）。
+pub fn host_window_label(track: u64, slot: PluginSlot) -> String {
+    format!("plugin-ui-{track}-{}", slot_tag(slot))
+}
+
+/// [`host_window_label`] 的反函数：从窗口 label 认回 (轨道, 槽位)。
+pub fn host_window_track(label: &str) -> Option<(u64, PluginSlot)> {
+    let rest = label.strip_prefix("plugin-ui-")?;
+    let (track, tag) = rest.split_once('-')?;
+    let track: u64 = track.parse().ok()?;
+    let slot = match tag.strip_prefix('f') {
+        Some(n) => PluginSlot::Effect(n.parse().ok()?),
+        None if tag == "i" => PluginSlot::Instrument,
+        None => return None,
+    };
+    Some((track, slot))
 }
 
 /// 建一扇宿主窗口来装「只能嵌入」插件的界面。
@@ -1466,11 +1575,12 @@ pub fn host_window_track(label: &str) -> Option<u64> {
 fn build_host_window(
     app: &tauri::AppHandle,
     track: u64,
+    slot: PluginSlot,
     title: &str,
     width: u32,
     height: u32,
 ) -> Result<tauri::WebviewWindow, String> {
-    let label = host_window_label(track);
+    let label = host_window_label(track, slot);
     if let Some(existing) = app.get_webview_window(&label) {
         return Ok(existing);
     }
@@ -1524,16 +1634,16 @@ fn track_name(state: &AppState, track: u64) -> String {
         .unwrap_or_else(|| format!("轨道 {track}"))
 }
 
-/// 把某条轨道已经开着的插件窗口带到最前面（**必须在主线程**）。
+/// 把某个槽位已经开着的插件窗口带到最前面（**必须在主线程**）。
 ///
 /// 原生窗口（VST3 的 `PluginWindow`、CLAP 的浮动窗口）由插件自己管理，没有统一的聚焦 API；
 /// 这里保证**嵌入模式的宿主窗口**被抬起，插件自己的窗口是否跟随交给插件。
-fn focus_plugin_window(app: &tauri::AppHandle, track: u64) {
+fn focus_plugin_window(app: &tauri::AppHandle, track: u64, slot: PluginSlot) {
     let (tx, rx) = std::sync::mpsc::channel();
     let app_for_main = app.clone();
     if app
         .run_on_main_thread(move || {
-            if let Some(window) = app_for_main.get_webview_window(&host_window_label(track)) {
+            if let Some(window) = app_for_main.get_webview_window(&host_window_label(track, slot)) {
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }
@@ -1545,40 +1655,46 @@ fn focus_plugin_window(app: &tauri::AppHandle, track: u64) {
     }
 }
 
-/// 为某条轨道打开插件的原生界面（**已经开着就把它带到最前面**，不再开新窗）。
+/// 按 plugin id 在**权威的**效果链里现算序号。
+///
+/// 调用方（前端）可能拿着一条**过时的效果链**——别的窗口刚改过它。按 id 现算而不是听调用方
+/// 给的序号，才能开到正确的槽位上。找不到就明确报错，而不是开出一扇空窗。
+fn resolve_effect_index(state: &AppState, track: u64, plugin_id: &str) -> Result<usize, String> {
+    let engine = state.engine.lock().unwrap();
+    engine
+        .project()
+        .track(TrackId(track))
+        .and_then(|t| t.effects.iter().position(|fx| fx.plugin_id == plugin_id))
+        .ok_or_else(|| "这个效果器已经不在效果链上了".to_string())
+}
+
+/// 为某个槽位打开插件的原生界面（**已经开着就把它带到最前面**，不再开新窗）。
 ///
 /// `title` 是插件展示名（界面按当前语言给出）；宿主再拼上轨道名，于是窗口标题是
 /// 「轨道名 - 插件名」，用户一眼能看出这扇窗是从哪条轨道开的。
 ///
+/// `plugin_id` 用来记录「这扇窗是为哪个插件开的」：重建后据此判断它是否还有效（插件没换就不关）。
+///
 /// 窗口必须在主线程创建（macOS 的 `NSWindow` 只能在那里建），所以走 `run_on_main_thread`，
 /// 并把结果通过 channel 带回来。
-#[tauri::command]
-pub fn open_plugin_window(
+fn open_slot_editor(
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
+    state: &AppState,
     track: u64,
+    slot: PluginSlot,
+    plugin_id: String,
     title: String,
 ) -> Result<(), String> {
-    if state.open_editors.lock().unwrap().contains(&track) {
+    let key = (track, slot);
+    if state.open_editors.lock().unwrap().contains(&key) {
         // 已经开着：把它带到最前面，而不是无动作——否则用户点「打开界面」毫无反应。
-        focus_plugin_window(&app, track);
+        focus_plugin_window(&app, track, slot);
         return Ok(());
     }
     let handle = state
-        .editor_handle(track)
-        .ok_or_else(|| "这条轨道没有可打开的插件界面".to_string())?;
-
-    // 记下这扇窗是**为哪个乐器**开的：重建后据此判断它是否还有效（乐器没换就不关）。
-    let plugin_id = {
-        let engine = state.engine.lock().unwrap();
-        engine
-            .project()
-            .track(TrackId(track))
-            .and_then(|t| t.instrument.as_ref())
-            .map(|instrument| instrument.plugin_id.clone())
-            .unwrap_or_default()
-    };
-    let title = format!("{} - {}", track_name(&state, track), title);
+        .editor_handle(track, slot)
+        .ok_or_else(|| "这个槽位没有可打开的插件界面".to_string())?;
+    let title = format!("{} - {}", track_name(state, track), title);
 
     let (tx, rx) = std::sync::mpsc::channel();
     let app_for_main = app.clone();
@@ -1588,7 +1704,7 @@ pub fn open_plugin_window(
         let host_size = handle.host_window_size();
         let host_window = match host_size {
             Some((width, height)) => {
-                match build_host_window(&app_for_main, track, &title, width, height) {
+                match build_host_window(&app_for_main, track, slot, &title, width, height) {
                     Ok(window) => Some(window),
                     Err(e) => {
                         let _ = tx.send(Err(e));
@@ -1617,13 +1733,13 @@ pub fn open_plugin_window(
         let result = match handle.open(&title, host_view) {
             Ok(window) => {
                 with_editor_windows(|windows| {
-                    windows.insert(track, window);
+                    windows.insert(key, window);
                 });
                 let state = app_for_main.state::<AppState>();
-                state.open_editors.lock().unwrap().insert(track);
-                state.editor_plugins.lock().unwrap().insert(track, plugin_id);
+                state.open_editors.lock().unwrap().insert(key);
+                state.editor_plugins.lock().unwrap().insert(key, plugin_id);
                 if host_size.is_some() {
-                    state.host_windows.lock().unwrap().insert(track);
+                    state.host_windows.lock().unwrap().insert(key);
                 }
                 Ok(())
             }
@@ -1636,22 +1752,59 @@ pub fn open_plugin_window(
     rx.recv().map_err(|e| e.to_string())?
 }
 
-/// 关闭某条轨道的插件窗口。
+/// 为某条轨道打开**乐器**的原生界面（已经开着就聚焦）。
 #[tauri::command]
-pub fn close_plugin_window(app: tauri::AppHandle, track: u64) -> Result<(), String> {
+pub fn open_plugin_window(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    title: String,
+) -> Result<(), String> {
+    // 记下这扇窗是**为哪个乐器**开的：重建后据此判断它是否还有效（乐器没换就不关）。
+    let plugin_id = {
+        let engine = state.engine.lock().unwrap();
+        engine
+            .project()
+            .track(TrackId(track))
+            .and_then(|t| t.instrument.as_ref())
+            .map(|instrument| instrument.plugin_id.clone())
+            .unwrap_or_default()
+    };
+    open_slot_editor(app, &state, track, PluginSlot::Instrument, plugin_id, title)
+}
+
+/// 为某条轨道上的**某个效果器**打开它**自带的**原生界面（已经开着就聚焦）。
+///
+/// 与 [`open_effect_window`]（内置面板窗口）不同：这条命令开的是插件自己的窗口。
+#[tauri::command]
+pub fn open_effect_plugin_window(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    plugin_id: String,
+    title: String,
+) -> Result<(), String> {
+    let index = resolve_effect_index(&state, track, &plugin_id)?;
+    open_slot_editor(app, &state, track, PluginSlot::Effect(index), plugin_id, title)
+}
+
+/// 关掉某个槽位的插件窗口，但**保留编辑器句柄**（用户只是关界面，之后还要能再开）。
+///
+/// 与 [`close_plugin_windows_for`] 的区别：那个用于「实例已经不在」的收尾，会连句柄一并清掉。
+fn close_slot_window(app: &tauri::AppHandle, key: (u64, PluginSlot)) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let app_for_main = app.clone();
     app.run_on_main_thread(move || {
-        let window = with_editor_windows(|windows| windows.remove(&track));
+        let window = with_editor_windows(|windows| windows.remove(&key));
         if let Some(window) = window {
             window.close();
         }
         let state = app_for_main.state::<AppState>();
-        state.open_editors.lock().unwrap().remove(&track);
-        state.editor_plugins.lock().unwrap().remove(&track);
+        state.open_editors.lock().unwrap().remove(&key);
+        state.editor_plugins.lock().unwrap().remove(&key);
         // 嵌入模式的界面住在我们建的宿主窗口里，一并收掉。
-        if state.host_windows.lock().unwrap().remove(&track) {
-            if let Some(window) = app_for_main.get_webview_window(&host_window_label(track)) {
+        if state.host_windows.lock().unwrap().remove(&key) {
+            if let Some(window) = app_for_main.get_webview_window(&host_window_label(key.0, key.1)) {
                 let _ = window.close();
             }
         }
@@ -1663,10 +1816,41 @@ pub fn close_plugin_window(app: tauri::AppHandle, track: u64) -> Result<(), Stri
     Ok(())
 }
 
-/// 该轨道是否开着插件窗口（用户自己点关闭按钮后会变回 false）。
+/// 关闭某条轨道的**乐器**窗口（保留编辑器句柄，之后还能再开）。
+#[tauri::command]
+pub fn close_plugin_window(app: tauri::AppHandle, track: u64) -> Result<(), String> {
+    close_slot_window(&app, (track, PluginSlot::Instrument))
+}
+
+/// 关闭某条轨道上某个**效果器**的原生窗口（保留编辑器句柄，之后还能再开）。
+#[tauri::command]
+pub fn close_effect_plugin_window(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    plugin_id: String,
+) -> Result<(), String> {
+    let index = resolve_effect_index(&state, track, &plugin_id)?;
+    close_slot_window(&app, (track, PluginSlot::Effect(index)))
+}
+
+/// 某条轨道的**乐器**窗口是否开着（用户自己点关闭按钮后会变回 false）。
 #[tauri::command]
 pub fn plugin_window_open(state: State<'_, AppState>, track: u64) -> bool {
-    state.open_editors.lock().unwrap().contains(&track)
+    state.open_editors.lock().unwrap().contains(&(track, PluginSlot::Instrument))
+}
+
+/// 某条轨道上某个**效果器**的原生窗口是否开着。效果器不在链上时返回 false。
+#[tauri::command]
+pub fn effect_plugin_window_open(
+    state: State<'_, AppState>,
+    track: u64,
+    plugin_id: String,
+) -> bool {
+    match resolve_effect_index(&state, track, &plugin_id) {
+        Ok(index) => state.open_editors.lock().unwrap().contains(&(track, PluginSlot::Effect(index))),
+        Err(_) => false,
+    }
 }
 
 /// 开一扇「内置插件面板」窗口（已经开着就聚焦过去）。

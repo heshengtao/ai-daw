@@ -24,6 +24,17 @@ impl AssetCache {
 
     /// 取素材（带缓存）。失败返回可读原因，且**失败结果也会被缓存**。
     pub fn load(&self, path: &str) -> Result<Arc<DecodedAudio>, String> {
+        self.load_with_progress(path, |_| {})
+    }
+
+    /// 同 [`load`]，但解码过程中把进度回调透出去（供界面画进度条）。
+    ///
+    /// 命中缓存时**不回调**：素材早就解好了，没有进度可言。
+    pub fn load_with_progress(
+        &self,
+        path: &str,
+        mut on_progress: impl FnMut(ai_daw_asset::DecodeProgress),
+    ) -> Result<Arc<DecodedAudio>, String> {
         {
             let map = self.map.lock().unwrap();
             match map.get(path) {
@@ -33,7 +44,7 @@ impl AssetCache {
             }
         }
         // 解码在锁外做：它很慢，别把其它路径的查询一起堵住。
-        let outcome = match ai_daw_asset::decode(path) {
+        let outcome = match ai_daw_asset::decode_with_progress(path, &mut on_progress) {
             Ok(audio) => Some(Arc::new(audio)),
             Err(err) => {
                 eprintln!("[asset] 解码失败 {path}：{err}");

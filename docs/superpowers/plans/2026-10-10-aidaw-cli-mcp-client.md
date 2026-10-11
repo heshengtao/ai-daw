@@ -1,10 +1,19 @@
 # `aidaw` CLI：MCP 薄客户端（Stage F 改向后的实现计划）
 
 - 日期：2026-10-10
-- 状态：⏳ **待开工**（本文档只描述方案；代码改动留待实现轮）
-- 依据：`ROADMAP.md` §5 **Stage F**（本次改向）；`skills/README.md`。
+- 状态：✅ **完成**（2026-10-10）
+- 依据：`ROADMAP.md` §5 **Stage F**（本次改向）；`skills/aidaw/SKILL.md`。
 - 取代：原 Stage F 的 F1（抽 `crates/runtime` 无 Tauri 运行时）+ F2（CLI 镜像全部命令）。
   原方案降级为 `ROADMAP.md` §5 Stage F 的 **F5（搁置）**。
+- **落地结果（2026-10-10）**：
+  - 新增 `crates/aidaw`（bin `aidaw`，根 workspace 成员）：`discovery.rs`（找端点）+ `client.rs`
+    （MCP 薄客户端）+ `main.rs`（`tools` / `call` / `status` / `start`）。
+  - `src-tauri/src/mcp.rs`：`start()` 写出 `mcp-url`、`stop()` / 未启用时删除（F2 发现协议落地）。
+  - §3 的「rmcp 还是轻量 HTTP」——**选了 `ureq`**：只连本机回环、不需要 TLS，
+    用 `default-features = false` 就复用 workspace 里已有的 ureq（`ort` 的传递依赖），
+    不引入 rmcp 客户端那棵大树；协议细节（会话头、SSE 帧）在 `client.rs` 里自己处理。
+  - 测试：`crates/aidaw` 5 条单测——其中一条用 std 手写的桩 MCP 服务器跑完
+    `initialize → initialized → tools/list → tools/call` 全流程并校验会话头只在握手后带上。
 
 ## 1. 目标
 
@@ -35,9 +44,10 @@
 - 位置：**根** workspace（`Cargo.toml` 的 `members` 增加，如 `crates/aidaw`），`[[bin]] name = "aidaw"`。
 - 依赖（许可需符合 `deny.toml`：MIT / Apache-2.0 …）：
   - `clap`（子命令解析）。
-  - MCP 客户端：复用 `rmcp` 的 `transport-streamable-http-client`（与现有服务器同一协议栈），
-    或等价的轻量 HTTP 客户端（`ureq` 已在 workspace 出现过）。**实现时二选一**——
-    优先 rmcp（协议一致、`tools/list` 动态），若体积/复杂度不划算再退轻量 HTTP。
+  - MCP 客户端：原拟「复用 `rmcp` 的 `transport-streamable-http-client`，或等价的
+    轻量 HTTP 客户端（`ureq`）二选一」。**实选定为 `ureq`**（`default-features = false`）——
+    只连本机回环、不需要 TLS，且 `ureq` 已在 workspace 里（`ort` 的传递依赖），
+    不引入 rmcp 客户端那棵大树；协议细节（`Mcp-Session-Id`、SSE 帧）在 `client.rs` 里自处理。
   - `serde_json`（透传 JSON 参数与结果）。
 - **不依赖**：`tauri`、`ai-daw-engine`、`ai-daw-app` 等任何仓库内 crate。
 
@@ -56,10 +66,12 @@
 - 文件：`mcp-url`（纯文本，内容形如 `http://127.0.0.1:50562/mcp`）。
   - 与既有 `mcp.json`（**配置**）分开：这是**运行时**状态，不进版本控制。
 - 写入时机：`mcp.rs` 的 `start()` 在拿到 `addr` 之后写；`stop()` 时删除。
-- CLI 读取顺序：`mcp-url` → 都不行则用默认 `http://127.0.0.1:50562/mcp` 兜底。
+- CLI 读取顺序：`AIDAW_MCP_URL`（环境变量覆盖，便于测试/非常规部署）→ `mcp-url` →
+  默认 `http://127.0.0.1:50562/mcp` 兜底。
 
-> **app 侧改动点（**下一轮**再做）**：仅 `src-tauri/src/mcp.rs` 的 `start()` / `stop()` 各加一处写/删。
-> 是本次改向里**唯一**需要动源码的地方。
+> **app 侧改动点 ✅ 已完成**：`src-tauri/src/mcp.rs` 的 `start()` 写、`stop()` 删；
+> 另外 `autostart()` 在 MCP 未启用时也清一次，避免上一次的残留文件骗到 CLI。
+> 这是本次改向里**唯一**动过的源码（除新增的 `crates/aidaw` 外）。
 
 ## 5. 子命令规格
 
@@ -96,9 +108,20 @@ $ aidaw call set_tempo --json '{"bpm":120}'
 4. **加工具自动可调**：临时给 `mcp.rs` 加一个 `#[tool]` → `aidaw tools` 立即列出、
    `aidaw call <新工具>` 可直接调用，**CLI 侧零改动**。
 
+**实测结果（2026-10-10）**：
+
+- 单测：`cargo test -p aidaw` → 5 通过。其中 `walks_the_full_mcp_handshake_and_calls` 用
+  std 手写桩服务器跑完整个握手 + `tools/list` + `tools/call`，并断言会话头只在握手后带上；
+  `probe_reports_a_dead_endpoint` 覆盖「端口没人监听」。
+- 真机：软件（`target/debug/ai-daw-app`）在跑时，`aidaw status` → `运行中 http://127.0.0.1:50562/mcp`；
+  `aidaw tools` 列出工具；`aidaw call get_transport` 返回真实传输状态；
+  `aidaw call aidaw_help --json '{"topic":"transport"}'` 返回该域文档。
+- `cargo clippy -p aidaw --all-targets -- -D warnings` 与 `cargo fmt --check` 均干净；
+  `src-tauri` `cargo check` 通过。
+
 ## 7. 与 skills 的衔接（随 F1 一起做）
 
-`skills/README.md` 增加「CLI 入口」一节：
+`skills/aidaw/SKILL.md` 增加「CLI 入口」一节：
 
 1. 先 `aidaw status`；
 2. 没开就 `aidaw start`；

@@ -18,6 +18,19 @@ import type {
   HistoryDepths,
   HistoryState,
   InputDeviceInfo,
+  CliState,
+  CliStatus,
+  ForeignPlugin,
+  ManagerInstallRequest,
+  ManagerInstalled,
+  ManagerProgress,
+  ManagerPlugin,
+  ManagerRegistry,
+  ModelProgress,
+  ModelStatus,
+  ProxyMode,
+  ProxyProbe,
+  ProxyStatus,
   McpConfig,
   McpStatus,
   Note,
@@ -25,6 +38,7 @@ import type {
   Preset,
   Project,
   Send,
+  StoreNetwork,
   TransportSnapshot,
 } from "./types";
 
@@ -43,12 +57,99 @@ function mockMcpStatus(): McpStatus {
   };
 }
 
+/** 预览版的 `aidaw` 挂载状态：开发构建没有真包，默认「未挂载」，但给得出全路径。 */
+let cliState: CliState = "missing";
+
+function mockCliStatus(): CliStatus {
+  const bundled = "/Applications/AI DAW.app/Contents/MacOS/aidaw";
+  return {
+    state: cliState,
+    command: "aidaw",
+    target: cliState === "installed" ? "/usr/local/bin/aidaw" : null,
+    bundled,
+    conflict: null,
+    hint: null,
+    manual_command: null,
+    full_path: bundled,
+  };
+}
+
 /** 预览版的本地 AI：没有真实处理，模拟一段进度供界面演示进度条与停止。 */
 let aiState: AiStatus = { running: false, kind: null, progress: 0, message: null };
 let aiTimer: number | null = null;
 
 function emitAi(): void {
   window.dispatchEvent(new CustomEvent("ai-daw-mock-ai", { detail: { ...aiState } }));
+}
+
+/** 插件管理器预览里的下载进度定时器（一次只跑一个）。 */
+let mockManagerTimer: number | null = null;
+
+function emitManager(p: ManagerProgress): void {
+  window.dispatchEvent(new CustomEvent("ai-daw-mock-manager", { detail: p }));
+}
+
+/** 预览里的模型清单（内存；下载完成后把 installed 置 true）。 */
+let mockModels: ModelStatus[] = [
+  {
+    id: "basic-pitch",
+    name: "Basic Pitch（音频转 MIDI）",
+    feature: "to_midi",
+    license: "Apache-2.0",
+    approx_bytes: 230444,
+    filename: "basic-pitch-nmp.onnx",
+    bundled: true,
+    installed: true,
+    bytes: 230444,
+    path: "/mock/models/basic-pitch-nmp.onnx",
+    downloadable: true,
+  },
+  {
+    id: "localvqe",
+    name: "LocalVQE（人声降噪 / 去混响）",
+    feature: "enhance",
+    license: "Apache-2.0",
+    approx_bytes: 6152621,
+    filename: "localvqe-ns.onnx",
+    bundled: true,
+    installed: true,
+    bytes: 6152621,
+    path: "/mock/models/localvqe-ns.onnx",
+    downloadable: false,
+  },
+  {
+    id: "htdemucs-ort-v1",
+    name: "HTDemucs（音源分离 · 4 分轨）",
+    feature: "separate",
+    license: "MIT",
+    approx_bytes: 209884896,
+    filename: "htdemucs.ort",
+    bundled: false,
+    installed: false,
+    bytes: null,
+    path: null,
+    downloadable: true,
+  },
+  {
+    id: "htdemucs-6s",
+    name: "HTDemucs 6s（音源分离 · 6 分轨）",
+    feature: "separate",
+    license: "MIT",
+    approx_bytes: 258159781,
+    filename: "htdemucs_6s.onnx",
+    bundled: false,
+    installed: false,
+    bytes: null,
+    path: null,
+    downloadable: true,
+  },
+];
+
+/** 模型下载预览定时器（一次只跑一个）。 */
+let mockModelTimer: number | null = null;
+
+function emitModel(p: ModelProgress): void {
+  window.dispatchEvent(new CustomEvent("ai-daw-mock-model", { detail: p }));
 }
 
 /** 是否使用假数据。 */
@@ -186,6 +287,122 @@ const MOCK_PARAMS: Record<string, BackendParam[]> = {
     { id: "1", name: "Decay", min: 0, max: 1, default: 0.5, automatable: true },
   ],
 };
+/**
+ * 插件管理器的假注册表（浏览器预览用）。
+ *
+ * 真数据来自开放注册表（Rust 侧拉取）；这里给几条覆盖各分支的样本：
+ * 可安装的归档、只能打开下载页的安装器、以及一条可「更新」的旧版本记录。
+ */
+const MOCK_REGISTRY: ManagerPlugin[] = [
+  {
+    slug: "surge-synthesizer/surge",
+    name: "Surge XT",
+    author: "Surge Synth Team",
+    description: "混合合成器：多种合成法、丰富的滤波器与调制引擎。",
+    license: "gpl-3.0",
+    kind: "instrument",
+    tags: ["Synth", "Modulation"],
+    image: null,
+    homepage: "https://github.com/surge-synthesizer/surge",
+    version: "1.3.4",
+    verified: true,
+    files: [
+      {
+        url: "https://example.com/surge-xt-macOS-1.3.4.dmg",
+        sha256: "b56e8d51a8dc2382ae668c9ff4e96bae38dbd452af4e584d5a5ef50ab2d09b07",
+        size: 416715686,
+        kind: "installer",
+        contains: ["vst3", "clap"],
+        platforms: ["mac"],
+        archs: ["arm64", "x64"],
+        compatible: true,
+      },
+      {
+        url: "https://example.com/surge-xt-linux-1.3.4-pluginsonly.tar.gz",
+        sha256: "dd431b75f5fa197c4bffa6ca27ca46970f0a94c834119bb1db7decdeec4c28db",
+        size: 97294804,
+        kind: "archive",
+        contains: ["vst3", "clap"],
+        platforms: ["linux"],
+        archs: ["x64"],
+        compatible: false,
+      },
+    ],
+  },
+  {
+    slug: "zl-audio/zlwarm",
+    name: "ZL Warm",
+    author: "ZL Audio",
+    description: "失真 / 饱和效果器。",
+    license: "gpl-3.0",
+    kind: "effect",
+    tags: ["Distortion", "Saturation"],
+    image: null,
+    homepage: "https://github.com/ZL-Audio/ZLWarm",
+    version: "0.2.1",
+    verified: true,
+    files: [
+      {
+        url: "https://example.com/ZL.Warm-0.2.1.zip",
+        sha256: "1e37bde56287423e075360cb44159bee4498a139144ff3c65c6d4e85e5198ef4",
+        size: 14110770,
+        kind: "archive",
+        contains: ["vst3"],
+        platforms: ["linux", "win", "mac"],
+        archs: ["arm64", "x64"],
+        compatible: true,
+      },
+    ],
+  },
+  {
+    slug: "dfl/faveworm",
+    name: "Faveworm",
+    author: "David Löwenfels",
+    description: "把音频画成发光模拟波束的 XY 示波器。",
+    license: "mit",
+    kind: "tool",
+    tags: ["Oscilloscope", "Visualizer"],
+    image: null,
+    homepage: "https://github.com/dfl/faveworm",
+    version: "1.0.1",
+    verified: true,
+    files: [
+      {
+        url: "https://example.com/faveworm-macos-universal.zip",
+        sha256: "c459cd0646f5bede736d93ebeaf2353e04dcce70e1aaadb27e3201dfb2696cf3",
+        size: 4471780,
+        kind: "archive",
+        contains: ["vst3", "clap"],
+        platforms: ["mac"],
+        archs: ["arm64", "x64"],
+        compatible: true,
+      },
+    ],
+  },
+];
+
+/** 预览里「本管理器装过的东西」；预置一条旧版本记录，用来演示「更新」。 */
+let mockInstalled: ManagerInstalled[] = [
+  {
+    key: "zl-audio/zlwarm",
+    slug: "zl-audio/zlwarm",
+    name: "ZL Warm",
+    version: "0.2.0",
+    source: "registry",
+    files: ["/mock/ZL Warm.vst3"],
+    installed_at: 0,
+  },
+];
+
+/** 预览里的插件源网络配置（内存，刷新即丢）。 */
+let mockNetwork: StoreNetwork = {
+  registry_mirrors: [],
+  download_prefix: "",
+  proxy_mode: "system",
+  proxy_url: "",
+  model_mirrors: [],
+};
+
 /** 铺上默认分轨的空工程。`names` 是界面按当前语言给出的分轨名（按模板顺序）。 */
 function starterProject(names?: string[], tempo?: number): Project {
   const p = empty();
@@ -413,6 +630,189 @@ export const mockApi = {
 
   pluginParams: (pluginId: string): BackendParam[] => MOCK_PARAMS[pluginId] ?? [],
 
+  // ---- 插件管理器（预览：内存里的假注册表与假安装记录）----
+
+  managerRegistry: (_force?: boolean): ManagerRegistry => ({
+    plugins: MOCK_REGISTRY.map((p) => ({ ...p, files: p.files.map((f) => ({ ...f })) })),
+    platform: "mac",
+    arch: "arm64",
+    fetched_at: Math.floor(Date.now() / 1000),
+    from_cache: false,
+  }),
+
+  managerInstalled: (): ManagerInstalled[] => mockInstalled.map((r) => ({ ...r, files: [...r.files] })),
+
+  // 预览里把假插件目录当成「用户自己装的」（它们不在托管库里）。
+  managerForeign: (): ForeignPlugin[] =>
+    MOCK_PLUGINS.map((p) => ({
+      id: p.id,
+      name: p.name,
+      vendor: p.vendor,
+      kind: p.kind,
+      format: p.format,
+      path: p.path,
+    })),
+
+  // 预览里模拟一次下载：跑几条进度事件（含「断点续传」的 80% 处顿一下），
+  // 好让浏览器里也能看到卡片下边缘的进度条。
+  managerInstall: (req: ManagerInstallRequest): void => {
+    const total = req.size || 48 * 1024 * 1024;
+    let received = 0;
+    mockManagerTimer = window.setInterval(() => {
+      received = Math.min(total, received + total * 0.12);
+      emitManager({
+        slug: req.slug,
+        phase: "downloading",
+        received,
+        total,
+        message: null,
+      });
+      if (received >= total) {
+        window.clearInterval(mockManagerTimer!);
+        mockManagerTimer = null;
+        emitManager({ slug: req.slug, phase: "installing", received: 0, total: 0, message: null });
+        mockInstalled = mockInstalled.filter((r) => r.key !== req.slug);
+        mockInstalled.push({
+          key: req.slug,
+          slug: req.slug,
+          name: req.name,
+          version: req.version,
+          source: "registry",
+          files: [`/mock/${req.name}.vst3`],
+          installed_at: Math.floor(Date.now() / 1000),
+        });
+      }
+    }, 160);
+  },
+
+  managerResolveUrl: (url: string): string =>
+    mockNetwork.download_prefix && url.includes("github.com")
+      ? `${mockNetwork.download_prefix}${url}`
+      : url,
+
+  onManagerEvent: (): (() => void) => () => {
+    if (mockManagerTimer !== null) {
+      window.clearInterval(mockManagerTimer);
+      mockManagerTimer = null;
+    }
+  },
+
+  managerImport: (path: string): void => {
+    const name = path.split("/").pop() ?? "Imported";
+    const key = `local:${name}`;
+    mockInstalled = mockInstalled.filter((r) => r.key !== key);
+    mockInstalled.push({
+      key,
+      slug: null,
+      name,
+      version: "",
+      source: "local",
+      files: [path],
+      installed_at: Math.floor(Date.now() / 1000),
+    });
+  },
+
+  managerRemove: (key: string): void => {
+    mockInstalled = mockInstalled.filter((r) => r.key !== key);
+  },
+
+  managerOpen: (_url?: string): Promise<void> => Promise.resolve(),
+
+  // 预览里网络配置只存在内存里（刷新即丢），语义与真实后端一致。
+  managerNetwork: (): StoreNetwork => ({ ...mockNetwork }),
+
+  managerSetNetwork: (
+    registryMirrors: string[],
+    downloadPrefix: string,
+    proxyMode: ProxyMode,
+    proxyUrl: string,
+    modelMirrors: string[] = [],
+  ): StoreNetwork => {
+    mockNetwork = {
+      registry_mirrors: [...registryMirrors],
+      download_prefix: downloadPrefix,
+      proxy_mode: proxyMode,
+      proxy_url: proxyUrl,
+      model_mirrors: [...modelMirrors],
+    };
+    return { ...mockNetwork };
+  },
+
+  // 浏览器里读不到系统代理（那是操作系统的设置），如实说明。
+  managerProxyStatus: (): ProxyStatus => {
+    if (mockNetwork.proxy_mode === "manual" && mockNetwork.proxy_url) {
+      return { proxy: mockNetwork.proxy_url, source: `手动代理 ${mockNetwork.proxy_url}` };
+    }
+    if (mockNetwork.proxy_mode === "system") {
+      return { proxy: null, source: "浏览器预览：读不到系统代理 → 直连" };
+    }
+    return { proxy: null, source: "直连（不使用代理）" };
+  },
+
+  managerProbeProxy: (proxyMode: ProxyMode, proxyUrl: string): ProxyProbe => {
+    const status = mockApi.managerProxyStatus();
+    const proxy = proxyMode === "manual" && proxyUrl ? proxyUrl : status.proxy;
+    const source =
+      proxyMode === "manual"
+        ? `手动代理 ${proxyUrl}`
+        : proxyMode === "system"
+          ? "浏览器预览：读不到系统代理 → 直连"
+          : "直连（不使用代理）";
+    return { proxy, source, ok: false, detail: "浏览器预览不发真实请求" };
+  },
+
+  // ---- 模型下载器（预览：内存里的假清单 + 假进度）----
+
+  modelCatalog: (): ModelStatus[] => mockModels.map((m) => ({ ...m })),
+
+  modelDownload: (id: string): void => {
+    if (mockModelTimer !== null) return;
+    const entry = mockModels.find((m) => m.id === id);
+    if (!entry) return;
+    const total = entry.approx_bytes;
+    let received = 0;
+    mockModelTimer = window.setInterval(() => {
+      received = Math.min(total, received + total * 0.08);
+      emitModel({ id, state: "downloading", received, total, message: null });
+      if (received >= total) {
+        window.clearInterval(mockModelTimer!);
+        mockModelTimer = null;
+        mockModels = mockModels.map((m) =>
+          m.id === id ? { ...m, installed: true, bytes: total, path: `/mock/models/${m.filename}` } : m,
+        );
+        emitModel({ id, state: "done", received: total, total, message: null });
+      }
+    }, 140);
+  },
+
+  modelCancel: (): void => {
+    if (mockModelTimer !== null) {
+      window.clearInterval(mockModelTimer);
+      mockModelTimer = null;
+    }
+  },
+
+  modelRemove: (id: string): void => {
+    mockModels = mockModels.map((m) =>
+      m.id === id ? { ...m, installed: false, bytes: null, path: null } : m,
+    );
+  },
+
+  // 「复制下载链接」：套上配置的模型镜像前缀（与真实后端一致）。
+  modelResolveUrl: (id: string): string => {
+    const url = `https://huggingface.co/gentij/${id}/resolve/main/${id}`;
+    const prefix = mockNetwork.model_mirrors[0] ?? "";
+    if (!prefix) return url;
+    return prefix.includes("{url}") ? prefix.replace("{url}", url) : `${prefix}${url}`;
+  },
+
+  onModelEvent: (): (() => void) => () => {
+    if (mockModelTimer !== null) {
+      window.clearInterval(mockModelTimer);
+      mockModelTimer = null;
+    }
+  },
+
   // ---- 插件原生界面（浏览器里没有原生窗口） ----
 
   openPluginWindow: (): Promise<void> =>
@@ -428,6 +828,14 @@ export const mockApi = {
 
   openEffectWindow: (): Promise<void> =>
     Promise.reject(new Error("浏览器预览没有独立窗口，已改用侧边栏面板")),
+
+  // 外部效果器的原生界面同理：桌面端才有。
+  openEffectPluginWindow: (): Promise<void> =>
+    Promise.reject(new Error("浏览器预览不支持原生插件窗口，请在桌面端使用")),
+
+  closeEffectPluginWindow: (): Promise<void> => Promise.resolve(),
+
+  effectPluginWindowOpen: (): boolean => false,
 
   // 预览里没有真实音频：画一段正弦，让示波器看得出在动。
   scopeData: (points: number): number[] => {
@@ -750,6 +1158,16 @@ export const mockApi = {
     return mockMcpStatus();
   },
 
+  cliStatus: (): CliStatus => mockCliStatus(),
+  installCli: (): CliStatus => {
+    cliState = "installed";
+    return mockCliStatus();
+  },
+  uninstallCli: (): CliStatus => {
+    cliState = "missing";
+    return mockCliStatus();
+  },
+
   // 浏览器预览没有真实解码：造一段音频片段与一条假的波形包络。
   importAudio: (path: string, trackId: number, start: number): Project =>
     commit(() => {
@@ -802,7 +1220,7 @@ export const mockApi = {
 
   aiStatus: (): AiStatus => ({ ...aiState }),
   // 浏览器预览里没有 Rust 侧，模型一律显示为未就位（走内置 DSP 文案）。
-  aiModels: (): AiModels => ({ basic_pitch: false, localvqe: false }),
+  aiModels: (): AiModels => ({ basic_pitch: false, localvqe: false, separate: false }),
   aiStart: (kind: string): void => {
     if (aiTimer !== null) return;
     aiState = { running: true, kind, progress: 0, message: null };

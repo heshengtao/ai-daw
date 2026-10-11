@@ -14,18 +14,32 @@ import type {
   AutomationPoint,
   BackendParam,
   CatalogPlugin,
+  CliStatus,
   ClipPlacement,
   ClipRef,
+  ForeignPlugin,
   HistoryDepths,
   HistoryState,
+  ImportProgress,
   InputDeviceInfo,
+  ManagerInstallRequest,
+  ManagerInstalled,
+  ManagerRegistry,
+  ManagerProgress,
+  MasterArgs,
   McpStatus,
   MixerState,
+  ModelProgress,
+  ModelStatus,
   Note,
   NoteEdit,
   Preset,
   Project,
+  ProxyMode,
+  ProxyProbe,
+  ProxyStatus,
   Send,
+  StoreNetwork,
   TransportSnapshot,
 } from "./types";
 
@@ -35,6 +49,12 @@ export const EVENT_ENGINE = "engine://event";
 export const EVENT_TRANSPORT = "engine://transport";
 /** 本地 AI 状态广播通道名，与后端 `ai::EVENT_AI` 保持一致。 */
 export const EVENT_AI = "engine://ai";
+/** 插件管理器进度广播通道名，与后端 `manager::EVENT_MANAGER` 保持一致。 */
+export const EVENT_MANAGER = "engine://manager";
+/** 模型下载进度广播通道名，与后端 `models::EVENT_MODEL` 保持一致。 */
+export const EVENT_MODEL = "engine://model";
+/** 音频导入解码进度广播通道名，与后端 `state::EVENT_IMPORT` 保持一致。 */
+export const EVENT_IMPORT = "engine://import";
 
 /** 读取当前工程。 */
 export function getProject(): Promise<Project> {
@@ -380,6 +400,24 @@ export function setMcpConfig(enabled: boolean, port: number): Promise<McpStatus>
   return invoke<McpStatus>("set_mcp_config", { enabled, port });
 }
 
+/** 读取 `aidaw` 命令行工具的安装状态。 */
+export function cliStatus(): Promise<CliStatus> {
+  if (mockEnabled()) return Promise.resolve(mockApi.cliStatus());
+  return invoke<CliStatus>("cli_status");
+}
+
+/** 把 `aidaw` 接进 PATH（macOS 会弹一次管理员授权）。 */
+export function installCli(): Promise<CliStatus> {
+  if (mockEnabled()) return Promise.resolve(mockApi.installCli());
+  return invoke<CliStatus>("install_cli");
+}
+
+/** 撤掉本应用装的 `aidaw`。 */
+export function uninstallCli(): Promise<CliStatus> {
+  if (mockEnabled()) return Promise.resolve(mockApi.uninstallCli());
+  return invoke<CliStatus>("uninstall_cli");
+}
+
 /** 导入一个音频文件为音频片段（自然时长会换算成拍，落在 `start` 处）。 */
 export function importAudio(path: string, track: number, start: number): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.importAudio(path, track, start));
@@ -423,6 +461,12 @@ export function audioWaveform(
 ): Promise<number[]> {
   if (mockEnabled()) return Promise.resolve(mockApi.audioWaveform(path, buckets));
   return invoke<number[]>("audio_waveform", { path, buckets, offsetFrames, frames });
+}
+
+/** 订阅音频导入的解码进度（顶栏下边缘的进度条据此绘制）。 */
+export function onImportEvent(handler: (p: ImportProgress) => void): Promise<UnlistenFn> {
+  if (mockEnabled()) return Promise.resolve(() => {});
+  return listen<ImportProgress>(EVENT_IMPORT, (event) => handler(event.payload));
 }
 
 // ---------------------------------------------------------------------------
@@ -475,10 +519,17 @@ export function aiModels(): Promise<AiModels> {
   return invoke<AiModels>("ai_models");
 }
 
-/** 开始一个本地 AI 任务：`kind` 为 `"to_midi"` / `"enhance"`，作用于 `track` 的音频片段。 */
-export function aiStart(kind: string, track: number): Promise<void> {
+/** 开始一个本地 AI 任务：`kind` 为 `"to_midi"` / `"enhance"`，作用于 `track` 的音频片段。
+ *
+ * `kind === "master"` 时作用于**整个工程的离线混音**，`master` 参数才有效（`track` 被忽略）。 */
+export function aiStart(
+  kind: string,
+  track: number,
+  master?: MasterArgs,
+  model?: string,
+): Promise<void> {
   if (mockEnabled()) return Promise.resolve(mockApi.aiStart(kind));
-  return invoke<void>("ai_start", { kind, track });
+  return invoke<void>("ai_start", { kind, track, master: master ?? null, model: model ?? null });
 }
 
 /** 停止当前 AI 任务。 */
@@ -649,6 +700,33 @@ export function openEffectWindow(track: number, pluginId: string, title: string)
   return invoke<void>("open_effect_window", { track, pluginId, title });
 }
 
+/**
+ * 为某条轨道上的某个**外部效果器**打开它**自带的**原生界面（已经开着就聚焦）。
+ *
+ * 与 {@link openEffectWindow}（内置面板窗口）不同：这条开的是插件自己的窗口。
+ * 传 **plugin id**，序号由后端在权威效果链里现算，避免开到过时的槽位。
+ */
+export function openEffectPluginWindow(
+  track: number,
+  pluginId: string,
+  title: string,
+): Promise<void> {
+  if (mockEnabled()) return mockApi.openEffectPluginWindow();
+  return invoke<void>("open_effect_plugin_window", { track, pluginId, title });
+}
+
+/** 关闭某条轨道上某个外部效果器的原生界面。 */
+export function closeEffectPluginWindow(track: number, pluginId: string): Promise<void> {
+  if (mockEnabled()) return mockApi.closeEffectPluginWindow();
+  return invoke<void>("close_effect_plugin_window", { track, pluginId });
+}
+
+/** 某条轨道上某个外部效果器的原生界面是否开着（用户自己关掉后会变回 false）。 */
+export function effectPluginWindowOpen(track: number, pluginId: string): Promise<boolean> {
+  if (mockEnabled()) return Promise.resolve(mockApi.effectPluginWindowOpen());
+  return invoke<boolean>("effect_plugin_window_open", { track, pluginId });
+}
+
 /** 一次设置效果器的多个参数（「恢复默认值」走它：一次事务，一个撤销步骤）。 */
 export function setEffectParams(
   track: number,
@@ -720,4 +798,164 @@ export function deletePreset(id: string): Promise<void> {
 export function setParams(track: number, params: Record<string, number>): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.setParams(track, params));
   return invoke<Project>("set_params", { track, params });
+}
+
+// ---------------------------------------------------------------------------
+// 插件管理器（E1：浏览 / 安装 / 导入 / 更新 / 删除）
+// ---------------------------------------------------------------------------
+
+/** 拉取插件注册表（带缓存；`force` 强制联网刷新）。 */
+export function managerRegistry(force = false): Promise<ManagerRegistry> {
+  if (mockEnabled()) return Promise.resolve(mockApi.managerRegistry(force));
+  return invoke<ManagerRegistry>("plugin_manager_registry", { force });
+}
+
+/** 本管理器装过的插件清单。 */
+export function managerInstalled(): Promise<ManagerInstalled[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.managerInstalled());
+  return invoke<ManagerInstalled[]>("plugin_manager_installed");
+}
+
+/** 用户自己装的插件（扫描到但不在托管库里；只读）。 */
+export function managerForeign(): Promise<ForeignPlugin[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.managerForeign());
+  return invoke<ForeignPlugin[]>("plugin_manager_foreign");
+}
+
+/** 按当前网络配置解析出**实际会请求**的下载地址（「复制下载链接」用）。 */
+export function managerResolveUrl(url: string): Promise<string> {
+  if (mockEnabled()) return Promise.resolve(url);
+  return invoke<string>("plugin_manager_resolve_url", { url });
+}
+
+/** 订阅插件管理器的安装/下载进度。 */
+export function onManagerEvent(handler: (p: ManagerProgress) => void): Promise<UnlistenFn> {
+  if (mockEnabled()) {
+    const onMock = (e: Event): void => handler((e as CustomEvent<ManagerProgress>).detail);
+    window.addEventListener("ai-daw-mock-manager", onMock);
+    const off = mockApi.onManagerEvent();
+    return Promise.resolve(() => {
+      window.removeEventListener("ai-daw-mock-manager", onMock);
+      off();
+    });
+  }
+  return listen<ManagerProgress>(EVENT_MANAGER, (e) => handler(e.payload));
+}
+
+/** 从注册表下载并安装（也是更新：先替换旧文件）。 */
+export function managerInstall(req: ManagerInstallRequest): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.managerInstall(req));
+  return invoke<void>("plugin_manager_install", { req });
+}
+
+/** 导入本地 `.vst3` / `.clap` 到托管库。 */
+export function managerImport(path: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.managerImport(path));
+  return invoke<void>("plugin_manager_import", { path });
+}
+
+/** 删除一条托管安装。 */
+export function managerRemove(key: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.managerRemove(key));
+  return invoke<void>("plugin_manager_remove", { key });
+}
+
+/** 在系统浏览器里打开下载页（安装器类型用）。 */
+export function managerOpen(url: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.managerOpen(url));
+  return invoke<void>("plugin_manager_open", { url });
+}
+
+/** 读取插件源的网络配置（镜像 / 下载代理）。 */
+export function managerNetwork(): Promise<StoreNetwork> {
+  if (mockEnabled()) return Promise.resolve(mockApi.managerNetwork());
+  return invoke<StoreNetwork>("plugin_manager_network");
+}
+
+/** 写入网络配置（落 `store.json`）。 */
+export function managerSetNetwork(
+  registryMirrors: string[],
+  downloadPrefix: string,
+  proxyMode: ProxyMode,
+  proxyUrl: string,
+  modelMirrors: string[] = [],
+): Promise<StoreNetwork> {
+  if (mockEnabled()) {
+    return Promise.resolve(
+      mockApi.managerSetNetwork(registryMirrors, downloadPrefix, proxyMode, proxyUrl, modelMirrors),
+    );
+  }
+  return invoke<StoreNetwork>("plugin_manager_set_network", {
+    registryMirrors,
+    downloadPrefix,
+    proxyMode,
+    proxyUrl,
+    modelMirrors,
+  });
+}
+
+/** 当前配置会解析成什么代理（不联网，用于设置页显示）。 */
+export function managerProxyStatus(): Promise<ProxyStatus> {
+  if (mockEnabled()) return Promise.resolve(mockApi.managerProxyStatus());
+  return invoke<ProxyStatus>("plugin_manager_proxy_status");
+}
+
+/** 用**给定**的代理设置实际发一次请求，验证通不通（不会写盘）。 */
+export function managerProbeProxy(proxyMode: ProxyMode, proxyUrl: string): Promise<ProxyProbe> {
+  if (mockEnabled()) return Promise.resolve(mockApi.managerProbeProxy(proxyMode, proxyUrl));
+  return invoke<ProxyProbe>("plugin_manager_probe_proxy", { proxyMode, proxyUrl });
+}
+
+// ---------------------------------------------------------------------------
+// 模型下载器（Stage G：大模型按需下载，与插件共用同一份网络配置）
+// ---------------------------------------------------------------------------
+
+/** 列出全部本地 AI 模型与本地状态。 */
+export function modelCatalog(): Promise<ModelStatus[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.modelCatalog());
+  return invoke<ModelStatus[]>("model_catalog");
+}
+
+/** 开始下载某个模型（后台线程；进度走 `engine://model`）。 */
+export function modelDownload(id: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.modelDownload(id));
+  return invoke<void>("model_download", { id });
+}
+
+/** 取消正在进行的模型下载。 */
+export function modelCancel(): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.modelCancel());
+  return invoke<void>("model_cancel");
+}
+
+/** 删除已下载的模型文件。 */
+export function modelRemove(id: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.modelRemove(id));
+  return invoke<void>("model_remove", { id });
+}
+
+/** 在系统文件管理器里显示模型文件。 */
+export function modelReveal(id: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve();
+  return invoke<void>("model_reveal", { id });
+}
+
+/** 按当前网络配置解析出模型**实际会先请求**的下载地址（「复制下载链接」用）。 */
+export function modelResolveUrl(id: string): Promise<string> {
+  if (mockEnabled()) return Promise.resolve(mockApi.modelResolveUrl(id));
+  return invoke<string>("model_resolve_url", { id });
+}
+
+/** 订阅模型下载进度。 */
+export function onModelEvent(handler: (p: ModelProgress) => void): Promise<UnlistenFn> {
+  if (mockEnabled()) {
+    const onMock = (e: Event): void => handler((e as CustomEvent<ModelProgress>).detail);
+    window.addEventListener("ai-daw-mock-model", onMock);
+    const off = mockApi.onModelEvent();
+    return Promise.resolve(() => {
+      window.removeEventListener("ai-daw-mock-model", onMock);
+      off();
+    });
+  }
+  return listen<ModelProgress>(EVENT_MODEL, (e) => handler(e.payload));
 }

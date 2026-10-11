@@ -2,6 +2,9 @@
 /**
  * MD3 数字步进器：自绘 − / + 按钮，输入框无原生外观（type=text + inputmode，
  * 因此没有原生 number 控件的步进箭头）。
+ *
+ * `decimals > 0` 时允许小数（如母带的 `-14.0` LUFS / `-1.0` dBTP / `1.0` 宽度）；
+ * 默认 0 只接受整数，行为与以前完全一致。
  */
 import { ref, watch } from "vue";
 import { useI18n } from "@/i18n";
@@ -12,12 +15,20 @@ const props = withDefaults(defineProps<{
     min?: number;
     max?: number;
     step?: number;
+    /** 允许的小数位数（0 = 只接受整数，默认）。>0 时如 `0.5` / `-1.25` 也合法。 */
+    decimals?: number;
+    /** 药丸内左侧的可见标签（BPM 就是靠它）。 */
     label?: string;
+    /**
+     * 只给读屏用的名称：**不渲染任何可见文字**，只作为输入框的无障碍名。
+     * 用于「名称在别处显示、药丸里只留数值与 −/+」的场景（如母带参数）。
+     */
+    srLabel?: string;
     inputWidth?: string;
     /** 禁用后不可编辑（用于「没有可编辑对象」的场景）。 */
     disabled?: boolean;
   }>(),
-  { min: 0, max: 100, step: 1, inputWidth: "44px", disabled: false },
+  { min: 0, max: 100, step: 1, decimals: 0, inputWidth: "44px", disabled: false },
 );
 const emit = defineEmits<{ (e: "update:modelValue", v: number): void }>();
 
@@ -31,8 +42,11 @@ watch(
   },
 );
 
+/** 夹到区间，并按 `decimals` 量化（0 位 = 取整）。 */
 function clamp(n: number): number {
-  return Math.min(props.max, Math.max(props.min, Math.round(n)));
+  const scale = 10 ** props.decimals;
+  const quantized = Math.round(n * scale) / scale;
+  return Math.min(props.max, Math.max(props.min, quantized));
 }
 
 /** 提交输入：非法值回退，合法值夹到区间后再向上报。 */
@@ -61,7 +75,7 @@ function bump(delta: number): void {
     <button
       class="step-btn"
       :disabled="disabled"
-      :aria-label="i18n.t('value.decrease', { name: label ?? i18n.t('value.none') })"
+      :aria-label="i18n.t('value.decrease', { name: srLabel ?? label ?? i18n.t('value.none') })"
       @click="bump(-step)"
     >
       <MinusIcon class="w-[13px] h-[13px]" />
@@ -70,11 +84,11 @@ function bump(delta: number): void {
       v-model="draft"
       class="step-input"
       type="text"
-      inputmode="numeric"
+      :inputmode="decimals > 0 ? 'decimal' : 'numeric'"
       autocomplete="off"
       spellcheck="false"
       :disabled="disabled"
-      :aria-label="label ?? i18n.t('value.none')"
+      :aria-label="srLabel ?? label ?? i18n.t('value.none')"
       :style="{ width: inputWidth }"
       @change="commit"
       @blur="commit"
@@ -83,7 +97,7 @@ function bump(delta: number): void {
     <button
       class="step-btn"
       :disabled="disabled"
-      :aria-label="i18n.t('value.increase', { name: label ?? i18n.t('value.none') })"
+      :aria-label="i18n.t('value.increase', { name: srLabel ?? label ?? i18n.t('value.none') })"
       @click="bump(step)"
     >
       <PlusIcon class="w-[13px] h-[13px]" />

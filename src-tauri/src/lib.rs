@@ -3,9 +3,12 @@
 mod ai;
 mod audio;
 mod assets;
+mod cli;
 mod commands;
 mod main_thread;
+mod manager;
 mod mcp;
+mod models;
 mod plugins;
 mod presets;
 mod session;
@@ -17,10 +20,11 @@ use std::time::Duration;
 
 use tauri::{Emitter, Manager};
 
+use ai_daw_engine::registry::PluginSlot;
 use ai_daw_host_vst3::EditorHandle;
 
 use crate::audio::{AudioEngine, TransportSnapshot};
-use crate::state::{AppState, EVENT_PLUGINS, EVENT_TRANSPORT};
+use crate::state::{AppState, EVENT_TRANSPORT};
 
 /// 传输位置的推送周期：约 30 Hz，足够让播放头看起来连续，又不会淹没前端。
 const TRANSPORT_TICK: Duration = Duration::from_millis(33);
@@ -78,16 +82,12 @@ fn spawn_transport_ticker(app: tauri::AppHandle, audio: Arc<AudioEngine>) {
 /// 启动插件扫描线程：结果写入共享状态（音频线程据此重建注册表）并广播给界面。
 ///
 /// 扫描会 dlopen 每个插件，可能耗时数秒，所以放到后台，不阻塞窗口出现。
+/// 一并扫描**插件管理器**的托管目录（它装/导入的插件在应用数据目录里）。
 fn spawn_plugin_scan(app: tauri::AppHandle) {
     thread::Builder::new()
         .name("ai-daw-scan".into())
         .spawn(move || {
-            let catalog = ai_daw_host_vst3::scan_catalog();
-            {
-                let state = app.state::<AppState>();
-                state.install_catalog(catalog.clone());
-            }
-            let _ = app.emit(EVENT_PLUGINS, &catalog);
+            crate::manager::rescan_with_managed(&app);
         })
         .expect("failed to spawn plugin scan thread");
 }
@@ -104,15 +104,15 @@ fn on_host_window_closing(window: &tauri::Window, event: &tauri::WindowEvent) {
     if !matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
         return;
     }
-    let Some(track) = crate::commands::host_window_track(window.label()) else {
+    let Some(key) = crate::commands::host_window_track(window.label()) else {
         return;
     };
     let state = window.app_handle().state::<AppState>();
-    if let Some(plugin_window) = crate::state::with_editor_windows(|windows| windows.remove(&track)) {
+    if let Some(plugin_window) = crate::state::with_editor_windows(|windows| windows.remove(&key)) {
         plugin_window.close();
     }
-    state.open_editors.lock().unwrap().remove(&track);
-    state.host_windows.lock().unwrap().remove(&track);
+    state.open_editors.lock().unwrap().remove(&key);
+    state.host_windows.lock().unwrap().remove(&key);
 }
 
 /// 启动插件窗口轮询线程：窗口级的事件（缩放、DPI）必须在主线程泵进插件。
@@ -127,37 +127,39 @@ fn spawn_editor_ticker(app: tauri::AppHandle) {
                 let mut open = state.open_editors.lock().unwrap();
                 let hosts = state.host_windows.clone();
                 // 需要连带关掉的宿主窗口，等到借用结束之后再关（见下面的说明）。
-                let mut close_hosts: Vec<u64> = Vec::new();
+                let mut close_hosts: Vec<(u64, PluginSlot)> = Vec::new();
                 crate::state::with_editor_windows(|windows| {
                     for window in windows.values() {
                         window.service();
                     }
                     // 结束的两种情况：插件自己关了窗口；或者我们给「嵌入模式」插件开的那扇
                     // 宿主窗口被用户关掉了（那时插件不会通知我们）。
-                    let doomed: Vec<u64> = windows
+                    let doomed: Vec<(u64, PluginSlot)> = windows
                         .iter()
-                        .filter(|(track, w)| {
+                        .filter(|(key, w)| {
                             if w.closed_by_user() {
                                 return true;
                             }
-                            let is_host = hosts.lock().unwrap().contains(track);
+                            let is_host = hosts.lock().unwrap().contains(*key);
                             is_host
                                 && app_for_main
-                                    .get_webview_window(&crate::commands::host_window_label(**track))
+                                    .get_webview_window(&crate::commands::host_window_label(
+                                        key.0, key.1,
+                                    ))
                                     .is_none()
                         })
-                        .map(|(track, _)| *track)
+                        .map(|(key, _)| *key)
                         .collect();
-                    for track in doomed {
+                    for key in doomed {
                         // 必须走 `close()` 而不是直接丢：它先 hide + destroy 插件的界面。
                         // 直接丢会把插件的原生视图留成悬空指针，之后一碰就崩。
-                        if let Some(window) = windows.remove(&track) {
+                        if let Some(window) = windows.remove(&key) {
                             window.close();
                         }
                         // 界面住在宿主窗口里的话，那扇窗也要收掉；插件自己关了界面时它
                         // 更会剩在那里变成一扇空窗。
-                        if hosts.lock().unwrap().remove(&track) {
-                            close_hosts.push(track);
+                        if hosts.lock().unwrap().remove(&key) {
+                            close_hosts.push(key);
                         }
                     }
                     open.clear();
@@ -167,14 +169,14 @@ fn spawn_editor_ticker(app: tauri::AppHandle) {
                         .editor_plugins
                         .lock()
                         .unwrap()
-                        .retain(|track, _| windows.contains_key(track));
+                        .retain(|key, _| windows.contains_key(key));
                 });
 
                 // 关宿主窗口必须在 `with_editor_windows` 的借用**之外**做：关窗会触发
                 // `CloseRequested`，我们的处理器又要去借同一个 RefCell——嵌套借用会 panic。
-                for track in close_hosts {
-                    if let Some(window) =
-                        app_for_main.get_webview_window(&crate::commands::host_window_label(track))
+                for key in close_hosts {
+                    if let Some(window) = app_for_main
+                        .get_webview_window(&crate::commands::host_window_label(key.0, key.1))
                     {
                         let _ = window.close();
                     }
@@ -189,7 +191,7 @@ fn spawn_editor_ticker(app: tauri::AppHandle) {
                     .lock()
                     .unwrap()
                     .values()
-                    .cloned()
+                    .map(|entry| entry.handle.clone())
                     .collect();
                 for handle in handles {
                     handle.service_requests();
@@ -245,13 +247,41 @@ pub fn run() {
             state.init_presets(preset_file(app.handle()));
             let audio = state.audio.clone();
             drop(state);
+            // 插件源的网络配置（镜像 / 下载代理）：要在预热线程之前装上。
+            app.manage(crate::manager::StoreRuntime::load(app.handle()));
             spawn_transport_ticker(app.handle().clone(), audio);
             spawn_plugin_scan(app.handle().clone());
             spawn_editor_ticker(app.handle().clone());
+            // 后台预热插件注册表缓存：用户点开「插件管理器 → 可下载」时通常已命中缓存、秒开。
+            {
+                let handle = app.handle().clone();
+                let _ = thread::Builder::new()
+                    .name("ai-daw-store-warm".into())
+                    .spawn(move || crate::manager::warm_registry_cache(&handle));
+            }
             // 内嵌 MCP 服务器：把 DAW 能力暴露给 AI 代理（只监听回环）。按设置启动。
             let mcp = crate::mcp::McpRuntime::load(app.handle().clone(), mcp_file(app.handle()));
             mcp.autostart();
             app.manage(mcp);
+            // 注意：`aidaw` CLI 的挂载**不做任何自动动作**——它是设置页里的一个显式开关
+            // （见 `cli.rs`）。启动时碰 PATH 会平白弹一次密码框，体验很差。
+            // 但要**登记自己在哪**：别的 AI harness 按 bundle id 推导配置目录、读 `cli-path`
+            // 就能拿到全路径，不必搜索、也不必用户开挂载开关。
+            if let Ok(dir) = app.path().app_config_dir() {
+                crate::cli::publish_path(&dir);
+            }
+            // 让模型层知道去哪找权重：**下载落点**（应用配置目录的 models/）与**随包小模型**
+            // （打包后的资源目录 models/）。本 crate 不依赖 Tauri，所以由宿主在这里登记。
+            {
+                let mut extra: Vec<std::path::PathBuf> = Vec::new();
+                if let Ok(dir) = app.path().resource_dir() {
+                    extra.push(dir.join("models"));
+                }
+                if let Ok(dir) = app.path().app_config_dir() {
+                    extra.push(dir.join("models"));
+                }
+                ai_daw_local_ai::models::set_extra_dirs(extra);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -326,6 +356,9 @@ pub fn run() {
             commands::plugin_window_open,
             commands::open_synth_window,
             commands::open_effect_window,
+            commands::open_effect_plugin_window,
+            commands::close_effect_plugin_window,
+            commands::effect_plugin_window_open,
             commands::set_effect_params,
             commands::scope_data,
             commands::audition_note,
@@ -335,10 +368,31 @@ pub fn run() {
             commands::delete_preset,
             mcp::mcp_status,
             mcp::set_mcp_config,
+            cli::cli_status,
+            cli::install_cli,
+            cli::uninstall_cli,
+            manager::plugin_manager_registry,
+            manager::plugin_manager_installed,
+            manager::plugin_manager_foreign,
+            manager::plugin_manager_install,
+            manager::plugin_manager_resolve_url,
+            manager::plugin_manager_import,
+            manager::plugin_manager_remove,
+            manager::plugin_manager_open,
+            manager::plugin_manager_network,
+            manager::plugin_manager_set_network,
+            manager::plugin_manager_probe_proxy,
+            manager::plugin_manager_proxy_status,
             ai::ai_status,
             ai::ai_models,
             ai::ai_start,
             ai::ai_cancel,
+            models::model_catalog,
+            models::model_download,
+            models::model_cancel,
+            models::model_remove,
+            models::model_reveal,
+            models::model_resolve_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ai-daw");

@@ -7,7 +7,7 @@ import { ref, watch } from "vue";
 const KEY = "ai-daw-layout";
 
 /** 右侧面板可打开的窗口类型；后续新增面板只需在此登记。 */
-export type PaneId = "inspector" | "plugins" | "editor" | "ai";
+export type PaneId = "inspector" | "plugins" | "manager" | "editor" | "ai";
 
 /**
  * 鼠标模式（顶栏三选一）：
@@ -27,6 +27,7 @@ export const PANES: { id: PaneId; labelKey: string; hintKey: string }[] = [
   { id: "inspector", labelKey: "panes.inspector", hintKey: "panes.inspectorHint" },
   { id: "editor", labelKey: "panes.editor", hintKey: "panes.editorHint" },
   { id: "plugins", labelKey: "panes.plugins", hintKey: "panes.pluginsHint" },
+  { id: "manager", labelKey: "panes.manager", hintKey: "panes.managerHint" },
   { id: "ai", labelKey: "panes.ai", hintKey: "panes.aiHint" },
 ];
 

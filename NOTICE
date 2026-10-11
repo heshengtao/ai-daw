@@ -23,6 +23,16 @@ the terms of the Apache License, Version 2.0:
 Each adapted file carries a header comment noting its origin.
 --------------------------------------------------------------------------------
 
+Stem Splitter Core (https://github.com/gentij/stem-splitter-core)
+Copyright the stem-splitter-core authors. Licensed under the MIT License OR the
+Apache License, Version 2.0.
+
+The Demucs (HTDemucs v4) STFT/"cac" front-end and the inverse-STFT + windowing
+logic in `crates/local-ai/src/models/demucs.rs` were adapted from that project
+(reimplemented against this project's own `ort` runtime and `rustfft`, rather
+than depending on the crate). Redistributed under the Apache License, Version 2.0.
+--------------------------------------------------------------------------------
+
 Third-party dependencies whose licences are not in the permissive default set:
 
 --------------------------------------------------------------------------------

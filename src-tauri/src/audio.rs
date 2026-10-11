@@ -21,6 +21,7 @@ use ai_daw_engine::realtime::{
     default_output_sample_rate, default_output_signature, device_changed, AudioHost,
     RealtimeOptions, SharedStatus, SharedTransport,
 };
+use ai_daw_engine::registry::PluginSlot;
 use ai_daw_engine::schedule::ScheduledEvents;
 use ai_daw_engine::scope::ScopeBuffer;
 use ai_daw_engine::transport::TransportCommand;
@@ -30,8 +31,23 @@ use ai_daw_host_vst3::{CatalogPlugin, EditorHandle};
 use crate::assets::AssetCache;
 use crate::plugins::build_registry;
 
-/// 「轨道 → 插件编辑器句柄」表（插件工厂在创建实例时登记）。
-pub type EditorHandles = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<u64, EditorHandle>>>;
+/// 一个槽位的编辑器句柄，连同它对应的 **plugin id**。
+///
+/// 带上 plugin id 是为了在重建播放器前**按 id** 把插件内部状态写回正确的实例：结构性变更
+/// （增删 / 移动效果器）会让链内下标整体前移，若按键里的下标写回就会串味。
+pub struct EditorSlot {
+    /// 与音频线程共享的插件实例句柄。
+    pub handle: EditorHandle,
+    /// 该实例对应的插件 id（= 工程里的 `plugin_id`）。
+    pub plugin_id: String,
+}
+
+/// 「(轨道, 槽位) → 插件编辑器句柄」表（插件工厂在创建实例时登记）。
+///
+/// 键含**槽位**（乐器 / 效果链下标）而不只是轨道：一轨只有一个乐器、却可以有多个效果器，
+/// 只按轨道寻址会让它们互相顶掉，界面也就无法为指定效果器打开原生窗口。
+pub type EditorHandles =
+    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<(u64, PluginSlot), EditorSlot>>>;
 
 /// 音频回调请求的最大帧数：同时也是请求设备的固定块大小。
 const MAX_BLOCK: usize = 2048;

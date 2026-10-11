@@ -30,7 +30,7 @@ const props = withDefaults(
     /** 候选项为空时的提示文案；不给就用通用文案。 */
     empty?: string;
     disabled?: boolean;
-    /** 菜单底部的一个动作按钮（例如「浏览全部音色」）。 */
+    /** 菜单**顶部**的动作按钮（例如「浏览全部音色」）：放最上面，选项再多也不会被埋。 */
     action?: { label: string };
   }>(),
   { placeholder: "—" },
@@ -106,7 +106,7 @@ function pick(id: string): void {
   emit("select", id);
 }
 
-/** 点击菜单底部的动作行：先收起菜单，再通知父组件（例如打开「浏览全部音色」）。 */
+/** 点击菜单顶部的动作行：先收起菜单，再通知父组件（例如打开「浏览全部音色」）。 */
 function runAction(): void {
   close();
   emit("action");
@@ -173,6 +173,15 @@ onUnmounted(() => {
         role="listbox"
         :aria-label="label"
       >
+        <!-- 动作行放**最上面**：选项一多，底部动作会被长列表埋掉、永远拉不到。 -->
+        <template v-if="action">
+          <button class="item action" type="button" @click="runAction">
+            <span class="item-main"><span class="item-label">{{ action.label }}</span></span>
+            <ArrowRightIcon class="item-check" />
+          </button>
+          <span class="menu-sep" aria-hidden="true" />
+        </template>
+
         <p v-if="options.length === 0" class="empty">{{ emptyText }}</p>
         <template v-for="g in groups" :key="g.title">
           <!-- 分组标题：`listbox` 里合法子项只有 `option`，标题标记成 presentation 免得成为杂项节点。 -->
@@ -191,14 +200,6 @@ onUnmounted(() => {
               <span v-if="o.hint" class="item-hint">{{ o.hint }}</span>
             </span>
             <CheckIcon v-if="o.id === modelValue" class="item-check" />
-          </button>
-        </template>
-
-        <template v-if="action">
-          <span class="menu-sep" aria-hidden="true" />
-          <button class="item action" type="button" @click="runAction">
-            <span class="item-main"><span class="item-label">{{ action.label }}</span></span>
-            <ArrowRightIcon class="item-check" />
           </button>
         </template>
       </div>

@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.aidaw.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run build:aidaw && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run build:aidaw",
     "frontendDist": "../dist"
   },
   "app": {
@@ -28,6 +28,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/aidaw"],
+    "resources": {
+      "resources/onnx/basic-pitch-nmp.onnx": "models/basic-pitch-nmp.onnx",
+      "resources/onnx/localvqe-ns.onnx": "models/localvqe-ns.onnx"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -5,10 +5,11 @@ use std::sync::{Arc, Mutex};
 
 use ai_daw_engine::bus::Engine;
 use ai_daw_engine::model::TrackId;
+use ai_daw_engine::registry::PluginSlot;
 use ai_daw_host_vst3::{CatalogPlugin, EditorHandle, PluginEditorWindow};
 
 use crate::ai::AiRuntime;
-use crate::audio::AudioEngine;
+use crate::audio::{AudioEngine, EditorSlot};
 use crate::assets::AssetCache;
 use crate::presets::PresetStore;
 
@@ -17,11 +18,11 @@ thread_local! {
     ///
     /// **只在主线程访问**：`PluginWindow` 持有 `NSWindow`（macOS），本来就是 `!Send`，
     /// 而且创建/销毁/泵事件都必须在主线程做，所以放在主线程局部而不是共享状态里。
-    static EDITOR_WINDOWS: RefCell<HashMap<u64, PluginEditorWindow>> = RefCell::new(HashMap::new());
+    static EDITOR_WINDOWS: RefCell<HashMap<(u64, PluginSlot), PluginEditorWindow>> = RefCell::new(HashMap::new());
 }
 
-/// 在主线程里操作「轨道 → 插件窗口」表。
-pub fn with_editor_windows<R>(f: impl FnOnce(&mut HashMap<u64, PluginEditorWindow>) -> R) -> R {
+/// 在主线程里操作「(轨道, 槽位) → 插件窗口」表。
+pub fn with_editor_windows<R>(f: impl FnOnce(&mut HashMap<(u64, PluginSlot), PluginEditorWindow>) -> R) -> R {
     EDITOR_WINDOWS.with(|windows| f(&mut windows.borrow_mut()))
 }
 
@@ -42,17 +43,17 @@ pub struct AppState {
     pub audio: Arc<AudioEngine>,
     /// 已扫描到的插件目录（启动时后台扫描填充；离线渲染也用它）。
     pub catalog: Mutex<Vec<CatalogPlugin>>,
-    /// 「轨道 → 插件编辑器句柄」：插件工厂在实例创建时登记，界面据此打开原生窗口。
-    pub editor_handles: Arc<Mutex<HashMap<u64, EditorHandle>>>,
-    /// 哪几条轨道开着插件窗口（主线程那张表的**可跨线程镜像**，供界面查询）。
-    pub open_editors: Arc<Mutex<HashSet<u64>>>,
-    /// 已开窗口是**为哪个乐器插件**开的（轨道 → plugin id）。
+    /// 「(轨道, 槽位) → 插件编辑器句柄」：插件工厂在实例创建时登记，界面据此打开原生窗口。
+    pub editor_handles: Arc<Mutex<HashMap<(u64, PluginSlot), EditorSlot>>>,
+    /// 哪些 (轨道, 槽位) 开着插件窗口（主线程那张表的**可跨线程镜像**，供界面查询）。
+    pub open_editors: Arc<Mutex<HashSet<(u64, PluginSlot)>>>,
+    /// 已开窗口是**为哪个插件**开的（(轨道, 槽位) → plugin id）。
     ///
-    /// 重建播放器时插件实例会被「搬」到新播放器复用，所以只要这条轨道的乐器没换，窗口就
-    /// 依旧有效、不该关；只有乐器被换掉（或轨道被删）时窗口才真的失效。判定要靠这份记录。
-    pub editor_plugins: Arc<Mutex<HashMap<u64, String>>>,
-    /// 其中哪些轨道的窗口是**宿主建的**（插件只支持嵌入模式）。用户关掉那扇窗就等于关界面。
-    pub host_windows: Arc<Mutex<HashSet<u64>>>,
+    /// 重建播放器时插件实例会被「搬」到新播放器复用，所以只要这个槽位的插件没换，窗口就
+    /// 依旧有效、不该关；只有插件被换掉（或轨道/槽位消失）时窗口才真的失效。判定靠这份记录。
+    pub editor_plugins: Arc<Mutex<HashMap<(u64, PluginSlot), String>>>,
+    /// 其中哪些 (轨道, 槽位) 的窗口是**宿主建的**（插件只支持嵌入模式）。用户关掉那扇窗就等于关界面。
+    pub host_windows: Arc<Mutex<HashSet<(u64, PluginSlot)>>>,
     /// 用户预设（跨工程；文件位置由 `init_presets` 装上）。
     pub presets: Mutex<PresetStore>,
     /// 音频素材缓存（路径 → 已解码 PCM）。音频线程与离线渲染共用。
@@ -71,7 +72,7 @@ impl AppState {
     /// 以给定工程名新建共享状态（初始工程带默认分轨模板，且不带历史）。
     pub fn new(name: &str) -> Self {
         let engine = Engine::new_project(name);
-        let editor_handles: Arc<Mutex<HashMap<u64, EditorHandle>>> =
+        let editor_handles: Arc<Mutex<HashMap<(u64, PluginSlot), EditorSlot>>> =
             Arc::new(Mutex::new(HashMap::new()));
         // 素材缓存要先于音频引擎建好：音频线程重建宿主时要靠它把音频片段接上真实 PCM。
         let assets = Arc::new(AssetCache::new());
@@ -144,9 +145,13 @@ impl AppState {
         *self.session_path.lock().unwrap() = session.path;
     }
 
-    /// 取某条轨道当前插件实例的编辑器句柄。
-    pub fn editor_handle(&self, track: u64) -> Option<EditorHandle> {
-        self.editor_handles.lock().unwrap().get(&track).cloned()
+    /// 取某条轨道某个槽位插件实例的编辑器句柄。
+    pub fn editor_handle(&self, track: u64, slot: PluginSlot) -> Option<EditorHandle> {
+        self.editor_handles
+            .lock()
+            .unwrap()
+            .get(&(track, slot))
+            .map(|entry| entry.handle.clone())
     }
 }
 
@@ -158,3 +163,6 @@ pub const EVENT_TRANSPORT: &str = "engine://transport";
 
 /// 插件扫描完成的前端事件名。
 pub const EVENT_PLUGINS: &str = "engine://plugins";
+
+/// 音频导入解码进度的前端事件名。
+pub const EVENT_IMPORT: &str = "engine://import";
