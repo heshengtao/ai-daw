@@ -166,8 +166,15 @@ pnpm build:aidaw      # build the aidaw CLI (see tools/build-aidaw.sh)
 | Platform | Status |
 | --- | --- |
 | Windows (x86_64) | ✅ Supported |
-| macOS (Apple Silicon) | ✅ Supported |
+| macOS (Apple Silicon) | ✅ Supported (see the “app is damaged” note below) |
 | Linux (x86_64 / arm64) | ✅ Supported |
+
+> **macOS says “App is damaged”?** The app is ad-hoc signed (not notarized), so macOS
+> quarantines downloads. Run this in Terminal, then open the app normally:
+>
+> ```bash
+> xattr -cr "/Applications/AI DAW.app"
+> ```
 
 > **Intel Macs are not supported yet.** ONNX Runtime publishes no prebuilt binaries for
 > `x86_64-apple-darwin`, so the local AI models cannot be linked for Intel macOS.

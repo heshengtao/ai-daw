@@ -94,43 +94,43 @@ jobs:
         if: startsWith(matrix.platform, 'ubuntu')
         shell: bash
         run: |
-          mkdir -p dist
+          mkdir -p out
           bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
           for f in "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage; do
             [ -f "$f" ] || continue
             ext="${f##*.}"
-            cp "$f" "dist/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.${ext}"
+            cp "$f" "out/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.${ext}"
           done
-          ls -la dist
+          ls -la out
 
       - name: Collect Windows bundles
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          New-Item -ItemType Directory -Force -Path out | Out-Null
           $bundle = "src-tauri/target/${{ matrix.target }}/release/bundle"
           Get-ChildItem "$bundle/msi/*.msi" -ErrorAction SilentlyContinue |
-            ForEach-Object { Copy-Item $_.FullName "dist/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.msi" }
+            ForEach-Object { Copy-Item $_.FullName "out/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.msi" }
           Get-ChildItem "$bundle/nsis/*-setup.exe" -ErrorAction SilentlyContinue |
-            ForEach-Object { Copy-Item $_.FullName "dist/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}-setup.exe" }
-          Get-ChildItem dist
+            ForEach-Object { Copy-Item $_.FullName "out/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}-setup.exe" }
+          Get-ChildItem out
 
       - name: Collect macOS bundles
         if: startsWith(matrix.platform, 'macos')
         shell: bash
         run: |
-          mkdir -p dist
+          mkdir -p out
           bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
           for f in "$bundle"/dmg/*.dmg; do
             [ -f "$f" ] || continue
-            cp "$f" "dist/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.dmg"
+            cp "$f" "out/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.dmg"
           done
-          ls -la dist
+          ls -la out
 
       - uses: actions/upload-artifact@v4
         with:
           name: ai-daw-${{ matrix.artifact }}
-          path: dist/*
+          path: out/*
           if-no-files-found: error
 
   release:

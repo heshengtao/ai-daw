@@ -166,8 +166,14 @@ pnpm build:aidaw      # 构建 aidaw CLI（见 tools/build-aidaw.sh）
 | 平台 | 状态 |
 | --- | --- |
 | Windows (x86_64) | ✅ 支持 |
-| macOS（Apple Silicon） | ✅ 支持 |
+| macOS（Apple Silicon） | ✅ 支持（.dmg 首次打开见「App 已损坏」说明） |
 | Linux (x86_64 / arm64) | ✅ 支持 |
+
+> **macOS 提示「App 已损坏，无法打开」？** 应用为自签名（未公证），从网络下载会带上隔离属性。在终端执行下面这行命令后即可正常打开：
+>
+> ```bash
+> xattr -cr "/Applications/AI DAW.app"
+> ```
 
 > **暂不支持 Intel Mac。** ONNX Runtime 不提供 `x86_64-apple-darwin` 的预编译二进制，
 > 本地 AI 模型无法为 Intel macOS 链接。
