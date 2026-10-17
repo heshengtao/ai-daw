@@ -26,7 +26,7 @@ import { useLayoutStore } from "@/stores/layout";
 import { useModelsStore } from "@/stores/models";
 import { useI18n } from "@/i18n";
 import { copyText } from "@/utils/clipboard";
-import { humanSize, missingBytes } from "@/utils/models";
+import { humanSize, missingBytes, modelName } from "@/utils/models";
 
 const KIND_MIDI = "to_midi";
 /** 人声降噪 / 去混响：走 LocalVQE 模型。 */
@@ -134,7 +134,7 @@ const sepDownloading = computed(() =>
 const sepOptions = computed(() =>
   separateModels.value.map((m) => ({
     id: m.id,
-    label: m.name,
+    label: modelName(m),
     hint: m.installed
       ? i18n.t("ai.modelReady")
       : i18n.t("ai.modelNeedsDownload", { size: humanSize(m.approx_bytes) }),
@@ -149,7 +149,7 @@ const promptOpen = ref(false);
 const downloadPromptMessage = computed(() => {
   const m = pendingModel.value;
   return m
-    ? i18n.t("dialog.downloadModelMessage", { name: m.name, size: humanSize(missingBytes(m)) })
+    ? i18n.t("dialog.downloadModelMessage", { name: modelName(m), size: humanSize(missingBytes(m)) })
     : "";
 });
 

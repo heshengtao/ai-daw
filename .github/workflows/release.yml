@@ -152,7 +152,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ env.APP_NAME }} ${{ github.ref_name }}
-          draft: true
+          draft: false
           prerelease: false
           fail_on_unmatched_files: false
           body: |

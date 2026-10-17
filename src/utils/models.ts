@@ -1,4 +1,18 @@
 import type { ModelStatus } from "@/api/types";
+import { useI18n } from "@/i18n";
+
+/**
+ * 模型的**显示名**。
+ *
+ * 清单条目由后端的 `local-ai::models::catalog` 下发，那里的 `name` 只有中文；界面按 id 取
+ * i18n 文案，英文界面才不会是中文名。词典里没有该 id（后端加了新模型、词条还没补）时
+ * 回退到后端自己的名字——宁可显示中文，也不要显示成 `model.xxx` 这种键名。
+ */
+export function modelName(model: { id: string; name: string }): string {
+  const key = `model.${model.id}`;
+  const text = useI18n().t(key);
+  return text === key ? model.name : text;
+}
 
 /**
  * 模型条目**还差多少字节**没下载。

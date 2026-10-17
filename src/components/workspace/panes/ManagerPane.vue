@@ -27,7 +27,7 @@ import { useLayoutStore } from "@/stores/layout";
 import { useI18n } from "@/i18n";
 import { pickPluginToImport } from "@/api/dialogs";
 import { copyText } from "@/utils/clipboard";
-import { humanSize, missingBytes } from "@/utils/models";
+import { humanSize, missingBytes, modelName } from "@/utils/models";
 import type {
   ManagerFile,
   ManagerInstalled,
@@ -183,7 +183,7 @@ const available = computed<ManagerPlugin[]>(() => {
 const visibleModels = computed(() => {
   if (kindFilter.value === "instrument" || kindFilter.value === "effect") return [];
   const q = query.value.trim().toLowerCase();
-  return models.catalog.filter((m) => !q || m.name.toLowerCase().includes(q));
+  return models.catalog.filter((m) => !q || modelName(m).toLowerCase().includes(q));
 });
 
 /** 「可下载」的计数（插件 + 模型）。 */
@@ -230,7 +230,7 @@ function installedFilterLabel(k: InstalledFilter): string {
 const visibleInstalledModels = computed(() => {
   if (installedFilter.value === "instrument" || installedFilter.value === "effect") return [];
   const q = installedQuery.value.trim().toLowerCase();
-  return models.catalog.filter((m) => m.installed && (!q || m.name.toLowerCase().includes(q)));
+  return models.catalog.filter((m) => m.installed && (!q || modelName(m).toLowerCase().includes(q)));
 });
 
 /** 已安装的插件（按筛选与搜索过滤）。
@@ -401,7 +401,7 @@ async function doRemoveModel(id: string): Promise<void> {
         >
           <div class="card-main">
             <div class="card-top">
-              <span class="card-name">{{ m.name }}</span>
+              <span class="card-name">{{ modelName(m) }}</span>
               <span class="badge">{{ i18n.t("manager.kindModel") }}</span>
               <span v-if="m.bundled" class="badge local">{{ i18n.t("manager.modelBundled") }}</span>
               <span v-else class="badge installed">{{ i18n.t("manager.modelInstalled") }}</span>
@@ -635,7 +635,7 @@ async function doRemoveModel(id: string): Promise<void> {
           :class="{ busy: models.installing(m.id) }"
         >
           <div class="card-top">
-            <span class="card-name">{{ m.name }}</span>
+            <span class="card-name">{{ modelName(m) }}</span>
             <span class="badge">{{ i18n.t("manager.kindModel") }}</span>
             <span v-if="m.bundled" class="badge local">{{ i18n.t("manager.modelBundled") }}</span>
             <span v-else-if="m.installed" class="badge installed">

@@ -64,7 +64,7 @@ const SOURCE_PREFS: { id: ModelSourcePreference; labelKey: string }[] = [
   { id: "domestic", labelKey: "settings.store.sourceCn" },
 ];
 
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "1.0.0";
 
 const router = useRouter();
 const active = ref<Section>("general");
@@ -274,9 +274,23 @@ async function loadStoreNetwork(): Promise<void> {
 const backendInfo = ref<BackendInfo | null>(null);
 const backendSaving = ref(false);
 const availableBackends = computed(() => backendInfo.value?.options.filter((o) => o.available) ?? []);
-const backendNote = computed(
-  () => backendInfo.value?.options.find((o) => o.kind === backendInfo.value?.preference)?.note ?? "",
-);
+
+/**
+ * 执行后端的文案。
+ *
+ * 后端目录（`local-ai::backend::catalog`）里的 `label` / `note` 只有中文；这里按 `kind` 取
+ * i18n 文案，英文界面才不会是中文。词典里没有该 kind 时回退到后端下发的那份文案。
+ */
+function backendText(kind: string, field: "label" | "note", fallback: string): string {
+  const key = field === "note" ? `backend.${kind}.note` : `backend.${kind}`;
+  const text = i18n.t(key);
+  return text === key ? fallback : text;
+}
+
+const backendNote = computed(() => {
+  const current = backendInfo.value?.options.find((o) => o.kind === backendInfo.value?.preference);
+  return current ? backendText(current.kind, "note", current.note) : "";
+});
 
 async function loadBackend(): Promise<void> {
   try {
@@ -800,7 +814,7 @@ onMounted(() => {
                     :disabled="backendSaving"
                     @click="setBackend(o.kind)"
                   >
-                    {{ o.label }}
+                    {{ backendText(o.kind, "label", o.label) }}
                   </button>
                 </div>
               </div>

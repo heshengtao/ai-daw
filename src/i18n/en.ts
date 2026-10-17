@@ -418,6 +418,20 @@ const en: Record<string, string> = {
   "panes.aiHint": "MCP status and entry points to local AI",
   "panes.manager": "Downloads",
   "panes.managerHint": "Install / import / update / remove plugins & models",
+  // Model catalog entries (backend `local-ai::models::catalog`) are named by id, falling
+  // back to the name the backend sent when there is no translation yet.
+  "model.basic-pitch": "Basic Pitch (audio to MIDI)",
+  "model.localvqe": "LocalVQE (vocal denoise / dereverb)",
+  "model.htdemucs-ort-v1": "HTDemucs (stem separation · 4 stems)",
+  "model.htdemucs-6s": "HTDemucs 6s (stem separation · 6 stems)",
+  "model.beat-this": "Beat This! (tempo / beat detection · final0)",
+  // Execution backends (backend `local-ai::backend::catalog`), same idea.
+  "backend.cpu": "CPU",
+  "backend.cpu.note": "Plain CPU (default, available on every platform)",
+  "backend.coreml": "Apple CoreML",
+  "backend.coreml.note": "Apple Neural Engine / GPU (measured slower than CPU for these small models on this machine)",
+  "backend.directml": "DirectML",
+  "backend.directml.note": "DirectX 12 hardware acceleration (Windows)",
   "ai.mcpServer": "MCP server",
   "ai.mcpOn": "Running (drivable by AI)",
   "ai.mcpOff": "Stopped",
