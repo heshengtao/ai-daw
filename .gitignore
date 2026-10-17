@@ -17,3 +17,6 @@ src-tauri/gen/
 
 # 头脑风暴可视化伴侣的 mockup 与会话文件（本地临时产物，不进仓库）。
 .superpowers/
+
+# 技能工具（Command Code）的本地状态，不进仓库。
+.agents/

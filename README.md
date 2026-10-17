@@ -15,60 +15,80 @@
 
 ## What is AI DAW?
 
-**AI DAW** is an open-source, **local-first digital audio workstation** built with **Tauri v2**, a **Rust audio engine**, and a **Vue 3** interface. Arrange, edit, mix, and master on your own machine — with the engine and every AI model running natively at your side, not in someone else's cloud.
+**AI DAW is a desktop music studio that runs entirely on your own machine** — write, arrange, mix, and master in one app, with AI built into the workflow instead of bolted onto the side.
 
-The engine is written in Rust and talks to the audio device through `cpal`, moving samples on a lock-free ring buffer so the real-time thread never blocks. Arranging, transport, scheduling, buses, and time-stretching all live in the engine; the UI is a Material You–styled Vue 3 app that mirrors that state over a typed command/event contract.
+Everything you'd expect from a DAW is here: a multi-track timeline, a piano roll, a mixer with sends and buses, automation lanes, a built-in synth, and VST3 / CLAP plugin hosting. What makes it different is what happens off the timeline — drop in a recording and ask for MIDI, split a finished mix into stems, find the tempo of a performance, clean up a vocal take. There is no account, no API key, and no audio leaving your computer: every model runs locally.
 
-Local AI runs **fully offline**. Tempo detection, audio-to-MIDI, voice cleanup, and stem separation are all ONNX models executed on-device — no account, no API key, no audio leaving your computer. A built-in **MCP server** (Model Context Protocol) then lets an AI agent read and edit the project directly, so assistants can drive the DAW for you.
+And because the project itself is exposed through a built-in **MCP server**, an AI assistant can read and edit your song while you work — adding clips, fixing notes, riding a fader — with every change appearing live in the UI.
+
+<p align="center">
+  <img src="./assets/screenshots/01-arrange.png" width="100%" alt="The AI DAW arrange view: MIDI clips on three tracks, the timeline ruler, the inspector, and the AI panel">
+</p>
 
 ## Features
 
-### 🎹 Arranging & Editing — Compose on a Real Timeline
+### 🎹 Arranging & Editing — Compose on a real timeline
 
-A familiar arrange view with multiple tracks, mini piano-roll clips, and audio waveform clips. Select, drag, split, copy, paste, and delete clips across tracks; the ruler and grid stay locked to a dynamic tempo and time signature you can change at any point in the song. A transport with loop, metronome, and a scrubable playhead ties it together, and automation lanes let you draw curves for anything a plugin or the built-in synth exposes.
+Lay out a song the way you hear it. Drag clips across tracks, split them where the music changes, and let the ruler and grid follow a tempo and time signature you can change anywhere in the song. MIDI clips draw their own notes, audio clips draw their own waveform, so you can read the arrangement at a glance.
 
-- **Multi-Track Arranging** — MIDI and audio clips side by side, cross-track drag & drop, marquee select
-- **Mini Piano Roll & Waveforms** — Clips render their own notes or waveform so you can read the song at a glance
-- **Dynamic Tempo & Meter** — Tempo and time-signature changes anywhere on the timeline; the grid follows automatically
-- **Transport & Loop** — Play, stop, seek, loop region, and a metronome
-- **Automation Lanes** — Draw parameter curves, with a parameter browser to pick what to automate
-- **Editing** — Split, move, copy/paste, undo/redo, plus a keyboard-shortcut cheat sheet
+- **Multi-track arranging** — MIDI and audio clips side by side, cross-track drag & drop, marquee select
+- **A piano roll that reads well** — clip previews show notes; the editor gives you velocity, zoom, and a keyboard
+- **Dynamic tempo & meter** — change tempo or time signature at any point; the grid follows
+- **Transport & loop** — play, stop, seek, loop a region, metronome
+- **Automation lanes** — draw curves for anything a plugin or the built-in synth exposes
+- **A real editing toolkit** — split, move, copy/paste, undo/redo, plus a keyboard-shortcut cheat sheet
 
-### 🎚️ Mixing & Mastering — Finish the Track
+<p align="center">
+  <img src="./assets/screenshots/02-edit.png" width="100%" alt="The piano-roll editor showing a chord clip's notes and a velocity lane">
+</p>
 
-A mixer with per-track gain, pan, sends, buses, mute/solo, and meters, plus built-in effects. A mastering chain — loudness normalization, true-peak limiting, and stereo width — gives you a release-ready render without leaving the app.
+### 🎚️ Mixing & Mastering — Finish the track
 
-- **Mixer** — Gain, pan, sends, buses, mute/solo, and meters
-- **Built-in Effects** — Ready-to-use dynamics, EQ, and time-based effects
-- **Mastering Chain** — Loudness normalization + true-peak limiting + stereo width
-- **Built-in Synth** — Oscillators, envelopes, and a filter with a live oscilloscope
+Balance the song, then make it loud. Channel strips give you gain, pan, sends, buses, mute/solo and metering; a mastering chain on the master bus handles loudness, peaks, and stereo width so you can render something release-ready without leaving the app.
 
-### 🧩 Plugins — Bring Your Own Instruments and Effects
+- **Mixer** — gain, pan, sends, buses, mute/solo, and level metering
+- **Built-in effects** — dynamics, EQ, and time-based effects, ready to drop on any track
+- **Mastering chain** — loudness normalization, true-peak limiting, and stereo width
+- **Built-in synth** — oscillators, envelopes, and a filter with a live oscilloscope
 
-Hosts **VST3** and **CLAP** plugins. A plugin manager searches the open registry, filters by type and OS compatibility, and installs, updates, or removes plugins in one click — or import a plugin you already have on disk.
+<p align="center">
+  <img src="./assets/screenshots/03-mix.png" width="100%" alt="The mixer: channel strips for the master bus and each track, with faders, pan and mute/solo">
+</p>
 
-- **VST3 & CLAP Hosting** — Load third-party instruments and effects on any track
-- **Plugin Manager** — Search the open registry, filter by instrument/effect and compatibility, install / update / uninstall
-- **Local Import** — Point the manager at a plugin you already have installed elsewhere
-- **Plugin UI & Parameters** — Open a plugin's own editor, or drive its parameters from the inspector and automation lanes
+### 🧩 Plugins — Bring your own instruments and effects
 
-### 🤖 Local AI Models — Offline, On Your Machine
+AI DAW hosts **VST3** and **CLAP** plugins, so the tools you already own come with you. A plugin manager searches the open registry, filters by type and OS compatibility, and installs, updates, or removes plugins in one click — or point it at something you already have on disk.
 
-Every AI feature is a local ONNX model that runs on CPU by default, with optional **CoreML** (macOS) and **DirectML** (Windows) execution providers when the hardware supports them. Weights download on demand from the in-app **model manager**; nothing is uploaded anywhere.
+- **VST3 & CLAP hosting** — load third-party instruments and effects on any track
+- **Plugin manager** — search the registry, filter by instrument/effect and platform, install / update / uninstall
+- **Local import** — bring in a plugin you have installed elsewhere
+- **Editors & parameters** — open a plugin's own UI, or drive its parameters from the inspector and automation lanes
 
-- **Tempo Detection** — Beat This! (ISMIR 2024) infers a global BPM and time signature in one pass
-- **Audio-to-MIDI** — Basic Pitch turns a recorded performance into editable MIDI notes
-- **Voice Cleanup** — LocalVQE reduces noise and reverb on voice takes
-- **Stem Separation** — HTDemucs v4 splits a track into 4 or 6 stems
-- **Execution Backends** — CPU by default; CoreML / DirectML where available
+### 🤖 Local AI — Turn audio into material you can work with
 
-### 🔌 MCP Server — Let an AI Agent Drive the DAW
+The AI features are built for real sessions, not demos. Point them at a track and they hand back something you can keep editing: MIDI notes you can move, a vocal take with less room noise, stems you can rebalance. Everything runs on your own hardware — CPU by default, with optional CoreML (macOS) and DirectML (Windows) acceleration.
 
-A built-in **MCP (Model Context Protocol)** server exposes the project to AI agents over Streamable HTTP, bound to `127.0.0.1` only. Enable it in **Settings → AI / MCP**, copy the endpoint, and connect your agent — it can add clips, edit notes, change gain, and more, with every change showing up live in the UI.
+- **Tempo detection** — Beat This! (ISMIR 2024) infers a global BPM and time signature in one pass
+- **Audio-to-MIDI** — Basic Pitch turns a recorded performance into editable notes
+- **Voice cleanup** — LocalVQE reduces noise and reverb on vocal takes
+- **Stem separation** — HTDemucs v4 splits a track into 4 or 6 stems, ready to remix
+- **Offline by design** — no account, no API key, no uploads
 
-- **MCP over HTTP** — A loopback-only endpoint your agent connects to
-- **Live Project Edits** — Agent actions appear immediately as normal project changes
-- **`aidaw` CLI** — A thin MCP client you can install onto `PATH` from Settings
+<p align="center">
+  <img src="./assets/screenshots/04-ai-panel.png" width="100%" alt="The AI panel: MCP server status, plus entries for audio-to-MIDI, voice cleanup, stem separation and tempo detection">
+</p>
+
+### 🔌 MCP Server — Let an AI agent work in your session
+
+Flip one switch and your project becomes something an AI assistant can operate. The built-in **MCP (Model Context Protocol)** server exposes the session over HTTP bound to `127.0.0.1` — connect your agent, hand it a task, and watch it add clips, fix notes, or change levels while the UI updates in real time. The `aidaw` command-line tool is a thin client for the same server.
+
+- **MCP over HTTP** — a loopback-only endpoint your agent connects to
+- **Live edits** — agent actions show up immediately as ordinary project changes
+- **`aidaw` CLI** — installable onto your `PATH` from Settings
+
+<p align="center">
+  <img src="./assets/screenshots/05-settings-ai-mcp.png" width="100%" alt="Settings → AI / MCP: execution backend selection and the MCP server endpoint">
+</p>
 
 ## Installation
 
@@ -114,11 +134,15 @@ Yes. AI DAW is open source under Apache 2.0. There are no paid tiers and no feat
 
 ### Does it work offline?
 
-Yes. The engine, the UI, and every AI model run locally. The only network access is downloading plugin/model packages (which you control) and fetching the plugin registry.
+Yes. The engine, the interface, and every AI model run locally. The only network access is downloading plugin packages and AI models (which you start), and fetching the plugin registry.
 
 ### Do I need a GPU?
 
 No. AI models run on CPU by default. macOS can use CoreML and Windows can use DirectML when the hardware supports it; both are optional.
+
+### Which AI models ship with the app?
+
+Two small ones do: **Basic Pitch** (audio-to-MIDI) and **LocalVQE** (voice cleanup), so those work the moment you install. The larger models — **Beat This!** (tempo detection) and **HTDemucs** (stem separation, 4- or 6-stem) — download on demand from the in-app model manager the first time you use them, and are stored outside the source tree.
 
 ### Which plugin formats are supported?
 
@@ -126,11 +150,7 @@ VST3 and CLAP.
 
 ### What can an AI agent do through the MCP server?
 
-With the MCP server enabled, an agent can read the project and make edits — adding clips, editing notes, changing gain, and more — over a loopback-only HTTP endpoint. The `aidaw` CLI is a thin client for the same server.
-
-### Where do the AI model weights live?
-
-A small log-mel front-end ships with the app. Larger weights download on demand from the in-app model manager and are stored outside the repository, so they are never committed.
+With the server enabled, an agent can read the project and make edits — adding clips, editing notes, changing levels, and more — over a loopback-only HTTP endpoint. The `aidaw` CLI is a thin client for the same server.
 
 ## License
 

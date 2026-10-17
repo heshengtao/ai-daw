@@ -5,28 +5,27 @@
       <stop offset="0" stop-color="#7F67BE" />
       <stop offset="1" stop-color="#4F378B" />
     </linearGradient>
-    <linearGradient id="eq" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#D0BCFF" />
-      <stop offset="1" stop-color="#6750A4" />
-    </linearGradient>
-    <radialGradient id="glow" cx="0.12" cy="0.5" r="0.9">
-      <stop offset="0" stop-color="#6750A4" stop-opacity="0.34" />
-      <stop offset="0.55" stop-color="#6750A4" stop-opacity="0.06" />
+    <radialGradient id="glow" cx="0.1" cy="0.5" r="0.85">
+      <stop offset="0" stop-color="#6750A4" stop-opacity="0.38" />
+      <stop offset="0.55" stop-color="#6750A4" stop-opacity="0.07" />
       <stop offset="1" stop-color="#6750A4" stop-opacity="0" />
     </radialGradient>
-    <radialGradient id="glow2" cx="0.94" cy="0.28" r="0.6">
-      <stop offset="0" stop-color="#D0BCFF" stop-opacity="0.16" />
-      <stop offset="1" stop-color="#D0BCFF" stop-opacity="0" />
-    </radialGradient>
+    <linearGradient id="panelFade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#232227" stop-opacity="0" />
+      <stop offset="0.12" stop-color="#232227" stop-opacity="1" />
+      <stop offset="1" stop-color="#232227" stop-opacity="1" />
+    </linearGradient>
     <clipPath id="frame">
       <rect width="1200" height="420" rx="24" />
+    </clipPath>
+    <clipPath id="panel">
+      <rect x="816" y="96" width="340" height="228" rx="14" />
     </clipPath>
   </defs>
 
   <g clip-path="url(#frame)">
     <rect width="1200" height="420" fill="#1c1b1f" />
     <rect width="1200" height="420" fill="url(#glow)" />
-    <rect width="1200" height="420" fill="url(#glow2)" />
 
     <!-- brand mark (same mark as public/logo.svg) -->
     <g transform="translate(84 118) scale(0.18)">
@@ -43,13 +42,66 @@
     <text x="312" y="226" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="86" font-weight="700" letter-spacing="2" fill="#EADDFF">AI DAW</text>
     <text x="314" y="274" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#CAC4D0">Local-first, AI-native digital audio workstation</text>
 
-    <!-- EQ motif -->
-    <g fill="url(#eq)" opacity="0.85">
-      <rect x="980" y="216" width="20" height="84" rx="10" />
-      <rect x="1016" y="150" width="20" height="150" rx="10" />
-      <rect x="1052" y="90" width="20" height="210" rx="10" />
-      <rect x="1088" y="168" width="20" height="132" rx="10" />
-      <rect x="1124" y="204" width="20" height="96" rx="10" />
+    <!-- the app's own arrange view, in miniature -->
+    <g clip-path="url(#panel)">
+      <rect x="816" y="96" width="340" height="228" fill="#232227" />
+      <g stroke="#ffffff" stroke-opacity="0.055">
+        <line x1="880" y1="108" x2="880" y2="312" />
+        <line x1="944" y1="108" x2="944" y2="312" />
+        <line x1="1008" y1="108" x2="1008" y2="312" />
+        <line x1="1072" y1="108" x2="1072" y2="312" />
+        <line x1="1136" y1="108" x2="1136" y2="312" />
+      </g>
+
+      <!-- lane 1: chords (primaryContainer) -->
+      <rect x="826" y="112" width="320" height="60" rx="10" fill="#1A191E" />
+      <rect x="832" y="120" width="252" height="44" rx="8" fill="#4F378B" />
+      <g fill="#D0BCFF">
+        <rect x="840" y="126" width="26" height="8" rx="4" />
+        <rect x="840" y="138" width="26" height="8" rx="4" />
+        <rect x="840" y="150" width="26" height="8" rx="4" />
+        <rect x="898" y="126" width="26" height="8" rx="4" />
+        <rect x="898" y="138" width="26" height="8" rx="4" />
+        <rect x="898" y="150" width="26" height="8" rx="4" />
+        <rect x="956" y="126" width="26" height="8" rx="4" />
+        <rect x="956" y="138" width="26" height="8" rx="4" />
+        <rect x="956" y="150" width="26" height="8" rx="4" />
+        <rect x="1014" y="126" width="26" height="8" rx="4" />
+        <rect x="1014" y="138" width="26" height="8" rx="4" />
+        <rect x="1014" y="150" width="26" height="8" rx="4" />
+      </g>
+
+      <!-- lane 2: melody (tertiaryContainer) -->
+      <rect x="826" y="182" width="320" height="60" rx="10" fill="#1A191E" />
+      <rect x="832" y="190" width="252" height="44" rx="8" fill="#633B48" />
+      <g fill="#EFB8C8">
+        <rect x="840" y="204" width="22" height="8" rx="4" />
+        <rect x="872" y="196" width="22" height="8" rx="4" />
+        <rect x="904" y="212" width="22" height="8" rx="4" />
+        <rect x="936" y="204" width="22" height="8" rx="4" />
+        <rect x="968" y="196" width="22" height="8" rx="4" />
+        <rect x="1000" y="212" width="22" height="8" rx="4" />
+        <rect x="1032" y="204" width="22" height="8" rx="4" />
+      </g>
+
+      <!-- lane 3: bass (secondaryContainer) -->
+      <rect x="826" y="252" width="320" height="60" rx="10" fill="#1A191E" />
+      <rect x="832" y="260" width="252" height="44" rx="8" fill="#4A4458" />
+      <g fill="#CCC2DC">
+        <rect x="840" y="278" width="34" height="8" rx="4" />
+        <rect x="906" y="278" width="34" height="8" rx="4" />
+        <rect x="972" y="278" width="34" height="8" rx="4" />
+        <rect x="1038" y="278" width="34" height="8" rx="4" />
+      </g>
+
+      <!-- playhead -->
+      <rect x="888" y="100" width="2" height="228" fill="#D0BCFF" fill-opacity="0.5" />
+
+      <!-- left edge fade so the panel melts into the banner -->
+      <rect x="816" y="96" width="60" height="228" fill="url(#panelFade)" />
     </g>
+
+    <!-- panel outline -->
+    <rect x="816.5" y="96.5" width="339" height="227" rx="14" fill="none" stroke="#49454F" stroke-opacity="0.45" />
   </g>
 </svg>
