@@ -32,10 +32,9 @@ jobs:
             target: aarch64-apple-darwin
             artifact: macos-arm64
             bundles: --bundles dmg
-          - platform: macos-latest
-            target: x86_64-apple-darwin
-            artifact: macos-amd64
-            bundles: --bundles dmg
+          # 没有 Intel macOS（x86_64-apple-darwin）这一档：`ort` 只对 x86_64-apple-darwin
+          # **不发预编译的 ONNX Runtime**（`ort-sys: no prebuilt binaries available`），
+          # 加进来只会让整个 release 挂掉。要支持得改用 `load-dynamic` 自己带 dylib。
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -163,8 +162,6 @@ jobs:
             👉 [Windows — setup (.exe)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AI-DAW-${{ github.ref_name }}-windows-amd64-setup.exe)
 
             👉 [macOS — Apple Silicon (.dmg)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AI-DAW-${{ github.ref_name }}-macos-arm64.dmg)
-
-            👉 [macOS — Intel (.dmg)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AI-DAW-${{ github.ref_name }}-macos-amd64.dmg)
 
             👉 [Linux — x86_64 (.AppImage)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AI-DAW-${{ github.ref_name }}-linux-amd64.AppImage)
 

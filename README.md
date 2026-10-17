@@ -27,7 +27,7 @@ Everything runs on your own machine. No account, no API key, no audio leaving yo
 
 ## Why this matters
 
-Models got good at writing code because they could **run** it. Cursor gave them a codebase to act on; MCP servers like Blender's gave them a scene to manipulate. In both cases the model gets a real tool, a real result, and a real feedback loop — and that is what makes fast iteration possible.
+Models got good at writing code because they could **run** it through a coding-agent framework; models got good at 3D modelling because they could drive real modelling software through Blender MCP. In both cases the model gets a real tool, a real result, and a real feedback loop — and that is what makes fast iteration possible.
 
 Music has mostly been missing that loop. A model can generate audio, but it cannot *work on a session* the way a person does: no arrangement to edit, no mixer to ride, no undo history, no way to notice that its last change made things worse.
 
@@ -41,7 +41,7 @@ Music has mostly been missing that loop. A model can generate audio, but it cann
 
 Being small is a feature, not a compromise.
 
-- **A lightweight footprint** — no Electron, no cloud, no bundled model zoo. The macOS app is about 38 MB.
+- **A lightweight footprint** — no Electron, no cloud, no bundled model zoo. The macOS app is about 38 MB — for reference, mainstream DAWs such as Ableton Live, Logic Pro, and FL Studio typically install at 1–3 GB, making AI DAW **95%+ smaller**.
 - **Fast to start** — nothing heavyweight loads at boot; AI models are pulled in only when you use them.
 - **Heavy AI stays where it belongs** — high-compute work such as music generation and timbre transfer is deliberately **not** integrated locally. Your AI harness generates audio, and the result can be imported straight into the DAW for editing, mixing, and mastering.
 - **Built to be extended** — interfaces for plugging external AI models into the workflow are on the roadmap.
@@ -166,8 +166,11 @@ pnpm build:aidaw      # build the aidaw CLI (see tools/build-aidaw.sh)
 | Platform | Status |
 | --- | --- |
 | Windows (x86_64) | ✅ Supported |
-| macOS (Apple Silicon / Intel) | ✅ Supported |
-| Linux (x86_64) | ✅ Supported |
+| macOS (Apple Silicon) | ✅ Supported |
+| Linux (x86_64 / arm64) | ✅ Supported |
+
+> **Intel Macs are not supported yet.** ONNX Runtime publishes no prebuilt binaries for
+> `x86_64-apple-darwin`, so the local AI models cannot be linked for Intel macOS.
 
 ## FAQ
 

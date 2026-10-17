@@ -493,7 +493,7 @@ fn write_user_path(value: &str, vtype: winreg::enums::RegType) -> Result<(), Str
         .map_err(|e| format!("打开注册表 Environment 失败：{e}"))?;
     let mut bytes: Vec<u8> = value.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
     bytes.extend([0, 0]); // 结尾 NUL
-    key.set_raw_value("Path", &RegValue { bytes, vtype })
+    key.set_raw_value("Path", &RegValue { bytes: bytes.into(), vtype })
         .map_err(|e| format!("写入用户 PATH 失败：{e}"))
 }
 
