@@ -15,21 +15,60 @@
 
 ## What is AI DAW?
 
-**AI DAW is a desktop music studio that runs entirely on your own machine** — write, arrange, mix, and master in one app, with AI built into the workflow instead of bolted onto the side.
+**AI DAW is a small, AI-native music studio for your desktop** — write, arrange, mix, and master in one lightweight app, and let an AI agent work in the session alongside you.
 
-Everything you'd expect from a DAW is here: a multi-track timeline, a piano roll, a mixer with sends and buses, automation lanes, a built-in synth, and VST3 / CLAP plugin hosting. What makes it different is what happens off the timeline — drop in a recording and ask for MIDI, split a finished mix into stems, find the tempo of a performance, clean up a vocal take. There is no account, no API key, and no audio leaving your computer: every model runs locally.
+It is a real DAW: a multi-track timeline, a piano roll, a mixer with sends and buses, automation lanes, a built-in synth, and VST3 / CLAP plugin hosting. It is also built to be **operated by a model** — a bundled Skill teaches any AI harness to drive the running app over MCP, so an agent can add tracks, write notes, balance a mix, and analyse the result while you watch it happen in the UI.
 
-And because the project itself is exposed through a built-in **MCP server**, an AI assistant can read and edit your song while you work — adding clips, fixing notes, riding a fader — with every change appearing live in the UI.
+Everything runs on your own machine. No account, no API key, no audio leaving your computer.
 
 <p align="center">
   <img src="./assets/screenshots/01-arrange.png" width="100%" alt="The AI DAW arrange view: MIDI clips on three tracks, the timeline ruler, the inspector, and the AI panel">
 </p>
 
+## Why this matters
+
+Models got good at writing code because they could **run** it. Cursor gave them a codebase to act on; MCP servers like Blender's gave them a scene to manipulate. In both cases the model gets a real tool, a real result, and a real feedback loop — and that is what makes fast iteration possible.
+
+Music has mostly been missing that loop. A model can generate audio, but it cannot *work on a session* the way a person does: no arrangement to edit, no mixer to ride, no undo history, no way to notice that its last change made things worse.
+
+**AI DAW is a small, deliberate attempt to close that gap.** It is a real DAW an AI agent can operate through a Skill and MCP, which makes it useful for:
+
+- **Testing what a model actually knows about songwriting** — not whether its audio sounds plausible, but whether it can build an arrangement, choose parts, and fix a mix.
+- **Collecting real songwriting traces** — every agent edit lands in a normal project with a normal undo history, so a session becomes data about how a model reasons about music.
+- **A step toward models that can write music the way they write code** — with a tool that talks back.
+
+## Lightweight by design
+
+Being small is a feature, not a compromise.
+
+- **A lightweight footprint** — no Electron, no cloud, no bundled model zoo. The macOS app is about 38 MB.
+- **Fast to start** — nothing heavyweight loads at boot; AI models are pulled in only when you use them.
+- **Heavy AI stays where it belongs** — high-compute work such as music generation and timbre transfer is deliberately **not** integrated locally. Your AI harness generates audio, and the result can be imported straight into the DAW for editing, mixing, and mastering.
+- **Built to be extended** — interfaces for plugging external AI models into the workflow are on the roadmap.
+
+## Drive it from any AI harness
+
+AI DAW ships a **Skill** (`skills/aidaw`) that teaches an AI agent how to operate the running app — reading and writing the project, tracks, clips and notes; mixing (gain, pan, sends, automation); transport and recording; loudness and spectrum analysis; WAV export; plugin scanning. It works over the built-in **MCP** server, so any harness that supports Agent Skills can pick it up.
+
+**Option 1 · Install from the command line**
+
+```bash
+npx skills add heshengtao/ai-daw
+```
+
+**Option 2 · Ask your agent to install it**
+
+```
+Install this Skill: https://github.com/heshengtao/ai-daw
+```
+
+Every edit an agent makes goes through the same command pipeline as the UI: it lands in the undo history, shows up in the interface, and is attributed to the agent — so you can always see what it did and undo it.
+
 ## Features
 
 ### 🎹 Arranging & Editing — Compose on a real timeline
 
-Lay out a song the way you hear it. Drag clips across tracks, split them where the music changes, and let the ruler and grid follow a tempo and time signature you can change anywhere in the song. MIDI clips draw their own notes, audio clips draw their own waveform, so you can read the arrangement at a glance.
+Lay out a song the way you hear it. Drag clips across tracks, split them where the music changes, and let the ruler and grid follow a tempo and time signature you can change anywhere in the song. MIDI clips draw their own notes and audio clips draw their own waveform, so you can read the arrangement at a glance.
 
 - **Multi-track arranging** — MIDI and audio clips side by side, cross-track drag & drop, marquee select
 - **A piano roll that reads well** — clip previews show notes; the editor gives you velocity, zoom, and a keyboard
@@ -134,7 +173,7 @@ Yes. AI DAW is open source under Apache 2.0. There are no paid tiers and no feat
 
 ### Does it work offline?
 
-Yes. The engine, the interface, and every AI model run locally. The only network access is downloading plugin packages and AI models (which you start), and fetching the plugin registry.
+Yes. The app and every AI model run locally. The only network access is downloading plugin packages and AI models (which you start), and fetching the plugin registry.
 
 ### Do I need a GPU?
 
@@ -148,9 +187,9 @@ Two small ones do: **Basic Pitch** (audio-to-MIDI) and **LocalVQE** (voice clean
 
 VST3 and CLAP.
 
-### What can an AI agent do through the MCP server?
+### Do I need the app running to let an agent drive it?
 
-With the server enabled, an agent can read the project and make edits — adding clips, editing notes, changing levels, and more — over a loopback-only HTTP endpoint. The `aidaw` CLI is a thin client for the same server.
+Yes. The Skill and the `aidaw` CLI talk to a running AI DAW over MCP, so start the app first (`aidaw status` will tell you if it is up).
 
 ## License
 
