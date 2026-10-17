@@ -1,0 +1,186 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  APP_NAME: AI DAW
+  PNPM_VERSION: '10'
+  NODE_VERSION: '22'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: linux-amd64
+            bundles: --bundles deb,appimage
+          - platform: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: linux-arm64
+            bundles: --bundles deb,appimage
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: windows-amd64
+            bundles: --bundles msi,nsis
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            artifact: macos-arm64
+            bundles: --bundles dmg
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            artifact: macos-amd64
+            bundles: --bundles dmg
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            src-tauri -> target
+
+      - name: Install Linux dependencies
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            pkg-config \
+            libclang-dev \
+            libasound2-dev \
+            libxcb1-dev \
+            libxrandr-dev \
+            libdbus-1-dev \
+            libpipewire-0.3-dev \
+            libspa-0.2-dev \
+            libwayland-dev \
+            libegl-dev \
+            libgbm-dev \
+            xdg-utils
+
+      - name: Build
+        run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundles }}
+        env:
+          AIDAW_TARGET: ${{ matrix.target }}
+
+      - name: Collect Linux bundles
+        if: startsWith(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          mkdir -p dist
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          for f in "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage; do
+            [ -f "$f" ] || continue
+            ext="${f##*.}"
+            cp "$f" "dist/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.${ext}"
+          done
+          ls -la dist
+
+      - name: Collect Windows bundles
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $bundle = "src-tauri/target/${{ matrix.target }}/release/bundle"
+          Get-ChildItem "$bundle/msi/*.msi" -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName "dist/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.msi" }
+          Get-ChildItem "$bundle/nsis/*-setup.exe" -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName "dist/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}-setup.exe" }
+          Get-ChildItem dist
+
+      - name: Collect macOS bundles
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          mkdir -p dist
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          for f in "$bundle"/dmg/*.dmg; do
+            [ -f "$f" ] || continue
+            cp "$f" "dist/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.dmg"
+          done
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-daw-${{ matrix.artifact }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List collected artifacts
+        run: ls -la artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ env.APP_NAME }} ${{ github.ref_name }}
+          draft: true
+          prerelease: false
+          fail_on_unmatched_files: false
+          body: |
+            ## 📦 Downloads
+
+            👉 [Windows — installer (.msi)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AI-DAW-${{ github.ref_name }}-windows-amd64.msi)
+
+            👉 [Windows — setup (.exe)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AI-DAW-${{ github.ref_name }}-windows-amd64-setup.exe)
+
+            👉 [macOS — Apple Silicon (.dmg)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AI-DAW-${{ github.ref_name }}-macos-arm64.dmg)
+
+            👉 [macOS — Intel (.dmg)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AI-DAW-${{ github.ref_name }}-macos-amd64.dmg)
+
+            👉 [Linux — x86_64 (.AppImage)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AI-DAW-${{ github.ref_name }}-linux-amd64.AppImage)
+
+            👉 [Linux — x86_64 (.deb)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AI-DAW-${{ github.ref_name }}-linux-amd64.deb)
+
+            👉 [Linux — arm64 (.AppImage)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AI-DAW-${{ github.ref_name }}-linux-arm64.AppImage)
+
+            👉 [Linux — arm64 (.deb)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AI-DAW-${{ github.ref_name }}-linux-arm64.deb)
+
+            ## ⚠️ macOS: "App is damaged" / 「App 已损坏，无法打开」
+
+            **EN:** The app is ad-hoc signed (not notarized). macOS quarantines apps downloaded from the internet. Run the command below in Terminal, then open the app normally:
+
+            **中文：** 应用为自签名（未公证），从网络下载会带隔离属性。在终端执行以下命令后即可正常打开：
+
+            ```bash
+            xattr -cr "/Applications/AI DAW.app"
+            ```
+          files: artifacts/*

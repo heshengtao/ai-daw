@@ -6,7 +6,6 @@
   <img src="https://img.shields.io/badge/version-0.1.0-1A6CFF?style=flat-square" alt="版本 0.1.0">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-1A6CFF?style=flat-square" alt="许可：Apache-2.0"></a>
   <img src="https://img.shields.io/badge/platforms-Windows%20/%20macOS%20/%20Linux-1A6CFF?style=flat-square" alt="平台：Windows、macOS、Linux">
-  <a href="https://github.com/heshengtao/ai-daw/stargazers"><img src="https://img.shields.io/github/stars/heshengtao/ai-daw?style=flat-square&color=1A6CFF" alt="GitHub stars"></a>
 </p>
 
 <p align="center">
@@ -99,8 +98,6 @@ pnpm build            # 对前端做类型检查并构建
 pnpm build:aidaw      # 构建 aidaw CLI（见 tools/build-aidaw.sh）
 ```
 
-> **本地 AI 权重不随包分发。** 一个小体积的 log-mel 前端随应用一起提供，而较大的权重（Beat This!、Demucs、LocalVQE、Basic Pitch）在首次使用时由应用内的**模型管理器**按需下载。若所在地区下载缓慢，可在**设置 → 网络**里配置镜像或代理。
-
 ### 平台支持
 
 | 平台 | 状态 |
@@ -108,38 +105,6 @@ pnpm build:aidaw      # 构建 aidaw CLI（见 tools/build-aidaw.sh）
 | Windows (x86_64) | ✅ 支持 |
 | macOS（Apple Silicon / Intel） | ✅ 支持 |
 | Linux (x86_64) | ✅ 支持 |
-
-## 架构
-
-整个仓库是一组职责单一的 Rust crate 组成的 Cargo workspace，背后是一个 Tauri 应用。
-
-| crate | 职责 |
-| --- | --- |
-| `crates/engine` | 实时音频引擎：播放、调度、总线、走带、时间拉伸 |
-| `crates/ipc` | Rust 核心与界面之间的命令 / 事件共享契约（serde 模型） |
-| `crates/synth` | 内置合成器 |
-| `crates/effects` | 内置效果器 |
-| `crates/asset` | 音频解码与素材管理 |
-| `crates/analysis` | 频谱 / 峰值 / RMS 分析 |
-| `crates/host-vst3` | VST3 / CLAP 插件宿主 |
-| `crates/plugin-api` | 插件抽象 |
-| `crates/local-ai` | 本地 AI 模型（Beat This!、Basic Pitch、LocalVQE、HTDemucs） |
-| `crates/mastering` | 母带链（响度归一、真峰值限幅、立体声宽度） |
-| `crates/aidaw` | `aidaw` 命令行工具（MCP 薄客户端） |
-| `src-tauri` | Tauri 外壳：命令、MCP 服务器、插件管理器、模型管理器 |
-| `src` | Vue 3 前端（视图、组件、Pinia stores、i18n） |
-
-## 仓库结构
-
-```
-ai-daw/
-├── crates/            # Rust workspace（engine、ipc、synth、effects、local-ai 等）
-├── src-tauri/         # Tauri 应用：命令、MCP 服务器、各类管理器
-├── src/               # Vue 3 前端（Vite + TypeScript + Pinia + Tailwind）
-├── tools/             # 构建与模型脚本（fetch-models.sh、build-aidaw.sh 等）
-├── assets/readme/     # README 资源
-└── docs/              # 设计稿与路线图
-```
 
 ## 常见问题
 

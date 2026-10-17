@@ -6,7 +6,6 @@
   <img src="https://img.shields.io/badge/version-0.1.0-1A6CFF?style=flat-square" alt="Version 0.1.0">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-1A6CFF?style=flat-square" alt="License: Apache-2.0"></a>
   <img src="https://img.shields.io/badge/platforms-Windows%20/%20macOS%20/%20Linux-1A6CFF?style=flat-square" alt="Platforms: Windows, macOS, Linux">
-  <a href="https://github.com/heshengtao/ai-daw/stargazers"><img src="https://img.shields.io/github/stars/heshengtao/ai-daw?style=flat-square&color=1A6CFF" alt="GitHub stars"></a>
 </p>
 
 <p align="center">
@@ -99,8 +98,6 @@ pnpm build            # type-check the frontend and build it
 pnpm build:aidaw      # build the aidaw CLI (see tools/build-aidaw.sh)
 ```
 
-> **Local AI weights are not bundled.** A small log-mel front-end ships with the app, but the larger weights (Beat This!, Demucs, LocalVQE, Basic Pitch) download on demand from the in-app **model manager** on first use. Configure a mirror or proxy under **Settings → Network** if downloads are slow in your region.
-
 ### Platform Support
 
 | Platform | Status |
@@ -108,38 +105,6 @@ pnpm build:aidaw      # build the aidaw CLI (see tools/build-aidaw.sh)
 | Windows (x86_64) | ✅ Supported |
 | macOS (Apple Silicon / Intel) | ✅ Supported |
 | Linux (x86_64) | ✅ Supported |
-
-## Architecture
-
-The repository is a Cargo workspace of focused Rust crates behind a Tauri app.
-
-| Crate | Purpose |
-| --- | --- |
-| `crates/engine` | Real-time audio engine: playback, scheduling, buses, transport, time-stretch |
-| `crates/ipc` | Shared command/event contract between the Rust core and the UI (serde models) |
-| `crates/synth` | Built-in synthesizer |
-| `crates/effects` | Built-in effects |
-| `crates/asset` | Audio decoding and asset management |
-| `crates/analysis` | Spectral / peak / RMS analysis |
-| `crates/host-vst3` | VST3 / CLAP plugin host |
-| `crates/plugin-api` | Plugin abstraction |
-| `crates/local-ai` | Local AI models (Beat This!, Basic Pitch, LocalVQE, HTDemucs) |
-| `crates/mastering` | Mastering chain (loudness normalization, true-peak limiting, stereo width) |
-| `crates/aidaw` | `aidaw` command-line tool (thin MCP client) |
-| `src-tauri` | Tauri shell: commands, MCP server, plugin manager, model manager |
-| `src` | Vue 3 frontend (views, components, Pinia stores, i18n) |
-
-## Project Structure
-
-```
-ai-daw/
-├── crates/            # Rust workspace (engine, ipc, synth, effects, local-ai, ...)
-├── src-tauri/         # Tauri app: commands, MCP server, managers
-├── src/               # Vue 3 frontend (Vite + TypeScript + Pinia + Tailwind)
-├── tools/             # Build and model scripts (fetch-models.sh, build-aidaw.sh, ...)
-├── assets/readme/     # README assets
-└── docs/              # Design specs and roadmap
-```
 
 ## FAQ
 
