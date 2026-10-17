@@ -56,6 +56,10 @@ pub enum Command {
     AddAudioClip { track: TrackId, start: f64, length: f64, source: AudioSource },
     /// 改写片段的音频素材。`None` 表示把它**变回 MIDI 片段**（同时清空音符）。
     SetClipAudio { track: TrackId, clip: ClipId, audio: Option<AudioSource> },
+    /// 设置音频片段的**播放速度**（`rate`，1.0 = 原速）与**升降调**（半音，0 = 不变）。
+    ///
+    /// 只对**音频片段**有效：对 MIDI 片段安静忽略（`translate` 里返回空）。数值会被归一化。
+    SetClipRate { track: TrackId, clip: ClipId, rate: f64, pitch_semitones: f64 },
     /// 从轨道上删除一个片段。
     RemoveClip { track: TrackId, clip: ClipId },
     /// 把片段移动到新的起始拍。

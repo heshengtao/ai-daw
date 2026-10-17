@@ -450,6 +450,50 @@ pub enum ProxyMode {
     Manual,
 }
 
+/// 模型下载源的**区域偏好**：决定先试国外源（HF / GitHub）还是国内源（魔搭）。
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelSourcePreference {
+    /// **自动探测连通性**（默认）：下载前快速探一下两边，谁先通/更快就排谁，失败再回退另一个。
+    #[default]
+    Auto,
+    /// 优先国外源（HF / GitHub）。
+    International,
+    /// 优先国内源（魔搭）。
+    Domestic,
+}
+
+/// **执行后端**偏好：决定用哪个 ONNX Runtime 执行后端跑本地模型。
+///
+/// 三个选项全部随包（零下载），**默认 CPU**。设置页只列出本机平台支持的那些
+/// （如 Intel Mac 没有 CoreML、非 Windows 没有 DirectML）。
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendPreference {
+    /// 纯 CPU（默认，全平台可用）。
+    #[default]
+    Cpu,
+    /// Apple CoreML（macOS Apple Silicon）。
+    #[serde(rename = "coreml")]
+    CoreMl,
+    /// Windows DirectML。
+    #[serde(rename = "directml")]
+    DirectMl,
+}
+
+impl BackendPreference {
+    /// 映射到后端种类。
+    pub fn kind(self) -> ai_daw_local_ai::backend::BackendKind {
+        use ai_daw_local_ai::backend::BackendKind;
+        match self {
+            BackendPreference::Cpu => BackendKind::Cpu,
+            BackendPreference::CoreMl => BackendKind::CoreMl,
+            BackendPreference::DirectMl => BackendKind::DirectMl,
+        }
+    }
+
+}
+
 /// 插件源的网络配置（存在应用配置目录的 `store.json`）。
 ///
 /// **不提供任何默认镜像/代理地址**：默认只有官方源与直连。国内的镜像与加速站五花八门、
@@ -460,8 +504,8 @@ pub struct StoreNetwork {
     #[serde(default)]
     pub registry_mirrors: Vec<String>,
     /// 下载代理前缀：只重写 `github.com` / `githubusercontent.com` 的地址；
-    /// 留空 = 直连。可含 `{url}` 占位符（如 `https://ghproxy.example/{url}`），
-    /// 不含占位符则直接拼在前缀之后（如 `https://ghproxy.example/https://github.com/...`）。
+    /// 留空 = 直连。可含 `{url}` 占位符（如 `https://proxy.example/{url}`），
+    /// 不含占位符则直接拼在前缀之后（如 `https://proxy.example/https://github.com/...`）。
     /// 无论走不走代理，下载都会**校验 sha256**——字节被改会被拒。
     ///
     /// 注意：这是**地址重写**，不是 HTTP 代理。真正走代理请用 [`StoreNetwork::proxy_mode`]。
@@ -476,10 +520,16 @@ pub struct StoreNetwork {
     /// **模型权重**的镜像 / 前置代理前缀（与插件下载共用同一套代理与镜像设置）。
     ///
     /// 每条是前缀模板：含 `{url}` 就替换，不含就直接拼在原地址前（如
-    /// `https://hf-mirror.example/` + 原 HF 地址）。留空 = 只用清单里的官方源。
+    /// `https://mirror.example/` + 原 HF 地址）。留空 = 只用清单里的官方源。
     /// 无论走不走镜像，权重下载都会**校验 sha256**。**不给任何默认地址。**
     #[serde(default)]
     pub model_mirrors: Vec<String>,
+    /// 模型下载源的**区域偏好**（自动探测 / 优先国外 / 优先国内）。见 [`ModelSourcePreference`]。
+    #[serde(default)]
+    pub model_source_preference: ModelSourcePreference,
+    /// **执行后端**偏好（自动推荐 / 强制某一种）。见 [`BackendPreference`]。
+    #[serde(default)]
+    pub backend_preference: BackendPreference,
 }
 
 /// 运行时的网络配置（内存 + `store.json` 文件）。
@@ -627,6 +677,18 @@ fn download_agent(proxy: Option<&ureq::Proxy>) -> ureq::Agent {
         Some(Duration::from_secs(30)),
         None,
         Some(DOWNLOAD_TIMEOUT),
+    )
+}
+
+/// 探测连通性用的 agent：**每一级超时都设得很短**，好让「被墙 / 不通」的源快速失败，
+/// 不至于在选源阶段就把用户卡住（模型下载前用它给国内外源排序）。
+pub(crate) fn probe_agent(proxy: Option<&ureq::Proxy>) -> ureq::Agent {
+    tls_agent(
+        proxy,
+        Some(Duration::from_secs(3)),
+        Some(Duration::from_secs(3)),
+        Some(Duration::from_secs(4)),
+        Some(Duration::from_secs(6)),
     )
 }
 
@@ -1737,6 +1799,7 @@ pub fn plugin_manager_set_network(
     proxy_mode: ProxyMode,
     proxy_url: String,
     model_mirrors: Option<Vec<String>>,
+    model_source_preference: Option<ModelSourcePreference>,
 ) -> Result<StoreNetwork, String> {
     let clean = |items: Vec<String>| -> Vec<String> {
         items
@@ -1750,10 +1813,14 @@ pub fn plugin_manager_set_network(
         download_prefix: download_prefix.trim().to_string(),
         proxy_mode,
         proxy_url: proxy_url.trim().to_string(),
-        // 老前端不带这个参数时就保留原值（追加字段不破坏既有调用）。
+        // 老前端不带这两个参数时就保留原值（追加字段不破坏既有调用）。
         model_mirrors: model_mirrors
             .map(clean)
             .unwrap_or_else(|| runtime.network().model_mirrors),
+        model_source_preference: model_source_preference
+            .unwrap_or_else(|| runtime.network().model_source_preference),
+        // 执行后端偏好由 `backend_set_preference` 单独管，这里原样保留。
+        backend_preference: runtime.network().backend_preference,
     };
     runtime.set(next.clone())?;
     Ok(next)

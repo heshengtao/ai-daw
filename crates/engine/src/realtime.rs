@@ -174,12 +174,21 @@ pub fn write_interleaved(staging: &[f32], data: &mut [f32], frames: usize, chann
     }
 }
 
-/// 到达工程结尾时的动作：开循环 → 无缝回到起点继续；否则 → 暂停（现状）。
-pub(crate) fn end_of_project_action(looping: bool) -> TransportCommand {
-    if looping {
-        TransportCommand::Seek { frame: 0 }
-    } else {
-        TransportCommand::Pause
+/// 到达播放边界时的动作。
+///
+/// - 没开循环 → 暂停（现状）。
+/// - 开了循环且有播放范围 → 无缝回到**范围起点**继续。
+/// - 开了循环但没范围 → 无缝回到工程起点继续（整首循环）。
+pub(crate) fn end_of_project_action(
+    looping: bool,
+    loop_range: Option<(u64, u64)>,
+) -> TransportCommand {
+    if !looping {
+        return TransportCommand::Pause;
+    }
+    match loop_range {
+        Some((start, _)) => TransportCommand::Seek { frame: start },
+        None => TransportCommand::Seek { frame: 0 },
     }
 }
 
@@ -193,6 +202,11 @@ pub struct SharedTransport {
     position: Arc<AtomicU64>,
     playing: Arc<AtomicBool>,
     looping: Arc<AtomicBool>,
+    metronome: Arc<AtomicBool>,
+    /// 播放范围起点（帧）；`loop_end > loop_start` 才算有效范围。
+    loop_start: Arc<AtomicU64>,
+    /// 播放范围终点（帧）。
+    loop_end: Arc<AtomicU64>,
 }
 
 impl SharedTransport {
@@ -214,6 +228,32 @@ impl SharedTransport {
     /// 音频线程最近一次报告的循环开关。
     pub fn is_looping(&self) -> bool {
         self.looping.load(Ordering::Relaxed)
+    }
+
+    /// 音频线程最近一次报告的节拍器开关。
+    pub fn is_metronome(&self) -> bool {
+        self.metronome.load(Ordering::Relaxed)
+    }
+
+    /// 音频线程最近一次报告的播放范围起点（帧）。
+    pub fn loop_start_frames(&self) -> u64 {
+        self.loop_start.load(Ordering::Relaxed)
+    }
+
+    /// 音频线程最近一次报告的播放范围终点（帧）。
+    pub fn loop_end_frames(&self) -> u64 {
+        self.loop_end.load(Ordering::Relaxed)
+    }
+
+    /// 当前生效的播放范围（帧）。`None` = 没设范围。
+    pub fn loop_range(&self) -> Option<(u64, u64)> {
+        let start = self.loop_start_frames();
+        let end = self.loop_end_frames();
+        if end > start {
+            Some((start, end))
+        } else {
+            None
+        }
     }
 }
 
@@ -471,6 +511,9 @@ impl AudioHost {
         let position_cb = Arc::clone(&shared.position);
         let playing_cb = Arc::clone(&shared.playing);
         let looping_cb = Arc::clone(&shared.looping);
+        let metronome_cb = Arc::clone(&shared.metronome);
+        let loop_start_cb = Arc::clone(&shared.loop_start);
+        let loop_end_cb = Arc::clone(&shared.loop_end);
         // 波形缓冲：回调侧只写，界面侧只读（都用原子，不加锁）。
         let scope = Arc::clone(&options.scope);
 
@@ -489,6 +532,13 @@ impl AudioHost {
         );
         // 重建宿主时延续循环开关：界面不必重新订阅，用户看到的状态也不会因编辑而复位。
         player.apply_command(TransportCommand::SetLoop(shared.is_looping()));
+        // 节拍器同理：它是运行时开关，重建（如编辑后）不该把它悄悄关掉。
+        player.apply_command(TransportCommand::SetMetronome(shared.is_metronome()));
+        // 播放范围也同理：用户划好的循环段不该因为一次编辑（重建播放器）就丢掉。
+        player.apply_command(TransportCommand::SetLoopRange {
+            start: shared.loop_start_frames(),
+            end: shared.loop_end_frames(),
+        });
         let mut staging: Vec<f32> = Vec::with_capacity(max_block * 2);
 
         let on_data = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
@@ -515,13 +565,25 @@ impl AudioHost {
             // 给界面画波形：推入刚渲染好的这块（下混成单声道）。
             scope.push_interleaved(&staging[..need], frames);
 
-            // 宿主策略：播到工程结尾。开循环 → 无缝回起点继续；否则暂停。
-            if player.end_frame() > 0 && player.position_frames() >= player.end_frame() {
-                player.apply_command(end_of_project_action(player.is_looping()));
+            // 宿主策略：播到播放边界。开循环 → 无缝回（范围起点 / 工程起点）继续；否则暂停。
+            let boundary = player.playback_end_frame();
+            if boundary > 0 && player.position_frames() >= boundary {
+                player.apply_command(end_of_project_action(
+                    player.is_looping(),
+                    player.loop_range(),
+                ));
             }
             position_cb.store(player.position_frames(), Ordering::Relaxed);
             playing_cb.store(player.is_playing(), Ordering::Relaxed);
             looping_cb.store(player.is_looping(), Ordering::Relaxed);
+            metronome_cb.store(player.is_metronome(), Ordering::Relaxed);
+            if let Some((start, end)) = player.loop_range() {
+                loop_start_cb.store(start, Ordering::Relaxed);
+                loop_end_cb.store(end, Ordering::Relaxed);
+            } else {
+                loop_start_cb.store(0, Ordering::Relaxed);
+                loop_end_cb.store(0, Ordering::Relaxed);
+            }
         };
         // 状态只在 cpal 的**错误回调**里写：实时数据回调（`on_data`）依旧不加锁、不分配。
         // cpal 在独立线程上调用错误回调，因此这里的 `Mutex` 不在音频处理路径上。
@@ -786,11 +848,21 @@ mod tests {
         assert!(!observer.is_playing());
     }
 
-    /// 到达工程结尾的动作：开循环回到起点，关循环暂停。
+    /// 到达边界的动作：开循环回到起点，关循环暂停。
     #[test]
     fn end_of_project_action_wraps_or_pauses() {
-        assert_eq!(end_of_project_action(true), TransportCommand::Seek { frame: 0 });
-        assert_eq!(end_of_project_action(false), TransportCommand::Pause);
+        assert_eq!(end_of_project_action(true, None), TransportCommand::Seek { frame: 0 });
+        assert_eq!(end_of_project_action(false, None), TransportCommand::Pause);
+    }
+
+    /// 设了播放范围时：开循环回到**范围起点**；关循环仍然只是暂停（范围不生效）。
+    #[test]
+    fn end_of_project_action_honors_loop_range() {
+        assert_eq!(
+            end_of_project_action(true, Some((4800, 9600))),
+            TransportCommand::Seek { frame: 4800 }
+        );
+        assert_eq!(end_of_project_action(false, Some((4800, 9600))), TransportCommand::Pause);
     }
 
     /// 共享状态的循环开关初始为关，且克隆共享同一份。

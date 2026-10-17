@@ -1,7 +1,7 @@
 //! 本地 AI 任务：后台线程里跑 DSP / 模型，带**进度**与**取消**。
 //!
 //! 能力（`crates/local-ai`）：`to_midi`（音频转 MIDI）、`enhance`（降噪）、`separate`（音源分离）、
-//! `master`（母带）。重活放在后台线程，界面显示进度条并随时可停。
+//! `master`（母带）、`detect_tempo`（节拍检测）。重活放在后台线程，界面显示进度条并随时可停。
 //!
 //! 结果落地都走**同一条命令管线**（可撤销）：转 MIDI → `AddNoteTrack`（一次事务）；
 //! 降噪 / 音源分离 → 写 WAV + 素材缓存 + `AddAudioTrack`（分离一次建四条轨，仍是一条撤销记录）；
@@ -15,7 +15,7 @@ use tauri::{Emitter, Manager};
 use ai_daw_engine::audio::{AudioBuffer, DecodedAudio};
 use ai_daw_engine::command::Command;
 use ai_daw_engine::event::Event;
-use ai_daw_engine::model::{AudioSource, Note, TrackId};
+use ai_daw_engine::model::{AudioSource, ClipId, Note, TrackId};
 
 use crate::state::AppState;
 
@@ -32,6 +32,11 @@ pub const KIND_ENHANCE_DSP: &str = "enhance_dsp";
 pub const KIND_MASTER: &str = "master";
 /// 音源分离：把所选轨道的音频拆成**鼓 / 贝斯 / 其他 / 人声**四条分轨（HTDemucs 模型，无 DSP 兜底）。
 pub const KIND_SEPARATE: &str = "separate";
+/// 节拍检测：用 **Beat This!** 推出**单一全局 BPM + 拍号**，一次事务写进工程。
+///
+/// 为什么是「全局一个速度」而不是逐小节速度图：时间轴按「拍」**线性绘制**，只有恒定速度下
+/// 网格 / 波形才稳定对齐（上一版写速度图，结果永远对不上——见 `models/beat_this.rs`）。
+pub const KIND_TEMPO: &str = "detect_tempo";
 
 /// 降噪的过减系数（越大越激进）。
 const ENHANCE_STRENGTH: f32 = 2.0;
@@ -122,7 +127,7 @@ pub fn ai_status(state: tauri::State<'_, AppState>) -> AiStatus {
     state.ai.status()
 }
 
-/// 三个本地 AI 模型是否已经就位（界面据此显示「模型 / 内置 DSP」）。
+/// 本地 AI 模型是否已经就位（界面据此显示「模型 / 内置 DSP」）。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AiModels {
     /// Basic Pitch 权重是否已下载。
@@ -131,6 +136,8 @@ pub struct AiModels {
     pub localvqe: bool,
     /// HTDemucs 音源分离权重是否已下载。
     pub separate: bool,
+    /// Beat This! 节拍 / 速度检测权重是否已下载（mel 前端随包 + 主模型按需）。
+    pub beat_this: bool,
 }
 
 /// 查询本地 AI 模型的可用情况（权重放在 `models/` 目录，见 `tools/fetch-models.sh`）。
@@ -141,10 +148,12 @@ pub fn ai_models() -> AiModels {
         basic_pitch: available.basic_pitch.is_some(),
         localvqe: available.localvqe.is_some(),
         separate: available.htdemucs.is_some(),
+        beat_this: available.beat_this.is_some(),
     }
 }
 
 /// 取消当前任务（下一次进度回调时停下，已处理的部分保留/丢弃由任务自己决定）。
+
 #[tauri::command]
 pub fn ai_cancel(state: tauri::State<'_, AppState>) {
     state.ai.cancel.store(true, Ordering::Relaxed);
@@ -152,7 +161,7 @@ pub fn ai_cancel(state: tauri::State<'_, AppState>) {
 
 /// 开始一个本地任务。
 ///
-/// `to_midi` / `enhance` / `enhance_dsp` / `separate` 作用于 `track` 上的**第一个音频片段**；
+/// `to_midi` / `enhance` / `enhance_dsp` / `separate` / `detect_tempo` 作用于 `track` 上的**第一个音频片段**；
 /// `master` 作用于**整个工程的离线混音**（不看 `track`，`master` 参数只在它身上有意义）。
 /// `model` 只在 `separate` 上有意义：选择用哪个分离模型（缺省 = 4 分轨的 HTDemucs）。
 #[tauri::command]
@@ -166,7 +175,12 @@ pub fn ai_start(
 ) -> Result<(), String> {
     if !matches!(
         kind.as_str(),
-        KIND_TO_MIDI | KIND_ENHANCE | KIND_ENHANCE_DSP | KIND_MASTER | KIND_SEPARATE
+        KIND_TO_MIDI
+            | KIND_ENHANCE
+            | KIND_ENHANCE_DSP
+            | KIND_MASTER
+            | KIND_SEPARATE
+            | KIND_TEMPO
     ) {
         return Err(format!("未知的 AI 任务：{kind}"));
     }
@@ -215,6 +229,10 @@ pub fn ai_start(
 
 /// 一条轨道的「第一个音频片段」输入，以及结果轨道要插入的行号。
 pub(crate) struct TrackInput {
+    /// 源轨道 id（结果新轨插在它下面；节拍检测要按它改片段）。
+    pub track: TrackId,
+    /// 源音频片段 id（节拍检测要对齐的就是它）。
+    pub clip: ClipId,
     /// 源音频片段。
     pub source: AudioSource,
     /// 源片段起始拍。
@@ -243,6 +261,8 @@ pub(crate) fn track_input(state: &AppState, track: u64) -> Result<TrackInput, St
         .find(|c| c.audio.is_some())
         .ok_or("这条轨道没有音频片段（先录音或导入音频）")?;
     Ok(TrackInput {
+        track: t.id,
+        clip: clip.id,
         source: clip.audio.clone().expect("已确认是音频片段"),
         clip_start: clip.start,
         clip_length: clip.length,
@@ -331,6 +351,11 @@ fn run_job(
         return Ok(format!("已生成 {count} 个音符（{backend}）"));
     }
 
+    // 节拍检测：推出全局 BPM + 拍号，并把片段对齐到小节线（一次事务 = 一条撤销记录）。
+    if kind == KIND_TEMPO {
+        return apply_tempo_detection(app, input, &samples, channels, sample_rate, &progress);
+    }
+
     // 音源分离：按选定的模型把音频拆成 N 条新轨（4 分轨或 6 分轨），一次事务。
     // 没有模型权重时给明确错误——分离没有内置 DSP 近似。
     if kind == KIND_SEPARATE {
@@ -381,6 +406,8 @@ fn run_job(
                 path,
                 offset_frames: source.offset_frames,
                 frames: source.frames,
+                rate: 1.0,
+                pitch_semitones: 0.0,
             },
             at: Some(track_index + 1),
         },
@@ -504,6 +531,8 @@ fn place_stems(
                 path: file,
                 offset_frames: input.source.offset_frames,
                 frames: input.source.frames,
+                rate: 1.0,
+                pitch_semitones: 0.0,
             },
             at: Some(input.track_index + 1 + i),
         });
@@ -536,6 +565,91 @@ pub(crate) fn separate_track(
     let stems =
         separate_with_model(model.as_deref(), &samples, channels, sample_rate, &|_| true)?;
     place_stems(app, &input, &stems, channels, sample_rate, frames)
+}
+
+/// 一条音频片段在**整段素材采样**里的可见窗口（交错）。
+///
+/// 片段可能只取素材的一段（`offset_frames` / `frames`）；节拍检测与对齐都只该看这一段。
+fn clip_window<'a>(samples: &'a [f32], channels: usize, source: &AudioSource) -> &'a [f32] {
+    let channels = channels.max(1);
+    let total = samples.len() / channels;
+    let offset = (source.offset_frames as usize).min(total);
+    let take = source
+        .frames
+        .map(|f| f as usize)
+        .unwrap_or(total - offset)
+        .min(total - offset);
+    &samples[offset * channels..(offset + take) * channels]
+}
+
+/// 节拍检测并写回：**一次事务**里设速度 + 拍号 + 把片段对齐到小节线。
+///
+/// 对齐做三件事，全部落在同一笔撤销记录里：
+/// - 速度 → 检出的 BPM，拍号 → 检出的分子 / 4（**只设全局一个值**，不写速度图）；
+/// - `start` → 让**第一个重拍**落在一条小节线上（片段起点不能为负，所以吸附到**下一条**
+///   小节线；没有重拍就退回 0）；
+/// - `length` → 素材窗口在新速度下的自然拍长（方框与素材等长），`rate` 复位到 1.0（原速）。
+fn apply_tempo_detection(
+    app: &tauri::AppHandle,
+    input: &TrackInput,
+    samples: &[f32],
+    channels: usize,
+    sample_rate: f64,
+    progress: ai_daw_local_ai::Progress<'_>,
+) -> Result<String, String> {
+    use ai_daw_local_ai::models;
+
+    let window = clip_window(samples, channels, &input.source);
+    if window.is_empty() {
+        return Err("素材是空的".into());
+    }
+    let detection = match models::beat_this::detect(window, channels, sample_rate, progress) {
+        Ok(d) => d,
+        // 取消走 `progress` 回调，回来时是「已取消」而不是失败。
+        Err(e) if e == "已取消" => return Ok("已取消".into()),
+        Err(e) => return Err(e),
+    };
+
+    let (bpm, num, den) = (detection.bpm, detection.time_sig_num, detection.time_sig_den);
+    // 一小节多少拍（四分音符为基准）：4/4 → 4，3/4 → 3。
+    let bar_beats = num as f64 * (4.0 / den as f64);
+    // 第一个重拍相对片段起点的拍数。
+    let phase_beats = detection.first_downbeat_sec.unwrap_or(0.0) * bpm / 60.0;
+    // 片段起点不能为负（会被夹到 0），所以把首重拍吸附到**下一条**小节线。
+    let start = (bar_beats - phase_beats.rem_euclid(bar_beats)) % bar_beats;
+    // 素材在新速度下的自然拍长：方框与素材等长，播放速率因此回到 1.0。
+    let length = detection.duration_sec * bpm / 60.0;
+
+    let _ = crate::commands::run_agent_all(
+        app,
+        vec![
+            Command::SetTempo(bpm),
+            Command::SetTimeSignature { num, den },
+            Command::MoveClip { track: input.track, clip: input.clip, start },
+            Command::ResizeClip { track: input.track, clip: input.clip, length },
+            Command::SetClipRate { track: input.track, clip: input.clip, rate: 1.0, pitch_semitones: 0.0 },
+        ],
+    );
+
+    let first_bar = ((start + phase_beats) / bar_beats).round() as i64 + 1;
+    Ok(format!(
+        "速度 {bpm:.1} BPM · {num}/{den}（{} 个拍点 / {} 个重拍）；首重拍对齐到第 {first_bar} 小节",
+        detection.beats, detection.downbeats,
+    ))
+}
+
+/// 同步跑一遍节拍检测（供 MCP 工具用；无进度回调，整体阻塞在调用线程）。
+pub(crate) fn detect_tempo_track(app: &tauri::AppHandle, track: u64) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let input = track_input(&state, track)?;
+    let audio = state.assets.load(&input.source.path)?;
+    let channels = audio.channels;
+    let sample_rate = audio.sample_rate;
+    let samples: Vec<f32> = audio.samples.to_vec();
+    if samples.is_empty() || sample_rate <= 0.0 {
+        return Err("素材是空的".into());
+    }
+    apply_tempo_detection(app, &input, &samples, channels, sample_rate, &|_| true)
 }
 
 /// 走与界面/代理同一条命令管线（会广播事件、进撤销历史）。
@@ -619,6 +733,8 @@ fn run_master_job(
                 path,
                 offset_frames: 0,
                 frames: Some(frames as u64),
+                rate: 1.0,
+                pitch_semitones: 0.0,
             },
             at: None,
         },
@@ -651,3 +767,4 @@ fn ai_output_path(app: &tauri::AppHandle, kind: &str) -> Result<String, String> 
         .unwrap_or(0);
     Ok(dir.join(format!("{kind}-{stamp}.wav")).to_string_lossy().into_owned())
 }
+

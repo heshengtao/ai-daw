@@ -6,3 +6,26 @@ members = ["crates/ipc", "crates/plugin-api", "crates/synth", "crates/effects", 
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
+
+# `rten`（Beat This! 的纯 Rust 推理后端）在未优化的 debug 下慢到不可用（几十倍）。
+# 真正吃算力的是它的 GEMM / 向量内核（`rten-gemm` / `rten-vecmath` / `rten-tensor`），
+# 只优化 `rten` 没用。Cargo 的 profile 不支持通配包名，只能逐个列。
+# 本仓库自己的代码仍留在 debug（增量快、保留 debug_assert）。
+[profile.dev.package.rten]
+opt-level = 3
+[profile.dev.package.rten-base]
+opt-level = 3
+[profile.dev.package.rten-gemm]
+opt-level = 3
+[profile.dev.package.rten-model-file]
+opt-level = 3
+[profile.dev.package.rten-onnx]
+opt-level = 3
+[profile.dev.package.rten-shape-inference]
+opt-level = 3
+[profile.dev.package.rten-simd]
+opt-level = 3
+[profile.dev.package.rten-tensor]
+opt-level = 3
+[profile.dev.package.rten-vecmath]
+opt-level = 3

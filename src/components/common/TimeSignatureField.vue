@@ -5,17 +5,23 @@
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ChevronDownIcon } from "@heroicons/vue/24/outline";
+import MetronomeIcon from "@/components/common/icons/MetronomeIcon.vue";
 import NumberField from "@/components/common/NumberField.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
 import { useI18n } from "@/i18n";
 
 const i18n = useI18n();
 
-const props = defineProps<{ num: number; den: number }>();
+const props = defineProps<{
+  num: number;
+  den: number;
+  /** 常用预设。默认是通用列表；音乐生成那边只传模型训练过的拍号。 */
+  presets?: [number, number][];
+}>();
 const emit = defineEmits<{ (e: "change", num: number, den: number): void }>();
 
-/** 常用拍号预设。 */
-const PRESETS: [number, number][] = [
+/** 通用拍号预设（调用方可用 `presets` 覆盖）。 */
+const DEFAULT_PRESETS: [number, number][] = [
   [2, 4],
   [3, 4],
   [4, 4],
@@ -29,9 +35,45 @@ const PRESETS: [number, number][] = [
 /** 合法分母（2 的幂）。 */
 const DENS = [2, 4, 8, 16];
 
+const presets = computed(() => props.presets ?? DEFAULT_PRESETS);
+
 const open = ref(false);
 const root = ref<HTMLElement | null>(null);
+/** 弹层本体：它挂在 `body` 上，所以要单独判「点在里面」。 */
+const pop = ref<HTMLElement | null>(null);
 const customNum = ref(props.num);
+
+/**
+ * 弹层位置（`fixed`，相对视口）。
+ *
+ * 弹层必须 `Teleport` 到 `body`：它原来是相对控件的绝对定位，而调用方可能在**可滚动容器**里
+ * （AI 音乐生成那张卡片就是），容器上的 `overflow-y: auto` 会把弹层裁掉——被裁掉的部分点下去
+ * 会被当成「点在控件外面」，`pointerdown` 先把弹层关掉，于是按钮永远点不到。
+ */
+const popStyle = ref<Record<string, string>>({});
+/** 弹层宽度（与 CSS 里的 `width` 一致），用于把弹层夹在视口内。 */
+const POP_WIDTH = 256;
+/** 弹层高度的估计值：上方不够就翻到下方去。 */
+const POP_HEIGHT = 300;
+/** 这次是往上弹还是往下弹（影响弹出动画方向）。 */
+const dropUp = ref(true);
+
+/** 按控件位置重新摆弹层（打开、滚动、改窗口大小都要重算）。 */
+function place(): void {
+  const el = root.value;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  // 弹层是 `left` 定位（不再用 translateX 居中），所以这里算的是**左边缘**。
+  const left = Math.min(
+    Math.max(rect.left + rect.width / 2 - POP_WIDTH / 2, 8),
+    window.innerWidth - POP_WIDTH - 8,
+  );
+  // 上方放得下就往上弹（贴控件）；放不下就翻到下方，免得顶出屏幕被截断。
+  dropUp.value = rect.top > POP_HEIGHT + 8;
+  popStyle.value = dropUp.value
+    ? { left: `${Math.round(left)}px`, bottom: `${Math.round(window.innerHeight - rect.top + 10)}px` }
+    : { left: `${Math.round(left)}px`, top: `${Math.round(rect.bottom + 10)}px` };
+}
 
 watch(
   () => props.num,
@@ -43,6 +85,7 @@ watch(
 const label = computed(() => `${props.num}/${props.den}`);
 
 function toggle(): void {
+  if (!open.value) place();
   open.value = !open.value;
 }
 
@@ -61,26 +104,39 @@ function setDen(d: number): void {
 
 function onDocPointer(e: PointerEvent): void {
   if (!open.value) return;
-  if (root.value && !root.value.contains(e.target as Node)) open.value = false;
+  const target = e.target as Node;
+  // 弹层已不在控件子树里（挂在 body 上），所以要两处都判。
+  if (root.value?.contains(target) || pop.value?.contains(target)) return;
+  open.value = false;
 }
 
 function onKey(e: KeyboardEvent): void {
   if (e.key === "Escape" && open.value) open.value = false;
 }
 
+/** 滚动 / 改窗口大小时跟着控件走（弹层是 fixed，不跟会飘）。 */
+function onReflow(): void {
+  if (open.value) place();
+}
+
 onMounted(() => {
   document.addEventListener("pointerdown", onDocPointer);
   window.addEventListener("keydown", onKey);
+  window.addEventListener("scroll", onReflow, true);
+  window.addEventListener("resize", onReflow);
 });
 onUnmounted(() => {
   document.removeEventListener("pointerdown", onDocPointer);
   window.removeEventListener("keydown", onKey);
+  window.removeEventListener("scroll", onReflow, true);
+  window.removeEventListener("resize", onReflow);
 });
 </script>
 
 <template>
   <div ref="root" class="ts-root">
-    <Tooltip :text="i18n.t('ts.title')" place="above" align="center">
+    <!-- 弹层开着的时候不显示提示：提示会压在弹层下半部分上 -->
+    <Tooltip :text="open ? '' : i18n.t('ts.title')" place="above" align="center">
       <button
         class="ts-btn"
         :class="{ open }"
@@ -89,24 +145,28 @@ onUnmounted(() => {
         :aria-label="i18n.t('ts.label')"
         @click="toggle"
       >
-        <!-- 节拍器图标（非横线） -->
-        <svg class="ts-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 3.6 L16.6 20.4 H7.4 Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
-          <path d="M6.2 20.4 h11.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-          <path d="M12 6.6 V15.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-          <circle cx="12" cy="15.6" r="1.5" fill="currentColor" />
-        </svg>
+        <!-- 节拍器图标（非横线）；与底栏的节拍器开关共用同一个组件。 -->
+        <MetronomeIcon />
         <span class="ts-value">{{ label }}</span>
         <ChevronDownIcon class="ts-chevron" :class="{ flip: open }" />
       </button>
     </Tooltip>
 
-    <transition name="pop">
-      <div v-if="open" class="ts-pop" role="dialog" :aria-label="i18n.t('ts.choose')">
+    <Teleport to="body">
+      <transition name="pop">
+        <div
+          v-if="open"
+          ref="pop"
+          class="ts-pop"
+          :style="popStyle"
+          :class="{ down: !dropUp }"
+          role="dialog"
+          :aria-label="i18n.t('ts.choose')"
+        >
         <div class="ts-pop-title">{{ i18n.t("ts.label") }}</div>
         <div class="ts-grid">
           <button
-            v-for="[n, d] in PRESETS"
+            v-for="[n, d] in presets"
             :key="`${n}/${d}`"
             class="ts-preset"
             :class="{ on: n === num && d === den }"
@@ -139,7 +199,8 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
-    </transition>
+      </transition>
+    </Teleport>
   </div>
 </template>
 
@@ -172,11 +233,6 @@ onUnmounted(() => {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 1px;
 }
-.ts-icon {
-  width: 17px;
-  height: 17px;
-  flex: 0 0 auto;
-}
 .ts-value {
   font-size: 12px;
   font-weight: 600;
@@ -195,10 +251,7 @@ onUnmounted(() => {
 
 /* ---- 弹出面板 ---- */
 .ts-pop {
-  position: absolute;
-  bottom: calc(100% + 10px);
-  left: 50%;
-  transform: translateX(-50%);
+  position: fixed;
   z-index: 60;
   width: 256px;
   padding: 12px;
@@ -304,7 +357,12 @@ onUnmounted(() => {
 .pop-enter-from,
 .pop-leave-to {
   opacity: 0;
-  transform: translateX(-50%) translateY(8px) scale(0.94);
+  transform: translateY(8px) scale(0.94);
+}
+/* 往下弹时动画方向反过来 */
+.ts-pop.down.pop-enter-from,
+.ts-pop.down.pop-leave-to {
+  transform: translateY(-8px) scale(0.94);
 }
 
 @media (prefers-reduced-motion: reduce) {

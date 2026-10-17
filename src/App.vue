@@ -28,6 +28,7 @@ import { useI18n } from "@/i18n";
 import { exportWav, onPluginsEvent } from "@/api/tauri";
 import { pickAudioToOpen, pickProjectToOpen, pickProjectToSave, pickWavToSave } from "@/api/dialogs";
 import { isTauri } from "@/utils/platform";
+import { shouldDeferToBrowser } from "@/utils/editable";
 
 const project = useProjectStore();
 const layout = useLayoutStore();
@@ -278,7 +279,9 @@ async function onRedo(): Promise<void> {
 }
 
 function onKey(e: KeyboardEvent): void {
-  if (e.target instanceof HTMLInputElement) return;
+  // 焦点在输入框/文本域里，或用户选了一段文字：这些按键归浏览器（否则文本域里打不出 `1`/`2`/`3`，
+  // 在别处选中文字按 Cmd+C 也会被当成 DAW 快捷键）。见 `utils/editable.ts`。
+  if (shouldDeferToBrowser(e)) return;
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.shiftKey && e.key.toLowerCase() === "d") {
     e.preventDefault();

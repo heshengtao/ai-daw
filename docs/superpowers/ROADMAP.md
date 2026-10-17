@@ -50,6 +50,91 @@
   统一查看 / 下载 / 删除模型（与插件共用同一份「网络」配置）。④ 设置页「网络」新增「模型镜像」；
   插件页提示语由「已迁移」改为可操作的「下载失败/代理有问题请到网络页配置」。魔搭（ModelScope）
   源待用户自建仓库后再补。设计/计划：`specs+plans/2026-10-10-local-ai-models*`（本轮更新）。
+- **第十次修订（2026-10-15）**：**节拍检测（G5）以新方式回归** —— 改用社区 Rust 移植 crate
+  **`beat-this`**（纯 Rust `rten` 后端）重做，**只写一个全局 BPM + 拍号**（不写逐小节速度图，
+  那正是上一版撤掉的原因），并把片段首重拍对齐到小节线。权重 `final0`（83 MB）**不随包**、
+  进「管理器 → 模型」下载列表；mel 前端（264 KB）随包。宿主 `KIND_TEMPO`、MCP 工具 `detect_tempo`
+  （**34 → 35**）、AI 面板「节拍检测」卡片。设计见 `specs/2026-10-15-beat-this-tempo-design.md`；
+  验收曲子由 `tools/make-test-song.py` 生成。
+- **第十一次修订（2026-10-15）**：**修音频播放的采样率换算** —— 片段读指针一直漏了「素材采样率 /
+  工程采样率」这一项（直接 `cursor += rate`），于是 **44.1 kHz 素材在 48 kHz 工程里会快
+  48000/44100 ≈ 8.8% 并升调**，尾端还会被方框截掉（听感正是「最后一小节没声音」）。
+  `ScheduledAudioClip` 新增 `source_ratio`，播放器直读与 WSOLA 读指针都按它推进——
+  `r` 进**读步进**（重采样），**不进伸缩**（WSOLA 保的是帧周期，折进伸缩会照样升调）。
+  回归测试：`engine/tests/audio_clip.rs::material_at_another_sample_rate_keeps_its_duration_and_pitch`、
+  `engine/src/stretch.rs::sample_rate_conversion_keeps_duration_and_pitch`。
+  顺带修底部「工程小节数」**差 1**（内容正好收在小节线上时多算了一小节），以及验收曲子末尾
+  不再留 0.4 s 静音尾巴（现在正好 12 小节）。
+- **第十二次修订（2026-10-15）**：**修「播放速度 / 升降调」不可用** —— 片段的 `rate` 漏在四处
+  「拍 / 时间轴秒 ↔ 素材帧」的换算里（`trim_clip` / `clip_bounds` / `split_clip` / 前端 `ClipWaveform`），
+  于是**设过播放速度之后再拖动片段就会把素材窗口设成 `1/rate`**（`rate = 2` 时后半段静音），
+  右边缘还能拖到素材早已放完之后，波形也与听到的对不上。现在换算统一走
+  `commands::{span_to_source_frames, source_frames_to_span}`（`trimmed_window` / `clip_bounds_for`），
+  并补了 3 条回归测试；波形新增 `rate` 参数参与时间轴→素材的映射。
+  （引擎侧本身是对的：`rate` 只改时长、`pitch` 只改音高，已用正弦 + 脉冲素材逐档量化核对过。）
+- **第十三次修订（2026-10-15）**：**修「变速 / 升降调一开就爆音、卡住」** —— 上一轮的量化核对是在
+  离线渲染里做的，**没量实时预算**。WSOLA 的对齐搜索对 `±SEARCH` 每个候选都重算 512 抽头互相关
+  = 105 万次乘加**每块**，而一块只出 `HOP` 个输出帧 → 每输出帧 ~2000 次乘加；Debug 构建实测
+  **42–170 µs/输出帧**（实时预算 20.8 µs，即 200%–800%）→ 回调必然爆音、卡死。这正是
+  「`rate ≠ 1` / `pitch ≠ 0` 才有问题、原速一切正常」的原因——**只有这条路径走 WSOLA**。
+  改成**先粗后精**搜索（4 帧步长 + 4 抽点粗搜 → 最优点 ±4 内全抽点精搜），快 ~15×，Debug 下
+  实测降到实时预算的 3%–20%。顺带修 `seek` 之后第一块「零模板互相关」把取段拽偏 −SEARCH
+  （≈21 ms 错位）：模板能量为 0 时直接跳过搜索。见 `specs/2026-10-09-audio-clip-design.md` §3。
+  回归测试：`stretch.rs::seek_lands_on_the_nominal_position_not_a_search_radius_offset`。
+  （教训：成本没有进 CI 门禁——离线的音高 / 时长断言全绿，实时预算却爆了 2–8 倍。
+  **DSP 断言要连「喂得动实时」一起量**。）
+
+- **第十四次修订（2026-10-15）**：**Stage G ⑤ 生成音乐（ACE-Step 1.5）阶段一落地** —— 先补
+  记在 §5 Stage G 里的**前置工程**：模型系统由「**单文件 + 单 sha256**」升级为
+  「**多文件组 + 各自 sha256**」（`ModelFile` / `ModelEntry.files` / `ModelEntry.dir`），
+  下载器改为**串行逐文件下载 + 逐个原子落地**、进度按**跨文件累计字节**上报、跳过已下文件；
+  「可用」判定要求**同一个搜索目录**里齐备整组（`ort` 靠相对路径找 `.onnx.data`，混目录会加载失败）。
+  据此新增清单条目 `ace-step-v15`（上游 MIT / 导出 Apache-2.0，**12 个文件 / 约 3.6 GiB**：
+  DiT + 文本编码器 + 融合条件编码器 + 词嵌入 + VAE + 各自 `.onnx.data` + Qwen3 分词器 + 静音潜变量，
+  INT4/fp16 混合，**不含 LM**）。
+  界面按 pane 体系扩一页：**AI 面板更名「AI 功能首页」**并加一张「音乐生成」**入口卡片**，
+  **新增独立标签页「AI 音乐生成」**（`PaneId = "aimusic"`，可从「+」标签列表直接打开），
+  负责权重状态（整组 `n/N` 文件）、一键下载、进度与取消。
+  **阶段二（推理管线：tokenize → 条件编码 → 8 步 DiT 去噪 → VAE 解码）已实现并端到端验收通过**：
+  `crates/local-ai/src/models/ace_step.rs`（含调度器 / 提示词 / 静音潜变量 / 确定性噪声 + 12 条单测）、
+  探针 `ace_step_probe`（打印图契约，`--generate` 真出 WAV）。
+  **风险闸门已通过**：整组 6 张图在**原生 `ort` CPU EP** 上全部建会话成功，**包括 INT4 的 `MatMulNBits`**。
+  **一处关键修正**：条件编码必须用**融合的 `condition_encoder`**——条件序列里还有一个 timbre
+  编码器产生的 token，`pack_sequences` 的排序语义也在图里，用拆分图自己拼是拼不对的；
+  为此清单去掉 `text_projector` / `lyric_encoder`，加入 `condition_encoder_q4v2` 与
+  `silence_latent.pt`（文生音乐的 context，学习得到的常量、非 0）。整组 12 个文件 / 约 3.6 GiB。
+  **实测**：10 秒音频 18.2 s、30 秒 46.8 s（≈1.5 s CPU / 音频秒）；峰值正好 −1 dBFS；
+  同 seed 两次输出**字节相同**；频谱平坦度 0.056（有音调结构，非噪声）；尾段/头段能量比 ≈1.00
+  （无时长塌陷）。**宿主接线（`ai_generate` + 落成音轨 + MCP 工具 + 生成表单）待做。**
+  见 `specs/2026-10-15-ace-step-music-generation-design.md`。
+
+- **第十五次修订（2026-10-16）**：**移除 ACE-Step 1.5 与「AI 音乐生成」整条线**。理由是
+  **实测不成立**：① CoreML 在这套图上**全面更慢**（Basic Pitch 6.5×、LocalVQE 142×、
+  6 分轨 12×；详见 `specs/2026-10-16-backend-runtime-download.md` §10.3）；② 即便纯 CPU，
+  10 秒音乐也要 **93 s**，其中 LM 规划占 ~55 s（`lm_0.6b_q4.onnx` 没导出 KV cache，
+  每 token 全序列前向 O(n²)），而重导 ONNX 需要上游权重（HF 在当前离线环境不可达）。
+  对一个轻量级本地应用来说，这不是可接受的成本结构。
+  **删掉的**：`models/{ace_step,ace_step_lm}.rs`、`examples/ace_step_probe.rs`、
+  清单三条目（`ace-step-v15` / `-q8` / `ace-step-lm`）、`GenerateArgs` / `GenerateLimits` /
+  `RepaintWindow` / LM 文本事件与流式增量、`KIND_{GENERATE,REPAINT,COVER,COMPLETE_SPEC}`、
+  MCP 的 `generate_music` 工具、前端 `AiMusicPanel.vue` + `stores/musicForm.ts` +
+  `PaneId = "aimusic"` + 全部 `aiMusic.*` 文案、`tools/{export-vae-encoder.py}` 与
+  `fetch-models.sh` 的 ACE 段、`tokenizers` 依赖。
+  **保留的**：多文件模型组机制（`ModelFile` / `ModelEntry.dir` / 分组校验）——它是通用能力，
+  与 ACE 无关；`AudioModels` 仅剩 Basic Pitch / LocalVQE / HTDemucs / Beat This!。
+
+- **第十六次修订（2026-10-16）**：**执行后端收成「三选一」，去掉所有下载**。
+  既然 CoreML 在这些小模型上实测全面更慢（§第十五次修订的理由①），原先那套
+  「CUDA 运行时下载 + `load-dynamic` + `BackendFile` 清单 + 下载进度事件」就没有成立的前提：
+  CUDA 本机无法验证，且对几个 MB~百 MB 的模型来说收益不成立。
+  **删掉的**：`BackendKind::Cuda`、`cuda-*` 清单条目、`BackendFile` / `BackendSource` /
+  `min_driver`、`resolve.rs`（推荐 / 驱动门槛 / 自动选择）、`runtime-download` feature
+  （含 `load-dynamic` 与 `prepare_runtime`）、`src-tauri/src/backends.rs` 里的下载器
+  （`fs4` / `lzma-rust2` 依赖随之移除）、`EVENT_BACKEND` 与 `stores/backends.ts`、
+  下载管理器里的「后端」页签。
+  **现在的形态**：`BackendKind { Cpu, CoreMl, DirectMl }`，全部随包零下载；`BackendPreference`
+  默认 **CPU**；设置页新增「AI」分区，用分段控件在**本机平台支持**的项里选
+  （Intel Mac 无 CoreML、非 Windows 无 DirectML）。改设置立即生效（会话每次现建，无需重启）。
 
 ## 1. 现状总览
 
@@ -187,7 +272,7 @@
 | 低延迟（Windows） | （外部建议）启用 cpal 的 ASIO 后端 | **不启用 ASIO**：ASIO SDK 为 GPLv3 / 专有，会破坏纯 Apache-2.0 分发。走 WASAPI |
 | AI 听感引擎 | （外部建议）Dhwani | **不用**：Dhwani 是 **GPL-3.0-only**，链接即传染。改用 `ebur128` / `rustfft` |
 | 音频解码 | `symphonia` / `rubato`（拟定） | **symphonia 已采用**（wav/flac/mp3/ogg/aac/m4a）。它是 **MPL-2.0**，原先不在允许清单里 → 2026-10-09 把 MPL-2.0 加入 §3（**仅限未修改依赖**，见 `NOTICE`/`deny.toml`）。`rubato`（保音高变速）暂未引入。 |
-| 音频片段时间语义 | （未指定） | **片段拍长是唯一真相，素材铺满跨度**：缩放/改速度按比例重采样 → **会变调**（v1 不做保音高变速）。理由：模型与 MIDI 片段一致、时间轴/吸附/长度全部复用、实现最简。 |
+| 音频片段时间语义 | 原为「片段拍长是唯一真相，素材铺满跨度 → 会变调」 | **2026-10-13 解耦**：片段拍长只决定**方框**；素材按 `rate` **原速**播放——**改 BPM 不改音频**、改速度时方框自动重算跟住素材；**变速 / 升降调**是片段自己的参数（`AudioSource.rate`/`pitch_semitones`，引擎用 **WSOLA 时值伸缩** 保音高）；拖左右边缘 = **裁剪**（改读写窗口，不改速度/音高）。见 `specs/2026-10-09-audio-clip-design.md` §3。 |
 | 声像律 | （未指定，原实现为等功率） | **改为线性 balance**（居中 = 单位增益，向一侧偏则衰减另一侧）。原因：引擎内部恒为立体声，等功率律让居中信号凭空 −3 dB，轨道与 master 各套一次 = 整链 **−6 dB**（导入满幅素材会明显变轻）。代价：硬偏不再有 +3 dB 补偿。 |
 | 暂停语义 | （原实现：暂停后插件继续跑） | **暂停 = 静音**：`Pause`/`Stop` 重置乐器与效果链（all-notes-off）。原实现只置 `playing=false`，长音的 NoteOff 再也送不到 → 插件一直挂着该音（「暂停了还在响」）。插件实例不销毁，界面键盘与插件自带界面预览仍可用。 |
 | 合成器扩展路线 | （用户提出多种合成法） | **一个合成器 + 更多原子，而不是每类一个引擎**：补齐噪声 / 位深压碎 / 失谐 / FM / 音高包络 / 滤波类型六种原子，8 类音色 = 8 组参数配方。波表/加法/物理建模/颗粒在 v1 是**近似**（见 `specs/2026-10-09-synth-overhaul-design.md` §2），真实现留后续。 |
@@ -260,7 +345,8 @@
   测试：`audio_clip.rs` 7 条量化断言 + 播放器/解码单测，`--features realtime` 的零分配门禁仍通过；
   **真机端到端**（MCP 导入 1 kHz WAV → 分析渲染结果）音高与单位增益均与理论值一致。
   设计与计划：`specs/2026-10-09-audio-clip-design.md`、`plans/2026-10-09-audio-clip.md`。
-  语义决策：**片段拍长是唯一真相，素材铺满跨度 → 缩放/改速度会变调**（v1 不做保音高变速）。
+  语义决策：**片段拍长只决定方框，素材原速播放（与工程 BPM 解耦）**；变速 / 升降调是片段参数，
+  拖左右边缘 = 裁剪（2026-10-13 从「铺满跨度会变调」改为解耦模型）。
 - **C2 · Plan 5**：录音（cpal 输入流 → 写入 `AudioClip`）。✅ **完成（2026-10-10）**：
   引擎新增 `crates/engine/src/recorder.rs`（输入设备枚举 + cpal 输入流 + 无锁 `rtrb` 采集环 +
   消费线程 → `DecodedAudio`），`AudioHost` 增加输入流生命周期（arm/disarm/start/stop）；
@@ -415,6 +501,9 @@
 > **G4 ② 音源分离 ✅ 完成（2026-10-11）**（HTDemucs v4 手写移植 + 四条分轨 + `separate_stems`）；
 > **模型分发基建 ✅ 完成**（清单 + 应用内下载器 + 「管理器 → 模型」标签 + 网络页「模型镜像」）。
 > G4 其余三项（SVC / SVS / 生成音乐）仍 ⬜。
+> **识谱 / 分析并对齐 ❌ 已移除（2026-10-14）**：Beat This! 那一版集成（模型 + AI 面板卡片 +
+> MCP 工具 `detect_beats`）整体撤掉——模型本身准，但配这套**按「拍」线性绘制**的时间轴无法稳定对齐。
+> **保留**底部条的**节拍器**（`TransportCommand::SetMetronome`，与模型无关）。
 
 **六个目标功能**：音频转 MIDI、音频增强/降噪/去混响、音频分离、生成音乐、人声音色替换、母带处理。
 **先做前两个。**
@@ -450,10 +539,33 @@
   两条本地能力**只要一个开始按钮**（处理中转成「停止」，条目**下边缘变进度条**，可**随时停止**），
   条目上带 `模型 / 内置 DSP` 标签（来自 `ai_models`）；
   结果走同一条命令管线（转 MIDI → `AddNoteTrack` 一次事务；降噪 → 写 WAV + `AddAudioClip`），可撤销。
-- **G4 · 其余四项（后续）**：**① 母带 ✅、② 音源分离 ✅（2026-10-11）**；③④⑤ 仍 ⬜。
+- **G5 · 节拍检测（BPM + 拍号对齐）**：✅ **以新方式重新实现（2026-10-15）**。
+  上一版（自实现 log-mel 前端 + 自导出 ONNX）于 2026-10-14 撤掉——**模型是准的**，但它把结果写成
+  **逐小节速度图**，而本仓库的时间轴是**按「拍」线性绘制**的，两者天然对不上（详见撤掉时的记录）。
+  这一版改用社区 Rust 移植 crate **`beat-this`**（Beat This!，ISMIR 2024，MIT；默认纯 Rust `rten`
+  后端，不需要 `libonnxruntime`）：
+  - **只写一个全局 BPM + 一个拍号**（`SetTempo` / `SetTimeSignature`），**不写 keyframes** ——
+    恒定速度下网格 / 波形 / 节拍器才稳定对齐；
+  - 拍号分子 = **相邻重拍之间的拍数**的众数（分母固定 4，重拍不足退回 4/4）；
+    **对齐** = 把片段平移到**下一条**小节线，使**首重拍落在小节线上**（片段起点不能为负）；
+  - 速度 / 拍号 / 片段起点 / 片段长度 / 速率复位走 `run_agent_all`，**一次事务 = 一笔撤销**；
+  - 权重：`final0`（FP32，83 MB）**不随包**，用户在「管理器 → 模型」下载（id `beat-this`；
+    源是上游 GitHub Releases 的 `model-large` 资产，sha256 硬门禁）；**mel 前端（264 KB）随包**
+    （`src-tauri/resources/onnx/mel_spectrogram.onnx`）。
+  - 宿主 `KIND_TEMPO`（AI 面板「节拍检测」卡片；缺权重时先弹确认框、再跳「管理器」下载）；
+    MCP 工具 `detect_tempo`（**34 → 35**）；诊断工具 `crates/local-ai/examples/beat_probe.rs`。
+  - 设计与非目标见 `specs/2026-10-15-beat-this-tempo-design.md`；人工验收曲子由
+    `tools/make-test-song.py` 生成（120 BPM 4/4，期望面板显示「120.0 BPM · 4/4」）。
+  - **适用素材**：只对**节拍稳定**的音乐有效（自由速度 / 氛围音 / 朗读 / <2 秒的素材测出的 BPM
+    没有意义）——AI 面板卡片上**常驻一行适用范围说明**，MCP 工具描述里也写了。
+    检测中的进度条用**不确定态**（推理是一整段不可打断的调用，release 下 100% 时间都在 beat 模型里）。
+  - **保留**：底部条的**节拍器**（`TransportCommand::SetMetronome`）——按工程速度 / 拍号在整数拍上打点、
+    小节头重音，只在播放时出声，与任何模型无关。
+- **G4 · 其余四项（后续）**：**① 母带 ✅、② 音源分离 ✅（2026-10-11）**、**⑤ 生成音乐 🟡 阶段一**
+  （2026-10-15）；③④ 仍 ⬜。
   见 `specs/2026-10-10-local-ai-models-design.md`、`plans/2026-10-10-local-ai-models.md`：
-  - **前置基建 ✅ 完成（2026-10-11）**：应用内**模型下载器**——多源（**HuggingFace + hf-mirror**，
-    用户可配镜像前缀）+ sha256 + 断点续传 + 进度/取消；权重落到应用配置目录 `models/`；
+  - **前置基建 ✅ 完成（2026-10-11）**：应用内**模型下载器**——多源（**HuggingFace / 魔搭**等官方源；
+    第三方镜像前缀由用户自配）+ sha256 + 断点续传 + 进度/取消；权重落到应用配置目录 `models/`；
     清单见 `crates/local-ai/src/models/catalog.rs`，下载器 `src-tauri/src/models.rs`，事件
     `engine://model`。**魔搭（ModelScope）源已接入**（自建仓库 `ailm32442/htdemucs-ort`，
     sha256 与 HF 一致，排在候选源第一位 / 国内优先）。
@@ -471,8 +583,10 @@
       产出 ONNX 后 Python 退场，随包/运行时不带 Python。
     - **不引 `candle`**（原计划的 ACE-Step 运行时）——⑤ 改用现成 ONNX 后，`candle` 与 git 依赖都不再需要。
     - **不需要 sidecar**；sidecar 只作将来 GPL / 崩溃隔离的兜底（且是 **Rust sidecar**，非 Python）。
-    - **前置工程**：ACE-Step 是**多文件流水线**（十余张 ONNX + `.data`），需把模型系统从「单文件 + 单 sha256」
-      升级为「**多文件组 + 各自 sha256**」；并实测 fp16 / 量化算子在 `ort`（CPU/CoreML）上的可加载性。
+    - **前置工程 🟡 部分完成（2026-10-15）**：模型系统已从「单文件 + 单 sha256」升级为
+      「**多文件组 + 各自 sha256**」（`catalog.rs` 的 `ModelFile` / `ModelEntry.files` /
+      `ModelEntry.dir`，下载器逐文件串行下载与原子落地）；**仍待实测** fp16 / 量化算子在
+      `ort`（CPU/CoreML）上的可加载性——这是 ⑤ 阶段二的第一道闸门。
   - **① 母带处理 ✅ 完成（2026-10-10，方案 A：纯 DSP）**：新 crate `crates/mastering` ——
     **响度归一（目标 LUFS）+ 真峰值限幅（4× 过采样 + 前瞻）+ 立体声宽度**；宿主侧作为
     `ai.rs` 的 `kind = "master"` 任务（复用进度/取消/事件/新轨机制），AI 面板一张卡片三个参数，
@@ -513,6 +627,9 @@ M3（Stage C：可录音、有音频片段）→ M4（Stage D：可被 AI 驱动
   - `specs/2026-10-10-recording-design.md`（C2，✅ 完成）
   - `specs/2026-10-10-mixing-sends-buses-automation-design.md`（C3，✅ 完成）
   - `specs/2026-10-10-plugin-param-automation-design.md`（C3 扩展：插件参数自动化 + 卷帘参数车道，✅ 完成）
+  - `specs/2026-10-15-beat-this-tempo-design.md`（G5：节拍检测 —— 全局 BPM + 拍号对齐，✅ 完成）
+  - `specs/2026-10-15-ace-step-music-generation-design.md`（G4⑤：生成音乐 ACE-Step 1.5 ——
+    多文件模型组 + 「AI 音乐生成」面板，🟡 阶段一完成、阶段二待做）
   - `specs/2026-10-10-cli-path-install-design.md`（F4：`aidaw` 随包分发并上 PATH，✅ 完成）
   - `specs/2026-10-10-plugin-manager-design.md`（E1：插件管理器 —— 安装 / 导入 / 更新 / 删除，✅ 完成）
   - `specs/2026-10-09-synth-overhaul-design.md`（✅ 完成）

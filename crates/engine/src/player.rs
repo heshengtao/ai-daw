@@ -12,6 +12,7 @@ use crate::registry::{PluginRegistry, PluginSlot};
 use crate::schedule::{
     LaneTarget, ScheduledAudioClip, ScheduledEvents, ScheduledLane, ScheduledMidi, ScheduledSend,
 };
+use crate::stretch::Stretcher;
 use crate::tempo::TempoMap;
 use crate::transport::TransportCommand;
 
@@ -139,26 +140,46 @@ impl Plugin for Bypass {
 /// 一条音频片段的运行期状态。
 struct AudioPlayback {
     clip: ScheduledAudioClip,
-    /// 素材内的当前帧位置。用 `f64` 按比值累加，避免长片段上的整数漂移。
+    /// 素材内的当前帧位置（`stretch` 为 `None` 时用；用 `f64` 累加避免整数漂移）。
     cursor: f64,
+    /// 变速 / 升降调读指针（`rate == 1 && pitch == 0` 时为 `None`，走原速直读）。
+    stretch: Option<Box<Stretcher>>,
 }
+
+/// 节拍器咔哒声的时长（秒）。
+const CLICK_SECONDS: f64 = 0.02;
 
 /// 片段在 `position` 帧时，素材内的播放位置（源帧）。
 ///
-/// 语义：素材从 `offset_frames` 起**铺满**整段跨度，因此每过一个输出帧前进
-/// `source_window_frames / span_frames` 个源帧。缩放片段或改工程速度都会改变这个比值，
-/// 于是音频被按比例重采样（**会变调**——v1 不做保音高变速）。
+/// **与工程 BPM 解耦**：每过一个输出帧前进 `rate × source_ratio` 个源帧（`rate` 是片段自己的
+/// 参数，`source_ratio` 是素材率/工程率）——改工程速度**不会**改变这个比值，因此音频不变速变调。
 fn audio_cursor(clip: &ScheduledAudioClip, position: u64) -> f64 {
     let offset = clip.offset_frames as f64;
-    let span = clip.end_frame.saturating_sub(clip.start_frame);
-    if span == 0 || position <= clip.start_frame {
+    let end = (clip.offset_frames + clip.source_window_frames) as f64;
+    if position <= clip.start_frame {
         return offset;
     }
     if position >= clip.end_frame {
-        return offset + clip.source_window_frames as f64;
+        return end;
     }
-    let ratio = clip.source_window_frames as f64 / span as f64;
-    offset + (position - clip.start_frame) as f64 * ratio
+    let step = clip.rate * clip.source_ratio;
+    (offset + (position - clip.start_frame) as f64 * step).clamp(offset, end)
+}
+
+/// `rate`/`pitch` 都缺省时返回 `None`（走直读，零开销）；否则建一个 WSOLA 读指针。
+fn make_stretcher(clip: &ScheduledAudioClip) -> Option<Box<Stretcher>> {
+    let unity = (clip.rate - 1.0).abs() < 1e-9 && clip.pitch_semitones.abs() < 1e-9;
+    if unity {
+        return None;
+    }
+    Some(Box::new(Stretcher::new(
+        clip.audio.clone(),
+        clip.offset_frames,
+        clip.source_window_frames,
+        clip.rate,
+        clip.pitch_semitones,
+        clip.source_ratio,
+    )))
 }
 
 /// 线性插值取一帧（交错 f32；`channels` 为 1 或 2）。
@@ -186,6 +207,25 @@ fn lerp_frame(samples: &[f32], channels: usize, pos: f64) -> (f32, f32) {
     (l0 + (l1 - l0) * t, r0 + (r1 - r0) * t)
 }
 
+/// 往 `out`（交错立体声）的 `start` 帧处叠加一声节拍器咔哒：指数衰减正弦，重音更高更响。
+///
+/// 实时安全：纯乘加，不分配。
+fn add_click(out: &mut [f32], start: usize, len: usize, sr: f64, accent: bool) {
+    let freq = if accent { 1600.0 } else { 1000.0 };
+    let amp = if accent { 0.5 } else { 0.26 };
+    for i in 0..len {
+        let idx = (start + i) * 2;
+        if idx + 1 >= out.len() {
+            break;
+        }
+        let t = i as f64 / sr;
+        let env = (-t / 0.006).exp();
+        let s = (amp * env * (std::f64::consts::TAU * freq * t).sin()) as f32;
+        out[idx] += s;
+        out[idx + 1] += s;
+    }
+}
+
 /// 把一条音频片段按帧**相加**进 `left/right`。
 ///
 /// 调用点在「乐器之后、效果链之前」：于是音频片段与 MIDI 一样经过轨道效果链、轨道
@@ -199,12 +239,30 @@ fn mix_audio_clip(
 ) {
     let start_frame = playback.clip.start_frame;
     let end_frame = playback.clip.end_frame;
-    let span = end_frame.saturating_sub(start_frame);
-    if span == 0 {
+    // 变速 / 升降调：交给 WSOLA 读指针。
+    if let Some(st) = playback.stretch.as_mut() {
+        for i in 0..frames {
+            let frame = block_start + i as u64;
+            if frame < start_frame {
+                continue;
+            }
+            if frame >= end_frame {
+                break;
+            }
+            match st.next_frame() {
+                Some((l, r)) => {
+                    left[i] += l;
+                    right[i] += r;
+                }
+                None => break, // 素材放完
+            }
+        }
         return;
     }
-    let ratio = playback.clip.source_window_frames as f64 / span as f64;
-    let source_frames = playback.clip.audio.frames() as f64;
+    // 直读（`rate == 1 && pitch == 0`）。步进仍要带上 `source_ratio`：素材采样率与工程采样率
+    // 不同时，这一步就是**采样率换算**（靠 `lerp_frame` 插值），时长与音高都不变。
+    let end = (playback.clip.offset_frames + playback.clip.source_window_frames) as f64;
+    let step = playback.clip.rate * playback.clip.source_ratio;
     let channels = playback.clip.audio.channels;
     let samples: &[f32] = &playback.clip.audio.samples;
     let mut cursor = playback.cursor;
@@ -213,13 +271,13 @@ fn mix_audio_clip(
         if frame < start_frame {
             continue;
         }
-        if frame >= end_frame || cursor >= source_frames {
-            break; // 片段结束，或素材放完（v1 不循环）
+        if frame >= end_frame || cursor >= end {
+            break; // 方框到头，或素材放完（v1 不循环）
         }
         let (l, r) = lerp_frame(samples, channels, cursor);
         left[i] += l;
         right[i] += r;
-        cursor += ratio;
+        cursor += step;
     }
     playback.cursor = cursor;
 }
@@ -264,8 +322,16 @@ pub struct Player {
     position: u64,
     end_frame: u64,
     playing: bool,
-    /// 循环播放开关。`Player` 自己不改位置；「到结尾回到起点」由宿主执行。
+    /// 循环播放开关。`Player` 自己不改位置；「到边界回卷」由宿主执行。
     looping: bool,
+    /// 播放范围起点（帧）。`loop_end > loop_start` 才算有效范围，否则是「整首」。
+    loop_start: u64,
+    /// 播放范围终点（帧）；到达此帧由宿主回卷到 `loop_start`。
+    loop_end: u64,
+    /// 节拍器开关（运行时，不写入工程）；只在播放时出声。
+    metronome: bool,
+    /// 下一个要打点的整数拍（节拍器用）。
+    next_beat: i64,
     master_gain_db: f32,
     master_pan: f32,
     master_left: f32,
@@ -358,10 +424,12 @@ impl Player {
             // 优先复用搬过来的实例（保住插件内部状态与已打开的界面窗口）；id 变了才新建。
             let mut plugin: Option<Box<dyn Plugin>> = instrument.and_then(|instance| {
                 if let Some(existing) = carried.instruments.remove(&st.track_id) {
-                    if existing.descriptor().id == instance.plugin_id {
+                    // 占位不复用：目录扫描完成后再重建时，真插件已经到位，复用占位会把它挡在
+                    // 门外（实例建不出来 → 界面句柄登记不上 → 打开界面报「没有可打开的插件界面」）。
+                    if !existing.is_placeholder() && existing.descriptor().id == instance.plugin_id {
                         return Some(existing);
                     }
-                    // id 不匹配的旧实例在**控制侧**释放，不带进新播放器。
+                    // 占位、或 id 不匹配的旧实例在**控制侧**释放，不带进新播放器。
                 }
                 registry.create(&instance.plugin_id, st.track_id, PluginSlot::Instrument)
             });
@@ -432,7 +500,11 @@ impl Player {
             let audio: Vec<AudioPlayback> = st
                 .audio_clips
                 .iter()
-                .map(|clip| AudioPlayback { clip: clip.clone(), cursor: audio_cursor(clip, 0) })
+                .map(|clip| AudioPlayback {
+                    stretch: make_stretcher(clip),
+                    cursor: audio_cursor(clip, 0),
+                    clip: clip.clone(),
+                })
                 .collect();
             // 自动化车道：克隆 + 预留几格，实时 `SetAutomation` 会 push 新车道，不能因此扩容
             // （音频线程不分配）。
@@ -482,6 +554,10 @@ impl Player {
             end_frame,
             playing: false,
             looping: false,
+            loop_start: 0,
+            loop_end: 0,
+            metronome: false,
+            next_beat: 0,
             master_gain_db: master.gain_db,
             master_pan: master.pan,
             master_left: 1.0,
@@ -509,6 +585,33 @@ impl Player {
         self.looping
     }
 
+    /// 当前生效的播放范围（帧）。`None` = 没设范围（循环时按「整首」处理）。
+    pub fn loop_range(&self) -> Option<(u64, u64)> {
+        if self.loop_end > self.loop_start {
+            Some((self.loop_start, self.loop_end))
+        } else {
+            None
+        }
+    }
+
+    /// 播放头到达此帧就该回卷 / 停下；`0` = 无边界。
+    ///
+    /// 开循环且设了范围 → 用范围终点（哪怕它越过工程正文，用户明确要求循环那一段）；
+    /// 否则 → 用工程结尾。宿主（实时回调 / 离线渲染）据此判断，`Player` 自身不改位置。
+    pub fn playback_end_frame(&self) -> u64 {
+        if self.looping {
+            if let Some((_, end)) = self.loop_range() {
+                return end;
+            }
+        }
+        self.end_frame
+    }
+
+    /// 当前是否开启节拍器。
+    pub fn is_metronome(&self) -> bool {
+        self.metronome
+    }
+
     /// 当前位置（自播放起点起的帧数）。
     pub fn position_frames(&self) -> u64 {
         self.position
@@ -523,6 +626,14 @@ impl Player {
         self.end_frame
     }
 
+    /// 重算节拍器的「下一个要打点的拍」：从播放头所在 / 之后的下一个整数拍开始。
+    fn reset_next_beat(&mut self) {
+        let beat = self
+            .tempo_map
+            .seconds_to_beats(self.position as f64 / self.sample_rate);
+        self.next_beat = beat.ceil() as i64;
+    }
+
     /// 定位到指定帧：重置所有插件并重算事件游标（已在播放中的音符不会被重新触发）。
     pub fn seek(&mut self, frame: u64) {
         self.position = frame;
@@ -530,6 +641,7 @@ impl Player {
             .tempo_points
             .partition_point(|(f, _)| *f <= frame)
             .saturating_sub(1);
+        self.reset_next_beat();
         for track in self.tracks.iter_mut() {
             track.cursor = track.events.partition_point(|e| e.frame < frame);
             if let Some(plugin) = track.plugin.as_mut() {
@@ -537,8 +649,10 @@ impl Player {
             }
             // 音频片段的游标同样要跟着播放头重算，否则定位后片段会错位。
             for playback in track.audio.iter_mut() {
-                let cursor = audio_cursor(&playback.clip, frame);
-                playback.cursor = cursor;
+                playback.cursor = audio_cursor(&playback.clip, frame);
+                if let Some(st) = playback.stretch.as_mut() {
+                    st.seek(frame.saturating_sub(playback.clip.start_frame));
+                }
             }
         }
     }
@@ -622,10 +736,17 @@ impl Player {
     pub fn apply_command(&mut self, command: TransportCommand) {
         match command {
             TransportCommand::Play => {
-                // 已经停在结尾：再按播放应当从头重播，而不是「按了没反应」。
-                // 宿主在播到 `end_frame` 时会暂停（位置留在结尾），这条判断就是它的配对。
-                if self.end_frame > 0 && self.position >= self.end_frame {
-                    self.seek(0);
+                // 已经停在边界上：再按播放应当从边界起点重播，而不是「按了没反应」。
+                // 宿主在播到边界时会暂停（位置留在边界），这条判断就是它的配对。
+                let boundary = self.playback_end_frame();
+                if boundary > 0 && self.position >= boundary {
+                    // 开了循环且有范围 → 从范围起点起播；否则照旧回到 0。
+                    let restart = if self.looping {
+                        self.loop_range().map(|(start, _)| start).unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    self.seek(restart);
                 }
                 self.playing = true;
             }
@@ -736,6 +857,20 @@ impl Player {
                 self.push_audition(track, note, velocity, on);
             }
             TransportCommand::SetLoop(on) => self.looping = on,
+            TransportCommand::SetLoopRange { start, end } => {
+                // `end <= start` = 取消范围。归一化写回 0，让 `loop_range()` 只有一种「无范围」表示。
+                if end > start {
+                    self.loop_start = start;
+                    self.loop_end = end;
+                } else {
+                    self.loop_start = 0;
+                    self.loop_end = 0;
+                }
+            }
+            TransportCommand::SetMetronome(on) => {
+                self.metronome = on;
+                self.reset_next_beat();
+            }
             TransportCommand::YieldInstances => self.yield_instances(),
             TransportCommand::SetParam { track, effect, param, value } => {
                 // 非有限值会让插件内部出现 NaN，直接拒绝。
@@ -940,6 +1075,25 @@ impl Player {
         for frame in out.chunks_exact_mut(2) {
             frame[0] *= ml;
             frame[1] *= mr;
+        }
+
+        // 节拍器：按速度表在整数拍上打点（重音在小节头）。加在**总输出之后**——不受推子 /
+        // 静音影响，永远听得见。只在播放时出声。
+        if self.metronome && playing {
+            let sr = self.sample_rate;
+            let click_len = (CLICK_SECONDS * sr) as usize;
+            let last_beat = self.tempo_map.seconds_to_beats(block_end as f64 / sr);
+            while (self.next_beat as f64) <= last_beat + 1e-9 {
+                let frame =
+                    (self.tempo_map.beats_to_seconds(self.next_beat as f64) * sr).round() as i64;
+                if frame >= block_end as i64 {
+                    break;
+                }
+                let off = frame.max(block_start as i64).saturating_sub(block_start as i64) as usize;
+                let num = self.tempo_map.meter_at(self.next_beat as f64).0.max(1) as i64;
+                add_click(out, off, click_len, sr, self.next_beat.rem_euclid(num) == 0);
+                self.next_beat += 1;
+            }
         }
 
         // 试听音只在本块送一次：没匹配到任何轨道的也一并丢掉。
@@ -1275,6 +1429,46 @@ mod tests {
         );
     }
 
+    /// 目录扫描完成后再重建时，**缺失占位不能被复用**：真插件已经到位，复用占位会让它建不
+    /// 出来，界面「打开」就报「这个槽位没有可打开的插件界面」。占位必须被丢掉、按注册表重建。
+    #[test]
+    fn missing_placeholder_is_not_reused_once_the_real_plugin_is_available() {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+
+        // 旧实例是「插件缺失」的静音占位：descriptor id 与真插件相同，但不是真插件。
+        let mut carried = ReusableInstances::default();
+        carried
+            .instruments
+            .insert(TrackId(1), crate::registry::missing_plugin("test.stateful"));
+
+        let mut p = project();
+        p.tracks[0].instrument = Some(PluginInstance {
+            plugin_id: "test.stateful".into(),
+            params: Default::default(),
+            // 真插件建出来时会还原成 level 1.0；占位 load_state 是空操作，复用了就一直是静音。
+            state: vec![255],
+        });
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::with_carried(
+            schedule,
+            &registry,
+            48_000.0,
+            512,
+            carried,
+            super::empty_yield_sink(),
+        );
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+
+        assert!(
+            peak(&out) > 0.9,
+            "缺失占位被复用了——真插件没有建出来（峰值 {}）",
+            peak(&out)
+        );
+    }
+
     /// 回调收到 `YieldInstances` 时把实例交出来——这是「跨重建保住实例」的通道。
     #[test]
     fn yield_instances_hands_the_live_instances_back() {
@@ -1433,6 +1627,36 @@ mod tests {
         assert!(peak(&out) < 0.001, "松开后要停下来");
     }
 
+    /// 节拍器：每拍一声，重音在小节头；拍中间安静；不写进工程。
+    #[test]
+    fn metronome_clicks_every_beat_with_downbeat_accent() {
+        let sr = 48_000.0;
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0; // 1 拍 = 0.5 s = 24000 帧
+        let schedule = ScheduledEvents::from_project(&p, sr);
+        let mut player = Player::new(schedule, &PluginRegistry::with_builtins(), sr, 1024);
+        player.apply_command(TransportCommand::SetMetronome(true));
+        player.apply_command(TransportCommand::Play);
+
+        let total = 72_000usize; // 3 拍
+        let mut out = vec![0.0f32; total * 2];
+        let mut off = 0usize;
+        while off < total {
+            let n = 1024.min(total - off);
+            player.process_block(&mut out[off * 2..(off + n) * 2], n);
+            off += n;
+        }
+        let peak_at = |f: usize| {
+            out[f * 2..(f + 1_000) * 2].iter().map(|v| v.abs()).fold(0.0f32, f32::max)
+        };
+        assert!(peak_at(0) > 0.05, "第 1 拍应有咔哒");
+        assert!(peak_at(24_000) > 0.05, "第 2 拍应有咔哒");
+        assert!(peak_at(48_000) > 0.05, "第 3 拍应有咔哒");
+        assert!(peak_at(12_000) < 1e-6, "拍中间应安静");
+        // 小节头是重音：比弱拍响。
+        assert!(peak_at(0) > peak_at(24_000), "小节头应有重音");
+    }
+
     /// 循环开关本身不改变播放状态与位置，只是被记下来。
     #[test]
     fn set_loop_toggles_the_flag_without_touching_playback() {
@@ -1444,6 +1668,53 @@ mod tests {
         assert_eq!(player.position_frames(), 0, "开关不该移动位置");
         player.apply_command(TransportCommand::SetLoop(false));
         assert!(!player.is_looping());
+    }
+
+    /// 播放范围：归一化（`end <= start` = 取消）、边界取值、以及关循环时范围不生效。
+    #[test]
+    fn loop_range_normalizes_and_overrides_the_boundary() {
+        // `schedule()` 里的片段长 1.0 拍 @120BPM = 0.5 s = 24000 帧（48 kHz）。
+        let mut player = Player::new(schedule(), &PluginRegistry::with_builtins(), 48_000.0, 512);
+        let project_end = player.end_frame();
+        assert!(project_end > 0, "工程结尾应当由片段长度推出");
+
+        assert_eq!(player.loop_range(), None, "默认没有范围");
+        assert_eq!(player.playback_end_frame(), project_end, "没范围时边界就是工程结尾");
+
+        // 无效范围（end <= start）→ 视同没设，而不是「一个空区间」。
+        player.apply_command(TransportCommand::SetLoopRange { start: 9600, end: 9600 });
+        assert_eq!(player.loop_range(), None);
+        player.apply_command(TransportCommand::SetLoopRange { start: 9600, end: 100 });
+        assert_eq!(player.loop_range(), None);
+
+        // 有效范围：开循环时边界被范围终点顶替。
+        player.apply_command(TransportCommand::SetLoopRange { start: 4800, end: 9600 });
+        assert_eq!(player.loop_range(), Some((4800, 9600)));
+        assert_eq!(player.playback_end_frame(), project_end, "没开循环时范围不生效");
+        player.apply_command(TransportCommand::SetLoop(true));
+        assert_eq!(player.playback_end_frame(), 9600, "开循环后边界是范围终点");
+
+        // 关掉循环 → 范围仍在（只是不生效），重新打开就恢复。
+        player.apply_command(TransportCommand::SetLoop(false));
+        assert_eq!(player.loop_range(), Some((4800, 9600)));
+        assert_eq!(player.playback_end_frame(), project_end);
+    }
+
+    /// 停在边界上再按播放：有范围时从**范围起点**起播，而不是回到 0。
+    #[test]
+    fn play_after_stopping_at_the_range_end_restarts_from_the_range_start() {
+        let mut player = Player::new(schedule(), &PluginRegistry::with_builtins(), 48_000.0, 512);
+        player.apply_command(TransportCommand::SetLoop(true));
+        player.apply_command(TransportCommand::SetLoopRange { start: 4800, end: 9600 });
+
+        // 模拟宿主：播到边界即暂停（位置留在边界）。
+        player.apply_command(TransportCommand::Seek { frame: 9600 });
+        player.apply_command(TransportCommand::Pause);
+        assert_eq!(player.position_frames(), 9600);
+
+        player.apply_command(TransportCommand::Play);
+        assert_eq!(player.position_frames(), 4800, "应当从范围起点重播");
+        assert!(player.is_playing());
     }
 
     #[test]

@@ -109,6 +109,12 @@ struct SeparateArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DetectTempoArgs {
+    /// 轨道 id（用它的第一段音频做节拍检测）。
+    track: u64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct NameArgs {
     /// 轨道名。
     name: String,
@@ -645,6 +651,15 @@ impl DawMcpServer {
         Ok(format!("已生成 {count} 条分轨（HTDemucs）"))
     }
 
+    #[tool(description = "节拍检测：对指定轨道的第一段音频跑 Beat This!，推出**单一全局 BPM + 拍号**写入工程，并把该片段对齐到小节线（速度 / 拍号 / 片段位置在同一笔撤销记录里，可整体撤销）。**只对节拍稳定**的音乐有效（流行/摇滚/电子/舞曲等）；自由速度（古典散板）、氛围/环境音、人声朗读、短于 2 秒的素材测出的 BPM 没有意义。需要已安装 Beat This! 模型（「管理器 → 可下载」下载 final0，约 83 MB）。")]
+    async fn detect_tempo(&self, Parameters(args): Parameters<DetectTempoArgs>) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || crate::ai::detect_tempo_track(&app, args.track))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
     #[tool(description = "把本机的一个音频文件导入成音频片段（wav/flac/mp3/ogg/m4a）；返回新片段 id。")]
     async fn import_audio(&self, Parameters(args): Parameters<ImportAudioArgs>) -> Result<String, ErrorData> {
         let assets = { Arc::clone(&self.state().assets) };
@@ -671,7 +686,7 @@ impl DawMcpServer {
                 start,
                 length,
                 // MCP 只给了路径：窗口长度未知（到结尾）。切分这类片段会被引擎拒绝。
-                source: AudioSource { path: args.path.clone(), offset_frames: 0, frames: None },
+                source: AudioSource { path: args.path.clone(), offset_frames: 0, frames: None, rate: 1.0, pitch_semitones: 0.0 },
             },
         );
         let id = clip_added_id(&events);
@@ -1010,6 +1025,7 @@ mod tests {
             "export_wav",
             "master_project",
             "separate_stems",
+            "detect_tempo",
             "import_audio",
             "audio_waveform",
             "apply_preset",

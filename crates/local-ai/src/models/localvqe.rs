@@ -20,7 +20,6 @@ use std::path::PathBuf;
 use ort::session::Session;
 use ort::value::Tensor;
 
-use super::err;
 use crate::resample;
 use crate::{hann, Progress};
 
@@ -49,10 +48,8 @@ pub fn enhance(
     progress: Progress,
 ) -> Result<Vec<f32>, String> {
     let path = model_path().ok_or_else(|| format!("未找到 LocalVQE 权重（{}）", super::LOCALVQE_FILE))?;
-    let mut session = Session::builder()
-        .map_err(|e| err("初始化 ONNX Runtime 失败", e))?
-        .commit_from_file(path)
-        .map_err(|e| err("加载 LocalVQE 权重失败", e))?;
+    let mut session =
+        crate::backend::session::build(&path, crate::backend::session::GraphRole::LocalVqe)?;
 
     let channels = channels.max(1);
     if samples.is_empty() || sample_rate <= 0.0 {

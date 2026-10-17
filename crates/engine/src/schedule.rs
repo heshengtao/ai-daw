@@ -92,19 +92,30 @@ pub struct ScheduledMidi {
 
 /// 一条已定绝对帧、且已接上素材的音频片段。
 ///
-/// 语义（见 `specs/2026-10-09-audio-clip-design.md`）：片段的 `length`（拍）决定时间轴跨度，
-/// 素材**铺满**该跨度（`ratio = source_window_frames / span_frames`）——缩放或改速度会按比例
-/// 重采样，因此会变调（v1 不做保音高变速）。
+/// 语义（见 `specs/2026-10-09-audio-clip-design.md`）：`length`（拍）只决定时间轴**方框**；
+/// 素材按 `rate`（播放速度）播放、**与工程 BPM 解耦**——改 BPM 不改音频；素材放完或方框到头
+/// 即停。`pitch_semitones` 由 `stretch::Stretcher` 施加（**变速不变调**）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScheduledAudioClip {
     /// 片段起始的绝对帧（含）。
     pub start_frame: u64,
-    /// 片段结束的绝对帧（不含）。
+    /// 片段结束的绝对帧（不含）——可听上界。
     pub end_frame: u64,
     /// 素材内的起始帧（crop 起点，已按素材长度夹紧）。
     pub offset_frames: u64,
-    /// 本次要铺开的源帧数（= 素材总帧数 − `offset_frames`）。
+    /// 素材窗口长度（源帧）：`offset_frames` 起取多少帧。
     pub source_window_frames: u64,
+    /// 播放速度倍率（1.0 = 原速）。改它只改时长，不变调。
+    pub rate: f64,
+    /// **素材采样率 / 工程采样率**（素材率与输出率不同时必须按它重采样读取）。
+    ///
+    /// 播放器按**输出帧**推进（`start_frame` / `end_frame` 都是输出帧），而素材存的是**它自己
+    /// 采样率下**的帧。两者不同时读指针每个输出帧必须前进 `source_ratio` 个源帧——那正是采样率
+    /// 换算（用 `lerp_frame` 插值），时长与音高都不变。缺了它就等于「把素材按输出率硬播」：
+    /// 44.1 kHz 素材在 48 kHz 工程里会快 8.8% 并升调，尾端还会被方框截掉。
+    pub source_ratio: f64,
+    /// 升降调（半音，0 = 不变）。改它只变调，不改时长。
+    pub pitch_semitones: f64,
     /// 已解码素材（构造播放器前加载完毕，播放路径只读）。
     pub audio: Arc<DecodedAudio>,
 }
@@ -259,13 +270,29 @@ impl ScheduledEvents {
                         end_frame,
                         offset_frames: offset,
                         source_window_frames: window,
+                        rate: crate::model::AudioSource::normalize_rate(source.rate),
+                        // 素材与工程采样率不同 → 读指针要按这个比值重采样（见字段文档）。
+                        source_ratio: if sample_rate > 0.0 && audio.sample_rate > 0.0 {
+                            audio.sample_rate / sample_rate
+                        } else {
+                            1.0
+                        },
+                        pitch_semitones: crate::model::AudioSource::normalize_pitch(
+                            source.pitch_semitones,
+                        ),
                         audio,
                     });
                     continue;
                 }
+                // 片段是**裁剪窗口**：起点落在方框外的音符不发声，越过方框尾端的在尾端截断。
+                // （音频片段同理：`start_frame..end_frame` 已经是窗口。）
+                let box_end = clip.start + clip.length;
                 for note in &clip.notes {
                     let on = clip.start + note.start;
-                    let off = on + note.duration;
+                    if on < clip.start - 1e-9 || on >= box_end - 1e-9 {
+                        continue;
+                    }
+                    let off = (on + note.duration).min(box_end);
                     events.push(ScheduledMidi {
                         frame: to_frame(on),
                         // 只送「演奏强度」。插件各自解释它（音色 / 振幅）——这是设计如此。
@@ -404,6 +431,39 @@ mod tests {
         assert!(matches!(ev[0].event, MidiEvent::NoteOn { note: 60, velocity: 100 }));
         assert_eq!(ev[1].frame, 48_000);
         assert!(matches!(ev[1].event, MidiEvent::NoteOff { note: 60 }));
+    }
+
+    /// 片段方框是**裁剪窗口**：起点在框外的音符不发声，越过框尾的截断在框尾。
+    #[test]
+    fn the_clip_box_crops_notes() {
+        let mut p = project_with_note();
+        // 片段长 4 拍：再加一个「起点已在框外」的音符（第 5 拍起）。
+        p.tracks[0].clips[0].notes.push(Note {
+            pitch: 62,
+            start: 5.0,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+        });
+        // 第 1 拍那个音符拉长到第 6 拍 → 越过框尾，应截断在第 4 拍。
+        p.tracks[0].clips[0].notes[0].duration = 5.0;
+
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        let ev = &s.tracks[0].events;
+        let on: Vec<u8> = ev
+            .iter()
+            .filter_map(|e| match e.event {
+                MidiEvent::NoteOn { note, .. } => Some(note),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(on, vec![60], "框外的音符不该发声");
+        // 120 BPM / 48 kHz → 1 拍 = 24000 帧；第 4 拍 = 96000。
+        let off = ev
+            .iter()
+            .find(|e| matches!(e.event, MidiEvent::NoteOff { note: 60 }))
+            .expect("应有 NoteOff");
+        assert_eq!(off.frame, 96_000, "越过框尾的音符应截断在框尾");
     }
 
     #[test]

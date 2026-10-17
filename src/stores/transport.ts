@@ -12,6 +12,7 @@ import * as api from "@/api/tauri";
 import type { InputDeviceInfo, TransportSnapshot } from "@/api/types";
 import { useLayoutStore } from "@/stores/layout";
 import { useProjectStore } from "@/stores/project";
+import { useTimelineStore } from "@/stores/timeline";
 import { useI18n } from "@/i18n";
 import { beatsToSeconds, secondsToBeats } from "@/utils/tempo";
 
@@ -24,6 +25,7 @@ export const useTransportStore = defineStore("transport", () => {
   const layout = useLayoutStore();
   const i18n = useI18n();
   const project = useProjectStore();
+  const timeline = useTimelineStore();
 
   // 乐观初值：初始化完成前先按「实时可用」处理，失败后再降级并提示。
   const available = ref(true);
@@ -33,9 +35,19 @@ export const useTransportStore = defineStore("transport", () => {
   const positionFrames = ref(0);
   /** 循环播放开关（运行时状态，不进工程）。 */
   const loop = ref(false);
+  /**
+   * 播放范围（cycle range）的起止帧。`loopEndFrames > loopStartFrames` 才算设了范围；
+   * 否则按「整首循环」处理。范围本身不启动播放、也不改 `loop`——由 `setLoopRange` 一并打开。
+   */
+  const loopStartFrames = ref(0);
+  const loopEndFrames = ref(0);
+  /** 节拍器开关（运行时状态，不进工程）。 */
+  const metronome = ref(false);
   const ready = ref(false);
 
   let unlisten: (() => void) | null = null;
+  /** 本会话是否已由界面改过播放范围；改过之后界面即权威，不再回吞引擎快照。 */
+  let rangeTouched = false;
 
   /** 离线试听的播放器（仅预览模式使用）。 */
   let audio: HTMLAudioElement | null = null;
@@ -60,6 +72,37 @@ export const useTransportStore = defineStore("transport", () => {
     secondsToBeats(positionFrames.value / effectiveSampleRate.value, transportSettings.value),
   );
 
+  /** 是否设了播放范围（`end > start`）。 */
+  const hasLoopRange = computed(() => loopEndFrames.value > loopStartFrames.value);
+
+  /** 播放范围起点（拍）；没设范围时是 0。 */
+  const loopStartBeats = computed(() =>
+    hasLoopRange.value
+      ? secondsToBeats(loopStartFrames.value / effectiveSampleRate.value, transportSettings.value)
+      : 0,
+  );
+
+  /** 播放范围终点（拍）；没设范围时是 0。 */
+  const loopEndBeats = computed(() =>
+    hasLoopRange.value
+      ? secondsToBeats(loopEndFrames.value / effectiveSampleRate.value, transportSettings.value)
+      : 0,
+  );
+
+  /**
+   * 播放范围的小节文案（例如「第 3–6 小节」）；没设范围时是空串。
+   *
+   * 放在 store 里而不是各组件里：「第几小节」要问时间轴（拍号 / 速度分段），而范围本身归
+   * 传输管——标尺与底栏都要显示，不该各算一遍。`t()` 读的是响应式的 `locale`，所以切语言会跟着变。
+   */
+  const loopRangeLabel = computed(() => {
+    if (!hasLoopRange.value) return "";
+    const { first, last } = timeline.barRange(loopStartBeats.value, loopEndBeats.value);
+    return first === last
+      ? i18n.t("transport.rangeSingle", { bar: first })
+      : i18n.t("transport.rangeLabel", { start: first, end: last });
+  });
+
   /** 拍 → 帧（与后端分段换算同一套）。 */
   function beatsToFrames(beats: number): number {
     if (!Number.isFinite(beats) || beats <= 0) return 0;
@@ -73,6 +116,14 @@ export const useTransportStore = defineStore("transport", () => {
     playing.value = snapshot.playing;
     positionFrames.value = snapshot.position_frames;
     if (snapshot.available) loop.value = snapshot.loop;
+    // 播放范围**不**回吞快照：引擎自己从不改范围，而 30 Hz 的快照可能在我们刚发完命令、
+    // 音频线程还没消费时到达——回吞会让拖动中的区间来回抖；离线（命令被 `AudioEngine::send`
+    // 拒绝）时更会把用户刚划好的段直接抹成 0。所以只有「本会话还没改过范围」时才采纳
+    // 引擎里的值（例如界面热重载后恢复）。
+    if (!rangeTouched) {
+      loopStartFrames.value = snapshot.loop_start_frames;
+      loopEndFrames.value = snapshot.loop_end_frames;
+    }
   }
 
   // ---- 离线试听（预览模式） ----
@@ -87,7 +138,14 @@ export const useTransportStore = defineStore("transport", () => {
   function startPreviewClock(): void {
     const step = (): void => {
       if (!audio) return;
-      positionFrames.value = Math.round(audio.currentTime * PREVIEW_SAMPLE_RATE);
+      const pos = Math.round(audio.currentTime * PREVIEW_SAMPLE_RATE);
+      // `<audio>` 只会整段循环，设了播放范围就由这个时钟把播放头拉回范围起点。
+      if (loop.value && hasLoopRange.value && pos >= loopEndFrames.value) {
+        audio.currentTime = loopStartFrames.value / PREVIEW_SAMPLE_RATE;
+        positionFrames.value = loopStartFrames.value;
+      } else {
+        positionFrames.value = pos;
+      }
       raf = requestAnimationFrame(step);
     };
     stopPreviewClock();
@@ -141,7 +199,11 @@ export const useTransportStore = defineStore("transport", () => {
   // 「回到 realtime」；写成 `next !== "preview"` 是为了将来再引入别的模式时依旧能收干净。
   // `teardownPreview()` 幂等（无试听时只是自增 token 并空转），没有试听时触发也安全。
   watch(mode, (next, prev) => {
-    if (prev === "preview" && next !== "preview") teardownPreview();
+    if (prev === "preview" && next !== "preview") {
+      teardownPreview();
+      // 离线期间设的范围 / 循环开关没送到引擎（命令被拒）→ 回到实时后补推一次。
+      void pushRange();
+    }
   });
 
   // ---- 对外动作 ----
@@ -243,6 +305,59 @@ export const useTransportStore = defineStore("transport", () => {
       return;
     }
     if (audio) audio.loop = on;
+  }
+
+  /**
+   * 把当前的播放范围 + 循环开关推给引擎（仅实时模式）。
+   *
+   * 失败不打扰：设备没起来时命令会被拒，等回到实时（`watch(mode)`）再补推一次。
+   */
+  async function pushRange(): Promise<void> {
+    if (mode.value !== "realtime") return;
+    try {
+      await api.transportSetLoopRange(loopStartFrames.value, loopEndFrames.value);
+      await api.transportSetLoop(loop.value);
+    } catch {
+      /* 设备未就绪：下次回到实时时补推 */
+    }
+  }
+
+  /**
+   * 设定播放范围（拍）。会一并打开循环——「划了一段」的意图就是循环这一段。
+   *
+   * `endBeats <= startBeats` 视同取消范围（回到整首循环）。界面上拖动区间时会以
+   * 每秒数十次的频率调用，所以这里**先改本地状态、再异步推引擎**，不做等待。
+   */
+  async function setLoopRange(startBeats: number, endBeats: number): Promise<void> {
+    const start = beatsToFrames(startBeats);
+    const end = beatsToFrames(endBeats);
+    const valid = end > start;
+    rangeTouched = true;
+    loopStartFrames.value = valid ? start : 0;
+    loopEndFrames.value = valid ? end : 0;
+    if (valid) loop.value = true;
+    if (mode.value === "realtime") {
+      await pushRange();
+      return;
+    }
+    if (audio) audio.loop = loop.value;
+  }
+
+  /** 取消播放范围（回到整首循环；循环开关本身不动）。 */
+  async function clearLoopRange(): Promise<void> {
+    await setLoopRange(0, 0);
+  }
+
+  /** 开关节拍器（只在实时播放时打点；离线模式只切界面状态）。 */
+  async function setMetronome(on: boolean): Promise<void> {
+    metronome.value = on;
+    if (mode.value === "realtime") {
+      try {
+        await api.transportSetMetronome(on);
+      } catch {
+        // 实时不可用时保持界面状态即可；下次快照会纠正。
+      }
+    }
   }
 
   /** 重新读取一次状态（例如音频设备在运行期间才可用）。 */
@@ -353,6 +468,13 @@ export const useTransportStore = defineStore("transport", () => {
     positionFrames,
     positionBeats,
     loop,
+    loopStartFrames,
+    loopEndFrames,
+    loopStartBeats,
+    loopEndBeats,
+    loopRangeLabel,
+    hasLoopRange,
+    metronome,
     ready,
     mode,
     effectiveSampleRate,
@@ -366,6 +488,9 @@ export const useTransportStore = defineStore("transport", () => {
     seekBeats,
     rewind,
     setLoop,
+    setLoopRange,
+    clearLoopRange,
+    setMetronome,
     dispose,
     recording,
     inputDevices,

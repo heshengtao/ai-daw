@@ -61,10 +61,8 @@ pub fn separate(
 ) -> Result<super::Stems, String> {
     let path = model_path()
         .ok_or_else(|| format!("未找到音源分离权重（{}）", super::HTDEMUCS_FILE))?;
-    let mut session = Session::builder()
-        .map_err(|e| err("初始化 ONNX Runtime 失败", e))?
-        .commit_from_file(path)
-        .map_err(|e| err("加载音源分离权重失败", e))?;
+    let mut session =
+        crate::backend::session::build(&path, crate::backend::session::GraphRole::Demucs)?;
 
     let channels = channels.max(1);
     let frames = samples.len() / channels;

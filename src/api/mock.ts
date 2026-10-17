@@ -11,7 +11,9 @@ import type {
   AiStatus,
   AnalysisReport,
   AutomationPoint,
+  BackendInfo,
   BackendParam,
+  BackendPreference,
   CatalogPlugin,
   ClipPlacement,
   ClipRef,
@@ -27,6 +29,7 @@ import type {
   ManagerPlugin,
   ManagerRegistry,
   ModelProgress,
+  ModelSourcePreference,
   ModelStatus,
   ProxyMode,
   ProxyProbe,
@@ -89,9 +92,28 @@ function emitManager(p: ManagerProgress): void {
   window.dispatchEvent(new CustomEvent("ai-daw-mock-manager", { detail: p }));
 }
 
+/** 给单文件模型补齐派生字段（`files` / 计数），免得每条都手写一遍。 */
+function oneFile(
+  entry: Omit<ModelStatus, "files" | "total_files" | "installed_files">,
+): ModelStatus {
+  return {
+    ...entry,
+    total_files: 1,
+    installed_files: entry.installed ? 1 : 0,
+    files: [
+      {
+        filename: entry.filename,
+        approx_bytes: entry.approx_bytes,
+        installed: entry.installed,
+        bytes: entry.bytes,
+      },
+    ],
+  };
+}
+
 /** 预览里的模型清单（内存；下载完成后把 installed 置 true）。 */
 let mockModels: ModelStatus[] = [
-  {
+  oneFile({
     id: "basic-pitch",
     name: "Basic Pitch（音频转 MIDI）",
     feature: "to_midi",
@@ -103,8 +125,8 @@ let mockModels: ModelStatus[] = [
     bytes: 230444,
     path: "/mock/models/basic-pitch-nmp.onnx",
     downloadable: true,
-  },
-  {
+  }),
+  oneFile({
     id: "localvqe",
     name: "LocalVQE（人声降噪 / 去混响）",
     feature: "enhance",
@@ -116,8 +138,8 @@ let mockModels: ModelStatus[] = [
     bytes: 6152621,
     path: "/mock/models/localvqe-ns.onnx",
     downloadable: false,
-  },
-  {
+  }),
+  oneFile({
     id: "htdemucs-ort-v1",
     name: "HTDemucs（音源分离 · 4 分轨）",
     feature: "separate",
@@ -129,8 +151,8 @@ let mockModels: ModelStatus[] = [
     bytes: null,
     path: null,
     downloadable: true,
-  },
-  {
+  }),
+  oneFile({
     id: "htdemucs-6s",
     name: "HTDemucs 6s（音源分离 · 6 分轨）",
     feature: "separate",
@@ -142,7 +164,20 @@ let mockModels: ModelStatus[] = [
     bytes: null,
     path: null,
     downloadable: true,
-  },
+  }),
+  oneFile({
+    id: "beat-this",
+    name: "Beat This!（节拍 / 速度检测 · final0）",
+    feature: "detect_tempo",
+    license: "MIT",
+    approx_bytes: 83162650,
+    filename: "beat_this.onnx",
+    bundled: false,
+    installed: false,
+    bytes: null,
+    path: null,
+    downloadable: true,
+  }),
 ];
 
 /** 模型下载预览定时器（一次只跑一个）。 */
@@ -150,6 +185,32 @@ let mockModelTimer: number | null = null;
 
 function emitModel(p: ModelProgress): void {
   window.dispatchEvent(new CustomEvent("ai-daw-mock-model", { detail: p }));
+}
+
+/** 预览里的后端选择（内存）。设备固定成 Apple M4，所以 CoreML 可选。 */
+let mockBackendPreference: BackendPreference = "cpu";
+
+function mockBackendInfo(): BackendInfo {
+  return {
+    preference: mockBackendPreference,
+    current: mockBackendPreference,
+    platform: "macos / aarch64 · Apple M4",
+    options: [
+      { kind: "cpu", label: "CPU", note: "纯 CPU（默认，全平台可用）", available: true },
+      {
+        kind: "coreml",
+        label: "Apple CoreML",
+        note: "Apple 神经引擎 / GPU（实测在本机的这些小模型上比 CPU 慢）",
+        available: true,
+      },
+      {
+        kind: "directml",
+        label: "DirectML",
+        note: "DirectX 12 硬件加速（Windows）",
+        available: false,
+      },
+    ],
+  };
 }
 
 /** 是否使用假数据。 */
@@ -401,6 +462,8 @@ let mockNetwork: StoreNetwork = {
   proxy_mode: "system",
   proxy_url: "",
   model_mirrors: [],
+  model_source_preference: "auto",
+  backend_preference: "cpu",
 };
 
 /** 铺上默认分轨的空工程。`names` 是界面按当前语言给出的分轨名（按模板顺序）。 */
@@ -499,6 +562,8 @@ const transport: TransportSnapshot = {
   position_frames: 0,
   sample_rate: 48_000,
   loop: false,
+  loop_start_frames: 0,
+  loop_end_frames: 0,
   error: null,
 };
 
@@ -515,6 +580,22 @@ function projectEndFrames(): number {
   return Math.round((beats * 60) / tempo * transport.sample_rate);
 }
 
+/** 当前生效的播放范围（帧）；`null` = 没设范围。与引擎 `Player::loop_range` 同义。 */
+function loopRange(): { start: number; end: number } | null {
+  const start = transport.loop_start_frames;
+  const end = transport.loop_end_frames;
+  return end > start ? { start, end } : null;
+}
+
+/** 播放头到达此帧就该回卷 / 停下。与引擎 `Player::playback_end_frame` 同义。 */
+function playbackBoundary(): number {
+  if (transport.loop) {
+    const range = loopRange();
+    if (range) return range.end;
+  }
+  return projectEndFrames();
+}
+
 function emitTransport(): void {
   const key = JSON.stringify(transport);
   if (key === lastEmitted) return;
@@ -528,10 +609,13 @@ function tick(): void {
   lastTickAt = now;
   if (transport.playing) {
     transport.position_frames += Math.round(dt * transport.sample_rate);
-    const end = projectEndFrames();
+    const end = playbackBoundary();
     if (end > 0 && transport.position_frames >= end) {
       if (transport.loop) {
-        transport.position_frames %= end;
+        // 有范围就在范围内回卷（起点 + 溢出量），否则整首回卷。
+        const range = loopRange();
+        const from = range ? range.start : 0;
+        transport.position_frames = from + ((transport.position_frames - from) % (end - from));
       } else {
         transport.position_frames = end;
         transport.playing = false;
@@ -727,6 +811,7 @@ export const mockApi = {
     proxyMode: ProxyMode,
     proxyUrl: string,
     modelMirrors: string[] = [],
+    modelSourcePreference: ModelSourcePreference = "auto",
   ): StoreNetwork => {
     mockNetwork = {
       registry_mirrors: [...registryMirrors],
@@ -734,6 +819,9 @@ export const mockApi = {
       proxy_mode: proxyMode,
       proxy_url: proxyUrl,
       model_mirrors: [...modelMirrors],
+      model_source_preference: modelSourcePreference,
+      // 执行后端偏好不在这里改（由 `aiSetBackend` 单独管）。
+      backend_preference: mockNetwork.backend_preference,
     };
     return { ...mockNetwork };
   },
@@ -778,7 +866,21 @@ export const mockApi = {
         window.clearInterval(mockModelTimer!);
         mockModelTimer = null;
         mockModels = mockModels.map((m) =>
-          m.id === id ? { ...m, installed: true, bytes: total, path: `/mock/models/${m.filename}` } : m,
+          m.id === id
+            ? {
+                ...m,
+                installed: true,
+                bytes: total,
+                path: `/mock/models/${m.filename}`,
+                // 组条目一并把「组内文件」全点亮，否则面板上的「已下 n/N」对不上。
+                installed_files: m.total_files,
+                files: m.files.map((f) => ({
+                  ...f,
+                  installed: true,
+                  bytes: f.approx_bytes,
+                })),
+              }
+            : m,
         );
         emitModel({ id, state: "done", received: total, total, message: null });
       }
@@ -794,7 +896,16 @@ export const mockApi = {
 
   modelRemove: (id: string): void => {
     mockModels = mockModels.map((m) =>
-      m.id === id ? { ...m, installed: false, bytes: null, path: null } : m,
+      m.id === id
+        ? {
+            ...m,
+            installed: false,
+            bytes: null,
+            path: null,
+            installed_files: 0,
+            files: m.files.map((f) => ({ ...f, installed: false, bytes: null })),
+          }
+        : m,
     );
   },
 
@@ -811,6 +922,15 @@ export const mockApi = {
       window.clearInterval(mockModelTimer);
       mockModelTimer = null;
     }
+  },
+
+  // ---- 执行后端（预览：内存里的假清单 + 假进度）----
+
+  aiBackendInfo: (): BackendInfo => mockBackendInfo(),
+
+  aiSetBackend: (preference: BackendPreference): BackendInfo => {
+    mockBackendPreference = preference;
+    return mockBackendInfo();
   },
 
   // ---- 插件原生界面（浏览器里没有原生窗口） ----
@@ -992,6 +1112,23 @@ export const mockApi = {
     commit(() => {
       const c = clip(trackId, clipId);
       if (c) c.length = Math.max(0.125, length);
+    }),
+
+  setClipRate: (trackId: number, clipId: number, rate: number, pitchSemitones: number): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (c?.audio) {
+        c.audio.rate = rate;
+        c.audio.pitch_semitones = pitchSemitones;
+      }
+    }),
+
+  trimClip: (trackId: number, clipId: number, start: number, length: number): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c) return;
+      c.start = Math.max(0, start);
+      c.length = Math.max(0.125, length);
     }),
 
   addNote: (trackId: number, clipId: number, note: Note): Project =>
@@ -1219,8 +1356,12 @@ export const mockApi = {
   // ---- 本地 AI（预览：模拟进度，不真正处理）----
 
   aiStatus: (): AiStatus => ({ ...aiState }),
-  // 浏览器预览里没有 Rust 侧，模型一律显示为未就位（走内置 DSP 文案）。
-  aiModels: (): AiModels => ({ basic_pitch: false, localvqe: false, separate: false }),
+  aiModels: (): AiModels => ({
+    basic_pitch: false,
+    localvqe: false,
+    separate: false,
+    beat_this: false,
+  }),
   aiStart: (kind: string): void => {
     if (aiTimer !== null) return;
     aiState = { running: true, kind, progress: 0, message: null };
@@ -1300,23 +1441,39 @@ export const mockApi = {
       else t.clips.splice(at, 0, right);
     }),
 
-  audioWaveform: (_path: string, buckets: number): number[] => {
-    const out: number[] = [];
+  audioWaveform: (
+    _path: string,
+    buckets: number,
+    offsetFrames?: number,
+    frames?: number,
+  ) => {
+    const peaks: number[] = [];
     for (let i = 0; i < buckets; i += 1) {
       const v = Math.abs(Math.sin((i / buckets) * Math.PI * 8)) * 0.9 + 0.05;
-      out.push(-v, v);
+      peaks.push(-v, v);
     }
-    return out;
+    return {
+      peaks,
+      sample_rate: 48000,
+      frames: frames ?? 48000 * 4,
+      offset_frames: offsetFrames ?? 0,
+    };
   },
+
+  // 预览环境不夹取（素材长度未知）：给一个宽松范围。
+  clipBounds: (_track: number, _clip: number) => ({ min_start: 0, max_end: 1e6 }),
 
   // ---- 传输 ----
 
   transportStatus: (): TransportSnapshot => ({ ...transport }),
 
   transportPlay: (): void => {
-    // 与引擎 `Player::apply_command(Play)` 同一条策略：已经停在结尾时再播放 → 从头开始。
-    const end = projectEndFrames();
-    if (end > 0 && transport.position_frames >= end) transport.position_frames = 0;
+    // 与引擎 `Player::apply_command(Play)` 同一条策略：已经停在边界上时再播放 →
+    // 开循环且有范围就从范围起点起播，否则从头开始。
+    const end = playbackBoundary();
+    if (end > 0 && transport.position_frames >= end) {
+      transport.position_frames = transport.loop ? loopRange()?.start ?? 0 : 0;
+    }
     transport.playing = true;
     ensureTransportTimer();
     emitTransport();
@@ -1342,6 +1499,16 @@ export const mockApi = {
     transport.loop = on;
     emitTransport();
   },
+
+  transportSetLoopRange: (start: number, end: number): void => {
+    // 与引擎同一条归一化：`end <= start` = 取消范围（写回 0）。
+    const valid = end > start;
+    transport.loop_start_frames = valid ? Math.max(0, Math.round(start)) : 0;
+    transport.loop_end_frames = valid ? Math.round(end) : 0;
+    emitTransport();
+  },
+
+  transportSetMetronome: (_on: boolean): void => {},
 
   // 浏览器预览里没有真实设备可探测：重试是空操作，状态照旧。
   retryAudio: (): Promise<void> => Promise.resolve(),

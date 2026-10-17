@@ -16,6 +16,7 @@ pub mod realtime;
 pub mod recorder;
 pub mod schedule;
 pub mod scope;
+pub mod stretch;
 pub mod tempo;
 pub mod transport;
 pub mod wav;

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 插件管理器面板：管理插件的**文件本身**。
+ * 下载管理器面板：管理插件与模型的**文件本身**。
  *
  * 两个标签：
  * - **已安装**：本管理器装过的东西（注册表安装 / 本地导入），可删除；注册表里有更新版本时给「更新」。
@@ -26,7 +26,14 @@ import { usePluginsStore } from "@/stores/plugins";
 import { useLayoutStore } from "@/stores/layout";
 import { useI18n } from "@/i18n";
 import { pickPluginToImport } from "@/api/dialogs";
-import type { ManagerFile, ManagerInstalled, ManagerPlugin } from "@/api/types";
+import { copyText } from "@/utils/clipboard";
+import { humanSize, missingBytes } from "@/utils/models";
+import type {
+  ManagerFile,
+  ManagerInstalled,
+  ManagerPlugin,
+  ModelStatus,
+} from "@/api/types";
 
 const manager = useManagerStore();
 const models = useModelsStore();
@@ -58,8 +65,8 @@ function installing(slug: string): boolean {
 async function doCopyLink(url: string): Promise<void> {
   try {
     const resolved = await managerResolveUrl(url);
-    await navigator.clipboard.writeText(resolved);
-    layout.notify(i18n.t("manager.linkCopied"));
+    if (await copyText(resolved)) layout.notify(i18n.t("manager.linkCopied"));
+    else layout.notify(i18n.t("copy.failed"));
   } catch (err) {
     layout.notify(String(err));
   }
@@ -69,8 +76,8 @@ async function doCopyLink(url: string): Promise<void> {
 async function doCopyModelLink(id: string): Promise<void> {
   try {
     const resolved = await modelResolveUrl(id);
-    await navigator.clipboard.writeText(resolved);
-    layout.notify(i18n.t("manager.linkCopied"));
+    if (await copyText(resolved)) layout.notify(i18n.t("manager.linkCopied"));
+    else layout.notify(i18n.t("copy.failed"));
   } catch (err) {
     layout.notify(String(err));
   }
@@ -105,17 +112,21 @@ onUnmounted(() => {
 
 // ---- 展示辅助 ----
 
-/** 人类可读体积。 */
-function humanSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "";
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+/** 模型的文件摘要：单文件给文件名，多组件组给「已下 n/N 个文件」。
+ *
+ * 组条目（多个文件缺一不可）只报 `filename`（= 代表文件）会让人以为
+ * 装的就是那一个文件，装没装齐完全看不出来。 */
+function modelSummary(m: ModelStatus): string {
+  if (m.total_files <= 1) return m.filename;
+  return i18n.t("manager.modelGroupSummary", {
+    done: m.installed_files,
+    total: m.total_files,
+  });
+}
+
+/** 摘要的悬停提示：组条目列出组内全部文件名。 */
+function modelSummaryTitle(m: ModelStatus): string {
+  return m.total_files <= 1 ? m.filename : m.files.map((f) => f.filename).join("\n");
 }
 
 function platformLabel(p: string): string {
@@ -298,6 +309,7 @@ async function doRemoveModel(id: string): Promise<void> {
   confirmingModel.value = null;
   await models.remove(id);
 }
+
 </script>
 
 <template>
@@ -556,7 +568,7 @@ async function doRemoveModel(id: string): Promise<void> {
     </template>
 
     <!-- ===== 可下载：模型 + 插件 ===== -->
-    <template v-else>
+    <template v-else-if="tab === 'available'">
       <div class="filters">
         <input
           v-model="query"
@@ -636,7 +648,7 @@ async function doRemoveModel(id: string): Promise<void> {
 
           <div class="files">
             <div class="file-row">
-              <span class="file-summary" :title="m.filename">{{ m.filename }}</span>
+              <span class="file-summary" :title="modelSummaryTitle(m)">{{ modelSummary(m) }}</span>
 
               <!-- 有可下载的源才给「复制下载链接」 -->
               <button
@@ -656,7 +668,7 @@ async function doRemoveModel(id: string): Promise<void> {
                 :disabled="models.busyId !== null"
                 @click="models.download(m.id)"
               >
-                {{ i18n.t("manager.modelDownload", { size: humanSize(m.approx_bytes) }) }}
+                {{ i18n.t("manager.modelDownload", { size: humanSize(missingBytes(m)) }) }}
               </button>
               <!-- 下载中：取消 -->
               <button
@@ -767,6 +779,7 @@ async function doRemoveModel(id: string): Promise<void> {
         </p>
       </div>
     </template>
+
   </div>
 </template>
 

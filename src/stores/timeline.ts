@@ -179,6 +179,47 @@ export const useTimelineStore = defineStore("timeline", () => {
     return Math.max(0, Math.round(beat / s) * s);
   }
 
+  /**
+   * 小节容差（拍）。
+   *
+   * 播放范围以**帧**为单位存在引擎里，界面算小节号前要先把帧换算回拍，一来一回会引入最多
+   * **半个采样帧**的量化误差（48 kHz / 300 BPM 下约 5e-5 拍）。旧代码用固定 1e-6 吸不住
+   * 这个误差——「从第 2 小节开头」划的范围，起点会被算回第 1 小节（显示「第 1–3 小节」）。
+   * 1e-3 拍在 120 BPM 下只有 0.5ms，远小于任何鼠标拖动的精度，不会把真实偏移误判成小节线。
+   */
+  const BAR_EPS = 1e-3;
+
+  /**
+   * 拍 → 小节号（1 起）。**本身不带容差**：`mark.beat <= beat` 即算这一小节。
+   *
+   * 容差由调用方按方向施加（见 `barRange`）——`barAt` 自己带容差会和 `barRange` 给 end
+   * 减的容差相互抵消（`x - eps + eps` 在浮点上可能回到 `x`），正好落在小节线上的 end
+   * 又会被算进下一小节（「第 2–3 小节」显示成「第 2–4」）。
+   *
+   * 直接扫 `barMarks`（标尺已经按速度 / 拍号分段累计好的小节刻度），所以换拍号、跨关键点
+   * 都准；比「按当前位置的小节长取整」可靠。
+   */
+  function barAt(beat: number): number {
+    let bar = 1;
+    for (const mark of barMarks.value) {
+      if (mark.beat <= beat) bar = mark.bar;
+      else break;
+    }
+    return bar;
+  }
+
+  /**
+   * 一段拍区间覆盖的小节号范围。
+   *
+   * - `first`：起点**加**一个容差再判——帧量化可能把「第 2 小节开头」压到第 1 小节里去；
+   * - `last`：终点按**开区间**算（正好落在小节线上时归上一小节，否则「第 2–3 小节」会显示成
+   *   「第 2–4」），减容差的方向与起点相反，两边各自吸收量化误差。
+   */
+  function barRange(startBeat: number, endBeat: number): { first: number; last: number } {
+    const first = barAt(startBeat + BAR_EPS);
+    return { first, last: barAt(Math.max(startBeat + BAR_EPS, endBeat - BAR_EPS)) };
+  }
+
   /** 指针在内容里的 x（px）→ 拍。 */
   function beatsAt(contentPx: number): number {
     return contentPx / zoom.value;
@@ -226,6 +267,8 @@ export const useTimelineStore = defineStore("timeline", () => {
     snapAt,
     gridStyle,
     snapBeats,
+    barAt,
+    barRange,
     beatsAt,
     zoomAt,
     centerOn,

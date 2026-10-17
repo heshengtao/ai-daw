@@ -12,7 +12,9 @@ import type {
   AiStatus,
   AnalysisReport,
   AutomationPoint,
+  BackendInfo,
   BackendParam,
+  BackendPreference,
   CatalogPlugin,
   CliStatus,
   ClipPlacement,
@@ -30,6 +32,7 @@ import type {
   McpStatus,
   MixerState,
   ModelProgress,
+  ModelSourcePreference,
   ModelStatus,
   Note,
   NoteEdit,
@@ -49,6 +52,7 @@ export const EVENT_ENGINE = "engine://event";
 export const EVENT_TRANSPORT = "engine://transport";
 /** 本地 AI 状态广播通道名，与后端 `ai::EVENT_AI` 保持一致。 */
 export const EVENT_AI = "engine://ai";
+
 /** 插件管理器进度广播通道名，与后端 `manager::EVENT_MANAGER` 保持一致。 */
 export const EVENT_MANAGER = "engine://manager";
 /** 模型下载进度广播通道名，与后端 `models::EVENT_MODEL` 保持一致。 */
@@ -182,6 +186,28 @@ export function moveClips(items: ClipPlacement[]): Promise<Project> {
 export function resizeClip(track: number, clip: number, length: number): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.resizeClip(track, clip, length));
   return invoke<Project>("resize_clip", { track, clip, length });
+}
+
+/** 设置音频片段的播放速度 / 升降调（缺省 1 / 0）。 */
+export function setClipRate(
+  track: number,
+  clip: number,
+  rate: number,
+  pitchSemitones: number,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setClipRate(track, clip, rate, pitchSemitones));
+  return invoke<Project>("set_clip_rate", { track, clip, rate, pitchSemitones });
+}
+
+/** 裁剪 / 移动片段：新的起点与拍长（音频按采样率换算成读写窗口）。 */
+export function trimClip(
+  track: number,
+  clip: number,
+  start: number,
+  length: number,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.trimClip(track, clip, start, length));
+  return invoke<Project>("trim_clip", { track, clip, start, length });
 }
 
 /** 在片段中新增一个音符。 */
@@ -347,6 +373,18 @@ export function transportSetLoop(on: boolean): Promise<void> {
   return invoke<void>("transport_set_loop", { on });
 }
 
+/** 设定播放范围（帧）；`end <= start` = 取消范围。 */
+export function transportSetLoopRange(start: number, end: number): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.transportSetLoopRange(start, end));
+  return invoke<void>("transport_set_loop_range", { start, end });
+}
+
+/** 开关节拍器（按工程速度 / 拍号打点）。 */
+export function transportSetMetronome(on: boolean): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.transportSetMetronome(on));
+  return invoke<void>("transport_set_metronome", { on });
+}
+
 /** 重新探测输出设备并重建实时宿主（设备变化后无需重启）。 */
 export function retryAudio(): Promise<void> {
   if (mockEnabled()) return mockApi.retryAudio();
@@ -448,19 +486,46 @@ export function splitClip(track: number, clip: number, beat: number): Promise<Pr
   return invoke<Project>("split_clip", { track, clip, beat });
 }
 
+/** 片段波形的数据：包络 + 素材采样率（用来把波形画在它真实的时间位置上）。 */
+export interface WaveformSlice {
+  peaks: number[];
+  sample_rate: number;
+  frames: number;
+  offset_frames: number;
+}
+
 /**
  * 取某个音频文件的波形包络（每桶 min/max 各一个值，长度 = `buckets * 2`）。
  *
  * `offsetFrames` / `frames` 只取素材的**窗口**（片段引用窗口而不是整段素材）；缺省 = 整段。
+ * 返回值带上采样率与夹紧后的窗口，界面据此把波形画在真实时间位置、并按方框裁切。
  */
 export function audioWaveform(
   path: string,
   buckets: number,
   offsetFrames?: number,
   frames?: number,
-): Promise<number[]> {
-  if (mockEnabled()) return Promise.resolve(mockApi.audioWaveform(path, buckets));
-  return invoke<number[]>("audio_waveform", { path, buckets, offsetFrames, frames });
+): Promise<WaveformSlice> {
+  if (mockEnabled())
+    return Promise.resolve(mockApi.audioWaveform(path, buckets, offsetFrames, frames));
+  return invoke<WaveformSlice>("audio_waveform", { path, buckets, offsetFrames, frames });
+}
+
+/** 片段可展开的范围（拍）：方框起点不能早于 `min_start`，末尾不能晚于 `max_end`。 */
+export interface ClipBounds {
+  min_start: number;
+  max_end: number;
+}
+
+/**
+ * 取片段可展开的范围（拍）。
+ *
+ * 左右拖拽据此把边缘**夹在素材之内**：「展开无法展开出原始的音频之外」。音频用素材首尾，
+ * MIDI 用音符的实际跨度。
+ */
+export function clipBounds(track: number, clip: number): Promise<ClipBounds> {
+  if (mockEnabled()) return Promise.resolve(mockApi.clipBounds(track, clip));
+  return invoke<ClipBounds>("clip_bounds", { track, clip });
 }
 
 /** 订阅音频导入的解码进度（顶栏下边缘的进度条据此绘制）。 */
@@ -529,7 +594,12 @@ export function aiStart(
   model?: string,
 ): Promise<void> {
   if (mockEnabled()) return Promise.resolve(mockApi.aiStart(kind));
-  return invoke<void>("ai_start", { kind, track, master: master ?? null, model: model ?? null });
+  return invoke<void>("ai_start", {
+    kind,
+    track,
+    master: master ?? null,
+    model: model ?? null,
+  });
 }
 
 /** 停止当前 AI 任务。 */
@@ -879,10 +949,18 @@ export function managerSetNetwork(
   proxyMode: ProxyMode,
   proxyUrl: string,
   modelMirrors: string[] = [],
+  modelSourcePreference: ModelSourcePreference = "auto",
 ): Promise<StoreNetwork> {
   if (mockEnabled()) {
     return Promise.resolve(
-      mockApi.managerSetNetwork(registryMirrors, downloadPrefix, proxyMode, proxyUrl, modelMirrors),
+      mockApi.managerSetNetwork(
+        registryMirrors,
+        downloadPrefix,
+        proxyMode,
+        proxyUrl,
+        modelMirrors,
+        modelSourcePreference,
+      ),
     );
   }
   return invoke<StoreNetwork>("plugin_manager_set_network", {
@@ -891,6 +969,7 @@ export function managerSetNetwork(
     proxyMode,
     proxyUrl,
     modelMirrors,
+    modelSourcePreference,
   });
 }
 
@@ -958,4 +1037,20 @@ export function onModelEvent(handler: (p: ModelProgress) => void): Promise<Unlis
     });
   }
   return listen<ModelProgress>(EVENT_MODEL, (e) => handler(e.payload));
+}
+
+// ---------------------------------------------------------------------------
+// 执行后端（Execution Provider）：只是「选哪个」，没有下载
+// ---------------------------------------------------------------------------
+
+/** 当前后端选择 + 本机可用项（设置页加载时调用）。 */
+export function aiBackendInfo(): Promise<BackendInfo> {
+  if (mockEnabled()) return Promise.resolve(mockApi.aiBackendInfo());
+  return invoke<BackendInfo>("ai_backend_info");
+}
+
+/** 保存执行后端偏好（写 `store.json` 并立即生效）。 */
+export function aiSetBackend(preference: BackendPreference): Promise<BackendInfo> {
+  if (mockEnabled()) return Promise.resolve(mockApi.aiSetBackend(preference));
+  return invoke<BackendInfo>("ai_set_backend", { preference });
 }

@@ -20,8 +20,11 @@ import Md3Slider from "@/components/common/Md3Slider.vue";
 import NumberField from "@/components/common/NumberField.vue";
 import { usePluginsStore } from "@/stores/plugins";
 import { useI18n } from "@/i18n";
+import { copyText } from "@/utils/clipboard";
 import { lastWorkspace } from "@/router";
 import {
+  aiBackendInfo,
+  aiSetBackend,
   cliStatus,
   installCli,
   managerNetwork,
@@ -32,9 +35,9 @@ import {
   setMcpConfig,
   uninstallCli,
 } from "@/api/tauri";
-import type { CliStatus, McpStatus, ProxyMode } from "@/api/types";
+import type { BackendInfo, BackendPreference, CliStatus, McpStatus, ModelSourcePreference, ProxyMode } from "@/api/types";
 
-type Section = "general" | "appearance" | "layout" | "plugins" | "network" | "mcp" | "cli" | "about";
+type Section = "general" | "appearance" | "layout" | "plugins" | "network" | "ai" | "mcp" | "cli" | "about";
 
 const SECTIONS: { id: Section; labelKey: string; captionKey: string }[] = [
   { id: "general", labelKey: "settings.section.general", captionKey: "settings.section.general.caption" },
@@ -42,6 +45,7 @@ const SECTIONS: { id: Section; labelKey: string; captionKey: string }[] = [
   { id: "layout", labelKey: "settings.section.layout", captionKey: "settings.section.layout.caption" },
   { id: "plugins", labelKey: "settings.section.plugins", captionKey: "settings.section.plugins.caption" },
   { id: "network", labelKey: "settings.section.network", captionKey: "settings.section.network.caption" },
+  { id: "ai", labelKey: "settings.section.ai", captionKey: "settings.section.ai.caption" },
   { id: "mcp", labelKey: "settings.section.mcp", captionKey: "settings.section.mcp.caption" },
   { id: "cli", labelKey: "settings.section.cli", captionKey: "settings.section.cli.caption" },
   { id: "about", labelKey: "settings.section.about", captionKey: "settings.section.about.caption" },
@@ -52,6 +56,13 @@ const PROXY_MODES: { id: ProxyMode; labelKey: string }[] = [
   { id: "direct", labelKey: "settings.proxy.modeDirect" },
   { id: "system", labelKey: "settings.proxy.modeSystem" },
   { id: "manual", labelKey: "settings.proxy.modeManual" },
+];
+
+/** 模型下载源的区域偏好（顺序即界面顺序）。 */
+const SOURCE_PREFS: { id: ModelSourcePreference; labelKey: string }[] = [
+  { id: "auto", labelKey: "settings.store.sourceAuto" },
+  { id: "international", labelKey: "settings.store.sourceIntl" },
+  { id: "domestic", labelKey: "settings.store.sourceCn" },
 ];
 
 const APP_VERSION = "0.1.0";
@@ -209,14 +220,11 @@ function onToggleCli(): void {
   );
 }
 
-/** 复制一段文本；剪贴板不可用（无权限 / 非安全上下文）时静默——内容就在旁边。 */
+/** 复制一段文本；两条路都不通（无权限 / 非安全上下文 / 没聚焦）时才提示手抄。 */
 async function copy(text: string | null | undefined): Promise<void> {
   if (!text) return;
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // 用户可以手抄。
-  }
+  if (await copyText(text)) layout.notify(i18n.t("settings.copy.ok"));
+  else layout.notify(i18n.t("copy.failed"));
 }
 
 // ---- 网络：代理 / 镜像 / 地址重写 ----
@@ -226,6 +234,8 @@ const storeMirrors = ref("");
 const storePrefix = ref("");
 /** 模型权重镜像 / 前置代理：多行文本，一行一个前缀。 */
 const storeModels = ref("");
+/** 模型下载源的区域偏好：自动探测 / 优先国外 / 优先国内。 */
+const modelSourcePref = ref<ModelSourcePreference>("auto");
 /** 代理取用方式；默认跟随系统。 */
 const proxyMode = ref<ProxyMode>("system");
 /** 手动模式的代理地址。 */
@@ -252,12 +262,41 @@ async function loadStoreNetwork(): Promise<void> {
     storeMirrors.value = net.registry_mirrors.join("\n");
     storePrefix.value = net.download_prefix;
     storeModels.value = net.model_mirrors.join("\n");
+    modelSourcePref.value = net.model_source_preference;
     proxyMode.value = net.proxy_mode;
     proxyUrl.value = net.proxy_url;
   } catch {
     // 预览 / 后端不可用：保持空白（等于直连）。
   }
   await refreshProxyStatus();
+}
+
+/** 执行后端（CPU / CoreML / DirectML）：只列出本机平台支持的那些。 */
+const backendInfo = ref<BackendInfo | null>(null);
+const backendSaving = ref(false);
+const availableBackends = computed(() => backendInfo.value?.options.filter((o) => o.available) ?? []);
+const backendNote = computed(
+  () => backendInfo.value?.options.find((o) => o.kind === backendInfo.value?.preference)?.note ?? "",
+);
+
+async function loadBackend(): Promise<void> {
+  try {
+    backendInfo.value = await aiBackendInfo();
+  } catch {
+    // 预览 / 后端不可用：保持空（界面只显示 CPU 之外的选项为空）。
+  }
+}
+
+async function setBackend(preference: BackendPreference): Promise<void> {
+  if (backendInfo.value?.preference === preference) return;
+  backendSaving.value = true;
+  try {
+    backendInfo.value = await aiSetBackend(preference);
+  } catch (err) {
+    layout.notify(String(err));
+  } finally {
+    backendSaving.value = false;
+  }
 }
 
 async function saveStoreNetwork(): Promise<void> {
@@ -277,10 +316,12 @@ async function saveStoreNetwork(): Promise<void> {
       proxyMode.value,
       proxyUrl.value.trim(),
       modelMirrors,
+      modelSourcePref.value,
     );
     storeMirrors.value = net.registry_mirrors.join("\n");
     storePrefix.value = net.download_prefix;
     storeModels.value = net.model_mirrors.join("\n");
+    modelSourcePref.value = net.model_source_preference;
     proxyMode.value = net.proxy_mode;
     proxyUrl.value = net.proxy_url;
     proxyProbe.value = "";
@@ -314,6 +355,7 @@ onMounted(() => {
   void loadMcp();
   void loadCli();
   void loadStoreNetwork();
+  void loadBackend();
 });
 </script>
 
@@ -698,6 +740,24 @@ onMounted(() => {
                   :placeholder="i18n.t('settings.store.prefixPlaceholder')"
                 />
               </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.store.source") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.store.sourceHint") }}</span>
+                </div>
+                <div class="m3-seg" role="group" :aria-label="i18n.t('settings.store.source')">
+                  <button
+                    v-for="p in SOURCE_PREFS"
+                    :key="p.id"
+                    class="m3-seg-btn"
+                    :class="{ on: modelSourcePref === p.id }"
+                    :aria-pressed="modelSourcePref === p.id"
+                    @click="modelSourcePref = p.id"
+                  >
+                    {{ i18n.t(p.labelKey) }}
+                  </button>
+                </div>
+              </div>
               <div class="col-row">
                 <span class="row-title">{{ i18n.t("settings.store.models") }}</span>
                 <span class="row-sub">{{ i18n.t("settings.store.modelsHint") }}</span>
@@ -721,7 +781,41 @@ onMounted(() => {
           </div>
         </template>
 
-        <!-- AI / MCP -->
+        <!-- AI -->
+        <template v-else-if="active === 'ai'">
+          <div class="group">
+            <div class="group-title">{{ i18n.t("settings.ai.title") }}</div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.ai.backend") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.ai.backendHint") }}</span>
+                </div>
+                <div class="m3-seg" role="group" :aria-label="i18n.t('settings.ai.backend')">
+                  <button
+                    v-for="o in availableBackends"
+                    :key="o.kind"
+                    class="m3-seg-btn"
+                    :class="{ on: backendInfo?.preference === o.kind }"
+                    :aria-pressed="backendInfo?.preference === o.kind"
+                    :disabled="backendSaving"
+                    @click="setBackend(o.kind)"
+                  >
+                    {{ o.label }}
+                  </button>
+                </div>
+              </div>
+              <div class="col-row">
+                <span class="row-sub" v-if="backendNote">{{ backendNote }}</span>
+                <span class="row-sub">
+                  {{ i18n.t("settings.ai.platform", { platform: backendInfo?.platform ?? "…" }) }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- MCP -->
         <template v-else-if="active === 'mcp'">
           <div class="group">
             <div class="group-title">{{ i18n.t("settings.mcp.server") }}</div>

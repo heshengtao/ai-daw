@@ -8,6 +8,7 @@ import {
   PlusIcon,
   XMarkIcon,
   AdjustmentsHorizontalIcon,
+  AdjustmentsVerticalIcon,
   CircleStackIcon,
   MusicalNoteIcon,
   PuzzlePieceIcon,
@@ -27,6 +28,7 @@ const PICKABLE = PICKABLE_PANES;
 
 const ICONS: Record<PaneId, unknown> = {
   inspector: AdjustmentsHorizontalIcon,
+  mixer: AdjustmentsVerticalIcon,
   editor: MusicalNoteIcon,
   plugins: CircleStackIcon,
   manager: PuzzlePieceIcon,

@@ -49,6 +49,8 @@ pub enum Event {
     AudioClipAdded { actor: Actor, track: TrackId, clip: ClipId, start: f64, length: f64, source: AudioSource },
     /// 片段的音频素材被改写；`audio` 为 `None` 表示变回 MIDI 片段。
     ClipAudioChanged { actor: Actor, track: TrackId, clip: ClipId, audio: Option<AudioSource> },
+    /// 音频片段的播放速度 / 升降调被改写（已归一化）。
+    ClipRateChanged { actor: Actor, track: TrackId, clip: ClipId, rate: f64, pitch_semitones: f64 },
     /// 片段删除。
     ClipRemoved { actor: Actor, track: TrackId, clip: ClipId },
     /// 片段被切分：左半段沿用原 `clip`，右半段是 `new_clip`（自 `at_beat` 起）。
@@ -130,6 +132,7 @@ impl Event {
             | Event::ClipAdded { actor, .. }
             | Event::AudioClipAdded { actor, .. }
             | Event::ClipAudioChanged { actor, .. }
+            | Event::ClipRateChanged { actor, .. }
             | Event::ClipRemoved { actor, .. }
             | Event::ClipSplit { actor, .. }
             | Event::ClipMoved { actor, .. }

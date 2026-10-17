@@ -8,8 +8,8 @@ use ai_daw_engine::bus::Engine;
 use ai_daw_engine::command::Command;
 use ai_daw_engine::event::{Actor, Event};
 use ai_daw_engine::model::{
-    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, Project, Send,
-    TrackId,
+    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, Keyframe, Note, NoteEdit, Project,
+    Send, TrackId, Transport,
 };
 use ai_daw_engine::registry::{PluginRegistry, PluginSlot};
 use ai_daw_engine::render::{render_with_assets, RenderOptions};
@@ -369,10 +369,63 @@ pub fn set_param(
     run(&app, &state, Command::SetParam { track: TrackId(track), param, value })
 }
 
+/// 改速度 / 拍号后，把每个**音频片段**的「拍长」重算成它在新速度下的**原真实时长**。
+///
+/// 引擎按 `length`（拍）画方框、素材按 `rate` 原速播放——**改 BPM 不改音频**，但方框会与素材
+/// 错位。这里让方框秒数保持不变（= 素材的真实秒数），于是方框始终覆盖素材、音频原速、网格随
+/// 速度走。返回需要追加的 `ResizeClip`（与速度命令同一批 → 一条撤销）。
+pub(crate) fn resize_audio_clips_for_transport(
+    project: &Project,
+    old: &Transport,
+    new: &Transport,
+) -> Vec<Command> {
+    if old == new {
+        return Vec::new();
+    }
+    let old_map = TempoMap::from_transport(old);
+    let new_map = TempoMap::from_transport(new);
+    let mut out = Vec::new();
+    for track in &project.tracks {
+        for clip in &track.clips {
+            if clip.audio.is_none() {
+                continue;
+            }
+            let span_sec = old_map.beats_to_seconds(clip.start + clip.length)
+                - old_map.beats_to_seconds(clip.start);
+            if span_sec <= 1e-9 {
+                continue;
+            }
+            let start_sec = new_map.beats_to_seconds(clip.start);
+            let length = new_map.seconds_to_beats(start_sec + span_sec) - clip.start;
+            if length > 1e-6 && (length - clip.length).abs() > 1e-6 {
+                out.push(Command::ResizeClip { track: track.id, clip: clip.id, length });
+            }
+        }
+    }
+    out
+}
+
+/// 走 `run_all`（**一条撤销**）：先发 `command`，再把音频片段的方框重算到 `new_transport`。
+fn run_tempo(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    command: Command,
+    new_transport: Transport,
+) -> Project {
+    let project = state.engine.lock().unwrap().project().clone();
+    let old = project.transport.clone();
+    let mut commands = vec![command];
+    commands.extend(resize_audio_clips_for_transport(&project, &old, &new_transport));
+    run_all(app, state, Actor::Human, commands).0
+}
+
 /// 设置速度（BPM）。
 #[tauri::command]
 pub fn set_tempo(app: tauri::AppHandle, state: State<'_, AppState>, bpm: f64) -> Project {
-    run(&app, &state, Command::SetTempo(bpm))
+    let bpm = if bpm.is_finite() { bpm.clamp(1.0, 1000.0) } else { 120.0 };
+    let mut t = state.engine.lock().unwrap().project().transport.clone();
+    t.tempo = bpm;
+    run_tempo(&app, &state, Command::SetTempo(bpm), t)
 }
 
 /// 一次性设置一条轨道上的多个参数——切换预设走的就是这条路。
@@ -499,13 +552,191 @@ pub fn set_keyframe(
     num: u8,
     den: u8,
 ) -> Project {
-    run(&app, &state, Command::SetKeyframe { beat, tempo, num, den })
+    let mut t = state.engine.lock().unwrap().project().transport.clone();
+    if let Some(kf) = Transport::normalize_keyframe(Keyframe {
+        beat,
+        tempo,
+        time_sig_num: num,
+        time_sig_den: den,
+    }) {
+        t.upsert_keyframe(kf);
+    }
+    run_tempo(&app, &state, Command::SetKeyframe { beat, tempo, num, den }, t)
 }
 
 /// 删除第 `beat` 拍的关键点。
 #[tauri::command]
 pub fn remove_keyframe(app: tauri::AppHandle, state: State<'_, AppState>, beat: f64) -> Project {
-    run(&app, &state, Command::RemoveKeyframe { beat })
+    let mut t = state.engine.lock().unwrap().project().transport.clone();
+    t.remove_keyframe(beat);
+    run_tempo(&app, &state, Command::RemoveKeyframe { beat }, t)
+}
+
+/// 设置音频片段的**播放速度**（`rate`，1.0 = 原速）与**升降调**（半音，0 = 不变）。
+///
+/// 速度变了 → 素材真实时长变了 → 方框（拍长）也要跟着，否则方框与素材错位（与速度命令同一批，
+/// 一条撤销）。升降调不改时长，只影响音高。
+#[tauri::command]
+pub fn set_clip_rate(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    rate: f64,
+    pitch_semitones: f64,
+) -> Project {
+    let track_id = TrackId(track);
+    let clip_id = ClipId(clip);
+    let project = state.engine.lock().unwrap().project().clone();
+    let rate = AudioSource::normalize_rate(rate);
+    let mut commands = vec![Command::SetClipRate {
+        track: track_id,
+        clip: clip_id,
+        rate,
+        pitch_semitones,
+    }];
+    if let Some(c) = project.track(track_id).and_then(|t| t.clips.iter().find(|c| c.id == clip_id)) {
+        if let Some(src) = &c.audio {
+            if src.rate > 1e-9 {
+                let map = TempoMap::from_transport(&project.transport);
+                let span = map.beats_to_seconds(c.start + c.length) - map.beats_to_seconds(c.start);
+                let target = span * (src.rate / rate);
+                let start_sec = map.beats_to_seconds(c.start);
+                let length = map.seconds_to_beats(start_sec + target) - c.start;
+                if length > 1e-6 && (length - c.length).abs() > 1e-6 {
+                    commands.push(Command::ResizeClip { track: track_id, clip: clip_id, length });
+                }
+            }
+        }
+    }
+    run_all(&app, &state, Actor::Human, commands).0
+}
+
+/// 裁剪 / 移动一个片段：`start` / `length` 是新的起点与拍长。
+///
+/// 音频片段按**资产采样率**把「拍」换算成源帧：拖左边缘推进 `offset_frames` 并缩短窗口，
+/// 拖右边缘只改窗口长度——**不改速度、不变调**（速度 / 升降调是检查器里的独立参数）。
+/// MIDI 片段只改起点 / 长度。同一批命令 → 一条撤销。
+#[tauri::command]
+pub fn trim_clip(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    start: f64,
+    length: f64,
+) -> Result<Project, String> {
+    let track_id = TrackId(track);
+    let clip_id = ClipId(clip);
+    let project = state.engine.lock().unwrap().project().clone();
+    let existing = project
+        .track(track_id)
+        .and_then(|t| t.clips.iter().find(|c| c.id == clip_id))
+        .ok_or("片段不存在")?
+        .clone();
+    let start = ai_daw_engine::model::Clip::normalize_start(start);
+    let length = ai_daw_engine::model::Clip::normalize_length(length);
+    let mut commands: Vec<Command> = Vec::new();
+
+    if let Some(src) = &existing.audio {
+        let audio = state.assets.load(&src.path)?;
+        let map = TempoMap::from_transport(&project.transport);
+        // 方框起点移动了多少 = 素材跟着平移多少；窗口 = 方框对应的素材帧数。
+        // 换算含片段速度 `rate`（见 `trimmed_window`）。
+        let (offset, frames) = trimmed_window(
+            &map,
+            existing.start,
+            start,
+            length,
+            src.offset_frames,
+            audio.frames() as u64,
+            audio.sample_rate,
+            src.rate,
+        );
+        commands.push(Command::SetClipAudio {
+            track: track_id,
+            clip: clip_id,
+            audio: Some(AudioSource {
+                path: src.path.clone(),
+                offset_frames: offset,
+                frames: Some(frames),
+                rate: src.rate,
+                pitch_semitones: src.pitch_semitones,
+            }),
+        });
+    } else if !existing.notes.is_empty() {
+        // MIDI 片段同样统一为「收起 / 展开」：音符存的是**相对片段起点**的拍，直接挪起点会把
+        // 音符一起拖走；这里把每个音符反向平移相同的量（停在**原本的时间线位置**）。
+        // 落到方框左边（相对起点为负）的音符**保留不删**，由引擎按方框裁掉——往回拖即恢复。
+        let shift = start - existing.start;
+        if shift.abs() > 1e-9 {
+            let entries: Vec<NoteEdit> = existing
+                .notes
+                .iter()
+                .enumerate()
+                .map(|(index, n)| NoteEdit {
+                    index,
+                    note: Note {
+                        pitch: n.pitch,
+                        start: n.start - shift,
+                        duration: n.duration,
+                        velocity: n.velocity,
+                        volume: n.volume,
+                    },
+                })
+                .collect();
+            commands.push(Command::SetNotes { track: track_id, clip: clip_id, entries });
+        }
+    }
+    commands.push(Command::MoveClip { track: track_id, clip: clip_id, start });
+    commands.push(Command::ResizeClip { track: track_id, clip: clip_id, length });
+    Ok(run_all(&app, &state, Actor::Human, commands).0)
+}
+
+/// 片段能「展开」到的范围（拍）：左端 = 素材第一帧所在的位置，右端 = 素材最后一帧所在的位置。
+#[derive(serde::Serialize)]
+pub struct ClipBounds {
+    /// 方框起点不能早于它。
+    pub min_start: f64,
+    /// 方框末尾不能晚于它。
+    pub max_end: f64,
+}
+
+/// 左右拖拽的**夹取范围**：界面据此把边缘停在素材之内——「展开无法展开出原始的音频之外」。
+///
+/// **音频片段**用素材的实际首尾（左边缘往左拖最多露出素材第 0 帧，往右拖最多到素材最后一帧）。
+/// **MIDI 片段是用户自定义的，没有素材边界**——长度随便改，所以不做夹取。
+#[tauri::command]
+pub fn clip_bounds(
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+) -> Result<ClipBounds, String> {
+    let track_id = TrackId(track);
+    let clip_id = ClipId(clip);
+    let project = state.engine.lock().unwrap().project().clone();
+    let c = project
+        .track(track_id)
+        .and_then(|t| t.clips.iter().find(|c| c.id == clip_id))
+        .ok_or("片段不存在")?;
+    let Some(src) = &c.audio else {
+        // MIDI：不夹取（用一个足够大的有限值，避免 JSON 里的 Infinity）。
+        return Ok(ClipBounds {
+            min_start: 0.0,
+            max_end: ai_daw_engine::model::Clip::MAX_START_BEATS,
+        });
+    };
+    let map = TempoMap::from_transport(&project.transport);
+    let audio = state.assets.load(&src.path)?;
+    let (min_start, max_end) = clip_bounds_for(
+        &map,
+        c.start,
+        src.offset_frames,
+        audio.frames() as u64,
+        audio.sample_rate,
+        src.rate,
+    );
+    Ok(ClipBounds { min_start, max_end })
 }
 
 /// 新建工程：清空并铺上默认分轨模板。
@@ -924,6 +1155,25 @@ pub fn transport_set_loop(state: State<'_, AppState>, on: bool) -> Result<(), St
     state.audio.send(TransportCommand::SetLoop(on))
 }
 
+/// 设定播放范围（帧）：开了循环时播到 `end` 无缝回到 `start`。
+///
+/// `end <= start` = 取消范围。范围本身不启动播放，也不改「是否循环」——那是
+/// `transport_set_loop` 的事。
+#[tauri::command]
+pub fn transport_set_loop_range(
+    state: State<'_, AppState>,
+    start: u64,
+    end: u64,
+) -> Result<(), String> {
+    state.audio.send(TransportCommand::SetLoopRange { start, end })
+}
+
+/// 开关节拍器：按工程速度 / 拍号在整数拍上打点（重音在小节头），只在播放时出声。
+#[tauri::command]
+pub fn transport_set_metronome(state: State<'_, AppState>, on: bool) -> Result<(), String> {
+    state.audio.send(TransportCommand::SetMetronome(on))
+}
+
 // ---------------------------------------------------------------------------
 // 文件与渲染
 // ---------------------------------------------------------------------------
@@ -953,6 +1203,28 @@ pub fn current_project_path(state: State<'_, AppState>) -> Option<String> {
     state.session_path()
 }
 
+/// 把当前工作状态落进会话缓存（纯落盘，不改动内存里的工程）。
+///
+/// `cache_session` 命令与**退出兜底**共用这一条路径。后端在 `RunEvent::ExitRequested` 里也
+/// 直接调它：macOS 从程序坞「退出」/ Cmd+Q 是进程级退出，前端的 `onCloseRequested` 守卫根本
+/// 不触发，只靠 10 秒一次的自动保存会把「最近一次保存之后」的改动（比如刚添加的效果器）
+/// 整段丢掉。
+pub(crate) fn write_session(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(file) = crate::session_file(app) else {
+        return Ok(());
+    };
+    let state = app.state::<AppState>();
+    // 会话缓存同样要记下插件实例的内部状态，下次启动才能还原外部插件的补丁。
+    capture_plugin_states(&state);
+    let path = state.session_path();
+    let (project, saved) = {
+        let engine = state.engine.lock().unwrap();
+        (engine.project().clone(), engine.saved().clone())
+    };
+    let session = crate::session::SessionFile { path, project, saved };
+    crate::session::write_session(&file, &session)
+}
+
 /// 把当前工程写入会话缓存（退出前 / 编辑过程中定期调用，供下次启动还原）。
 ///
 /// 缓存同时记录工作副本与保存基线，因此带着未保存改动退出后，下次打开依旧显示「未保存」。
@@ -962,19 +1234,8 @@ pub fn cache_session(
     state: State<'_, AppState>,
     path: Option<String>,
 ) -> Result<(), String> {
-    let Some(file) = crate::session_file(&app) else {
-        return Ok(());
-    };
-    // 会话缓存同样要记下插件实例的内部状态，下次启动才能还原外部插件的补丁。
-    capture_plugin_states(&state);
-    let (project, saved) = {
-        let engine = state.engine.lock().unwrap();
-        (engine.project().clone(), engine.saved().clone())
-    };
-    let session = crate::session::SessionFile { path: path.clone(), project, saved };
-    crate::session::write_session(&file, &session)?;
     state.set_session_path(path);
-    Ok(())
+    write_session(&app)
 }
 
 /// 从 JSON 文件导入工程：替换当前工程并清空历史（导入是一个新的起点）。
@@ -1113,6 +1374,70 @@ pub(crate) fn natural_length_beats(project: &Project, start: f64, seconds: f64) 
     map.seconds_to_beats(start_sec + seconds) - start
 }
 
+/// **时间轴秒 → 素材源帧**，含片段的播放速度 `rate`。
+///
+/// 音频片段的语义（见 `specs/2026-10-09-audio-clip-design.md` §3）：时间轴 1 秒 = 素材 **`rate`** 秒
+/// （`rate = 2` 就是「一秒听两秒素材」）。所以**任何在「拍 / 时间轴秒」与「素材帧」之间换算的地方
+/// 都必须带上它**——漏掉就会出现「改了播放速度以后再拖动片段，音频被砍掉一半（后半段静音）」这类错误。
+pub(crate) fn span_to_source_frames(seconds: f64, sample_rate: f64, rate: f64) -> f64 {
+    (seconds * sample_rate * rate).round().max(0.0)
+}
+
+/// **素材源帧 → 时间轴秒**，含片段的播放速度 `rate`（[`span_to_source_frames`] 的逆）。
+pub(crate) fn source_frames_to_span(frames: f64, sample_rate: f64, rate: f64) -> f64 {
+    frames / (sample_rate * rate.max(1e-9))
+}
+
+/// 裁剪 / 移动一个音频片段后，它引用的素材窗口：`(offset_frames, frames)`。
+///
+/// - `old_start` / `new_start`：方框起点（拍），两者之差就是要平移的素材量；
+/// - `length`：新的方框长度（拍）；
+/// - 返回值都已夹到素材范围内（窗口至少 1 帧）。
+///
+/// 抽成纯函数是为了**能被单测直接钉住**：这套换算漏掉 `rate` 时，改了播放速度以后再拖动片段
+/// 就会把音频砍掉一半（后半段静音），而这类错误在界面里很难一眼看出来。
+pub(crate) fn trimmed_window(
+    map: &TempoMap,
+    old_start: f64,
+    new_start: f64,
+    length: f64,
+    offset_frames: u64,
+    total: u64,
+    sample_rate: f64,
+    rate: f64,
+) -> (u64, u64) {
+    let shift = span_to_source_frames(
+        map.beats_to_seconds(new_start) - map.beats_to_seconds(old_start),
+        sample_rate,
+        rate,
+    ) as i64;
+    let offset = (offset_frames as i64 + shift).clamp(0, total as i64) as u64;
+    let visible = span_to_source_frames(
+        map.beats_to_seconds(new_start + length) - map.beats_to_seconds(new_start),
+        sample_rate,
+        rate,
+    ) as u64;
+    (offset, visible.clamp(1, total.saturating_sub(offset).max(1)))
+}
+
+/// 音频片段能「展开」到的范围（拍）：左端 = 素材第一帧所在的位置，右端 = 素材最后一帧所在的位置。
+///
+/// **素材帧除以 `rate` 才是时间轴秒**：`rate = 2` 时两秒素材只占一秒时间轴——漏掉它，
+/// 界面就能把右边缘拖到素材早已放完之后，露出一段没有声音的空档。
+pub(crate) fn clip_bounds_for(
+    map: &TempoMap,
+    start: f64,
+    offset_frames: u64,
+    total: u64,
+    sample_rate: f64,
+    rate: f64,
+) -> (f64, f64) {
+    let t0 = map.beats_to_seconds(start);
+    let consumed = source_frames_to_span(offset_frames as f64, sample_rate, rate);
+    let available = source_frames_to_span(total.saturating_sub(offset_frames) as f64, sample_rate, rate);
+    (map.seconds_to_beats(t0 - consumed), map.seconds_to_beats(t0 + available))
+}
+
 /// 音频导入的解码进度（与前端 `ImportProgress` 一一对应）。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ImportProgress {
@@ -1205,7 +1530,7 @@ pub async fn import_audio(
             start,
             length,
             // 记下素材总帧数：切分时才知道「左半段到哪停」（否则会一路播到结尾、被拉伸）。
-            source: AudioSource { path, offset_frames: 0, frames: Some(frames) },
+            source: AudioSource { path, offset_frames: 0, frames: Some(frames), rate: 1.0, pitch_semitones: 0.0 },
         },
     ))
 }
@@ -1232,7 +1557,7 @@ pub fn add_audio_clip(
             track: TrackId(track),
             start,
             length,
-            source: AudioSource { path, offset_frames, frames },
+            source: AudioSource { path, offset_frames, frames, rate: 1.0, pitch_semitones: 0.0 },
         },
     )
 }
@@ -1266,17 +1591,53 @@ pub async fn split_clip(
         let audio = tauri::async_runtime::spawn_blocking(move || assets.load(&path))
             .await
             .map_err(|e| e.to_string())??;
+        // 切分按「方框占素材窗口的比例」切，所以要补的是**方框对应的帧数**（不是到素材结尾）。
+        let (clip_start, clip_len, transport) = {
+            let engine = state.engine.lock().unwrap();
+            let p = engine.project();
+            let c = p
+                .track(TrackId(track))
+                .and_then(|t| t.clips.iter().find(|c| c.id == ClipId(clip)))
+                .ok_or("片段不存在")?;
+            (c.start, c.length, p.transport.clone())
+        };
+        let map = TempoMap::from_transport(&transport);
+        let span = map.beats_to_seconds(clip_start + clip_len) - map.beats_to_seconds(clip_start);
         let total = audio.frames() as u64;
         let offset = src.offset_frames.min(total);
+        // 左半段吃掉多少素材帧：同样要带上 `rate`（时间轴 1 秒 = 素材 `rate` 秒）。
+        let visible = span_to_source_frames(span, audio.sample_rate, src.rate).max(1.0) as u64;
         commands.push(Command::SetClipAudio {
             track: TrackId(track),
             clip: ClipId(clip),
-            audio: Some(AudioSource { path: src.path, offset_frames: offset, frames: Some(total - offset) }),
+            audio: Some(AudioSource {
+                path: src.path,
+                offset_frames: offset,
+                frames: Some(visible.clamp(1, total.saturating_sub(offset).max(1))),
+                rate: src.rate,
+                pitch_semitones: src.pitch_semitones,
+            }),
         });
     }
     commands.push(Command::SplitClip { track: TrackId(track), clip: ClipId(clip), beat });
 
     Ok(run_all(&app, &state, Actor::Human, commands).0)
+}
+
+/// 片段波形：包络 + 素材采样率。
+///
+/// 界面需要采样率把「源帧」换算成秒 / 拍，才能把波形画在**它真实的时间位置**上、再按片段
+/// 方框裁切——而不是把窗口拉伸铺满方框（拖动边缘时会看着像在拉伸/移动）。
+#[derive(serde::Serialize)]
+pub struct WaveformSlice {
+    /// 每桶 min/max 各一个值（长度 = `buckets * 2`）。
+    pub peaks: Vec<f32>,
+    /// 素材采样率（Hz）。
+    pub sample_rate: f64,
+    /// 本窗口实际取到的源帧数（`frames` 夹紧后）——前端据此算窗口时长。
+    pub frames: u64,
+    /// 窗口在素材里的起点（源帧，夹紧后）。
+    pub offset_frames: u64,
 }
 
 /// 取某个音频文件的波形包络（每桶 min/max 各一个值，长度 = `buckets * 2`），供界面绘制。
@@ -1290,10 +1651,20 @@ pub async fn audio_waveform(
     buckets: usize,
     offset_frames: Option<u64>,
     frames: Option<u64>,
-) -> Result<Vec<f32>, String> {
+) -> Result<WaveformSlice, String> {
     let assets = Arc::clone(&state.assets);
     tauri::async_runtime::spawn_blocking(move || {
-        assets.waveform_range(&path, buckets, offset_frames.unwrap_or(0), frames)
+        let audio = assets.load(&path)?;
+        let total = audio.frames() as u64;
+        let offset = offset_frames.unwrap_or(0).min(total);
+        let window = frames.unwrap_or(total - offset).min(total - offset);
+        let peaks = assets.waveform_range(&path, buckets, offset, Some(window))?;
+        Ok(WaveformSlice {
+            peaks,
+            sample_rate: audio.sample_rate,
+            frames: window,
+            offset_frames: offset,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1392,7 +1763,7 @@ pub async fn record_stop(
             track: target.track,
             start,
             length,
-            source: AudioSource { path, offset_frames: 0, frames: Some(audio.frames() as u64) },
+            source: AudioSource { path, offset_frames: 0, frames: Some(audio.frames() as u64), rate: 1.0, pitch_semitones: 0.0 },
         },
     )))
 }
@@ -2046,6 +2417,48 @@ pub fn delete_preset(state: State<'_, AppState>, id: String) -> Result<(), Strin
 mod tests {
     use super::*;
 
+    /// 改速度时，音频片段的「拍长」重算成它的原真实秒数在新速度下的拍数——方框跟得上，
+    /// 音频原速。
+    #[test]
+    fn tempo_change_resizes_audio_boxes_to_keep_seconds() {
+        use ai_daw_engine::model::{Clip, MixerChannel, Track};
+        let mut p = Project::new("t");
+        p.transport.tempo = 120.0;
+        p.tracks = vec![Track {
+            id: TrackId(1),
+            name: "a".into(),
+            instrument: None,
+            effects: Vec::new(),
+            clips: vec![Clip {
+                id: ClipId(1),
+                start: 0.0,
+                length: 4.0, // 120 BPM 下 = 2 s
+                notes: Vec::new(),
+                audio: Some(AudioSource {
+                    path: "x".into(),
+                    offset_frames: 0,
+                    frames: None,
+                    rate: 1.0,
+                    pitch_semitones: 0.0,
+                }),
+            }],
+            mixer: MixerChannel { gain_db: 0.0, pan: 0.0, mute: false, solo: false },
+            sends: Vec::new(),
+            automation: Vec::new(),
+        }];
+        let old = p.transport.clone();
+        let mut new = old.clone();
+        new.tempo = 60.0; // 同样的 2 s 现在应占 2 拍
+        let cmds = resize_audio_clips_for_transport(&p, &old, &new);
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            Command::ResizeClip { length, .. } => assert!((length - 2.0).abs() < 1e-6, "length={length}"),
+            other => panic!("expected ResizeClip, got {other:?}"),
+        }
+        // 速度不变时不动片段。
+        assert!(resize_audio_clips_for_transport(&p, &old, &old).is_empty());
+    }
+
     /// 离线渲染**绝不能**共用实时播放的编辑器句柄表。
     ///
     /// 插件工厂在创建实例时会把句柄登记进传进来的那张表。离线渲染（预览 / 导出 / 分析 / MCP）
@@ -2064,5 +2477,63 @@ mod tests {
             inputs.editor_handles.lock().unwrap().is_empty(),
             "一次性句柄表应当是空的"
         );
+    }
+
+    // ---- 拍 ↔ 素材帧的换算（必须带上片段的播放速度 rate）----
+
+    /// 120 BPM：1 拍 = 0.5 s，1 s = 2 拍。素材按 48 kHz 计。
+    fn map120() -> TempoMap {
+        TempoMap::from_transport(&Transport::default())
+    }
+
+    /// 回归：裁剪 / 移动时，方框吃掉的素材量 = 方框秒数 × `rate`。
+    ///
+    /// 早先这里漏了 `rate`，于是「改了播放速度以后再拖动片段」会把窗口设成一半
+    /// （`rate = 2` 时只播前半段，后半段静音）——听感就是「变速之后没法用了」。
+    #[test]
+    fn trimming_consumes_material_in_proportion_to_playback_rate() {
+        let map = map120();
+        let total = 384_000; // 8 s 素材
+        // 4 拍 = 2 s 时间轴。
+        let (offset, frames) = trimmed_window(&map, 0.0, 0.0, 4.0, 0, total, 48_000.0, 2.0);
+        assert_eq!(offset, 0);
+        assert_eq!(frames, 192_000, "rate=2：2 s 时间轴要吃 4 s 素材");
+        // 原速仍是 2 s（与改动前逐位一致）。
+        let (_, frames1) = trimmed_window(&map, 0.0, 0.0, 4.0, 0, total, 48_000.0, 1.0);
+        assert_eq!(frames1, 96_000);
+        // 放慢到 0.5×：只吃 1 s。
+        let (_, frames_half) = trimmed_window(&map, 0.0, 0.0, 4.0, 0, total, 48_000.0, 0.5);
+        assert_eq!(frames_half, 48_000);
+    }
+
+    /// 整体平移片段时，素材偏移同样按 `rate` 走；拖出素材开头会被夹住。
+    #[test]
+    fn moving_a_clip_shifts_the_window_by_playback_rate() {
+        let map = map120();
+        let total = 384_000;
+        // 从第 0 拍移到第 4 拍（时间轴 +2 s）：rate=2 → 素材偏移 +4 s。
+        let (offset, _) = trimmed_window(&map, 0.0, 4.0, 4.0, 0, total, 48_000.0, 2.0);
+        assert_eq!(offset, 192_000);
+        let (offset1, _) = trimmed_window(&map, 0.0, 4.0, 4.0, 0, total, 48_000.0, 1.0);
+        assert_eq!(offset1, 96_000);
+        // 反向拖出素材开头：夹到 0，不出现负偏移。
+        let (clamped, _) = trimmed_window(&map, 4.0, 0.0, 4.0, 0, total, 48_000.0, 2.0);
+        assert_eq!(clamped, 0);
+    }
+
+    /// 回归：可拖范围也要按 `rate` 折算，否则右边缘能拖到素材早已放完之后，露出一段静音。
+    #[test]
+    fn clip_bounds_account_for_playback_rate() {
+        let map = map120();
+        // 第 0 拍的片段、8 s 素材：rate=2 时只能向右展开 4 s 时间轴 = 第 8 拍。
+        let (min_start, max_end) = clip_bounds_for(&map, 0.0, 0, 384_000, 48_000.0, 2.0);
+        assert_eq!(min_start, 0.0);
+        assert!((max_end - 8.0).abs() < 1e-9, "rate=2 应到第 8 拍，实际 {max_end}");
+        // 原速：展开到 8 s = 第 16 拍。
+        let (_, max_end1) = clip_bounds_for(&map, 0.0, 0, 384_000, 48_000.0, 1.0);
+        assert!((max_end1 - 16.0).abs() < 1e-9, "rate=1 应到第 16 拍，实际 {max_end1}");
+        // 已消耗的素材也除以 rate：偏移 2 s 素材在 rate=2 下只占 1 s 时间轴。
+        let (min2, _) = clip_bounds_for(&map, 4.0, 96_000, 384_000, 48_000.0, 2.0);
+        assert!((min2 - 2.0).abs() < 1e-9, "第 4 拍（2 s）左移 1 s → 第 2 拍，实际 {min2}");
     }
 }

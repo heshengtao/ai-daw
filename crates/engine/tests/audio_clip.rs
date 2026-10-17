@@ -24,14 +24,19 @@ type Assets = HashMap<String, Arc<DecodedAudio>>;
 
 /// 生成一段立体声正弦素材（左右同相）。
 fn sine(freq: f64, amp: f64, seconds: f64) -> Arc<DecodedAudio> {
-    let frames = (seconds * SR) as usize;
+    sine_at(freq, amp, seconds, SR)
+}
+
+/// 与 [`sine`] 相同，但**录在给定采样率**上（测采样率换算用）。
+fn sine_at(freq: f64, amp: f64, seconds: f64, sr: f64) -> Arc<DecodedAudio> {
+    let frames = (seconds * sr) as usize;
     let mut samples = Vec::with_capacity(frames * 2);
     for f in 0..frames {
-        let s = (amp * (std::f64::consts::TAU * freq * f as f64 / SR).sin()) as f32;
+        let s = (amp * (std::f64::consts::TAU * freq * f as f64 / sr).sin()) as f32;
         samples.push(s);
         samples.push(s);
     }
-    Arc::new(DecodedAudio { samples: samples.into(), channels: 2, sample_rate: SR })
+    Arc::new(DecodedAudio { samples: samples.into(), channels: 2, sample_rate: sr })
 }
 
 /// 生成一段**单声道阶梯**素材：第 `f` 帧的值 = `f / frames`。
@@ -62,7 +67,7 @@ fn project_with_audio(path: &str, start_beats: f64, length_beats: f64) -> Projec
             start: start_beats,
             length: length_beats,
             notes: vec![],
-            audio: Some(AudioSource { path: path.into(), offset_frames: 0, frames: None }),
+            audio: Some(AudioSource { path: path.into(), offset_frames: 0, frames: None, rate: 1.0, pitch_semitones: 0.0 }),
         }],
         mixer: Default::default(),
         sends: vec![],
@@ -130,18 +135,60 @@ fn audio_clip_starts_exactly_at_its_start_beat() {
 }
 
 #[test]
-fn halving_the_length_resamples_twice_as_fast() {
-    // 同一段 1 kHz 素材塞进**一半**的跨度 → 比值 2 → 播放快一倍 → 变调成 2 kHz。
+fn resizing_the_box_does_not_change_pitch() {
+    // 「拍长」只决定方框；素材**原速**播放——缩短方框只会**截断**，不改音高（与工程 BPM 解耦）。
     let project = project_with_audio("/tmp/a.wav", 0.0, 1.0);
     let audio = assets("/tmp/a.wav", sine(1_000.0, 1.0, 1.0));
     let buffer = render_with_assets(&project, &PluginRegistry::with_builtins(), &options(), &audio);
 
-    assert_eq!(buffer.frames(), 24_000, "跨度减半后总长也减半");
+    assert_eq!(buffer.frames(), 24_000, "方框减半 → 总长减半（截断）");
     let report = analyze(buffer.data(), 2, SR).unwrap();
     assert!(
-        (peak_hz(&report) - 2_000.0).abs() < 2.0 * report.spectrum.bin_hz,
-        "铺满一半跨度应当变成 2 kHz，实际 {} Hz",
+        (peak_hz(&report) - 1_000.0).abs() < 2.0 * report.spectrum.bin_hz,
+        "截断方框不该改变音高（应保持 1 kHz），实际 {} Hz",
         peak_hz(&report)
+    );
+}
+
+#[test]
+fn tempo_change_does_not_change_audio_pitch() {
+    // 同一段音频、同一个方框（拍长），只把工程速度翻倍：音频必须仍是 1 kHz（不再被拉伸）。
+    let mut project = project_with_audio("/tmp/a.wav", 0.0, 2.0);
+    project.transport.tempo = 240.0;
+    let audio = assets("/tmp/a.wav", sine(1_000.0, 1.0, 1.0));
+    let buffer = render_with_assets(&project, &PluginRegistry::with_builtins(), &options(), &audio);
+    let report = analyze(buffer.data(), 2, SR).unwrap();
+    assert!(
+        (peak_hz(&report) - 1_000.0).abs() < 2.0 * report.spectrum.bin_hz,
+        "改速度不该改变音高（应保持 1 kHz），实际 {} Hz",
+        peak_hz(&report)
+    );
+}
+
+/// 素材采样率 ≠ 工程采样率时，必须按 `素材率 / 工程率` 重采样读取。
+///
+/// 回归：早先读指针每输出帧只前进 1 个**源帧**，于是 44.1 kHz 素材在 48 kHz 工程里会快
+/// 48000/44100 ≈ 8.8% 并升调，尾端还会被方框截掉（听感正是「最后一小节没声音」）。
+#[test]
+fn material_at_another_sample_rate_keeps_its_duration_and_pitch() {
+    // 1 秒 1 kHz 素材，录在 44.1 kHz；方框 = 120 BPM 下 2 拍 = 1 秒（48 kHz 下 48000 帧）。
+    let project = project_with_audio("/tmp/a.wav", 0.0, 2.0);
+    let audio = assets("/tmp/a.wav", sine_at(1_000.0, 1.0, 1.0, 44_100.0));
+    let buffer = render_with_assets(&project, &PluginRegistry::with_builtins(), &options(), &audio);
+
+    assert_eq!(buffer.frames(), 48_000, "方框仍是 1 秒");
+    let report = analyze(buffer.data(), 2, SR).unwrap();
+    assert!(
+        (peak_hz(&report) - 1_000.0).abs() < 2.0 * report.spectrum.bin_hz,
+        "采样率换算不该改变音高（应仍 1 kHz），实际 {} Hz",
+        peak_hz(&report)
+    );
+    // 尾端必须还有声音：素材没被提前放完。
+    let tail = &buffer.data()[44_000 * 2..];
+    assert!(
+        max_abs(tail) > 0.5,
+        "素材尾端不该被截掉，实际峰值 {}",
+        max_abs(tail)
     );
 }
 

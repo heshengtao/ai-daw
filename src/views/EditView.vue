@@ -33,6 +33,7 @@ import ControllerLane from "@/components/workspace/ControllerLane.vue";
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
 import { capturePointer } from "@/utils/pointer";
+import { shouldDeferToBrowser } from "@/utils/editable";
 import { automationTargetsFor, curateTargets, defaultBoundKeys } from "@/utils/automation";
 import { auditionNote } from "@/api/tauri";
 import { useI18n } from "@/i18n";
@@ -731,7 +732,8 @@ watch(() => `${selection.trackId}:${selection.clipId}`, () => {
 // ---------------------------------------------------------------------------
 
 function onKey(e: KeyboardEvent): void {
-  if (e.target instanceof HTMLInputElement) return;
+  // 焦点在输入框/文本域里，或用户选了一段文字：这些按键归浏览器（见 `utils/editable.ts`）。
+  if (shouldDeferToBrowser(e)) return;
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key.toLowerCase() === "c") {
     const c = clip.value;
@@ -745,6 +747,8 @@ function onKey(e: KeyboardEvent): void {
     return;
   }
   if (mod && e.key.toLowerCase() === "v") {
+    // 没有可粘贴的音符就别吞按键。
+    if (clipboard.payload?.kind !== "note") return;
     e.preventDefault();
     void pasteNote();
     return;
@@ -893,14 +897,15 @@ onUnmounted(() => {
 
           <div class="playhead" :style="{ left: `${playheadPx}px` }" />
         </div>
+      </div>
 
-        <!-- 没有片段时的入口：直接建一个片段，否则这里是个死胡同 -->
-        <div v-if="!clip" class="roll-blank">
-          <p class="text-body-md">{{ i18n.t("edit.noClip") }}</p>
-          <button v-if="trackId !== null" class="btn-filled" @click="createClipHere">
-            {{ i18n.t("edit.createBarClip") }}
-          </button>
-        </div>
+      <!-- 没有片段时的入口：覆盖整块卷帘、垂直居中。放在滚动容器**外**，
+           否则遮罩会跟着内容滚走，只盖住可见区顶部、提示也会偏上。 -->
+      <div v-if="!clip" class="roll-blank">
+        <p class="text-body-md">{{ i18n.t("edit.noClip") }}</p>
+        <button v-if="trackId !== null" class="btn-filled" @click="createClipHere">
+          {{ i18n.t("edit.createBarClip") }}
+        </button>
       </div>
     </div>
 
@@ -988,6 +993,7 @@ onUnmounted(() => {
 
 /* ---- 主体 ---- */
 .body-row {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -1132,7 +1138,12 @@ onUnmounted(() => {
 /* 没有片段时的空状态：居中在可见区域，并给出一个可点的入口 */
 .roll-blank {
   position: absolute;
-  inset: 0;
+  /* 只盖卷帘区（琴键列右侧 60px 起），横向保持原样；纵向铺满整块卷帘 */
+  left: 60px;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 4;
   display: flex;
   flex-direction: column;
   align-items: center;

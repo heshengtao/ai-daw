@@ -5,12 +5,16 @@
 #   ./tools/fetch-models.sh                  # 直连
 #   AIDAW_MODEL_PROXY=http://127.0.0.1:7892 ./tools/fetch-models.sh   # 走代理
 #
-# 三个模型：
+# 四个模型：
 #   models/basic-pitch-nmp.onnx  Basic Pitch（Spotify, Apache-2.0）—— 官方 ONNX 导出的镜像
 #   models/htdemucs.ort          HTDemucs v4（音源分离, Apache-2.0）—— 209 MB，不随包，正式版由
 #                                应用内「管理器 → 模型」下载；这里只是开发路径
 #   models/localvqe-ns.onnx      LocalVQE v1.2（Apache-2.0）—— 上游只发 .pt/GGUF，
 #                                ONNX 是本地用 tools/export-localvqe-onnx.py 从官方权重导出的
+#   models/mel_spectrogram.onnx  Beat This! 的 log-mel 前端（MIT）—— 264 KB，**随包**（与
+#                                随包资源是同一个文件）
+#   models/beat_this.onnx        Beat This! 主模型 `final0`（MIT）—— 约 83 MB，不随包，正式版由
+#                                应用内「管理器 → 模型」下载（id `beat-this`）；这里只是开发路径
 #
 # LocalVQE 那一步需要 python3 + torch；缺依赖时会跳过并打印手动步骤，其余模型仍然可用。
 set -euo pipefail
@@ -48,6 +52,21 @@ got="$(sha256_of "$DEST/htdemucs.ort")"
   exit 1
 }
 ls -l "$DEST/htdemucs.ort"
+
+echo "==> Beat This!（节拍检测：mel 前端 + final0 主模型）"
+# mel 前端（264 KB）：与随包资源 `src-tauri/resources/onnx/mel_spectrogram.onnx` 是同一个文件。
+"${CURL[@]}" -o "$DEST/mel_spectrogram.onnx" \
+  "https://raw.githubusercontent.com/danigb/beat-this-rs/main/models/mel_spectrogram.onnx"
+# final0（FP32，约 83 MB）：上游放在 GitHub Releases 的 `model-large` 资产里（crate 本身不含权重）。
+BEAT_THIS_SHA="5f810debe53459b559127fb55bbad40035bb47cc567b20e501670f968c770f02"
+"${CURL[@]}" -o "$DEST/beat_this.onnx" \
+  "https://github.com/danigb/beat-this-rs/releases/download/model-large/beat_this.onnx"
+got="$(sha256_of "$DEST/beat_this.onnx")"
+[[ "$got" == "$BEAT_THIS_SHA" ]] || {
+  echo "    sha256 校验失败：期望 $BEAT_THIS_SHA，实际 $got" >&2
+  exit 1
+}
+ls -l "$DEST/beat_this.onnx" "$DEST/mel_spectrogram.onnx"
 
 echo "==> LocalVQE v1.2（.pt → ONNX 导出）"
 python3 -c "import torch" 2>/dev/null || {

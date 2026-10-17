@@ -205,6 +205,10 @@ impl Plugin for MissingPlugin {
     fn load_state(&mut self, _state: &[u8]) -> Result<(), PluginError> {
         Ok(())
     }
+    /// 缺失插件是占位，不是真插件——重建播放器时不参与复用（见 trait 说明）。
+    fn is_placeholder(&self) -> bool {
+        true
+    }
 }
 
 /// 构造一个「缺失插件」静音占位实例。
@@ -376,6 +380,7 @@ mod tests {
         r.register_missing("vst3:deadbeef");
         let mut p = r.create("vst3:deadbeef", TrackId(1), PluginSlot::Instrument).expect("占位已注册");
         assert_eq!(p.descriptor().id, "vst3:deadbeef");
+        assert!(p.is_placeholder(), "缺失插件必须自报为占位（重建时据此不复用）");
 
         let ctx = ProcessContext { sample_rate: 48_000.0, block_size: 4, tempo: 120.0, playing: true };
         let mut left = [1.0f32; 4];

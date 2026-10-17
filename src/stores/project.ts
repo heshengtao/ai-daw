@@ -232,6 +232,21 @@ export const useProjectStore = defineStore("project", () => {
     return edit(() => api.resizeClip(track, clip, length));
   }
 
+  /** 设置音频片段的播放速度 / 升降调。 */
+  function setClipRate(
+    track: number,
+    clip: number,
+    rate: number,
+    pitchSemitones: number,
+  ): Promise<void> {
+    return edit(() => api.setClipRate(track, clip, rate, pitchSemitones));
+  }
+
+  /** 裁剪 / 移动片段（新的起点与拍长；音频自动换算读写窗口）。 */
+  function trimClip(track: number, clip: number, start: number, length: number): Promise<void> {
+    return edit(() => api.trimClip(track, clip, start, length));
+  }
+
   // ---- 音符 ----
 
   /** 新增音符。 */
@@ -489,6 +504,8 @@ export const useProjectStore = defineStore("project", () => {
     moveClip,
     moveClips,
     resizeClip,
+    setClipRate,
+    trimClip,
     splitClip,
     applyRecorded,
     addNote,

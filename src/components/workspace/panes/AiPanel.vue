@@ -1,24 +1,21 @@
 <script setup lang="ts">
 /**
- * AI 面板：与「插件」面板同一种风格（一个可滚动容器 + 一组卡片条目，不套多层容器）。
+ * AI 功能：与「插件」面板同一种风格（一个可滚动容器 + 一组卡片条目，不套多层容器）。
  *
- * 五条一级条目：
+ * 一级条目，绝大多数**依赖本地模型**（`crates/local-ai` 的 ONNX 权重）：
  * - **MCP 服务器**：开关；开启后同一容器里多出一行接入地址 + 「复制」。
- * - **音频转 MIDI** / **人声降噪** / **乐器底噪降噪**：各自**一个**「开始」按钮；
- *   处理中该条**下边缘变成进度条**、按钮变成「停止」，可随时中止。
- * - **母带处理**：作用于**整个工程的离线混音**（不是某条轨道），三个参数（目标响度 /
- *   真峰值上限 / 立体声宽度）；同样是**一个**按钮 + 进度条。
+ * - **音频转 MIDI** / **人声降噪**：各自**一个**「开始」按钮；处理中该条**下边缘变成
+ *   进度条**、按钮变成「停止」，可随时中止。权重缺失时退回内置 DSP，条目上的标签会标明。
+ * - **音源分离**：HTDemucs，可选 4 / 6 分轨；没有内置兜底，缺权重时先问再下载。
+ * - **节拍检测**：Beat This!，推出全局 BPM + 拍号。
+ * - **音乐生成**：只是**入口**——按一下就跳到独立的「AI 音乐生成」面板。音乐生成有
+ *   描述 / 歌词 / 时长 / 种子一整套表单和一次动辄几分钟的推理，塞进这个列表里会挤成
  *
- * 降噪刻意分成两条：LocalVQE 是 16 kHz 的**语音**模型，直接拿它处理音乐会把乐器当噪声压掉
- * （而且 8 kHz 以上直接没了），所以另一条走内置 DSP（全带宽、只在接近底噪处衰减）。
- * 结果都放到源轨道**下面**的新轨道上，方便和原轨 A/B 对比。
- *
- * 母带与上面几条不同：**纯 DSP、不依赖任何模型**（`crates/mastering`），所以没有「模型 /
- * 内置 DSP」的路径之分；结果是一条名为「母带」的新轨道。
+ * **不依赖模型的传统 DSP 不在这里**：乐器底噪降噪与母带处理都搬到了「调音台」面板
+ * （那条降噪走内置 DSP——LocalVQE 是 16 kHz 的语音模型，直接拿来处理音乐会把乐器当噪声压掉）。
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ClipboardDocumentIcon } from "@heroicons/vue/24/outline";
-import NumberField from "@/components/common/NumberField.vue";
 import Md3Select from "@/components/common/Md3Select.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import { aiCancel, aiModels, aiStart, aiStatus, mcpStatus, onAiEvent, setMcpConfig } from "@/api/tauri";
@@ -28,18 +25,16 @@ import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
 import { useModelsStore } from "@/stores/models";
 import { useI18n } from "@/i18n";
+import { copyText } from "@/utils/clipboard";
+import { humanSize, missingBytes } from "@/utils/models";
 
 const KIND_MIDI = "to_midi";
 /** 人声降噪 / 去混响：走 LocalVQE 模型。 */
 const KIND_VOICE = "enhance";
-/** 乐器 / 素材底噪降噪：始终走内置 DSP（全带宽）。 */
-const KIND_MUSIC = "enhance_dsp";
-/** 母带处理：作用于**整个工程的离线混音**，纯 DSP，不需要模型。 */
-const KIND_MASTER = "master";
 /** 音源分离：把所选轨道的音频拆成鼓/贝斯/其他/人声四条分轨（HTDemucs 模型，无 DSP 兜底）。 */
 const KIND_SEPARATE = "separate";
-/** 音源分离模型在清单里的 id（不带权重时在本卡片里直接下载）。 */
-const SEPARATE_MODEL_ID = "htdemucs-ort-v1";
+/** 节拍检测：Beat This! 推出全局 BPM + 拍号，并把片段首重拍对齐到小节线。 */
+const KIND_TEMPO = "detect_tempo";
 
 const project = useProjectStore();
 const selection = useSelectionStore();
@@ -76,18 +71,19 @@ async function toggleMcp(): Promise<void> {
 async function copyEndpoint(): Promise<void> {
   const url = endpoint.value;
   if (!url) return;
-  try {
-    await navigator.clipboard.writeText(url);
-    layout.notify(i18n.t("ai.copied"));
-  } catch {
-    layout.notify(i18n.t("ai.copyFailed"));
-  }
+  if (await copyText(url)) layout.notify(i18n.t("ai.copied"));
+  else layout.notify(i18n.t("copy.failed"));
 }
 
 // ---- 本地 AI ----
 const ai = ref<AiStatus>({ running: false, kind: null, progress: 0, message: null });
 /** 两个 ONNX 权重是否就位（决定条目上的「模型 / 内置 DSP」标签）。 */
-const models = ref<AiModels>({ basic_pitch: false, localvqe: false, separate: false });
+const models = ref<AiModels>({
+  basic_pitch: false,
+  localvqe: false,
+  separate: false,
+  beat_this: false,
+});
 let unlisten: (() => void) | null = null;
 /** 模型下载进度订阅的取消函数。 */
 let stopModel: (() => void) | null = null;
@@ -106,10 +102,7 @@ function busy(kind: string): boolean {
   return ai.value.running && ai.value.kind === kind;
 }
 
-/** 这个功能会走哪个后端：权重就位就是真模型，否则退回内置 DSP。
- *
- * 乐器降噪**始终**是内置 DSP——语音模型会把乐器当噪声压掉，所以那条路刻意不走模型。
- */
+/** 这个功能会走哪个后端：权重就位就是真模型，否则退回内置 DSP。 */
 function backendLabel(kind: string): string {
   return hasModel(kind) ? i18n.t("ai.backendModel") : i18n.t("ai.backendDsp");
 }
@@ -117,28 +110,16 @@ function hasModel(kind: string): boolean {
   if (kind === KIND_MIDI) return models.value.basic_pitch;
   if (kind === KIND_VOICE) return models.value.localvqe;
   if (kind === KIND_SEPARATE) return models.value.separate;
+  if (kind === KIND_TEMPO) return models.value.beat_this;
   return false;
 }
 const progressPct = computed(() => `${Math.round(ai.value.progress * 100)}%`);
 
 // ---- 音源分离：可选模型（4 分轨 / 6 分轨）；缺权重时先问、再下载并跳到「管理器」----
-/** 「人类可读体积」。 */
-function humanSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "";
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
-
 /** 清单里的分离模型（按清单顺序）。 */
 const separateModels = computed(() => modelsStore.catalog.filter((m) => m.feature === "separate"));
-/** 当前选中的分离模型 id。 */
-const sepModelId = ref(SEPARATE_MODEL_ID);
+/** 当前选中的分离模型 id；`null` = 还没定，由下面的 watcher 按「谁已下载」自动选。 */
+const sepModelId = ref<string | null>(null);
 /** 当前选中的分离模型条目（清单没加载出来时为 null）。 */
 const sepModel = computed(
   () => separateModels.value.find((m) => m.id === sepModelId.value) ?? separateModels.value[0] ?? null,
@@ -168,7 +149,7 @@ const promptOpen = ref(false);
 const downloadPromptMessage = computed(() => {
   const m = pendingModel.value;
   return m
-    ? i18n.t("dialog.downloadModelMessage", { name: m.name, size: humanSize(m.approx_bytes) })
+    ? i18n.t("dialog.downloadModelMessage", { name: m.name, size: humanSize(missingBytes(m)) })
     : "";
 });
 
@@ -206,54 +187,69 @@ async function cancelModelDownload(): Promise<void> {
   await modelsStore.cancel();
 }
 
-// 分离模型就位情况变化后，刷新一次「模型 / 内置 DSP」标签。
-watch(
-  () => separateModels.value.map((m) => `${m.id}:${m.installed}`).join(","),
-  () => {
-    void aiModels()
-      .then((m) => (models.value = m))
-      .catch(() => {});
-  },
+// ---- 节拍检测：只依赖一个模型（Beat This! final0），缺权重时同样先问再下载 ----
+/** 清单里节拍检测的模型（`feature = detect_tempo`）。 */
+const tempoModel = computed(
+  () => modelsStore.catalog.find((m) => m.feature === KIND_TEMPO) ?? null,
+);
+/** 权重是否就位（mel 前端随包 + final0 已下载 → 后端才认）。 */
+const tempoReady = computed(() => models.value.beat_this);
+/** 模型是否正在下载。 */
+const tempoDownloading = computed(() =>
+  tempoModel.value ? modelsStore.installing(tempoModel.value.id) : false,
 );
 
-// ---- 母带处理（纯 DSP，作用于整个工程）----
-/** 三个参数；默认值与后端 `crates/mastering` 的默认值一致。 */
-const masterTarget = ref(-14);
-const masterCeiling = ref(-1);
-const masterWidth = ref(1);
-/** 母带有东西可处理：工程里至少有一条轨道（且没有别的任务在跑）。 */
-const canMaster = computed(() => (project.project?.tracks.length ?? 0) > 0 && !ai.value.running);
-
-async function runMaster(): Promise<void> {
-  if (!canMaster.value) return;
+/** 点「检测」：权重缺就弹 MD3 确认框，确认后下载并跳到「管理器 → 可下载 → 模型」。 */
+async function runTempo(): Promise<void> {
+  const t = track.value;
+  if (!t || !canRun.value) return;
+  const model = tempoModel.value;
+  if (!tempoReady.value) {
+    if (!model) return;
+    pendingModel.value = model;
+    promptOpen.value = true;
+    return;
+  }
   try {
-    await aiStart(KIND_MASTER, 0, {
-      target_lufs: masterTarget.value,
-      ceiling_dbtp: masterCeiling.value,
-      stereo_width: masterWidth.value,
-    });
+    await aiStart(KIND_TEMPO, t.id);
   } catch (err) {
     layout.notify(String(err));
   }
 }
+
+// 分离模型就位情况变化后：默认选中「已下载」的那个（都没下载就退回第一个），并刷新标签。
+// 同时覆盖节拍检测的模型（任一模型下载完成后都要刷新 AI 模型可用状态）。
+watch(
+  () => modelsStore.catalog.map((m) => `${m.id}:${m.installed}`).join(","),
+  () => {
+    const list = separateModels.value;
+    const current = list.find((m) => m.id === sepModelId.value);
+    // 选中的已就位就留着；否则优先跟着已下载的那个，都没有再退回第一个。
+    if (!current?.installed && list.length > 0) {
+      sepModelId.value = (list.find((m) => m.installed) ?? list[0])!.id;
+    }
+    void aiModels()
+      .then((m) => (models.value = m))
+      .catch(() => {});
+  },
+  { immediate: true },
+);
 
 /** 条目下的说明：先说这条能力**适合什么素材**，跑不了时说明缺什么。
  *
  * **不**把上一次任务的结果写进来——几条能力共用同一份说明，会导致「转 MIDI 的结果
  * 出现在别的条目下面」。任务结果/错误统一走通知（见下面的 watcher）。 */
 function noteFor(kind: string): string {
-  // 母带作用于整个工程，与「选中轨道有没有音频」无关。
-  if (kind === KIND_MASTER) {
-    return canMaster.value || busy(KIND_MASTER) ? i18n.t("ai.masterNote") : i18n.t("ai.noTrack");
-  }
   if (!track.value) return i18n.t("ai.noTrack");
   if (!hasAudio.value) return i18n.t("ai.needsAudio");
   if (kind === KIND_MIDI) return i18n.t("ai.midiNote");
-  if (kind === KIND_VOICE) return i18n.t("ai.voiceNote");
   if (kind === KIND_SEPARATE) {
     return separateModelReady.value ? i18n.t("ai.separateNote") : i18n.t("ai.separateNeedsModel");
   }
-  return i18n.t("ai.musicNote");
+  if (kind === KIND_TEMPO) {
+    return tempoReady.value ? i18n.t("ai.tempoNote") : i18n.t("ai.tempoNeedsModel");
+  }
+  return i18n.t("ai.voiceNote");
 }
 
 /** 任务跑完时把摘要 / 错误作为通知弹一次（而不是塞进两条能力的描述里）。 */
@@ -341,10 +337,10 @@ onUnmounted(() => {
             </span>
             <span class="item-note">{{ busy(KIND_MIDI) ? i18n.t("ai.busy") : noteFor(KIND_MIDI) }}</span>
           </div>
-          <button v-if="!busy(KIND_MIDI)" class="iface-btn" :disabled="!canRun" @click="run(KIND_MIDI)">
+          <button v-if="!busy(KIND_MIDI)" class="run-btn" :disabled="!canRun" @click="run(KIND_MIDI)">
             {{ i18n.t("ai.run") }}
           </button>
-          <button v-else class="iface-btn danger" @click="stop">{{ i18n.t("ai.stop") }}</button>
+          <button v-else class="run-btn" @click="stop">{{ i18n.t("ai.stop") }}</button>
         </div>
         <div v-if="busy(KIND_MIDI)" class="progress">
           <div class="progress-fill" :style="{ width: progressPct }" />
@@ -365,42 +361,15 @@ onUnmounted(() => {
           </div>
           <button
             v-if="!busy(KIND_VOICE)"
-            class="iface-btn"
+            class="run-btn"
             :disabled="!canRun"
             @click="run(KIND_VOICE)"
           >
             {{ i18n.t("ai.runEnhance") }}
           </button>
-          <button v-else class="iface-btn danger" @click="stop">{{ i18n.t("ai.stop") }}</button>
+          <button v-else class="run-btn" @click="stop">{{ i18n.t("ai.stop") }}</button>
         </div>
         <div v-if="busy(KIND_VOICE)" class="progress">
-          <div class="progress-fill" :style="{ width: progressPct }" />
-        </div>
-      </li>
-
-      <!-- 乐器 / 素材底噪降噪：内置 DSP（全带宽，对音乐温和） -->
-      <li class="item" :class="{ busy: busy(KIND_MUSIC) }">
-        <div class="item-row">
-          <div class="item-main">
-            <span class="item-name">
-              {{ i18n.t("ai.enhanceMusic") }}
-              <span class="badge" :class="{ on: hasModel(KIND_MUSIC) }">
-                {{ backendLabel(KIND_MUSIC) }}
-              </span>
-            </span>
-            <span class="item-note">{{ busy(KIND_MUSIC) ? i18n.t("ai.busy") : noteFor(KIND_MUSIC) }}</span>
-          </div>
-          <button
-            v-if="!busy(KIND_MUSIC)"
-            class="iface-btn"
-            :disabled="!canRun"
-            @click="run(KIND_MUSIC)"
-          >
-            {{ i18n.t("ai.runEnhance") }}
-          </button>
-          <button v-else class="iface-btn danger" @click="stop">{{ i18n.t("ai.stop") }}</button>
-        </div>
-        <div v-if="busy(KIND_MUSIC)" class="progress">
           <div class="progress-fill" :style="{ width: progressPct }" />
         </div>
       </li>
@@ -412,7 +381,7 @@ onUnmounted(() => {
             <span class="item-name">
               {{ i18n.t("ai.separate") }}
               <span class="badge" :class="{ on: separateModelReady }">
-                {{ i18n.t(separateModelReady ? "ai.backendModel" : "ai.backendDsp") }}
+                {{ i18n.t(separateModelReady ? "ai.backendModel" : "ai.modelMissing") }}
               </span>
             </span>
             <span class="item-note">
@@ -427,15 +396,15 @@ onUnmounted(() => {
           </div>
 
           <!-- 正在下载模型：可停止 -->
-          <button v-if="sepDownloading" class="iface-btn danger" @click="cancelModelDownload">
+          <button v-if="sepDownloading" class="run-btn" @click="cancelModelDownload">
             {{ i18n.t("ai.stop") }}
           </button>
           <!-- 正在分离：可停止 -->
-          <button v-else-if="busy(KIND_SEPARATE)" class="iface-btn danger" @click="stop">
+          <button v-else-if="busy(KIND_SEPARATE)" class="run-btn" @click="stop">
             {{ i18n.t("ai.stop") }}
           </button>
           <!-- 开始：权重缺时先弹「是否下载」并跳转到「管理器」 -->
-          <button v-else class="iface-btn" :disabled="!canRun" @click="runSeparation">
+          <button v-else class="run-btn" :disabled="!canRun" @click="runSeparation">
             {{ separateModelReady ? i18n.t("ai.runSeparate") : i18n.t("ai.downloadAndRun") }}
           </button>
         </div>
@@ -464,74 +433,57 @@ onUnmounted(() => {
         </div>
       </li>
 
-      <!-- 母带处理：整个工程的离线混音（纯 DSP，无模型） -->
-      <li class="item" :class="{ busy: busy(KIND_MASTER) }">
+      <!-- 节拍检测：Beat This!（一个全局 BPM + 拍号，并把片段首重拍对齐到小节线） -->
+      <li class="item" :class="{ busy: busy(KIND_TEMPO) || tempoDownloading }">
         <div class="item-row">
           <div class="item-main">
             <span class="item-name">
-              {{ i18n.t("ai.master") }}
-              <span class="badge">{{ i18n.t("ai.backendDsp") }}</span>
+              {{ i18n.t("ai.tempo") }}
+              <span class="badge" :class="{ on: tempoReady }">
+                {{ i18n.t(tempoReady ? "ai.backendModel" : "ai.modelMissing") }}
+              </span>
             </span>
             <span class="item-note">
-              {{ busy(KIND_MASTER) ? i18n.t("ai.busy") : noteFor(KIND_MASTER) }}
+              {{
+                tempoDownloading
+                  ? i18n.t("ai.downloadingModel")
+                  : busy(KIND_TEMPO)
+                    ? i18n.t("ai.tempoBusy")
+                    : noteFor(KIND_TEMPO)
+              }}
             </span>
+            <!-- 适用范围常驻显示：避免用户拿自由速度 / 氛围音试完觉得「这功能没用」。 -->
+            <span class="item-hint">{{ i18n.t("ai.tempoScope") }}</span>
           </div>
-          <button
-            v-if="!busy(KIND_MASTER)"
-            class="iface-btn"
-            :disabled="!canMaster"
-            @click="runMaster"
-          >
-            {{ i18n.t("ai.runMaster") }}
+
+          <!-- 正在下载模型 / 正在检测：可停止 -->
+          <button v-if="tempoDownloading" class="run-btn" @click="cancelModelDownload">
+            {{ i18n.t("ai.stop") }}
           </button>
-          <button v-else class="iface-btn danger" @click="stop">{{ i18n.t("ai.stop") }}</button>
+          <button v-else-if="busy(KIND_TEMPO)" class="run-btn" @click="stop">
+            {{ i18n.t("ai.stop") }}
+          </button>
+          <!-- 开始：权重缺时先弹「是否下载」并跳转到「管理器」 -->
+          <button v-else class="run-btn" :disabled="!canRun" @click="runTempo">
+            {{ tempoReady ? i18n.t("ai.runTempo") : i18n.t("ai.downloadAndDetect") }}
+          </button>
         </div>
 
-        <!-- 三个参数：名称（单位）在左，步进器靠右；步进器里只有数值与 −/+。
-             `sr-label` 让读屏仍能念出名称（界面上不重复渲染）。 -->
-        <div class="params">
-          <div class="param-field">
-            <span class="param-name">{{ i18n.t("ai.masterTarget") }}</span>
-            <NumberField
-              v-model="masterTarget"
-              :sr-label="i18n.t('ai.masterTarget')"
-              :min="-40"
-              :max="0"
-              :step="0.5"
-              :decimals="1"
-              :disabled="ai.running"
-            />
-          </div>
-          <div class="param-field">
-            <span class="param-name">{{ i18n.t("ai.masterCeiling") }}</span>
-            <NumberField
-              v-model="masterCeiling"
-              :sr-label="i18n.t('ai.masterCeiling')"
-              :min="-12"
-              :max="0"
-              :step="0.1"
-              :decimals="1"
-              :disabled="ai.running"
-            />
-          </div>
-          <div class="param-field">
-            <span class="param-name">{{ i18n.t("ai.masterWidth") }}</span>
-            <NumberField
-              v-model="masterWidth"
-              :sr-label="i18n.t('ai.masterWidth')"
-              :min="0"
-              :max="2"
-              :step="0.1"
-              :decimals="1"
-              :disabled="ai.running"
-            />
-          </div>
+        <!-- 进度条：模型下载 或 检测处理，贴在条目下边缘 -->
+        <div v-if="tempoDownloading" class="progress">
+          <div
+            class="progress-fill"
+            :class="{ indeterminate: modelsStore.progressPct === null }"
+            :style="modelsStore.progressPct === null ? undefined : { width: `${modelsStore.progressPct}%` }"
+          />
         </div>
-
-        <div v-if="busy(KIND_MASTER)" class="progress">
-          <div class="progress-fill" :style="{ width: progressPct }" />
+        <div v-else-if="busy(KIND_TEMPO)" class="progress">
+          <!-- 进度**不确定**：Beat This! 的推理是一整段不可打断的调用（crate 没有进度回调），
+               给百分比只会「停在 5%、然后突然满」。用不定长条纹诚实表示「在跑」。 -->
+          <div class="progress-fill indeterminate" />
         </div>
       </li>
+
     </ul>
 
     <!-- 「是否下载该模型」用应用内 MD3 模态框（不用系统原生框）。 -->
@@ -595,6 +547,12 @@ onUnmounted(() => {
   font-size: 11px;
   color: rgb(var(--md-on-surface-variant));
 }
+/* 适用范围（比说明更弱一档）：常驻显示，不随任务状态变化。 */
+.item-hint {
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgb(var(--md-on-surface-variant) / 0.78);
+}
 /* 后端标签：权重就位时点亮（走真模型），否则是灰的内置 DSP。 */
 .badge {
   margin-left: 6px;
@@ -616,12 +574,8 @@ onUnmounted(() => {
   word-break: break-all;
   font-size: 12px;
 }
-/* 母带参数：一行一个「名称（单位）在左 + 步进器靠右」。 */
-.params {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
+/* 模型选择行：名称在左、下拉靠右。`Md3Select` 是 `width:100%`，配 `space-between`
+   正好占满剩余宽度——**不要**去掉它，否则标签与下拉会各占一行。 */
 .param-field {
   display: flex;
   align-items: center;
@@ -630,6 +584,9 @@ onUnmounted(() => {
   min-width: 0;
 }
 .param-name {
+  /* `flex: 0 0 auto` 不能少：`Md3Select` 是 `width:100%`，标签不锁宽就会被它挤成
+     二十来像素、末尾被省略号吃掉（「模型」显示成「模..」）。检查器的 `.row-label` 同理。 */
+  flex: 0 0 auto;
   font-size: 11px;
   color: rgb(var(--md-on-surface-variant));
   white-space: nowrap;
@@ -707,6 +664,35 @@ onUnmounted(() => {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 2px;
 }
+/* 运行 / 停止键：与「调音台」面板的运行键**逐字同一套**（实心主色 + on-primary、30px 药丸）。
+   同一件事在两个面板里必须长得一样——用 `.iface-btn` 那套描边样式会和调音台对不上。 */
+.run-btn {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 999px;
+  background-color: rgb(var(--md-primary));
+  color: rgb(var(--md-on-primary));
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 0.14s ease;
+}
+.run-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.run-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.run-btn:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 2px;
+}
 /* 按钮：与插件面板的「界面」按钮同一套。 */
 .iface-btn {
   flex: 0 0 auto;
@@ -730,13 +716,6 @@ onUnmounted(() => {
 .iface-btn:disabled {
   opacity: 0.45;
   cursor: default;
-}
-.iface-btn.danger {
-  color: rgb(var(--md-error));
-  border-color: rgb(var(--md-error) / 0.5);
-}
-.iface-btn.danger:hover:not(:disabled) {
-  background-color: rgb(var(--md-error) / 0.12);
 }
 .iface-btn:focus-visible {
   outline: 2px solid rgb(var(--md-primary));

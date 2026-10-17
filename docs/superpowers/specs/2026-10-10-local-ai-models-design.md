@@ -17,8 +17,12 @@
 >   **不给默认**；环境变量 `AIDAW_MODEL_SOURCES` 整体覆盖。
 > - **小模型随包**：Basic Pitch / LocalVQE 提交进 `src-tauri/resources/onnx/`，`bundle.resources`
 >   映射到 `models/` → 开箱可用；**大模型（htdemucs）不随包**。
-> - **魔搭（ModelScope）源 ✅ 已接入**：自建仓库 `ailm32442/htdemucs-ort` 的
->   `resolve/master/htdemucs.ort`（sha256 与 HF 完全一致），排在 htdemucs 候选源第一位。
+> - **魔搭（ModelScope）源 ✅ 已接入**：自建仓库 `ailm32442/htdemucs-ort`、
+>   `ailm32442/beat_this.onnx` 的 `resolve/master/*`（sha256 与 HF / GitHub 完全一致）。
+> - **区域感知源排序 ✅（2026-10-15）**：`ModelSource` 增 `region`（`intl` / `cn`）；
+>   `StoreNetwork::model_source_preference`（`auto` / `international` / `domestic`，默认 `auto`，
+>   设置页「网络」可切）决定优先区域，`auto` 时**探测首字节延迟**定序，另一区域兜底（详 §3.2）。
+>   清单补齐：`htdemucs-6s` + 魔搭、`beat-this` + 魔搭，至此三个大模型均国内外双源。
 > - **运行方式原则（2026-10-11 定，不引 Python、保轻量）**：Python **只**用于**开发期**把
 >   `.pt` 导成 ONNX（同 `tools/export-localvqe-onnx.py` 先例），产出 ONNX 后即退场，随包/运行时
 >   **不带 Python**；运行时统一 `ort`（③④ SoulX 拿到 ONNX 后**进程内**、无需 sidecar）；只有需要
@@ -89,27 +93,49 @@ feature       所属功能（separate / svc / svs / mastering / …）
 license       SPDX（"MIT OR Apache-2.0" / "Apache-2.0" …）
 approx_bytes  预估体积（下载前告知用户）
 filename      落地文件名
-sources[]     有序候选源：{ kind: "hf" | "hf-mirror" | "modelscope" | "custom", url, sha256 }
+sources[]     候选源：{ kind: "hf" | "modelscope" | "custom", region: "intl" | "cn", url, sha256 }
 ```
+
+同一个模型的各源是**同一份字节**：`sha256` 必须完全一致，否则换源就校验失败。
+`region` 标出该源是**国外直连友好**（`intl`：HF / GitHub）还是**国内友好**（`cn`：魔搭），
+下载前据此排序（见 3.2）。
 
 **sha256 是硬门禁**，来自第三方源的一律先校验再落地——和插件管理器 E1 同一套安全立场
 （「用第三方加速站不会降低完整性保证」）。
 
 ### 3.2 双源下载（国内外都能下）
 
-按顺序尝试，**第一个成功即止**，并把成功源记住（下次优先）：
+**区域感知排序 + 自动回退**（2026-10-15 修订，取代早先「魔搭固定靠后 / 记住成功源」的做法）。下载前先决定「优先哪个区域的源」，把该区域的源排到前面，另一个区域留在候选里兜底——下载器**逐个尝试、第一个成功即止**，所以排错序也只是慢一步、不会失败。
 
-1. **用户配置的镜像**（设置页；为空则跳过）——见 3.7；
-2. **HuggingFace**：`https://huggingface.co/{repo}/resolve/main/{file}`
-   （国内可用的镜像 `https://hf-mirror.com/{repo}/resolve/main/{file}` 作为 `hf-mirror` 源）；
-3. **魔搭社区**：`https://www.modelscope.cn/models/{ns}/{model}/resolve/master/{file}`
+优先区域由 `StoreNetwork::model_source_preference` 决定：
+
+- `auto`（默认）：分别对清单里 `intl` / `cn` 各取一个源，发一个 `Range: bytes=0-0` 探**首字节延迟**（连接/解析/首字节全 3–4 秒超时，避免被墙的源把用户卡住）；谁先通 / 更快就优先谁；两边都探不出结果 → 按清单原序。
+- `international` / `domestic`：用户在设置页显式指定，不联网探测。
+
+候选地址的完整顺序：
+
+1. **偏好区域的源**（清单原序）→ 2. **另一区域的源**（清单原序）；
+  **清单里只放官方源**（HF / GitHub / 魔搭）：第三方镜像与加速站一律不写进源码——
+开源项目不该替用户选第三方服务，要镜像由用户自己在设置页填（默认留空）。
+
+每个源内部再依次是：**用户配置的镜像**（设置页；为空则跳过，见 3.7）→ **官方直链**（GitHub 地址会先过 `download_prefix` 重写）。
+
+各源的官方直链形态：
+- **HuggingFace**：`https://huggingface.co/{repo}/resolve/main/{file}`（`intl`）；
+- **魔搭社区**：`https://modelscope.cn/models/{ns}/{model}/resolve/master/{file}`（`cn`）——
+  对 LFS 文件返回 **302 → CDN**（`ureq` 默认跟随；CDN 的 `X-Linked-Etag` 即该文件的 sha256），
+  `Range` 断点续传照常可用；
+- **GitHub Releases** 等其它直链记为 `custom` + `intl`。
 
 **前置工作（每模型一次，需要人做）**：模型必须**真的存在于**魔搭。分两种：
 - 魔搭上已有（或 `AI-ModelScope` 等组织已镜像）；
 - 没有 → 我们自己上传一份到魔搭，或在魔搭建一个只放权重的仓库。
 
 这条**必须逐模型核实**，不能假设「HF 有就等于魔搭有」。清单里**没有的源就不写进去**，
-缺源时该地区用户会看到「此源不可用」而不是一个死链。
+缺源时该地区用户会看到「此源不可用」而不是一个死链。目前双源齐备的是 `htdemucs-ort-v1`
+（魔搭 + HF）、`htdemucs-6s`（魔搭 + HF）、`beat-this`（魔搭 + GitHub Releases）。
+
+`AIDAW_MODEL_SOURCES`（逗号分隔）仍是最高优先级的整体覆盖，此时不参与区域排序（测试 / 无头用）。
 
 ### 3.3 安装位置与查找顺序
 
@@ -152,7 +178,8 @@ sources[]     有序候选源：{ kind: "hf" | "hf-mirror" | "modelscope" | "cus
 
 E1 已经落了「设置页 → 插件 → 网络与镜像」（注册表镜像 + 下载代理，**不给默认地址**）。
 模型下载**复用同一组配置**，不新开一节：注册表镜像用于**插件注册表**，下载代理前缀用于**插件二进制**；
-模型再加一个 **`model_mirrors: Vec<String>`**（模型权重镜像/前置代理），仍遵循「**不给默认地址**」。
+模型再加 **`model_mirrors: Vec<String>`**（模型权重镜像/前置代理，仍遵循「**不给默认地址**」）与
+**`model_source_preference`**（区域偏好，默认 `auto`，见 §3.2）。
 
 环境变量 `AIDAW_MODEL_SOURCES`（逗号分隔）可**整体覆盖**配置，供测试与无头场景使用
 （对应 E1 的 `AIDAW_STORE_URLS`）。

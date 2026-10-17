@@ -75,6 +75,24 @@
     /* 卷帘里黑键行整行的压暗（透明，压在网格上） */
     --roll-black-tint:  rgb(var(--md-on-surface) / 0.075);
 
+    /* 轨道色的派生层：**只有色相**来自轨道（`--track-hue`），饱和度/明度由主题决定。
+       浅色 = 浅彩底 + 同色相深内容；深色 = 深彩底 + 同色相浅内容。
+       这些 S/L 以前写死在片段规则里，于是浅色模式下片段是一块和深色一模一样的暗块。 */
+    --track-clip-bg-s:    74%;
+    --track-clip-bg-l:    93%;
+    --track-clip-edge-s:  46%;
+    --track-clip-edge-l:  66%;
+    --track-wave-s:       62%;
+    --track-wave-l:       40%;
+    --track-blip-s:       58%;
+    --track-blip-l:       44%;
+    --track-blip-line-s:  40%;
+    --track-blip-line-l:  30%;
+    --track-ghost-s:      45%;
+    --track-ghost-l:      55%;
+    --track-handle-s:     55%;
+    --track-handle-l:     40%;
+
     /* Shadows / Scrim */
     --md-scrim:               0 0 0;
 
@@ -157,6 +175,22 @@
     --piano-black:      #191820;
     --piano-edge:       rgb(255 255 255 / 0.1);
     --roll-black-tint:  rgb(0 0 0 / 0.28);
+
+    /* 轨道色派生层：深色保持原样（深彩底 + 浅内容）。浅色那套见 `:root`。 */
+    --track-clip-bg-s:    42%;
+    --track-clip-bg-l:    32%;
+    --track-clip-edge-s:  60%;
+    --track-clip-edge-l:  62%;
+    --track-wave-s:       78%;
+    --track-wave-l:       86%;
+    --track-blip-s:       72%;
+    --track-blip-l:       88%;
+    --track-blip-line-s:  40%;
+    --track-blip-line-l:  22%;
+    --track-ghost-s:      45%;
+    --track-ghost-l:      45%;
+    --track-handle-s:     70%;
+    --track-handle-l:     88%;
 
     --md-elevation-1: 0 1px 2px 0 rgba(0 0 0 / 0.3), 0 1px 3px 1px rgba(0 0 0 / 0.15);
     --md-elevation-2: 0 1px 2px 0 rgba(0 0 0 / 0.3), 0 2px 6px 2px rgba(0 0 0 / 0.15);

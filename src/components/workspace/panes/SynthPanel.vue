@@ -732,11 +732,13 @@ function pickPad(option: PresetOption): void {
   flex: 1 1 0;
   min-height: 0;
 }
-/* 包络图：一块可拖动的「屏幕」，控制点用绝对定位的按钮画（与 polyline 共用百分比坐标）。 */
+/* 包络图：一块可拖动的「屏幕」，控制点用绝对定位的按钮画（与 polyline 共用百分比坐标）。
+   底色必须与示波器（`Oscilloscope.vue` 的 `.scope`）**完全一致**——两块屏幕并排，深浅不同会
+   显得像两种材质。 */
 .env {
   position: relative;
   border-radius: 16px;
-  background-color: rgb(var(--md-scrim) / 0.35);
+  background-color: rgb(var(--md-scrim) / 0.55);
   border: 1px solid rgb(var(--md-outline-variant) / 0.45);
   overflow: hidden;
   touch-action: none;
@@ -879,6 +881,14 @@ function pickPad(option: PresetOption): void {
   grid-template-columns: repeat(4, 1fr);
   justify-items: center;
   gap: 10px 6px;
+}
+/* 基础模式（未展开高级区）：8 个旋钮**铺满右侧剩下的高度**——两排等分、旋钮在各自行内垂直
+   居中，于是上下留白相等（此前不撑高，整块贴在顶部、下方留一大片空白）。展开高级区时是
+   `.compact`，不套用这条（高级区自己排布，保持原样）。 */
+.basic:not(.compact) {
+  flex: 1 1 auto;
+  grid-template-rows: repeat(2, 1fr);
+  align-items: center;
 }
 
 /* 高级区：老式减法合成器的分区卡片 */

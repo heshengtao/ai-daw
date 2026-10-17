@@ -3,6 +3,7 @@
 mod ai;
 mod audio;
 mod assets;
+mod backends;
 mod cli;
 mod commands;
 mod main_thread;
@@ -226,7 +227,7 @@ pub(crate) fn session_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf>
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| on_host_window_closing(window, event))
         .manage(AppState::new("untitled"))
@@ -249,6 +250,9 @@ pub fn run() {
             drop(state);
             // 插件源的网络配置（镜像 / 下载代理）：要在预热线程之前装上。
             app.manage(crate::manager::StoreRuntime::load(app.handle()));
+            // 执行后端：CoreML 编译缓存目录 + 按 store.json 的偏好落地 + 校验并打印一行。
+            // **必须在任何 ort 调用之前**（只决定「用哪个 EP」，不触发加载，所以放这儿安全）。
+            crate::backends::init_runtime(app.handle());
             spawn_transport_ticker(app.handle().clone(), audio);
             spawn_plugin_scan(app.handle().clone());
             spawn_editor_ticker(app.handle().clone());
@@ -306,6 +310,8 @@ pub fn run() {
             commands::move_clip,
             commands::move_clips,
             commands::resize_clip,
+            commands::set_clip_rate,
+            commands::trim_clip,
             commands::split_clip,
             commands::add_note,
             commands::set_note,
@@ -331,6 +337,8 @@ pub fn run() {
             commands::transport_stop,
             commands::transport_seek,
             commands::transport_set_loop,
+            commands::transport_set_loop_range,
+            commands::transport_set_metronome,
             commands::save_project,
             commands::open_project,
             commands::render_preview,
@@ -339,6 +347,7 @@ pub fn run() {
             commands::import_audio,
             commands::add_audio_clip,
             commands::audio_waveform,
+            commands::clip_bounds,
             commands::list_input_devices,
             commands::set_input_device,
             commands::input_level,
@@ -393,7 +402,20 @@ pub fn run() {
             models::model_remove,
             models::model_reveal,
             models::model_resolve_url,
+            backends::ai_backend_info,
+            backends::ai_set_backend,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running ai-daw");
+        .build(tauri::generate_context!())
+        .expect("error while building ai-daw");
+
+    app.run(|app_handle, event| {
+        // 进程级退出（程序坞「退出」/ Cmd+Q）走的是 `app.exit`，前端那道 `onCloseRequested`
+        // 守卫不会触发——只靠 10 秒一次的自动保存，最近一次保存之后的改动（比如刚添加的
+        // 效果器）会整段丢失。这里由后端兜底再存一次会话缓存。
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            if let Err(err) = commands::write_session(app_handle) {
+                eprintln!("退出时写会话缓存失败：{err}");
+            }
+        }
+    });
 }

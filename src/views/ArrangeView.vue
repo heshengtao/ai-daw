@@ -27,11 +27,13 @@ import { useLayoutStore } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
 import ClipWaveform from "@/components/common/ClipWaveform.vue";
+import { clipBounds } from "@/api/tauri";
 import AutomationLane from "@/components/workspace/AutomationLane.vue";
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import { trackHue } from "@/utils/trackColor";
 import { laneScrollTop } from "@/composables/useLaneScroll";
 import { capturePointer } from "@/utils/pointer";
+import { shouldDeferToBrowser } from "@/utils/editable";
 import { useI18n } from "@/i18n";
 import type { Clip, ClipPlacement, Note, Track } from "@/api/types";
 
@@ -78,13 +80,17 @@ function snapDelta(beat: number): number {
   return Math.round(beat / s) * s;
 }
 
-/** 指针 y → 所在轨道的 id（跨轨道拖动用）；越界返回 null。 */
-function trackAt(clientY: number): number | null {
+/**
+ * 指针 y → lane 下标（跨轨道拖动用）。
+ *
+ * **不夹取**：可能为负（拖到最上方轨道之外），也可能 >= 轨道数（拖到最下方之外——那里要
+ * 新建一条轨道接住）。调用方负责夹到合法范围。
+ */
+function laneIndexAt(clientY: number): number {
   const el = lanesEl.value;
-  if (!el) return null;
+  if (!el) return 0;
   const rect = el.getBoundingClientRect();
-  const index = Math.floor((clientY - rect.top) / LANE_H);
-  return tracks.value[index]?.id ?? null;
+  return Math.floor((clientY - rect.top) / LANE_H);
 }
 
 // ---------------------------------------------------------------------------
@@ -95,11 +101,14 @@ type DragMode = "create" | "move" | "resize" | "marquee" | "marquee-delete";
 
 interface MoveDrag {
   originBeat: number;
-  /** 拖动前的 (track, clip, start) 快照。 */
-  base: (ClipSel & { start: number; length: number })[];
+  /** 拖动前的快照：轨道下标 + 片段 + 起点 / 长度。 */
+  base: (ClipSel & { start: number; length: number; trackIndex: number })[];
+  /** 横向位移（拍，已吸附）。 */
   delta: number;
-  /** 目标轨道（单个片段可跨轨道拖动；多选时恒等于原轨道）。 */
-  targetTrack: number | null;
+  /** 纵向位移（按轨道数）：**整组一起**上下移动；0 = 只横向。 */
+  deltaTrack: number;
+  /** 指针按下时所在轨道的下标（纵向位移的锚点）。 */
+  anchorIndex: number;
   moved: boolean;
 }
 
@@ -108,10 +117,24 @@ const mode = ref<DragMode | null>(null);
 const create = reactive({ trackId: 0, from: 0, to: 0 });
 /** 移动中的片段预览。 */
 const moveDrag = ref<MoveDrag | null>(null);
-/** 缩放中的片段预览。 */
-const resizeDrag = ref<{ track: number; clip: number; originBeat: number; base: number; next: number; moved: boolean } | null>(null);
+/** 缩放 / 裁剪中的片段预览（左右边缘都可拖）。 */
+const resizeDrag = ref<{
+  track: number;
+  clip: number;
+  /** 拖哪条边：右 = 改长度；左 = 改起点（长度随之）。 */
+  edge: "left" | "right";
+  originBeat: number;
+  baseStart: number;
+  base: number;
+  /** 正在拖的值：右边缘 = 新长度；左边缘 = 新起点。 */
+  next: number;
+  moved: boolean;
+} | null>(null);
 /** 框选矩形（客户端坐标，用于 fixed 覆盖层与相交测试）。 */
 const marquee = reactive({ x1: 0, y1: 0, x2: 0, y2: 0 });
+
+/** 边缘拖拽的夹取范围（拍）——展开不能超出素材本身。`null` = 还没取回来（不夹）。 */
+const resizeBounds = ref<{ min: number; max: number } | null>(null);
 
 const marqueeStyle = computed(() => ({
   left: `${Math.min(marquee.x1, marquee.x2)}px`,
@@ -136,6 +159,8 @@ function intersects(el: Element): boolean {
 
 /** 渲染用：拖动中的片段使用预览值。 */
 function effStart(clip: Clip): number {
+  const r = resizeDrag.value;
+  if (r && r.edge === "left" && r.clip === clip.id) return r.next;
   const d = moveDrag.value;
   if (d) {
     const item = d.base.find((b) => b.clip === clip.id);
@@ -146,36 +171,64 @@ function effStart(clip: Clip): number {
 
 function effLength(clip: Clip): number {
   const r = resizeDrag.value;
-  if (r && r.clip === clip.id) return r.next;
+  if (r && r.clip === clip.id) {
+    // 左拖：起点右移 → 长度缩短（右端钉住）。
+    if (r.edge === "left") return Math.max(MIN_CREATE_BEATS, r.base - (r.next - r.baseStart));
+    return r.next;
+  }
   return clip.length;
+}
+
+/**
+ * 波形的**内容锚点**（拍）：音频内容在工程时间轴上的起点。
+ *
+ * - 整体拖动：锚点跟着方框走（音频就是跟着动的，不跟手才对）；
+ * - 裁切（拖左右边缘）：锚点**钉在原地**——拖动只改方框，不搬动音频。
+ */
+function waveAnchor(clip: Clip): number {
+  const d = moveDrag.value;
+  if (d && d.base.some((b) => b.clip === clip.id)) return effStart(clip);
+  return clip.start;
 }
 
 /**
  * 该片段是否正被拖到别的轨道上。
  * 拖到别处时要把它从原轨道隐藏，改在目标轨道画一个预览块——否则会看到它「粘」在原处。
  */
-function isDraggingAway(clip: Clip, trackId: number): boolean {
+function isDraggingAway(clip: Clip, trackIndex: number): boolean {
   const d = moveDrag.value;
-  if (!d || d.targetTrack === null || d.targetTrack === trackId) return false;
-  return d.base.some((b) => b.clip === clip.id);
+  if (!d || d.deltaTrack === 0) return false;
+  return d.base.some((b) => b.clip === clip.id && b.trackIndex === trackIndex);
 }
 
-/** 跨轨道拖动时，目标轨道上显示的预览块（只有单片段拖动才会出现）。 */
-const dragGhost = computed(() => {
+/**
+ * 跨轨道拖动时各目标行上的预览块（**整组**一起移动：每个片段在自己的目标行画一块）。
+ * `index` 是**目标**轨道下标；等于轨道数时表示「下界之外的新轨道」。
+ */
+const dragGhosts = computed(() => {
   const d = moveDrag.value;
-  if (!d || d.targetTrack === null || d.base.length !== 1) return null;
-  const item = d.base[0];
-  if (item.track === d.targetTrack) return null;
-  return { track: d.targetTrack, start: Math.max(0, item.start + d.delta), length: item.length };
+  if (!d || d.deltaTrack === 0) return [];
+  return d.base.map((b) => ({
+    clip: b.clip,
+    index: b.trackIndex + d.deltaTrack,
+    start: Math.max(0, b.start + d.delta),
+    length: b.length,
+  }));
 });
 
-function ghostStyle(trackId: number, index: number): Record<string, string> {
-  const g = dragGhost.value;
-  if (!g || g.track !== trackId) return {};
+/** 落到某一行上的预览块。 */
+function ghostsAt(index: number) {
+  return dragGhosts.value.filter((g) => g.index === index);
+}
+
+/** 落到**下界之外**（需要新建轨道）的预览块。 */
+const newTrackGhosts = computed(() => dragGhosts.value.filter((g) => g.index >= tracks.value.length));
+
+function ghostStyleAt(g: { index: number; start: number; length: number }): Record<string, string> {
   return {
     left: `${g.start * timeline.zoom}px`,
     width: `${Math.max(6, g.length * timeline.zoom)}px`,
-    "--track-hue": String(trackHue(index)),
+    "--track-hue": String(trackHue(g.index)),
   };
 }
 
@@ -192,10 +245,18 @@ function clipStyle(clip: Clip, index: number): Record<string, string> {
  * 若固定用 36..84，低音线会全挤在底部 15% 里，形状完全看不出来。
  */
 function pitchRange(clip: Clip): { low: number; high: number } {
-  const pitches = clip.notes.map((n) => n.pitch);
-  if (pitches.length === 0) return { low: 48, high: 60 };
-  const lo = Math.min(...pitches) - 2;
-  const hi = Math.max(...pitches) + 2;
+  // 必须用循环求极值，**不要**写回 `Math.min(...pitches)`：音符到十万级时展开实参会抛
+  // `RangeError: Maximum call stack size exceeded`。这个函数在 render 期被读（`blipStyle`），
+  // 一抛就是 Vue 把整个编排网格换成空节点——表现为「中间所有轨道一起消失」。
+  let lowest = 127;
+  let highest = 0;
+  for (const n of clip.notes) {
+    if (n.pitch < lowest) lowest = n.pitch;
+    if (n.pitch > highest) highest = n.pitch;
+  }
+  if (highest < lowest) return { low: 48, high: 60 };
+  const lo = lowest - 2;
+  const hi = highest + 2;
   const span = Math.max(12, hi - lo);
   const center = (lo + hi) / 2;
   return { low: Math.round(center - span / 2), high: Math.round(center + span / 2) };
@@ -209,6 +270,18 @@ const previewRanges = computed(() => {
 });
 
 /**
+ * 音符方块的**拖动补偿**（拍）。
+ *
+ * 拖**左边缘**时方框左端在动，但音符本身不该动（那是「收起 / 展开」，不是搬移）——所以给
+ * 每个音符加上这个补偿量，让它在屏幕上**钉在原处**。整体拖动 / 右边缘不需要补偿。
+ */
+function blipShift(clip: Clip): number {
+  const r = resizeDrag.value;
+  if (r && r.clip === clip.id && r.edge === "left") return clip.start - effStart(clip);
+  return 0;
+}
+
+/**
  * 片段内的音符预览：**迷你钢琴卷帘**。
  * 横轴 = 时间，纵轴 = 音高。以前这里是一根居中细条，看起来像滚动条——现在不会了。
  */
@@ -216,9 +289,13 @@ function blipStyle(n: Note, clip: Clip): Record<string, string> {
   const range = previewRanges.value.get(clip.id) ?? { low: 48, high: 60 };
   const span = Math.max(1, range.high - range.low + 1);
   const pitch = Math.min(range.high, Math.max(range.low, n.pitch));
+  // 横轴用**绝对像素**（拍 × 缩放），不是百分比：拖动方框伸缩时音符**原地不动**——
+  // 改变只是「这个 MIDI 块的哪一部分会发声」（越出方框的音符由引擎裁掉、不删）。
+  const z = timeline.zoom;
+  const shift = blipShift(clip);
   return {
-    left: `${(n.start / clip.length) * 100}%`,
-    width: `${Math.max(1.5, (n.duration / clip.length) * 100)}%`,
+    left: `${(n.start + shift) * z}px`,
+    width: `${Math.max(1.5, n.duration * z)}px`,
     top: `${((range.high - pitch) / span) * 100}%`,
     height: `${(100 / span) * 4}%`,
   };
@@ -298,26 +375,36 @@ function onClipPointerDown(e: PointerEvent, track: Track, clip: Clip): void {
   }
 
   capturePointer(e.currentTarget, e.pointerId);
+  const all = tracks.value;
+  // 每块记下自己的**轨道下标**：多选整组纵向移动时，各自按同一个位移挪（一起上下）。
   const base = (selection.clipRefs.length > 0 ? selection.clipRefs : [{ track: track.id, clip: clip.id }])
     .map((ref) => {
-      const t = tracks.value.find((x) => x.id === ref.track);
-      const c = t?.clips.find((x) => x.id === ref.clip);
-      return c ? { ...ref, start: c.start, length: c.length } : null;
+      const trackIndex = all.findIndex((x) => x.id === ref.track);
+      const c = all[trackIndex]?.clips.find((x) => x.id === ref.clip);
+      return c ? { ...ref, start: c.start, length: c.length, trackIndex } : null;
     })
-    .filter((x): x is ClipSel & { start: number; length: number } => x !== null);
+    .filter(
+      (x): x is ClipSel & { start: number; length: number; trackIndex: number } =>
+        x !== null && x.trackIndex >= 0,
+    );
 
-  // 跨轨道拖动只对单个片段开放：多选时各自的原轨道不同，「一起挪到哪一条」没有明确答案。
   moveDrag.value = {
     originBeat: beatAt(e.clientX),
     base,
     delta: 0,
-    targetTrack: base.length === 1 ? track.id : null,
+    deltaTrack: 0,
+    anchorIndex: Math.max(0, all.findIndex((x) => x.id === track.id)),
     moved: false,
   };
   mode.value = "move";
 }
 
-function onResizePointerDown(e: PointerEvent, track: Track, clip: Clip): void {
+function onResizePointerDown(
+  e: PointerEvent,
+  track: Track,
+  clip: Clip,
+  edge: "left" | "right",
+): void {
   if (e.button !== 0) return;
   e.stopPropagation();
   selection.selectClip(track.id, clip.id);
@@ -325,12 +412,21 @@ function onResizePointerDown(e: PointerEvent, track: Track, clip: Clip): void {
   resizeDrag.value = {
     track: track.id,
     clip: clip.id,
+    edge,
     originBeat: beatAt(e.clientX),
+    baseStart: clip.start,
     base: clip.length,
-    next: clip.length,
+    next: edge === "left" ? clip.start : clip.length,
     moved: false,
   };
   mode.value = "resize";
+  // 夹取范围：**展开不能超出素材本身**（与剪映一致）。取回来之前先不夹（几十毫秒）。
+  resizeBounds.value = null;
+  void clipBounds(track.id, clip.id)
+    .then((b) => {
+      resizeBounds.value = { min: b.min_start, max: b.max_end };
+    })
+    .catch(() => {});
 }
 
 /** 空白处按下：右键 → 框选删除；Shift/Alt 或「框选模式」→ 框选；否则左键拖拽创建片段。 */
@@ -400,11 +496,15 @@ function onPointerMove(e: PointerEvent): void {
         d.delta = delta;
         d.moved = true;
       }
-      // 纵向：单个片段可以换轨道（多选时锁死在原轨道）。
-      if (d.base.length === 1) {
-        const target = trackAt(e.clientY);
-        if (target !== null && target !== d.targetTrack) {
-          d.targetTrack = target;
+      // 纵向：**整组一起**上下移动（多选也能跨轨道）。上不越界（不早于第 0 轨），下最多到
+      // 下界之外的那一格——松手时在那里新建一条轨道接住。
+      if (d.base.length > 0) {
+        const minOrig = Math.min(...d.base.map((b) => b.trackIndex));
+        const maxOrig = Math.max(...d.base.map((b) => b.trackIndex));
+        const raw = laneIndexAt(e.clientY) - d.anchorIndex;
+        const next = Math.min(Math.max(raw, -minOrig), tracks.value.length - maxOrig);
+        if (next !== d.deltaTrack) {
+          d.deltaTrack = next;
           d.moved = true;
         }
       }
@@ -413,10 +513,29 @@ function onPointerMove(e: PointerEvent): void {
     case "resize": {
       const r = resizeDrag.value;
       if (!r) break;
-      const next = Math.max(MIN_CREATE_BEATS, snapDelta(r.base + (beatAt(e.clientX) - r.originBeat)));
-      if (next !== r.next) {
-        r.next = next;
-        r.moved = true;
+      const bounds = resizeBounds.value;
+      if (r.edge === "left") {
+        // 左边缘：拖的是新起点；吸附后不能越过右端，也不能越过**素材开头**（展开的极限）。
+        const raw = snapDelta(r.baseStart + (beatAt(e.clientX) - r.originBeat));
+        const minStart = Math.max(0, bounds?.min ?? 0);
+        const maxStart = r.baseStart + r.base - MIN_CREATE_BEATS;
+        const next = Math.min(Math.max(minStart, raw), maxStart);
+        if (next !== r.next) {
+          r.next = next;
+          r.moved = true;
+        }
+      } else {
+        // 右边缘：拖的是新长度；不能越过**素材末尾**（展开的极限）。
+        const raw = Math.max(
+          MIN_CREATE_BEATS,
+          snapDelta(r.base + (beatAt(e.clientX) - r.originBeat)),
+        );
+        const maxLen = bounds ? Math.max(MIN_CREATE_BEATS, bounds.max - r.baseStart) : Infinity;
+        const next = Math.min(raw, maxLen);
+        if (next !== r.next) {
+          r.next = next;
+          r.moved = true;
+        }
       }
       break;
     }
@@ -461,42 +580,61 @@ async function onPointerUp(): Promise<void> {
 
   if (current === "move") {
     const d = moveDrag.value;
-    moveDrag.value = null;
     if (!d) return;
     // 没动过 = 一次单击：顺手打开检查器（方便换音色）。
     if (!d.moved) {
+      moveDrag.value = null;
       scheduleOpenInspector();
       return;
     }
-    const items: ClipPlacement[] = d.base.map((b) => ({
-      track: b.track,
-      clip: b.clip,
-      to_track: d.targetTrack ?? b.track,
-      start: Math.max(0, b.start + d.delta),
-    }));
+    const all = tracks.value;
     try {
-      if (items.length === 1) {
-        const only = items[0];
-        // 同轨道只改起点时走更轻的命令，跨轨道才需要搬移。
-        if (only.to_track === only.track) await store.moveClip(only.track, only.clip, only.start);
-        else await store.moveClips(items);
-      } else {
-        await store.moveClips(items);
+      // 只横向、单个片段 → 走更轻的命令（不改轨道归属）。
+      if (d.deltaTrack === 0 && d.base.length === 1) {
+        const only = d.base[0]!;
+        await store.moveClip(only.track, only.clip, Math.max(0, only.start + d.delta));
+        return;
       }
+      // 目标落到下界之外 → 先新建一条轨道接住（整组最多只多出一条）。
+      const needsNewTrack = d.base.some((b) => b.trackIndex + d.deltaTrack >= all.length);
+      if (needsNewTrack) await store.addTrack(i18n.t("tracks.newName", { n: all.length + 1 }));
+      const after = store.project?.tracks ?? all;
+      const items: ClipPlacement[] = d.base.map((b) => ({
+        track: b.track,
+        clip: b.clip,
+        // 新建的轨道追加在末尾，所以原有下标不变；越界的那块落到最后一条（就是新轨道）。
+        to_track: after[Math.min(b.trackIndex + d.deltaTrack, after.length - 1)]?.id ?? b.track,
+        start: Math.max(0, b.start + d.delta),
+      }));
+      await store.moveClips(items);
     } catch (err) {
       layout.notify(i18n.t("error.moveClip", { error: String(err) }));
+    } finally {
+      // 同 resize：预览留到命令回来，方框 / 波形才不会先弹回原位再跳过去。
+      moveDrag.value = null;
     }
     return;
   }
 
   if (current === "resize") {
     const r = resizeDrag.value;
-    resizeDrag.value = null;
-    if (!r || !r.moved) return;
+    if (!r || !r.moved) {
+      resizeDrag.value = null;
+      return;
+    }
+    const start = r.edge === "left" ? r.next : r.baseStart;
+    const length =
+      r.edge === "left"
+        ? Math.max(MIN_CREATE_BEATS, r.base - (r.next - r.baseStart))
+        : r.next;
     try {
-      await store.resizeClip(r.track, r.clip, r.next);
+      // 边缘拖动 = **裁剪**（音频改读写窗口，不改速度 / 音高）。
+      // 预览要等命令回来再清：否则方框会先弹回旧值、再跳到新值（看着像「反复变化 / 回弹」）。
+      await store.trimClip(r.track, r.clip, start, length);
     } catch (err) {
       layout.notify(i18n.t("error.resizeClip", { error: String(err) }));
+    } finally {
+      resizeDrag.value = null;
     }
     return;
   }
@@ -596,7 +734,9 @@ async function pasteClip(): Promise<void> {
 
 /** Delete / Backspace 删除所选片段；Ctrl/Cmd+C / V 复制粘贴。 */
 function onKey(e: KeyboardEvent): void {
-  if (e.target instanceof HTMLInputElement) return;
+  // 焦点在输入框/文本域里，或用户选了一段文字：这些按键归浏览器。
+  // 少了这一关，只要有一条片段被选中，用户选中的文本一按 Cmd+C 就被当成「复制片段」吞掉。
+  if (shouldDeferToBrowser(e)) return;
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key.toLowerCase() === "c") {
     const ref = selection.clipRefs;
@@ -611,6 +751,8 @@ function onKey(e: KeyboardEvent): void {
     return;
   }
   if (mod && e.key.toLowerCase() === "v") {
+    // 没有可粘贴的片段就别吞按键——否则在别处（如设置页文本域）粘贴会失效。
+    if (clipboard.payload?.kind !== "clip") return;
     e.preventDefault();
     void pasteClip();
     return;
@@ -747,16 +889,17 @@ onUnmounted(() => {
             }"
           />
 
-          <!-- 跨轨道拖动的落点预览 -->
+          <!-- 跨轨道拖动的落点预览（整组：落到本行的每一块都画） -->
           <div
-            v-if="dragGhost && dragGhost.track === track.id"
+            v-for="g in ghostsAt(ti)"
+            :key="g.clip"
             class="clip-ghost"
-            :style="ghostStyle(track.id, ti)"
+            :style="ghostStyleAt(g)"
           />
 
           <template v-for="clip in track.clips" :key="clip.id">
             <div
-              v-if="!isDraggingAway(clip, track.id)"
+              v-if="!isDraggingAway(clip, ti)"
               class="clip"
               :class="{
                 dragging: moveDrag?.base.some((b) => b.clip === clip.id),
@@ -782,7 +925,10 @@ onUnmounted(() => {
                 class="clip-wave"
                 :path="clip.audio.path"
                 :offset-frames="clip.audio.offset_frames"
-                :frames="clip.audio.frames"
+                :rate="clip.audio.rate ?? 1"
+                :source-start="waveAnchor(clip)"
+                :view-start="effStart(clip)"
+                :view-length="effLength(clip)"
               />
               <template v-else>
                 <span
@@ -793,12 +939,27 @@ onUnmounted(() => {
                 />
               </template>
               <span
+                class="clip-handle left"
+                aria-hidden="true"
+                @pointerdown="onResizePointerDown($event, track, clip, 'left')"
+              />
+              <span
                 class="clip-handle"
                 aria-hidden="true"
-                @pointerdown="onResizePointerDown($event, track, clip)"
+                @pointerdown="onResizePointerDown($event, track, clip, 'right')"
               />
             </div>
           </template>
+        </div>
+
+        <!-- 拖到下界之外：预览「即将新建的轨道」（松手后就在这一行落下） -->
+        <div
+          v-if="newTrackGhosts.length > 0"
+          class="lane phantom"
+          :style="{ height: `${LANE_H}px` }"
+        >
+          <span class="phantom-label">{{ i18n.t("arrange.newTrack") }}</span>
+          <div v-for="g in newTrackGhosts" :key="g.clip" class="clip-ghost" :style="ghostStyleAt(g)" />
         </div>
 
         <div v-if="tracks.length === 0" class="lane-empty text-body-md">
@@ -870,6 +1031,21 @@ onUnmounted(() => {
 .lane.selected {
   background-color: rgb(var(--md-primary) / 0.05);
 }
+/* 「即将新建的轨道」行：拖到下界之外时出现，虚线示意它还没真的存在 */
+.lane.phantom {
+  cursor: default;
+  border-bottom: 1px dashed rgb(var(--md-primary) / 0.5);
+  background-color: rgb(var(--md-primary) / 0.04);
+}
+.phantom-label {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11.5px;
+  color: rgb(var(--md-primary));
+  pointer-events: none;
+}
 /* 左侧留白里的轨道色竖线：与左栏 .grip 同色，留白不再突兀 */
 .lane-accent {
   position: absolute;
@@ -905,8 +1081,8 @@ onUnmounted(() => {
   top: 8px;
   bottom: 8px;
   border-radius: 12px;
-  border: 2px dashed hsl(var(--track-hue) 60% 62%);
-  background-color: hsl(var(--track-hue) 45% 45% / 0.22);
+  border: 2px dashed hsl(var(--track-hue) var(--track-clip-edge-s) var(--track-clip-edge-l));
+  background-color: hsl(var(--track-hue) var(--track-ghost-s) var(--track-ghost-l) / 0.22);
   pointer-events: none;
 }
 .clip {
@@ -914,8 +1090,8 @@ onUnmounted(() => {
   top: 8px;
   bottom: 8px;
   border-radius: 12px;
-  background-color: hsl(var(--track-hue) 42% 32%);
-  border: 1px solid hsl(var(--track-hue) 60% 62% / 0.9);
+  background-color: hsl(var(--track-hue) var(--track-clip-bg-s) var(--track-clip-bg-l));
+  border: 1px solid hsl(var(--track-hue) var(--track-clip-edge-s) var(--track-clip-edge-l) / 0.9);
   box-shadow: var(--md-elevation-1);
   overflow: hidden;
   cursor: grab;
@@ -938,15 +1114,15 @@ onUnmounted(() => {
   position: absolute;
   min-height: 3px;
   border-radius: 2px;
-  background-color: hsl(var(--track-hue) 72% 88%);
-  box-shadow: 0 0 0 1px hsl(var(--track-hue) 40% 22% / 0.5);
+  background-color: hsl(var(--track-hue) var(--track-blip-s) var(--track-blip-l));
+  box-shadow: 0 0 0 1px hsl(var(--track-hue) var(--track-blip-line-s) var(--track-blip-line-l) / 0.5);
   pointer-events: none;
 }
 /* 音频片段的波形层：铺满片段盒子，不抢指针事件（拖动/缩放仍归 .clip）。 */
 .clip-wave {
   position: absolute;
   inset: 0;
-  --wave-color: hsl(var(--track-hue) 78% 86%);
+  --wave-color: hsl(var(--track-hue) var(--track-wave-s) var(--track-wave-l));
   pointer-events: none;
 }
 /* 右边缘的缩放热区：命中区 10px，视觉上只有一条细亮边 */
@@ -960,7 +1136,17 @@ onUnmounted(() => {
   border-right: 2px solid transparent;
 }
 .clip:hover .clip-handle {
-  border-right-color: hsl(var(--track-hue) 70% 88% / 0.8);
+  border-right-color: hsl(var(--track-hue) var(--track-handle-s) var(--track-handle-l) / 0.8);
+}
+/* 左边缘的裁剪热区（左右对称）。 */
+.clip-handle.left {
+  left: 0;
+  right: auto;
+  border-right: 0;
+  border-left: 2px solid transparent;
+}
+.clip:hover .clip-handle.left {
+  border-left-color: hsl(var(--track-hue) var(--track-handle-s) var(--track-handle-l) / 0.8);
 }
 .lane-empty {
   padding: 24px;

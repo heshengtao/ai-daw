@@ -45,7 +45,9 @@ impl Note {
     pub fn normalize(note: Note) -> Note {
         Note {
             pitch: note.pitch.min(127),
-            start: clamp_beats(note.start, Self::MAX_START_BEATS),
+            // 音符起点是**相对片段起点**的拍，**允许为负**：左边缘往右拖时音符要停在原处（被
+            // 方框裁掉但不删），往回拖就能恢复。
+            start: clamp_signed_beats(note.start, Self::MAX_START_BEATS),
             duration: clamp_range(note.duration, Self::MIN_DURATION_BEATS, Self::MAX_DURATION_BEATS),
             velocity: note.velocity.min(127),
             volume: note.volume.min(Self::MAX_VOLUME),
@@ -56,19 +58,77 @@ impl Note {
 /// 音频素材引用：片段指向一段外部音频文件。
 ///
 /// v1 存**绝对路径**（录音落在应用数据目录、导入的文件沿用原位置）；素材库/相对路径留后续。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// **播放速度与工程 BPM 解耦**：`rate` / `pitch_semitones` 是片段自己的参数——改它们不影响
+/// 工程速度；改工程速度也不影响音频（音频默认 1:1 原速）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioSource {
     /// 素材文件路径。
     pub path: String,
     /// 素材内的起始帧（crop 起点）。旧工程/手写 JSON 缺省时按 0 读入。
     #[serde(default)]
     pub offset_frames: u64,
-    /// 素材窗口长度（源帧）：从 `offset_frames` 起**取多少帧**铺满整个片段。
+    /// 素材窗口长度（源帧）：从 `offset_frames` 起**取多少帧**（裁剪 / 切分记录下来的）。
     ///
     /// `None` = 取到素材结尾（旧工程/手写 JSON 缺省）。切分音频片段时必须知道窗口长度，
-    /// 否则「左半段」会一路播到结尾、被拉伸变调——所以导入时会把素材总帧数写进来。
+    /// 否则「左半段」会一路播到结尾——所以导入时会把素材总帧数写进来。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frames: Option<u64>,
+    /// 播放速度倍率（1.0 = 原速，>1 更快）。改它**只改时长，不变调**（时值伸缩）。
+    #[serde(default = "default_rate", skip_serializing_if = "is_default_rate")]
+    pub rate: f64,
+    /// 升降调（半音，0 = 不变；正 = 升高）。改它**只变调，不改时长**。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pitch_semitones: f64,
+}
+
+/// `rate` 的缺省值（原速）。
+fn default_rate() -> f64 {
+    1.0
+}
+
+/// 是否等于缺省速度——等于时不写进 JSON（保持旧工程形状）。
+fn is_default_rate(v: &f64) -> bool {
+    (*v - 1.0).abs() < 1e-9
+}
+
+/// 是否为 0（升降调缺省）——为 0 时不写进 JSON。
+fn is_zero(v: &f64) -> bool {
+    v.abs() < 1e-9
+}
+
+impl AudioSource {
+    /// 最低速度倍率。
+    pub const MIN_RATE: f64 = 0.25;
+    /// 最高速度倍率。
+    pub const MAX_RATE: f64 = 4.0;
+    /// 升降调上限（半音，正负对称）。
+    pub const MAX_PITCH_SEMITONES: f64 = 24.0;
+
+    /// 归一化：速度/升降调夹到合法区间，非有限值回落到缺省（而不是把 NaN 带进播放）。
+    pub fn normalize_rate(rate: f64) -> f64 {
+        if rate.is_finite() {
+            rate.clamp(Self::MIN_RATE, Self::MAX_RATE)
+        } else {
+            default_rate()
+        }
+    }
+
+    /// 归一化升降调。
+    pub fn normalize_pitch(semitones: f64) -> f64 {
+        if semitones.is_finite() {
+            semitones.clamp(-Self::MAX_PITCH_SEMITONES, Self::MAX_PITCH_SEMITONES)
+        } else {
+            0.0
+        }
+    }
+
+    /// 归一化整个素材引用（速度 / 升降调）。
+    pub fn normalize(mut self) -> Self {
+        self.rate = Self::normalize_rate(self.rate);
+        self.pitch_semitones = Self::normalize_pitch(self.pitch_semitones);
+        self
+    }
 }
 
 /// 片段：MIDI（`notes`）或音频（`audio`）。
@@ -118,8 +178,12 @@ pub struct NoteEdit {
 impl Clip {
     /// 最短长度（拍）＝一个 32 分音符。
     pub const MIN_LENGTH_BEATS: f64 = 1.0 / 32.0;
-    /// 最长长度（拍）：64 小节 4/4。
-    pub const MAX_LENGTH_BEATS: f64 = 256.0;
+    /// 最长长度（拍）。
+    ///
+    /// **不能太小**：导入音频时片段拍长 = 素材的自然时长；早先这里是 256 拍（4/4 的 64 小节），
+    /// 于是任何超过 64 小节的音频**尾部会被静默截断**，右边缘拖到那儿也「回弹」。现在放到
+    /// 65536 拍（120 BPM 下约 9 小时），任何现实素材都放得下。
+    pub const MAX_LENGTH_BEATS: f64 = 65_536.0;
     /// 起始位置上界（拍）。
     pub const MAX_START_BEATS: f64 = 1_000_000.0;
 
@@ -139,12 +203,13 @@ impl Clip {
     }
 
     /// 归一化整个片段：夹紧起点/长度；音频片段的 `notes` 必须为空
-    /// （两种内容不能共存，否则播放与界面会各画一半）。
+    /// （两种内容不能共存，否则播放与界面会各画一半），并归一化速度 / 升降调。
     pub fn normalize(mut clip: Clip) -> Clip {
         clip.start = Self::normalize_start(clip.start);
         clip.length = Self::normalize_length(clip.length);
-        if clip.audio.is_some() {
+        if let Some(audio) = clip.audio.take() {
             clip.notes.clear();
+            clip.audio = Some(audio.normalize());
         }
         clip
     }
@@ -154,6 +219,15 @@ impl Clip {
 pub fn clamp_beats(value: f64, max: f64) -> f64 {
     if value.is_finite() {
         value.clamp(0.0, max)
+    } else {
+        0.0
+    }
+}
+
+/// 把「拍」坐标夹到 `-max..=max`：**相对片段起点**的音符允许落在方框左侧（被裁掉但仍保留）。
+pub fn clamp_signed_beats(value: f64, max: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(-max, max)
     } else {
         0.0
     }
@@ -176,7 +250,8 @@ mod tests {
     fn note_normalization_clamps_every_field() {
         let n = Note::normalize(Note { pitch: 200, start: -3.0, duration: 0.0, velocity: 250, volume: 250 });
         assert_eq!(n.pitch, 127);
-        assert_eq!(n.start, 0.0);
+        // 起点是**相对片段起点**的拍，允许为负（收起时被裁掉的音符要留着）。
+        assert_eq!(n.start, -3.0);
         assert_eq!(n.duration, Note::MIN_DURATION_BEATS);
         assert_eq!(n.velocity, 127);
         assert_eq!(n.volume, Note::MAX_VOLUME);
@@ -231,7 +306,13 @@ mod tests {
             start: -3.0,
             length: 0.0,
             notes: vec![Note { pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 }],
-            audio: Some(AudioSource { path: "/tmp/kick.wav".into(), offset_frames: 0, frames: Some(480) }),
+            audio: Some(AudioSource {
+                path: "/tmp/kick.wav".into(),
+                offset_frames: 0,
+                frames: Some(480),
+                rate: 1.0,
+                pitch_semitones: 0.0,
+            }),
         };
         let back: Clip = serde_json::from_str(&serde_json::to_string(&clip).unwrap()).unwrap();
         assert_eq!(back, clip);
@@ -253,10 +334,51 @@ mod tests {
         assert_eq!(audio.frames, None, "旧工程没有窗口长度 → 到素材结尾");
     }
 
-    /// 没有窗口长度时不该写进 JSON（保持旧工程形状）。
+    /// 没有窗口长度时不该写进 JSON（保持旧工程形状）；缺省速度 / 升降调也不写。
     #[test]
     fn audio_source_omits_frames_when_absent() {
-        let src = AudioSource { path: "a.wav".into(), offset_frames: 0, frames: None };
+        let src = AudioSource {
+            path: "a.wav".into(),
+            offset_frames: 0,
+            frames: None,
+            rate: 1.0,
+            pitch_semitones: 0.0,
+        };
         assert_eq!(serde_json::to_string(&src).unwrap(), r#"{"path":"a.wav","offset_frames":0}"#);
+    }
+
+    /// 旧工程没有 rate/pitch → 按原速 / 不变调读入。
+    #[test]
+    fn audio_source_rate_defaults_without_json_keys() {
+        let json = r#"{"path":"a.wav","offset_frames":10}"#;
+        let src: AudioSource = serde_json::from_str(json).unwrap();
+        assert_eq!(src.rate, 1.0);
+        assert_eq!(src.pitch_semitones, 0.0);
+    }
+
+    /// 非缺省的速度 / 升降调会写进 JSON 并能往返；越界 / 非有限值被归一化。
+    #[test]
+    fn audio_source_rate_and_pitch_roundtrip_and_normalize() {
+        let src = AudioSource {
+            path: "a.wav".into(),
+            offset_frames: 0,
+            frames: None,
+            rate: 2.5,
+            pitch_semitones: -12.0,
+        };
+        let json = serde_json::to_string(&src).unwrap();
+        assert!(json.contains("\"rate\":2.5"), "{json}");
+        assert!(json.contains("\"pitch_semitones\":-12.0"), "{json}");
+        assert_eq!(serde_json::from_str::<AudioSource>(&json).unwrap(), src);
+
+        let hi = AudioSource { rate: 99.0, pitch_semitones: 99.0, ..src.clone() };
+        let n = hi.normalize();
+        assert_eq!(n.rate, AudioSource::MAX_RATE);
+        assert_eq!(n.pitch_semitones, AudioSource::MAX_PITCH_SEMITONES);
+
+        let nan = AudioSource { rate: f64::NAN, pitch_semitones: f64::NAN, ..src };
+        let n = nan.normalize();
+        assert_eq!(n.rate, 1.0, "非有限速度应回落原速");
+        assert_eq!(n.pitch_semitones, 0.0);
     }
 }

@@ -3,6 +3,7 @@
 //! 四个模型：
 //! - [`basic_pitch`] —— Spotify Basic Pitch（ICASSP 2022）多音音高转录，音频 → MIDI 音符。
 //! - [`localvqe`] —— LocalVQE v1.2（DeepVQE 的流式 CPU 派生版）联合降噪/去混响。
+//! - [`beat_this`] —— Beat This!（ISMIR 2024）节拍/重拍检测，推出全局 BPM 与拍号。
 //! - [`demucs`] —— HTDemucs（Demucs v4）音源分离 4 分轨（复数谱 "cac" 输入）。
 //! - [`demucs6s`] —— HTDemucs 6s 音源分离 6 分轨（自足 ONNX：波形进、分轨出）。
 //!
@@ -19,8 +20,14 @@
 //! 4. macOS 应用包里的 `../Resources/models/`
 //! 5. 开发时仓库根目录的 `models/`（`crate` 的上两级）
 //! 6. 当前工作目录的 `models/`
+//!
+//! **多文件模型**（「一张图 + 一个 `.onnx.data` 外部权重」这类）不散落在 `models/` 下，而是
+//! 整组待在子目录里——`ort` 靠 `.onnx` 里记录的相对路径去找外部权重，图和权重分处两个搜索
+//! 目录就会加载失败。所以这类模型要求**同一个搜索目录**里齐备全部文件才算可用（见
+//! [`catalog::group_dir`]）。
 
 pub mod basic_pitch;
+pub mod beat_this;
 pub mod catalog;
 pub mod demucs;
 pub mod demucs6s;
@@ -37,6 +44,10 @@ pub const LOCALVQE_FILE: &str = "localvqe-ns.onnx";
 pub const HTDEMUCS_FILE: &str = "htdemucs.ort";
 /// HTDemucs 6s（6 分轨）音源分离权重文件名（自足 ONNX 导出）。
 pub const HTDEMUCS_6S_FILE: &str = "htdemucs_6s.onnx";
+/// Beat This! 的 log-mel 前端权重文件名（264 KB，**随包**，同 Basic Pitch）。
+pub const BEAT_THIS_MEL_FILE: &str = "mel_spectrogram.onnx";
+/// Beat This! 的主模型（`final0`，FP32，约 83 MB）——**不随包**，用户按需下载。
+pub const BEAT_THIS_FILE: &str = "beat_this.onnx";
 
 /// 一次音源分离的结果：按模型输出顺序的 `(stem 名, 交错样本)`。
 ///
@@ -125,6 +136,14 @@ pub fn find(file: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// 在候选目录的**子目录**里找一个模型文件（多文件模型组用，见 [`catalog::group_dir`]）。
+pub fn find_in(dir: &str, file: &str) -> Option<PathBuf> {
+    search_dirs()
+        .into_iter()
+        .map(|d| d.join(dir).join(file))
+        .find(|p| p.is_file())
+}
+
 /// 各模型各自的可用情况（给界面/日志用）。
 #[derive(Debug, Clone, Default)]
 pub struct Availability {
@@ -134,21 +153,32 @@ pub struct Availability {
     pub localvqe: Option<PathBuf>,
     /// HTDemucs 音源分离权重路径。
     pub htdemucs: Option<PathBuf>,
+    /// Beat This! 主模型（`final0`）路径 —— **仅当 log-mel 前端也在位时**才算可用。
+    pub beat_this: Option<PathBuf>,
 }
 
 impl Availability {
     /// 至少有一个模型可用。
     pub fn any(&self) -> bool {
-        self.basic_pitch.is_some() || self.localvqe.is_some() || self.htdemucs.is_some()
+        self.basic_pitch.is_some()
+            || self.localvqe.is_some()
+            || self.htdemucs.is_some()
+            || self.beat_this.is_some()
     }
 }
 
 /// 探测各模型是否存在。
 pub fn availability() -> Availability {
+    // Beat This! 要**两个**权重才能跑：mel 前端（随包）与主模型（按需下载）。
+    let beat_this = match (find(BEAT_THIS_MEL_FILE), find(BEAT_THIS_FILE)) {
+        (Some(_), Some(beat)) => Some(beat),
+        _ => None,
+    };
     Availability {
         basic_pitch: find(BASIC_PITCH_FILE),
         localvqe: find(LOCALVQE_FILE),
         htdemucs: find(HTDEMUCS_FILE),
+        beat_this,
     }
 }
 

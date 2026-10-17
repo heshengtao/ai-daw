@@ -8,5 +8,24 @@ license.workspace = true
 ort = "2.0.0-rc.13"
 # 频谱：窗函数 + FFT（与 `crates/analysis` 同一个库，MIT OR Apache-2.0）。
 rustfft = "6"
+# 节拍 / 重拍检测：Beat This!（ISMIR 2024，MIT）的 Rust 移植。默认后端 `rten`
+# 是纯 Rust、不需要任何系统库（`ort` 后端要 libonnxruntime，这里不启用）。
+# 只当库用：关掉 `cli` / `decode`——音频已经在本地解码成 f32，直接喂单声道采样即可。
+beat-this = { version = "1", default-features = false }
+
+# 执行后端的 API gate——**必须按 target 条件启用**（见上）。
+#
+# 裸依赖时 resolve 的回落逻辑本就拿到「含该 EP」的构建：`aarch64-apple-darwin` 只有
+# `coreml` / `coreml,webgpu` 两个预编译构建；`x86_64-pc-windows-msvc` 有 `directml`。
+# 所以加特性只解锁 `ort::ep::{CoreML, DirectML}` API，**不改变下载的二进制、不改变包体积**
+# ⇒ macOS / Windows 走这两个后端是**零下载**的。
+#
+# 但 resolve 要求特性集**精确匹配**（symmetric difference == 0），在缺少对应构建的平台上开
+# 会构建失败，所以不能无条件写进 [dependencies]。
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "2.0.0-rc.13", features = ["coreml"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+ort = { version = "2.0.0-rc.13", features = ["directml"] }
 
 [dev-dependencies]

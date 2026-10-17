@@ -89,6 +89,10 @@ pub struct TransportSnapshot {
     /// 是否开启循环播放。
     #[serde(rename = "loop")]
     pub loop_: bool,
+    /// 播放范围起点（帧）；与 `loop_end_frames` 一起构成循环区间。
+    pub loop_start_frames: u64,
+    /// 播放范围终点（帧）。`<= loop_start_frames` = 没设范围（循环时按整首处理）。
+    pub loop_end_frames: u64,
     /// 不可用时的原因。
     pub error: Option<String>,
 }
@@ -304,6 +308,9 @@ impl AudioEngine {
             position_frames: if available { self.shared.position_frames() } else { 0 },
             sample_rate: self.sample_rate.load(Ordering::Relaxed),
             loop_: available && self.shared.is_looping(),
+            // 范围与可用性无关：设备没起来时界面仍要能记住用户划的段（下次重建继续用）。
+            loop_start_frames: self.shared.loop_start_frames(),
+            loop_end_frames: self.shared.loop_end_frames(),
             error: if dead { self.status.message() } else { self.error.lock().unwrap().clone() },
         }
     }

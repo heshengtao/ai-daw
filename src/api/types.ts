@@ -22,6 +22,10 @@ export interface AudioSource {
    * 切分音频片段时必须知道它，否则「左半段」会一路播到结尾、被拉伸变调。
    */
   frames?: number;
+  /** 播放速度倍率（1 = 原速）。**与工程 BPM 解耦**：改它只改时长，不变调。缺省 = 1。 */
+  rate?: number;
+  /** 升降调（半音，0 = 不变，正 = 升高）。改它只变调，不改时长。缺省 = 0。 */
+  pitch_semitones?: number;
 }
 
 /** 片段：MIDI（`notes`）或音频（`audio`）。 */
@@ -162,6 +166,10 @@ export interface TransportSnapshot {
   sample_rate: number;
   /** 是否开启循环播放。 */
   loop: boolean;
+  /** 播放范围起点（帧）；与 `loop_end_frames` 一起构成循环区间。 */
+  loop_start_frames: number;
+  /** 播放范围终点（帧）。`<= loop_start_frames` = 没设范围。 */
+  loop_end_frames: number;
   /** 不可用时的原因。 */
   error: string | null;
 }
@@ -335,6 +343,8 @@ export interface AiModels {
   localvqe: boolean;
   /** HTDemucs（音源分离）权重是否就位。 */
   separate: boolean;
+  /** Beat This!（节拍 / 速度检测）权重是否就位。 */
+  beat_this: boolean;
 }
 
 /**
@@ -365,6 +375,29 @@ export interface ModelStatus {
   path: string | null;
   /** 是否有可下载的源。 */
   downloadable: boolean;
+  /** 组内文件总数（单文件模型为 1）。 */
+  total_files: number;
+  /** 组内已就位的文件数。 */
+  installed_files: number;
+  /** 组内每个文件的状态。 */
+  files: ModelFileStatus[];
+}
+
+/**
+ * 组内单个文件的状态（与后端 `models::ModelFileStatus` 一一对应）。
+ *
+ * 只有多文件模型才有实际意义：一个几 GB 的组光有整组百分比不够，
+ * 还需要「下到第几个文件了」。
+ */
+export interface ModelFileStatus {
+  /** 文件名。 */
+  filename: string;
+  /** 预估体积（字节）。 */
+  approx_bytes: number;
+  /** 是否已在位。 */
+  installed: boolean;
+  /** 已在位时的实际大小。 */
+  bytes: number | null;
 }
 
 /**
@@ -383,6 +416,42 @@ export interface ModelProgress {
   total: number;
   /** 出错 / 取消时的一句话。 */
   message: string | null;
+}
+
+/**
+ * 执行后端（Execution Provider）种类。三个都**随包、零下载**。
+ *
+ * - `cpu`：纯 CPU，全平台可用，**默认**；
+ * - `coreml`：macOS Apple Silicon（Intel Mac 没有对应预编译构建）；
+ * - `directml`：Windows。
+ */
+export type BackendKind = "cpu" | "coreml" | "directml";
+
+/** 执行后端偏好（与后端 `manager::BackendPreference` 一一对应）。 */
+export type BackendPreference = BackendKind;
+
+/** 一个可选后端（与后端 `backends::BackendOption` 一一对应）。 */
+export interface BackendOption {
+  /** 稳定标识。 */
+  kind: BackendKind;
+  /** 展示名。 */
+  label: string;
+  /** 一句话说明。 */
+  note: string;
+  /** 是否本机平台支持（不可用的不会出现在设置页里）。 */
+  available: boolean;
+}
+
+/** 后端选择 + 本机情况（与后端 `backends::BackendInfo` 一一对应）。 */
+export interface BackendInfo {
+  /** 已保存的偏好。 */
+  preference: BackendPreference;
+  /** 当前生效的后端（偏好在本机不支持时回落 CPU）。 */
+  current: BackendKind;
+  /** 本机平台描述（展示用）。 */
+  platform: string;
+  /** 全部选项（含本机不支持的）。 */
+  options: BackendOption[];
 }
 
 /**
@@ -479,6 +548,13 @@ export interface ManagerInstallRequest {
 /** 代理取用方式（与后端 `manager::ProxyMode` 一一对应）。 */
 export type ProxyMode = "direct" | "system" | "manual";
 
+/**
+ * 模型下载源的区域偏好（与后端 `manager::ModelSourcePreference` 一一对应）。
+ *
+ * `auto` = 下载前探测连通性后决定（默认）；`international` = 优先 HF / GitHub；`domestic` = 优先魔搭。
+ */
+export type ModelSourcePreference = "auto" | "international" | "domestic";
+
 /** 网络配置（与后端 `manager::StoreNetwork` 一一对应）。 */
 export interface StoreNetwork {
   /** 注册表镜像（按顺序在官方源之前尝试）；空数组 = 只用官方源。 */
@@ -495,6 +571,10 @@ export interface StoreNetwork {
    *
    * 每条是前缀模板：含 `{url}` 就替换，否则直接拼在原地址前。始终校验 sha256。 */
   model_mirrors: string[];
+  /** 模型下载源的区域偏好；`auto` = 探测连通性后决定（默认）。 */
+  model_source_preference: ModelSourcePreference;
+  /** **执行后端**偏好；`auto` = 按本机硬件推荐（默认）。 */
+  backend_preference: BackendPreference;
 }
 
 /** 当前配置会解析成什么代理（不联网）。 */

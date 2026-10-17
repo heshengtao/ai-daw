@@ -11,3 +11,9 @@ src-tauri/gen/
 # 本地 AI 的 ONNX 权重（不进仓库，见 tools/fetch-models.sh）。
 # 只忽略**仓库根**的 `models/`——否则会连 `crates/local-ai/src/models/`（源码目录）一起忽略。
 /models/
+
+# 测试用音频（`tools/make-test-song.py` 生成的合成曲子，本地产物）。
+/test-files/
+
+# 头脑风暴可视化伴侣的 mockup 与会话文件（本地临时产物，不进仓库）。
+.superpowers/

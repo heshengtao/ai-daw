@@ -31,7 +31,8 @@
     "externalBin": ["binaries/aidaw"],
     "resources": {
       "resources/onnx/basic-pitch-nmp.onnx": "models/basic-pitch-nmp.onnx",
-      "resources/onnx/localvqe-ns.onnx": "models/localvqe-ns.onnx"
+      "resources/onnx/localvqe-ns.onnx": "models/localvqe-ns.onnx",
+      "resources/onnx/mel_spectrogram.onnx": "models/mel_spectrogram.onnx"
     },
     "icon": [
       "icons/32x32.png",

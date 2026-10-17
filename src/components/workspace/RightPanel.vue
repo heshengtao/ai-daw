@@ -5,12 +5,14 @@
  */
 import {
   AdjustmentsHorizontalIcon,
+  AdjustmentsVerticalIcon,
   CircleStackIcon,
   MusicalNoteIcon,
   PuzzlePieceIcon,
   SparklesIcon,
 } from "@heroicons/vue/24/outline";
 import InspectorPanel from "./InspectorPanel.vue";
+import MixerPanel from "./panes/MixerPanel.vue";
 import PluginEditorPane from "./panes/PluginEditorPane.vue";
 import PluginsPane from "./panes/PluginsPane.vue";
 import ManagerPane from "./panes/ManagerPane.vue";
@@ -23,6 +25,7 @@ const i18n = useI18n();
 
 const ICONS: Record<PaneId, unknown> = {
   inspector: AdjustmentsHorizontalIcon,
+  mixer: AdjustmentsVerticalIcon,
   editor: MusicalNoteIcon,
   plugins: CircleStackIcon,
   manager: PuzzlePieceIcon,
@@ -51,6 +54,7 @@ const ICONS: Record<PaneId, unknown> = {
       </div>
 
       <InspectorPanel v-else-if="layout.activeTab === 'inspector'" />
+      <MixerPanel v-else-if="layout.activeTab === 'mixer'" />
       <PluginEditorPane v-else-if="layout.activeTab === 'editor'" />
       <PluginsPane v-else-if="layout.activeTab === 'plugins'" />
       <ManagerPane v-else-if="layout.activeTab === 'manager'" />

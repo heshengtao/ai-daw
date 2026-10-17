@@ -16,6 +16,7 @@
 //! 两件事都跑在**后台工作线程**里（宿主用 `spawn_blocking`），带**进度回调**与**取消**
 //! （回调返回 `false` 即尽快中止）。**不在音频回调路径上**，因此可以自由分配。
 
+pub mod backend;
 pub mod denoise;
 pub mod models;
 pub mod pitch;
@@ -23,6 +24,12 @@ pub mod resample;
 
 /// 处理进度回调：参数为 0.0..=1.0；返回 `false` 表示**取消**，调用方应尽快返回已完成的部分。
 pub type Progress<'a> = &'a dyn Fn(f32) -> bool;
+
+/// 流式文本回调：模型每多吐出一小段就调一次，参数是**这一段的增量**。
+///
+/// 只有「AI 补全」这类**给人看的文本生成**才需要它（界面上那行「思考中」）；
+/// 产语义码那条路传空实现即可——码是给 DiT 的，不是给人读的。
+pub type Delta<'a> = &'a dyn Fn(&str);
 
 /// 把交错多声道下混成单声道（取平均）。
 pub(crate) fn to_mono(samples: &[f32], channels: usize) -> Vec<f32> {

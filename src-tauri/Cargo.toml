@@ -9,11 +9,14 @@ license = "Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
+# The `_lib` suffix may seem redundant but it is necessary to
+# make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "ai_daw_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -67,6 +70,27 @@ codegen-units = 1
 lto = true
 opt-level = 3
 strip = true
+
+# `rten`（Beat This! 的纯 Rust 推理后端）在未优化的 debug 下慢到不可用。
+# 本 crate 是**独立 workspace**，仓库根的同一段 profile 覆盖不到这里，必须自己再写一遍。
+[profile.dev.package.rten]
+opt-level = 3
+[profile.dev.package.rten-base]
+opt-level = 3
+[profile.dev.package.rten-gemm]
+opt-level = 3
+[profile.dev.package.rten-model-file]
+opt-level = 3
+[profile.dev.package.rten-onnx]
+opt-level = 3
+[profile.dev.package.rten-shape-inference]
+opt-level = 3
+[profile.dev.package.rten-simd]
+opt-level = 3
+[profile.dev.package.rten-tensor]
+opt-level = 3
+[profile.dev.package.rten-vecmath]
+opt-level = 3
 
 # Opt out of the repository-root Cargo workspace: this crate is its own
 # workspace root and is therefore not built by `cargo test --workspace`.

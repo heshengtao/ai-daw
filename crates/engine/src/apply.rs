@@ -93,6 +93,15 @@ pub fn apply(project: &mut Project, event: &Event) {
                 }
             }
         }
+        Event::ClipRateChanged { track, clip, rate, pitch_semitones, .. } => {
+            if let Some(c) = find_clip_mut(project, *track, *clip) {
+                if let Some(audio) = c.audio.as_mut() {
+                    audio.rate = crate::model::AudioSource::normalize_rate(*rate);
+                    audio.pitch_semitones =
+                        crate::model::AudioSource::normalize_pitch(*pitch_semitones);
+                }
+            }
+        }
         Event::ClipRemoved { track, clip, .. } => {
             if let Some(t) = project.track_mut(*track) {
                 t.clips.retain(|c| c.id != *clip);
@@ -413,7 +422,8 @@ mod tests {
         );
         let n = p.track(t).unwrap().clips[0].notes[1];
         assert_eq!(n.pitch, 127);
-        assert_eq!(n.start, 0.0);
+        // 音符起点是**相对片段起点**的拍，允许为负（左边缘收起时被裁掉的音符要留着）。
+        assert_eq!(n.start, -1.0);
         assert_eq!(n.duration, Note::MIN_DURATION_BEATS);
         assert_eq!(n.velocity, 127);
 

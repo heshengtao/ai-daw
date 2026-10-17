@@ -9,6 +9,7 @@ import ImportProgressBar from "./ImportProgressBar.vue";
 import BottomBar from "./BottomBar.vue";
 import WindowControls from "./WindowControls.vue";
 import DevDrawer from "./DevDrawer.vue";
+import ToolDock from "./ToolDock.vue";
 import { isLinux, isTauri, isWindows } from "@/utils/platform";
 
 defineProps<{ aiActive: boolean }>();
@@ -54,6 +55,8 @@ const showWindowControls = isTauri() && (isWindows() || isLinux());
           <main class="app-main">
             <slot />
             <DevDrawer />
+            <!-- 浮动工具岛：中栏右下角的鼠标模式 + 底部窗格开关 -->
+            <ToolDock />
           </main>
 
           <slot name="right" />

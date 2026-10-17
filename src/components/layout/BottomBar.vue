@@ -1,7 +1,14 @@
 <script setup lang="ts">
 /**
- * 底部条：三栏网格（1fr / auto / 1fr），传输键因此始终严格居中，左右容器等宽。
- * 左：撤销 / 重做 / 拍号 / 位置读数；中：回到起点 · 播放暂停 · 停止；右：BPM / 状态。
+ * 底部条：三栏网格（minmax(0,1fr) / auto / minmax(0,1fr)），中栏因此严格居中，左右容器等宽。
+ *
+ * 按「功能相关」分三组：
+ * - **左 · 编辑与工程读数**：撤销 / 重做 / 关键点 / 录音输入设备与电平表 / 工程小节数；
+ * - **中 · 传输**：回到起点、录音 ｜ 播放暂停 ｜ 停止、循环；
+ * - **右 · 时间与节拍**：位置读数 / 拍号 / BPM / 节拍器，再加 AI 与引擎状态。
+ *
+ * 中栏内部还有一层 `1fr auto 1fr`：**播放键左右各是一簇**，所以它恒落在底栏中线上——
+ * 不再依赖「左右按钮数量相等」这个脆弱前提（节拍器搬去右栏后，靠数量已经对不齐了）。
  *
  * 传输直接调用 `transport` store：实时播放走原生音频线程，设备不可用时自动降级为
  * 离线试听，两种模式下这些按钮的行为完全一致。
@@ -15,25 +22,29 @@ import {
   ArrowUturnLeftIcon,
   ArrowUturnRightIcon,
   ArrowPathIcon,
+  XMarkIcon,
 } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
+import MetronomeIcon from "@/components/common/icons/MetronomeIcon.vue";
 import NumberField from "@/components/common/NumberField.vue";
 import TimeSignatureField from "@/components/common/TimeSignatureField.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
 import { retryAudio } from "@/api/tauri";
 import { useEngineEventsStore } from "@/stores/engineEvents";
+import { useLayoutStore } from "@/stores/layout";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
 import { useI18n } from "@/i18n";
-import { barBeatAt, barBeatsAt, meterAt, tempoAt } from "@/utils/tempo";
+import { barBeatAt, meterAt, tempoAt } from "@/utils/tempo";
 
 const props = defineProps<{ aiActive: boolean }>();
 
 const store = useProjectStore();
 const transport = useTransportStore();
 const timeline = useTimelineStore();
+const layout = useLayoutStore();
 const selection = useSelectionStore();
 const i18n = useI18n();
 const aiEvents = useEngineEventsStore();
@@ -119,11 +130,13 @@ function onTimeSignature(num: number, den: number): void {
 /** 播放头是否正对准某个关键点（显示徽标）。 */
 const onKeyframe = computed(() => store.keyframeAt(atBeat.value) !== null);
 
-/** 工程内容长度（小节），按分段累计。 */
+/** 工程内容长度（小节）。 */
 const bars = computed(() => {
   const beats = timeline.contentBeats;
   if (beats <= 0) return 0;
-  return barBeatAt(beats, settings.value).bar + (beats % barBeatsAt(beats, settings.value) > 1e-9 ? 1 : 0);
+  // 内容占的是 `[0, beats)`：正好收在小节线上时，**那条线属于下一小节的开头、不算占用**
+  // （12 小节整的片段必须读 12，不是 13）。所以看的是「最后一个被占用的瞬间」落在第几小节。
+  return barBeatAt(Math.max(0, beats - 1e-9), settings.value).bar;
 });
 
 /** 当前位置（小节.拍），随实时位置推进，按分段读数。 */
@@ -141,6 +154,12 @@ const rateText = computed(() => {
 const isPlaying = computed(() => transport.playing);
 const isAiActive = computed(() => props.aiActive);
 const isPreview = computed(() => transport.mode === "preview");
+
+/** 取消循环范围（回到整首循环）。给一句提示，免得用户以为「循环被关掉了」。 */
+async function clearLoopRange(): Promise<void> {
+  await transport.clearLoopRange();
+  layout.notify(i18n.t("bottom.loopRangeCleared"));
+}
 
 /** AI 胶囊文案：代理在写时带上代理名，否则是空闲态。 */
 const aiText = computed(() => {
@@ -188,7 +207,7 @@ function onRetryAudio(): void {
 
 <template>
   <footer class="bottom-bar">
-    <!-- 左：编辑历史 + 拍号 + 位置 -->
+    <!-- 左：编辑历史 + 录音输入 + 工程读数 -->
     <div class="zone left">
       <Tooltip :text="i18n.t('bottom.undo')" place="above" align="center">
         <button
@@ -230,38 +249,40 @@ function onRetryAudio(): void {
         <span class="level-fill" :style="{ width: levelPct }" />
       </span>
 
-      <TimeSignatureField :num="timeSigNum" :den="timeSigDen" @change="onTimeSignature" />
+      <span class="t-sep" />
 
-      <span class="readout" :title="i18n.t('bottom.positionTitle', { bar: positionText })">
-        <span class="readout-label">{{ i18n.t("bottom.position") }}</span>
-        <span class="strong tabular">{{ positionText }}</span>
+      <span class="readout">
+        <span class="strong tabular">{{ bars }}</span>
+        <span class="readout-label">{{ i18n.t("bottom.bar") }}</span>
       </span>
     </div>
 
-    <!-- 中：传输键（严格居中）。播放键左右各两个按钮 → 它正好落在底栏中线上。 -->
+    <!-- 中：传输。左右各一簇、播放键夹在中间 → 它恒落在底栏中线上。 -->
     <div class="core">
-      <Tooltip :text="i18n.t('bottom.toStart')" place="above" align="center">
-        <button class="t-btn" :aria-label="i18n.t('bottom.toStartLabel')" @click="transport.rewind()">
-          <BackwardIcon class="w-[17px] h-[17px]" />
-        </button>
-      </Tooltip>
+      <div class="core-side left">
+        <Tooltip :text="i18n.t('bottom.toStart')" place="above" align="center">
+          <button class="t-btn" :aria-label="i18n.t('bottom.toStartLabel')" @click="transport.rewind()">
+            <BackwardIcon class="w-[17px] h-[17px]" />
+          </button>
+        </Tooltip>
 
-      <Tooltip
-        :text="transport.recording ? i18n.t('bottom.recordStop') : i18n.t('bottom.record')"
-        place="above"
-        align="center"
-      >
-        <button
-          class="rec-btn"
-          :class="{ on: transport.recording }"
-          :disabled="recordTrack === null"
-          :aria-pressed="transport.recording"
-          :aria-label="transport.recording ? i18n.t('bottom.recordStopLabel') : i18n.t('bottom.recordLabel')"
-          @click="onToggleRecord"
+        <Tooltip
+          :text="transport.recording ? i18n.t('bottom.recordStop') : i18n.t('bottom.record')"
+          place="above"
+          align="center"
         >
-          <span class="rec-dot" />
-        </button>
-      </Tooltip>
+          <button
+            class="rec-btn"
+            :class="{ on: transport.recording }"
+            :disabled="recordTrack === null"
+            :aria-pressed="transport.recording"
+            :aria-label="transport.recording ? i18n.t('bottom.recordStopLabel') : i18n.t('bottom.recordLabel')"
+            @click="onToggleRecord"
+          >
+            <span class="rec-dot" />
+          </button>
+        </Tooltip>
+      </div>
 
       <Tooltip :text="isPlaying ? i18n.t('bottom.pause') : i18n.t('bottom.play')" place="above" align="center">
         <button
@@ -275,35 +296,71 @@ function onRetryAudio(): void {
         </button>
       </Tooltip>
 
-      <Tooltip :text="i18n.t('bottom.stop')" place="above" align="center">
-        <button class="t-btn" :aria-label="i18n.t('bottom.stopLabel')" @click="transport.stop()">
-          <StopIcon class="w-[17px] h-[17px]" />
-        </button>
-      </Tooltip>
+      <div class="core-side right">
+        <Tooltip :text="i18n.t('bottom.stop')" place="above" align="center">
+          <button class="t-btn" :aria-label="i18n.t('bottom.stopLabel')" @click="transport.stop()">
+            <StopIcon class="w-[17px] h-[17px]" />
+          </button>
+        </Tooltip>
 
-      <Tooltip :text="i18n.t('bottom.loop')" place="above" align="center">
-        <button
-          class="t-btn"
-          :class="{ on: transport.loop }"
-          :aria-pressed="transport.loop"
-          :aria-label="i18n.t('bottom.loopLabel')"
-          @click="transport.setLoop(!transport.loop)"
+        <Tooltip :text="i18n.t('bottom.loop')" place="above" align="center">
+          <button
+            class="t-btn"
+            :class="{ on: transport.loop }"
+            :aria-pressed="transport.loop"
+            :aria-label="i18n.t('bottom.loopLabel')"
+            @click="transport.setLoop(!transport.loop)"
+          >
+            <ArrowPathIcon class="w-[17px] h-[17px]" />
+          </button>
+        </Tooltip>
+
+        <!--
+          循环范围徽标：只在标尺上划出了范围时出现。右键标尺也能取消，但那条手势太隐晦，
+          底栏给一个明面上的出口（点它即取消，并提示一下「回到整首循环」）。
+        -->
+        <Tooltip
+          v-if="transport.hasLoopRange"
+          :text="i18n.t('bottom.loopRangeClear')"
+          place="above"
+          align="center"
         >
-          <ArrowPathIcon class="w-[17px] h-[17px]" />
-        </button>
-      </Tooltip>
+          <button
+            class="range-pill"
+            :aria-label="i18n.t('bottom.loopRangeClear')"
+            @click="clearLoopRange"
+          >
+            <span class="tabular">{{ transport.loopRangeLabel }}</span>
+            <XMarkIcon class="w-[12px] h-[12px]" />
+          </button>
+        </Tooltip>
+      </div>
     </div>
 
-    <!-- 右：BPM + 状态 -->
+    <!-- 右：时间与节拍（位置 / 拍号 / BPM / 节拍器）+ AI 与引擎状态 -->
     <div class="zone right">
-      <NumberField v-model="tempo" :min="20" :max="300" label="BPM" />
+      <!-- 位置只给数字（`小节.拍`），名称交给 tooltip：右栏还要塞下拍号与 BPM，省掉标签更稳。 -->
+      <span class="readout" :title="i18n.t('bottom.positionTitle', { bar: positionText })">
+        <span class="strong tabular">{{ positionText }}</span>
+      </span>
 
       <span class="t-sep" />
 
-      <span class="readout">
-        <span class="strong tabular">{{ bars }}</span>
-        <span class="readout-label">{{ i18n.t("bottom.bar") }}</span>
-      </span>
+      <TimeSignatureField :num="timeSigNum" :den="timeSigDen" @change="onTimeSignature" />
+      <NumberField v-model="tempo" :min="20" :max="300" label="BPM" />
+      <Tooltip :text="i18n.t('bottom.metronome')" place="above" align="center">
+        <button
+          class="t-btn"
+          :class="{ on: transport.metronome }"
+          :aria-pressed="transport.metronome"
+          :aria-label="i18n.t('bottom.metronomeLabel')"
+          @click="transport.setMetronome(!transport.metronome)"
+        >
+          <MetronomeIcon />
+        </button>
+      </Tooltip>
+
+      <span class="t-sep" />
 
       <Tooltip :text="aiHint" place="above" align="end">
         <span class="ai-pill" :class="{ live: isAiActive }">
@@ -358,11 +415,25 @@ function onRetryAudio(): void {
 .zone.right {
   justify-content: flex-start;
 }
+/* 中栏：左右各一簇 + 正中的播放键。`1fr auto 1fr` 让播放键**恒落在该栏中线上**，
+   与两簇各有几个按钮无关（外层等宽三栏已把中栏本身钉在底栏中线上）。 */
 .core {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+}
+.core-side {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 8px;
+  min-width: 0;
+}
+.core-side.left {
+  justify-content: flex-end;
+}
+.core-side.right {
+  justify-content: flex-start;
 }
 .t-btn {
   width: 32px;
@@ -421,6 +492,37 @@ function onRetryAudio(): void {
   letter-spacing: 0.4px;
   white-space: nowrap;
   flex: 0 0 auto;
+}
+/*
+ * 循环范围徽标：显示「第 X–Y 小节」，点它取消范围。
+ * 用**主色**而不是关键点那套三色——循环范围是运行时状态、跟关键点那种工程数据不是一回事，
+ * 标尺上那条范围带也是同一个主色，两处能对上。
+ */
+.range-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  margin-left: 4px;
+  border: 0;
+  border-radius: 999px;
+  background-color: rgb(var(--md-primary));
+  color: rgb(var(--md-on-primary));
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  cursor: pointer;
+  transition: background-color var(--md-ease-emphasized);
+}
+.range-pill:hover {
+  background-color: rgb(var(--md-primary-container));
+  color: rgb(var(--md-on-primary-container));
+}
+.range-pill:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 1px;
 }
 .play-btn {
   width: 44px;
@@ -614,7 +716,7 @@ function onRetryAudio(): void {
     display: none;
   }
 }
-@media (max-width: 1080px) {
+@media (max-width: 1280px) {
   .engine:not(.fallback) {
     display: none;
   }

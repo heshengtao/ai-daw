@@ -403,6 +403,26 @@ impl Engine {
                     audio: audio.clone(),
                 }]
             }
+            Command::SetClipRate { track, clip, rate, pitch_semitones } => {
+                // 只对**音频片段**有效；MIDI 片段 / 不存在的片段安静忽略。
+                let Some(existing) = self
+                    .project
+                    .track(*track)
+                    .and_then(|t| t.clips.iter().find(|c| c.id == *clip))
+                else {
+                    return vec![];
+                };
+                if existing.audio.is_none() {
+                    return vec![];
+                }
+                vec![Event::ClipRateChanged {
+                    actor: actor.clone(),
+                    track: *track,
+                    clip: *clip,
+                    rate: crate::model::AudioSource::normalize_rate(*rate),
+                    pitch_semitones: crate::model::AudioSource::normalize_pitch(*pitch_semitones),
+                }]
+            }
             Command::RemoveClip { track, clip } => {
                 vec![Event::ClipRemoved { actor: actor.clone(), track: *track, clip: *clip }]
             }
@@ -493,11 +513,15 @@ impl Engine {
                         path: src.path.clone(),
                         offset_frames: src.offset_frames,
                         frames: Some(left_frames),
+                        rate: src.rate,
+                        pitch_semitones: src.pitch_semitones,
                     });
                     right_audio = Some(crate::model::AudioSource {
                         path: src.path.clone(),
                         offset_frames: src.offset_frames + left_frames,
                         frames: Some(window - left_frames),
+                        rate: src.rate,
+                        pitch_semitones: src.pitch_semitones,
                     });
                 }
 
@@ -765,7 +789,7 @@ mod tests {
                 track,
                 start: -5.0,
                 length: 1e9,
-                source: AudioSource { path: "/tmp/a.wav".into(), offset_frames: 0, frames: None },
+                source: AudioSource { path: "/tmp/a.wav".into(), offset_frames: 0, frames: None, rate: 1.0, pitch_semitones: 0.0 },
             },
             Actor::Human,
         );
@@ -802,7 +826,7 @@ mod tests {
             Command::SetClipAudio {
                 track,
                 clip,
-                audio: Some(AudioSource { path: "x.wav".into(), offset_frames: 0, frames: None }),
+                audio: Some(AudioSource { path: "x.wav".into(), offset_frames: 0, frames: None, rate: 1.0, pitch_semitones: 0.0 }),
             },
             Actor::Human,
         );
@@ -1461,7 +1485,7 @@ mod tests {
                 track,
                 start: 0.0,
                 length: 4.0,
-                source: AudioSource { path: "/tmp/a.wav".into(), offset_frames: 100, frames: Some(800) },
+                source: AudioSource { path: "/tmp/a.wav".into(), offset_frames: 100, frames: Some(800), rate: 1.0, pitch_semitones: 0.0 },
             },
             Actor::Human,
         );
@@ -1475,8 +1499,9 @@ mod tests {
         assert_eq!(left.frames, Some(400), "左半段窗口取一半");
         assert_eq!(right.offset_frames, 500);
         assert_eq!(right.frames, Some(400));
-        // 两半段铺满各自的跨度，比值一致 → 不变调。
-        assert_eq!(left.frames.unwrap() as f64 / t.clips[0].length, right.frames.unwrap() as f64 / t.clips[1].length);
+        // 两半段沿用同一速度 / 升降调参数 → 切分不改音高、不变速。
+        assert_eq!(left.rate, right.rate);
+        assert_eq!(left.pitch_semitones, right.pitch_semitones);
     }
 
     #[test]
@@ -1565,6 +1590,8 @@ mod tests {
                     path: "clean.wav".into(),
                     offset_frames: 100,
                     frames: Some(800),
+                    rate: 1.0,
+                    pitch_semitones: 0.0,
                 },
                 at: Some(1),
             },
