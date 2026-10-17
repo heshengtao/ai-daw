@@ -255,6 +255,9 @@ fn agent_sessions_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // 自动更新：`updater` 负责检查 / 下载 / 验签安装，`process` 负责装完重启。
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .on_window_event(|window, event| on_host_window_closing(window, event))
         .manage(AppState::new("untitled"))
         .setup(|app| {

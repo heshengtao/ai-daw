@@ -287,6 +287,24 @@ const en: Record<string, string> = {
   "settings.about.licenseLabel": "Open-source licence",
   "settings.about.licenseHint": "The core and the built-in plugin share one licence",
 
+  // ---- Auto-update (Settings → About) ----
+  "settings.update.group": "Updates",
+  "settings.update.title": "Software update",
+  "settings.update.hint": "Updates are fetched from GitHub Releases",
+  "settings.update.check": "Check for updates",
+  "settings.update.download": "Download & install",
+  "settings.update.restart": "Restart now",
+  "settings.update.downloading": "Downloading {percent}%",
+  "settings.update.notes": "What's new",
+  "settings.update.status.idle": "You're up to date",
+  "settings.update.status.checking": "Checking for updates…",
+  "settings.update.status.available": "Version v{version} is available",
+  "settings.update.status.downloading": "Downloading v{version}…",
+  "settings.update.status.ready": "Downloaded — restart to finish",
+  "settings.update.status.restartHint": "Restart the app to run the new version",
+  "settings.update.status.error": "Update failed: {error}",
+  "settings.update.availableToast": "Version v{version} is available — update it in Settings → About",
+
   // ---- Top bar / bottom bar / tabs ----
   "topbar.view.arrange": "Arrange",
   "topbar.view.edit": "Edit",

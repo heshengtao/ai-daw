@@ -20,6 +20,7 @@ import Md3Slider from "@/components/common/Md3Slider.vue";
 import NumberField from "@/components/common/NumberField.vue";
 import ComboField from "@/components/common/ComboField.vue";
 import { usePluginsStore } from "@/stores/plugins";
+import { useUpdaterStore } from "@/stores/updater";
 import { useI18n } from "@/i18n";
 import { copyText } from "@/utils/clipboard";
 import { lastWorkspace } from "@/router";
@@ -69,7 +70,7 @@ const SOURCE_PREFS: { id: ModelSourcePreference; labelKey: string }[] = [
   { id: "domestic", labelKey: "settings.store.sourceCn" },
 ];
 
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.1.0";
 
 const router = useRouter();
 const active = ref<Section>("general");
@@ -78,6 +79,7 @@ const layout = useLayoutStore();
 const project = useProjectStore();
 const settings = useSettingsStore();
 const plugins = usePluginsStore();
+const updater = useUpdaterStore();
 const i18n = useI18n();
 
 const activeMeta = computed(() => SECTIONS.find((s) => s.id === active.value) ?? SECTIONS[0]);
@@ -431,12 +433,42 @@ async function saveAgent(): Promise<void> {
   }
 }
 
+// ---- 自动更新 ----
+/** 更新行标题：随阶段变化（检查中 / 发现新版本 / 下载中 / 就绪 / 失败）。 */
+const updateTitle = computed(() => {
+  switch (updater.phase) {
+    case "checking":
+      return i18n.t("settings.update.status.checking");
+    case "available":
+      return i18n.t("settings.update.status.available", { version: updater.info?.version ?? "" });
+    case "downloading":
+      return i18n.t("settings.update.status.downloading", { version: updater.info?.version ?? "" });
+    case "ready":
+      return i18n.t("settings.update.status.ready");
+    case "error":
+      return i18n.t("settings.update.status.error", { error: updater.error });
+    default:
+      return i18n.t("settings.update.title");
+  }
+});
+
+/** 更新行说明：空闲给「已是最新」，下载中给百分比，就绪提示重启，其余给来源提示。 */
+const updateMessage = computed(() => {
+  if (updater.phase === "idle") return i18n.t("settings.update.status.idle");
+  if (updater.phase === "ready") return i18n.t("settings.update.status.restartHint");
+  if (updater.phase === "downloading") {
+    return i18n.t("settings.update.downloading", { percent: Math.round(updater.progress * 100) });
+  }
+  return i18n.t("settings.update.hint");
+});
+
 onMounted(() => {
   void loadMcp();
   void loadCli();
   void loadStoreNetwork();
   void loadBackend();
   void loadAgent();
+  void updater.loadVersion();
   // 深链：`/settings?section=ai` 直接落到 AI / MCP 子页（写歌智能体的「去配置」会这么跳）。
   const section = router.currentRoute.value.query.section;
   if (typeof section === "string" && SECTIONS.some((s) => s.id === section)) {
@@ -1091,7 +1123,7 @@ onMounted(() => {
                   <span class="row-title">{{ i18n.t("settings.about.version") }}</span>
                   <span class="row-sub">{{ i18n.t("settings.about.versionHint") }}</span>
                 </div>
-                <span class="row-value">v{{ APP_VERSION }}</span>
+                <span class="row-value">v{{ updater.version || APP_VERSION }}</span>
               </div>
               <div class="row">
                 <div class="row-text">
@@ -1099,6 +1131,60 @@ onMounted(() => {
                   <span class="row-sub">{{ i18n.t("settings.about.engineHint") }}</span>
                 </div>
                 <span class="row-value">ai-daw-engine</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="group">
+            <div class="group-title">{{ i18n.t("settings.update.group") }}</div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ updateTitle }}</span>
+                  <span class="row-sub">{{ updateMessage }}</span>
+                </div>
+                <div class="row-actions">
+                  <button
+                    v-if="updater.phase === 'ready'"
+                    class="scan-btn"
+                    @click="updater.restart()"
+                  >
+                    {{ i18n.t("settings.update.restart") }}
+                  </button>
+                  <button
+                    v-else-if="updater.phase === 'available'"
+                    class="scan-btn"
+                    @click="updater.install()"
+                  >
+                    {{ i18n.t("settings.update.download") }}
+                  </button>
+                  <button
+                    v-else
+                    class="scan-btn"
+                    :disabled="updater.phase === 'checking' || updater.phase === 'downloading'"
+                    @click="updater.check()"
+                  >
+                    {{ i18n.t("settings.update.check") }}
+                  </button>
+                </div>
+              </div>
+              <div v-if="updater.phase === 'downloading'" class="col-row">
+                <div
+                  class="update-progress"
+                  role="progressbar"
+                  :aria-valuenow="Math.round(updater.progress * 100)"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                >
+                  <div
+                    class="update-progress-fill"
+                    :style="{ width: `${Math.round(updater.progress * 100)}%` }"
+                  />
+                </div>
+              </div>
+              <div v-if="updater.info?.notes" class="col-row">
+                <span class="row-title">{{ i18n.t("settings.update.notes") }}</span>
+                <p class="row-sub update-notes">{{ updater.info.notes }}</p>
               </div>
             </div>
           </div>
@@ -1441,5 +1527,24 @@ onMounted(() => {
   gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+/* ---- 自动更新 ---- */
+.update-progress {
+  height: 4px;
+  border-radius: 999px;
+  background-color: rgb(var(--md-outline-variant) / 0.4);
+  overflow: hidden;
+}
+.update-progress-fill {
+  height: 100%;
+  background-color: rgb(var(--md-primary));
+  transition: width 0.15s linear;
+}
+.update-notes {
+  margin: 0;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
 }
 </style>

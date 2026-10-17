@@ -286,6 +286,24 @@ const zh: Record<string, string> = {
   "settings.about.licenseLabel": "开源许可",
   "settings.about.licenseHint": "核心与内置插件为同一许可",
 
+  // ---- 自动更新（设置 → 关于） ----
+  "settings.update.group": "自动更新",
+  "settings.update.title": "软件更新",
+  "settings.update.hint": "更新从 GitHub Releases 获取",
+  "settings.update.check": "检查更新",
+  "settings.update.download": "下载并安装",
+  "settings.update.restart": "立即重启",
+  "settings.update.downloading": "正在下载 {percent}%",
+  "settings.update.notes": "更新内容",
+  "settings.update.status.idle": "已是最新版本",
+  "settings.update.status.checking": "正在检查更新…",
+  "settings.update.status.available": "发现新版本 v{version}",
+  "settings.update.status.downloading": "正在下载 v{version}…",
+  "settings.update.status.ready": "已下载，重启后生效",
+  "settings.update.status.restartHint": "重启应用即可运行新版本",
+  "settings.update.status.error": "更新失败：{error}",
+  "settings.update.availableToast": "发现新版本 v{version}，可在「设置 → 关于」更新",
+
   // ---- 顶栏 / 底栏 / 标签栏 ----
   "topbar.view.arrange": "编排",
   "topbar.view.edit": "编辑",

@@ -31,7 +31,8 @@ jobs:
           - platform: macos-latest
             target: aarch64-apple-darwin
             artifact: macos-arm64
-            bundles: --bundles dmg
+            # 同时出 `app`：更新包（`.app.tar.gz`）就是由它生成的（dmg 只是分发外壳）。
+            bundles: --bundles dmg,app
           # 没有 Intel macOS（x86_64-apple-darwin）这一档：`ort` 只对 x86_64-apple-darwin
           # **不发预编译的 ONNX Runtime**（`ort-sys: no prebuilt binaries available`），
           # 加进来只会让整个 release 挂掉。要支持得改用 `load-dynamic` 自己带 dylib。
@@ -89,6 +90,9 @@ jobs:
         run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundles }}
         env:
           AIDAW_TARGET: ${{ matrix.target }}
+          # 更新包签名：私钥 + 口令从仓库 Secrets 读；缺失会让 build 直接失败（有意为之）。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Collect Linux bundles
         if: startsWith(matrix.platform, 'ubuntu')
@@ -100,6 +104,11 @@ jobs:
             [ -f "$f" ] || continue
             ext="${f##*.}"
             cp "$f" "out/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.${ext}"
+          done
+          # AppImage 的更新签名（autoupdate 只认 .AppImage + 同名 .sig）。
+          for f in "$bundle"/appimage/*.AppImage.sig; do
+            [ -f "$f" ] || continue
+            cp "$f" "out/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.AppImage.sig"
           done
           ls -la out
 
@@ -113,6 +122,9 @@ jobs:
             ForEach-Object { Copy-Item $_.FullName "out/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.msi" }
           Get-ChildItem "$bundle/nsis/*-setup.exe" -ErrorAction SilentlyContinue |
             ForEach-Object { Copy-Item $_.FullName "out/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}-setup.exe" }
+          # NSIS 安装包的更新签名。
+          Get-ChildItem "$bundle/nsis/*-setup.exe.sig" -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName "out/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}-setup.exe.sig" }
           Get-ChildItem out
 
       - name: Collect macOS bundles
@@ -124,6 +136,11 @@ jobs:
           for f in "$bundle"/dmg/*.dmg; do
             [ -f "$f" ] || continue
             cp "$f" "out/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.dmg"
+          done
+          # 更新包：`.app.tar.gz`（+ 同名 .sig），由 `app` bundle 产出。
+          for f in "$bundle"/macos/*.app.tar.gz "$bundle"/macos/*.app.tar.gz.sig; do
+            [ -f "$f" ] || continue
+            cp "$f" "out/AI-DAW-${{ github.ref_name }}-${{ matrix.artifact }}.app.tar.gz${f##*.app.tar.gz}"
           done
           ls -la out
 
@@ -146,6 +163,40 @@ jobs:
 
       - name: List collected artifacts
         run: ls -la artifacts
+
+      - name: Generate latest.json for the updater
+        run: |
+          node -e "
+          const fs = require('fs');
+          const tag = process.env.TAG;
+          const base = 'https://github.com/' + process.env.REPO + '/releases/download/' + tag + '/';
+          const files = fs.readdirSync('artifacts');
+          const find = (suffix, mid) => files.find((f) => f.endsWith(suffix) && (!mid || f.includes(mid)));
+          const platforms = {};
+          const add = (key, fileSuffix, sigSuffix, mid) => {
+            const f = find(fileSuffix, mid);
+            const s = find(sigSuffix, mid);
+            if (f && s) {
+              platforms[key] = {
+                signature: fs.readFileSync('artifacts/' + s, 'utf8').trim(),
+                url: base + f,
+              };
+            }
+          };
+          add('windows-x86_64', '-setup.exe', '-setup.exe.sig');
+          add('darwin-aarch64', '.app.tar.gz', '.app.tar.gz.sig', 'macos-arm64');
+          add('linux-x86_64', 'linux-amd64.AppImage', 'linux-amd64.AppImage.sig');
+          add('linux-aarch64', 'linux-arm64.AppImage', 'linux-arm64.AppImage.sig');
+          fs.writeFileSync('artifacts/latest.json', JSON.stringify({
+            version: tag.replace(/^v/, ''),
+            notes: 'See the release notes on GitHub.',
+            pub_date: new Date().toISOString(),
+            platforms,
+          }, null, 2));
+          "
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
 
       - uses: softprops/action-gh-release@v2
         with:

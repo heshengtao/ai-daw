@@ -19,6 +19,7 @@ import { useLayoutStore } from "@/stores/layout";
 import { useEngineEventsStore } from "@/stores/engineEvents";
 import { useTransportStore } from "@/stores/transport";
 import { usePluginsStore } from "@/stores/plugins";
+import { useUpdaterStore } from "@/stores/updater";
 import { usePresetsStore } from "@/stores/presets";
 import { useSelectionStore } from "@/stores/selection";
 import { useParamBrowserStore } from "@/stores/paramBrowser";
@@ -35,6 +36,7 @@ const layout = useLayoutStore();
 const events = useEngineEventsStore();
 const transport = useTransportStore();
 const plugins = usePluginsStore();
+const updater = useUpdaterStore();
 const presets = usePresetsStore();
 const selection = useSelectionStore();
 const paramBrowser = useParamBrowserStore();
@@ -413,6 +415,17 @@ onMounted(async () => {
   if (isPrimaryWindow) await project.localizeStarterTracks().catch(() => {});
   // 用户预设：跨工程，取一次就够（保存/删除后会各自刷新）。
   void presets.refresh();
+  // 启动时静默查一次更新（只由主窗口做）：有新版本就提示去设置页更新；查不到（例如还没发过
+  // release，端点 404）或连不上都当作「已是最新」，不打扰用户。
+  if (isPrimaryWindow) {
+    void updater.check(true).then((has) => {
+      if (has) {
+        layout.notify(
+          i18n.t("settings.update.availableToast", { version: updater.info?.version ?? "" }),
+        );
+      }
+    });
+  }
   // 插件目录：先取一次当前值，再等后端的后台扫描完成推送。
   await plugins.refresh().catch(() => {});
   unlistenPlugins = await onPluginsEvent(() => void plugins.refresh());
