@@ -1,118 +1,176 @@
-# AI DAW
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="100%" alt="AI DAW — a local-first, AI-native digital audio workstation">
+</p>
 
-> 本地优先的 AI 数字音频工作站 ｜ A local-first, AI-native digital audio workstation
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.1.0-1A6CFF?style=flat-square" alt="Version 0.1.0">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-1A6CFF?style=flat-square" alt="License: Apache-2.0"></a>
+  <img src="https://img.shields.io/badge/platforms-Windows%20/%20macOS%20/%20Linux-1A6CFF?style=flat-square" alt="Platforms: Windows, macOS, Linux">
+  <a href="https://github.com/heshengtao/ai-daw/stargazers"><img src="https://img.shields.io/github/stars/heshengtao/ai-daw?style=flat-square&color=1A6CFF" alt="GitHub stars"></a>
+</p>
 
-用 **Tauri v2 + Rust 音频引擎 + Vue 3** 构建的桌面 DAW。实时音频引擎跑在 Rust 侧，
-界面用 Material You 风格自绘；本地 AI 模型（节拍检测、音频转 MIDI、人声降噪、音源分离）
-全部离线推理，另内置一个 MCP 服务器，让 AI 代理可以直接操作工程。
+<p align="center">
+  <a href="README_zh.md"><b>简体中文</b></a> ·
+  <a href="README.md"><b>English</b></a>
+</p>
 
-A desktop DAW built with **Tauri v2 + a Rust audio engine + Vue 3**. All local AI
-models run offline; a built-in MCP server lets AI agents drive the project directly.
+## What is AI DAW?
 
----
+**AI DAW** is an open-source, **local-first digital audio workstation** built with **Tauri v2**, a **Rust audio engine**, and a **Vue 3** interface. Arrange, edit, mix, and master on your own machine — with the engine and every AI model running natively at your side, not in someone else's cloud.
 
-## 功能
+The engine is written in Rust and talks to the audio device through `cpal`, moving samples on a lock-free ring buffer so the real-time thread never blocks. Arranging, transport, scheduling, buses, and time-stretching all live in the engine; the UI is a Material You–styled Vue 3 app that mirrors that state over a typed command/event contract.
 
-**编排与编辑**
-- 多轨道编排视图、迷你钢琴卷帘、音频波形片段、框选 / 拖拽 / 剪切 / 复制粘贴
-- 动态速度与拍号、走带循环、标尺与网格自动对齐
-- 内置合成器（振荡器 / 包络 / 滤波）、参数自动化车道
+Local AI runs **fully offline**. Tempo detection, audio-to-MIDI, voice cleanup, and stem separation are all ONNX models executed on-device — no account, no API key, no audio leaving your computer. A built-in **MCP server** (Model Context Protocol) then lets an AI agent read and edit the project directly, so assistants can drive the DAW for you.
 
-**混音**
-- 调音台：增益、声像、发送、总线、静音 / 独奏
-- 内置效果器、母带处理（响度归一 + 真峰值限幅 + 立体声宽度）
+## Features
 
-**插件**
-- VST3 / CLAP 插件宿主
-- 插件管理器：搜索、按类型与兼容性筛选、一键安装 / 更新 / 卸载、本地导入
+### 🎹 Arranging & Editing — Compose on a Real Timeline
 
-**本地 AI（离线，ONNX）**
-- **节拍检测** — Beat This!（ISMIR 2024）：一次推理给出全局 BPM + 拍号
-- **音频转 MIDI** — Basic Pitch
-- **人声降噪 / 去混响** — LocalVQE
-- **音源分离** — HTDemucs v4，可选 4 / 6 分轨
+A familiar arrange view with multiple tracks, mini piano-roll clips, and audio waveform clips. Select, drag, split, copy, paste, and delete clips across tracks; the ruler and grid stay locked to a dynamic tempo and time signature you can change at any point in the song. A transport with loop, metronome, and a scrubable playhead ties it together, and automation lanes let you draw curves for anything a plugin or the built-in synth exposes.
 
-**AI 代理接入**
-- 内嵌 MCP 服务器（Streamable HTTP，只监听 `127.0.0.1`），AI 代理可直接读写工程
-- `aidaw` 命令行工具（MCP 薄客户端），可一键挂到 `PATH`
+- **Multi-Track Arranging** — MIDI and audio clips side by side, cross-track drag & drop, marquee select
+- **Mini Piano Roll & Waveforms** — Clips render their own notes or waveform so you can read the song at a glance
+- **Dynamic Tempo & Meter** — Tempo and time-signature changes anywhere on the timeline; the grid follows automatically
+- **Transport & Loop** — Play, stop, seek, loop region, and a metronome
+- **Automation Lanes** — Draw parameter curves, with a parameter browser to pick what to automate
+- **Editing** — Split, move, copy/paste, undo/redo, plus a keyboard-shortcut cheat sheet
 
-## 技术栈
+### 🎚️ Mixing & Mastering — Finish the Track
 
-| 层 | 选型 |
-| --- | --- |
-| 桌面外壳 | Tauri v2 |
-| 音频引擎 | Rust（`cpal` 实时音频、`rtrb` 无锁环、`hound` / Symphonia 解码） |
-| 本地推理 | `ort`（ONNX Runtime）/ `rten`（纯 Rust） |
-| 插件宿主 | VST3 / CLAP |
-| AI 代理 | `rmcp` + `axum`（MCP over HTTP） |
-| 前端 | Vue 3 + Vite + TypeScript + Pinia + Tailwind（Material You） |
+A mixer with per-track gain, pan, sends, buses, mute/solo, and meters, plus built-in effects. A mastering chain — loudness normalization, true-peak limiting, and stereo width — gives you a release-ready render without leaving the app.
 
-## 仓库结构
+- **Mixer** — Gain, pan, sends, buses, mute/solo, and meters
+- **Built-in Effects** — Ready-to-use dynamics, EQ, and time-based effects
+- **Mastering Chain** — Loudness normalization + true-peak limiting + stereo width
+- **Built-in Synth** — Oscillators, envelopes, and a filter with a live oscilloscope
 
-```
-crates/
-  engine/        实时音频引擎：播放、调度、总线、走带、时间拉伸
-  ipc/           前后端命令与事件的共享契约（serde 模型）
-  synth/         内置合成器
-  effects/       内置效果器
-  asset/         音频解码与素材管理
-  analysis/      频谱 / 峰值 / RMS 量化分析
-  host-vst3/     VST3 / CLAP 插件宿主
-  plugin-api/    插件抽象
-  local-ai/      本地 AI 模型（Beat This!、Basic Pitch、LocalVQE、HTDemucs）
-  mastering/     母带处理（响度归一、真峰值限幅、立体声宽度）
-  aidaw/         aidaw 命令行（MCP 薄客户端）
-src-tauri/       应用外壳：Tauri 命令、MCP 服务器、插件管理器、模型管理器
-src/             Vue 3 前端（视图、组件、Pinia stores、i18n）
-tools/           构建与模型脚本（fetch-models.sh、build-aidaw.sh 等）
-docs/            设计稿与路线图（docs/superpowers）
-```
+### 🧩 Plugins — Bring Your Own Instruments and Effects
 
-## 快速开始
+Hosts **VST3** and **CLAP** plugins. A plugin manager searches the open registry, filters by type and OS compatibility, and installs, updates, or removes plugins in one click — or import a plugin you already have on disk.
 
-**环境要求**
-- Rust（stable）与 Cargo
-- Node.js ≥ 18 与 [pnpm](https://pnpm.io/)
-- Tauri v2 所需的系统依赖，见 <https://tauri.app/start/prerequisites/>
+- **VST3 & CLAP Hosting** — Load third-party instruments and effects on any track
+- **Plugin Manager** — Search the open registry, filter by instrument/effect and compatibility, install / update / uninstall
+- **Local Import** — Point the manager at a plugin you already have installed elsewhere
+- **Plugin UI & Parameters** — Open a plugin's own editor, or drive its parameters from the inspector and automation lanes
 
-**开发**
+### 🤖 Local AI Models — Offline, On Your Machine
+
+Every AI feature is a local ONNX model that runs on CPU by default, with optional **CoreML** (macOS) and **DirectML** (Windows) execution providers when the hardware supports them. Weights download on demand from the in-app **model manager**; nothing is uploaded anywhere.
+
+- **Tempo Detection** — Beat This! (ISMIR 2024) infers a global BPM and time signature in one pass
+- **Audio-to-MIDI** — Basic Pitch turns a recorded performance into editable MIDI notes
+- **Voice Cleanup** — LocalVQE reduces noise and reverb on voice takes
+- **Stem Separation** — HTDemucs v4 splits a track into 4 or 6 stems
+- **Execution Backends** — CPU by default; CoreML / DirectML where available
+
+### 🔌 MCP Server — Let an AI Agent Drive the DAW
+
+A built-in **MCP (Model Context Protocol)** server exposes the project to AI agents over Streamable HTTP, bound to `127.0.0.1` only. Enable it in **Settings → AI / MCP**, copy the endpoint, and connect your agent — it can add clips, edit notes, change gain, and more, with every change showing up live in the UI.
+
+- **MCP over HTTP** — A loopback-only endpoint your agent connects to
+- **Live Project Edits** — Agent actions appear immediately as normal project changes
+- **`aidaw` CLI** — A thin MCP client you can install onto `PATH` from Settings
+
+## Installation
+
+Pre-built binaries will be published on the [GitHub Releases](https://github.com/heshengtao/ai-daw/releases) page. Until then, build from source.
+
+### Requirements
+
+- Rust (stable) with Cargo
+- Node.js ≥ 18 and [pnpm](https://pnpm.io/)
+- Tauri v2 system prerequisites — see <https://tauri.app/start/prerequisites/>
+
+### Build from Source
 
 ```bash
+git clone https://github.com/heshengtao/ai-daw.git
+cd ai-daw
+
 pnpm install
-pnpm tauri dev
+pnpm tauri dev        # run the app in development
+pnpm tauri build      # produce a release build
 ```
 
-**构建**
+Other useful commands:
 
 ```bash
-pnpm tauri build      # 打包桌面应用
-pnpm build            # 仅做类型检查 + 前端构建
+pnpm build            # type-check the frontend and build it
+pnpm build:aidaw      # build the aidaw CLI (see tools/build-aidaw.sh)
 ```
 
-**命令行工具**
+> **Local AI weights are not bundled.** A small log-mel front-end ships with the app, but the larger weights (Beat This!, Demucs, LocalVQE, Basic Pitch) download on demand from the in-app **model manager** on first use. Configure a mirror or proxy under **Settings → Network** if downloads are slow in your region.
 
-```bash
-pnpm build:aidaw      # 构建 aidaw CLI（见 tools/build-aidaw.sh）
+### Platform Support
+
+| Platform | Status |
+| --- | --- |
+| Windows (x86_64) | ✅ Supported |
+| macOS (Apple Silicon / Intel) | ✅ Supported |
+| Linux (x86_64) | ✅ Supported |
+
+## Architecture
+
+The repository is a Cargo workspace of focused Rust crates behind a Tauri app.
+
+| Crate | Purpose |
+| --- | --- |
+| `crates/engine` | Real-time audio engine: playback, scheduling, buses, transport, time-stretch |
+| `crates/ipc` | Shared command/event contract between the Rust core and the UI (serde models) |
+| `crates/synth` | Built-in synthesizer |
+| `crates/effects` | Built-in effects |
+| `crates/asset` | Audio decoding and asset management |
+| `crates/analysis` | Spectral / peak / RMS analysis |
+| `crates/host-vst3` | VST3 / CLAP plugin host |
+| `crates/plugin-api` | Plugin abstraction |
+| `crates/local-ai` | Local AI models (Beat This!, Basic Pitch, LocalVQE, HTDemucs) |
+| `crates/mastering` | Mastering chain (loudness normalization, true-peak limiting, stereo width) |
+| `crates/aidaw` | `aidaw` command-line tool (thin MCP client) |
+| `src-tauri` | Tauri shell: commands, MCP server, plugin manager, model manager |
+| `src` | Vue 3 frontend (views, components, Pinia stores, i18n) |
+
+## Project Structure
+
+```
+ai-daw/
+├── crates/            # Rust workspace (engine, ipc, synth, effects, local-ai, ...)
+├── src-tauri/         # Tauri app: commands, MCP server, managers
+├── src/               # Vue 3 frontend (Vite + TypeScript + Pinia + Tailwind)
+├── tools/             # Build and model scripts (fetch-models.sh, build-aidaw.sh, ...)
+├── assets/readme/     # README assets
+└── docs/              # Design specs and roadmap
 ```
 
-## 本地 AI 模型
+## FAQ
 
-模型权重**不进仓库**，按需下载：
+### Is AI DAW free?
 
-- `mel_spectrogram.onnx`（约 264 KB 的 log-mel 前端）**随安装包分发**
-- 其余权重（如 Beat This! 约 83 MB、Demucs、LocalVQE、Basic Pitch）在
-  **「管理器 → 可下载 → 模型」**里按需下载，或在设置里配置镜像 / 代理后拉取
-- 开发期也可以用 `tools/fetch-models.sh` 预先拉取到仓库根的 `models/`（该目录已被忽略）
+Yes. AI DAW is open source under Apache 2.0. There are no paid tiers and no feature gates.
 
-## 许可
+### Does it work offline?
 
-本项目以 **Apache License 2.0** 授权，见 [LICENSE](./LICENSE)。
+Yes. The engine, the UI, and every AI model run locally. The only network access is downloading plugin/model packages (which you control) and fetching the plugin registry.
 
-再分发时请一并保留 [NOTICE](./NOTICE)：其中记录了改编自其它开源项目的文件
-（均已按其许可授权）以及第三方依赖里非宽松许可的说明。
+### Do I need a GPU?
 
-## 致谢
+No. AI models run on CPU by default. macOS can use CoreML and Windows can use DirectML when the hardware supports it; both are optional.
 
-界面设计系统（Material You 令牌与组件层）改编自
-[Exameow](https://github.com/heshengtao/exameow)；Demucs 的 STFT 前端改编自
-[stem-splitter-core](https://github.com/gentij/stem-splitter-core)。详见 [NOTICE](./NOTICE)。
+### Which plugin formats are supported?
+
+VST3 and CLAP.
+
+### What can an AI agent do through the MCP server?
+
+With the MCP server enabled, an agent can read the project and make edits — adding clips, editing notes, changing gain, and more — over a loopback-only HTTP endpoint. The `aidaw` CLI is a thin client for the same server.
+
+### Where do the AI model weights live?
+
+A small log-mel front-end ships with the app. Larger weights download on demand from the in-app model manager and are stored outside the repository, so they are never committed.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
+
+## Third-Party Licenses
+
+This project builds on third-party open source software. Files adapted from other projects, and dependencies whose licenses are not in the permissive default set, are listed in [NOTICE](NOTICE).

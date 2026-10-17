@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" width="1200" height="420" role="img" aria-label="AI DAW — a local-first, AI-native digital audio workstation">
+  <title>AI DAW</title>
+  <defs>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7F67BE" />
+      <stop offset="1" stop-color="#4F378B" />
+    </linearGradient>
+    <linearGradient id="eq" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#D0BCFF" />
+      <stop offset="1" stop-color="#6750A4" />
+    </linearGradient>
+    <radialGradient id="glow" cx="0.12" cy="0.5" r="0.9">
+      <stop offset="0" stop-color="#6750A4" stop-opacity="0.34" />
+      <stop offset="0.55" stop-color="#6750A4" stop-opacity="0.06" />
+      <stop offset="1" stop-color="#6750A4" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.94" cy="0.28" r="0.6">
+      <stop offset="0" stop-color="#D0BCFF" stop-opacity="0.16" />
+      <stop offset="1" stop-color="#D0BCFF" stop-opacity="0" />
+    </radialGradient>
+    <clipPath id="frame">
+      <rect width="1200" height="420" rx="24" />
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#frame)">
+    <rect width="1200" height="420" fill="#1c1b1f" />
+    <rect width="1200" height="420" fill="url(#glow)" />
+    <rect width="1200" height="420" fill="url(#glow2)" />
+
+    <!-- brand mark (same mark as public/logo.svg) -->
+    <g transform="translate(84 118) scale(0.18)">
+      <rect width="1024" height="1024" rx="232" fill="url(#mark)" />
+      <g fill="#ffffff">
+        <rect x="152" y="352" width="120" height="320" rx="60" />
+        <rect x="352" y="232" width="120" height="560" rx="60" />
+        <rect x="552" y="292" width="120" height="440" rx="60" />
+        <rect x="752" y="392" width="120" height="240" rx="60" />
+      </g>
+    </g>
+
+    <!-- wordmark + tagline -->
+    <text x="312" y="226" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="86" font-weight="700" letter-spacing="2" fill="#EADDFF">AI DAW</text>
+    <text x="314" y="274" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#CAC4D0">Local-first, AI-native digital audio workstation</text>
+
+    <!-- EQ motif -->
+    <g fill="url(#eq)" opacity="0.85">
+      <rect x="980" y="216" width="20" height="84" rx="10" />
+      <rect x="1016" y="150" width="20" height="150" rx="10" />
+      <rect x="1052" y="90" width="20" height="210" rx="10" />
+      <rect x="1088" y="168" width="20" height="132" rx="10" />
+      <rect x="1124" y="204" width="20" height="96" rx="10" />
+    </g>
+  </g>
+</svg>
