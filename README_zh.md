@@ -21,9 +21,7 @@
 
 一切都在你自己的电脑上运行。不要账号、不要 API Key、音频不出本机。
 
-<p align="center">
-  <img src="./assets/screenshots/01-arrange.png" width="100%" alt="AI DAW 的编排视图：三条轨道的 MIDI 片段、时间标尺、检查器与 AI 面板">
-</p>
+https://github.com/user-attachments/assets/e0da890d-854d-4727-9cfb-3eb82c2a9bd1
 
 ## 为什么这件事值得做
 

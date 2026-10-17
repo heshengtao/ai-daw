@@ -373,8 +373,37 @@ impl Plugin for SynthPlugin {
     }
 
     fn load_state(&mut self, state: &[u8]) -> Result<(), PluginError> {
-        if state.len() < 12 {
-            return Err(PluginError::StateTooShort { expected: 12, got: state.len() });
+        // 只认**自己的**格式：参数表顺序的 f32 小端序列。老工程可能只存了前几个参数
+        // （最短 12 字节 = gain / attack / release），所以「短」是合法的，「长」不是。
+        //
+        // 光看「够 12 字节」远远不够：状态可能是**另一件乐器**留下的——宿主换乐器时，
+        // 上一件乐器的实例句柄要等这一轮重建之后才清理，它的二进制会被写进新乐器。
+        // 把 VST3 鼓机的状态按 f32 解码，`gain` 恰好落在合法区间（`"VST3"` → 1.19e-8），
+        // 钳制拦不住它：插件不报错、界面正常，却**整轨彻底无声**，而且状态进了工程 /
+        // 会话缓存，重启也照样无声。
+        //
+        // 所以加两道指纹：**长度**不能超过整张参数表，**每个值**都必须落在该参数的合法
+        // 区间里（真状态一定满足——写进去的时候就已经钳过）。认不出来就拒绝，参数保持
+        // 默认：宁可回到出厂音色，也不要静音。
+        const LEGACY_LEN: usize = 12; // gain / attack / release：老工程的形状
+        let full = PARAM_TABLE.len() * 4;
+        if state.len() < LEGACY_LEN || state.len() % 4 != 0 || state.len() > full {
+            return Err(PluginError::InvalidState(format!(
+                "内置合成器的状态应为 {LEGACY_LEN}..={full} 字节且按 f32 对齐，实际 {} 字节（可能来自另一件乐器）",
+                state.len()
+            )));
+        }
+        for (index, (_, _, min, max, _)) in PARAM_TABLE.iter().enumerate() {
+            let start = index * 4;
+            if start + 4 > state.len() {
+                break;
+            }
+            let value = f32::from_le_bytes(state[start..start + 4].try_into().unwrap());
+            if !value.is_finite() || value < *min || value > *max {
+                return Err(PluginError::InvalidState(format!(
+                    "第 {index} 个参数解出 {value}，不在 [{min}, {max}] 内"
+                )));
+            }
         }
         // 允许多余/缺失：按可用的个数恢复，多出来的忽略，少掉的保持默认。
         for (index, (id, ..)) in PARAM_TABLE.iter().enumerate() {
@@ -850,5 +879,37 @@ mod tests {
         assert_eq!(t.get_param(&ParamId::from("pitchDecay")), Some(0.1), "缺失的参数保持默认");
         assert_eq!(t.get_param(&ParamId::from("filterType")), Some(0.0));
         assert_eq!(t.get_param(&ParamId::from("noise")), Some(0.9), "短的也照读");
+    }
+
+    /// **别的乐器**的状态（VST3 / CLAP 的二进制）绝不能被当成参数表读进来。
+    ///
+    /// 真实故障：轨道上原本是 VST3 鼓机，换成内置合成器后，宿主把鼓机的状态写了进来
+    /// （换乐器时旧实例句柄还没清理）。`"VST3"` 这四个字节按 f32 读是 1.19e-8 —— 恰好
+    /// 落在 gain 的合法区间里，钳制拦不住，于是**整轨无声**；状态还会进工程 / 会话缓存，
+    /// 重启也不好，切个预设（写 `params`）才会恢复。
+    #[test]
+    fn foreign_state_is_rejected_and_keeps_the_synth_audible() {
+        // 两种形状都要挡住：长的（远超一张参数表）与短的（长度像，但值不像）。
+        let mut long: Vec<u8> = b"VST3HOST_STATE\x00\x00\x01\x00".to_vec();
+        long.resize(512, 0);
+        let short: Vec<u8> = b"VST3HOST_STATE\x00\x00\x01\x00".to_vec();
+
+        let cases: [(&str, Vec<u8>); 2] = [("长", long), ("短", short)];
+        for (name, blob) in cases {
+            let mut s = SynthPlugin::new();
+            s.prepare(48_000.0, 256);
+            assert!(s.load_state(&blob).is_err(), "{name}状态必须被拒绝");
+
+            // 拒绝之后参数保持默认（gain = 0.8）→ 按下键依然出声。
+            let mut l = [0.0f32; 256];
+            let mut r = [0.0f32; 256];
+            s.process(
+                &ctx(256),
+                &mut [&mut l, &mut r],
+                &[TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 100 } }],
+            );
+            let peak = l.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+            assert!(peak > 0.05, "{name}状态被拒后必须仍然出声，peak={peak}");
+        }
     }
 }

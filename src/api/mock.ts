@@ -7,6 +7,11 @@
  * 定位与传输按钮，而不需要真的打开音频设备（浏览器里没有声音是预期行为）。
  */
 import type {
+  AgentConfig,
+  AgentEvent,
+  AgentProbe,
+  AgentSession,
+  AgentSessionSummary,
   AiModels,
   AiStatus,
   AnalysisReport,
@@ -15,8 +20,12 @@ import type {
   BackendParam,
   BackendPreference,
   CatalogPlugin,
+  Clip,
   ClipPlacement,
   ClipRef,
+  FitMode,
+  HarmonyBar,
+  HarmonyReport,
   HistoryDepths,
   HistoryState,
   InputDeviceInfo,
@@ -38,12 +47,25 @@ import type {
   McpStatus,
   Note,
   NoteEdit,
+  NotePatch,
+  NoteRange,
+  NoteStats,
+  OverlapReport,
+  PitchRange,
   Preset,
   Project,
+  Section,
   Send,
   StoreNetwork,
+  TrackMeta,
+  TrackOverlap,
   TransportSnapshot,
+  VelocityShape,
 } from "./types";
+
+/** 写歌智能体：预览里没有真后端，配置与会话都只存在内存里。 */
+let agentConfigState: AgentConfig = { base_url: "", api_key: "", model: "" };
+const mockSessions = new Map<string, AgentSession>();
 
 /** MCP 服务器：浏览器预览里没有真服务器，配置只存在内存里。 */
 let mcpConfig: McpConfig = { enabled: true, port: 0 };
@@ -550,6 +572,55 @@ function writePresets(presets: Preset[]): void {
 
 function clip(trackId: number, clipId: number) {
   return track(trackId)?.clips.find((c) => c.id === clipId);
+}
+
+// ---------------------------------------------------------------------------
+// 编曲辅助：与引擎里的纯函数同语义（浏览器预览用）
+// ---------------------------------------------------------------------------
+
+/** 片段内下一个音符 id（最大值 + 1，与引擎一致）。 */
+function nextNoteId(c: { notes: Note[] }): number {
+  return c.notes.reduce((max, n) => Math.max(max, n.id ?? 0), 0) + 1;
+}
+
+/** 夹进片段范围：起点不早于 0、时值至少 1/32、不越出片段。 */
+function clampNote(n: Note, length: number): Note {
+  const MIN = 1 / 32;
+  if (n.start < 0) return { ...n, duration: Math.max(MIN, n.duration) };
+  const start = Math.min(Math.max(0, n.start), Math.max(0, length - MIN));
+  const duration = Math.min(Math.max(MIN, n.duration), Math.max(MIN, length - start));
+  return { ...n, start, duration };
+}
+
+/** 范围是**片段内**拍、左闭右开；不给 = 整段。 */
+function inRange(n: Note, range?: NoteRange): boolean {
+  if (!range) return true;
+  const lo = Math.min(range.start, range.end);
+  const hi = Math.max(range.start, range.end);
+  return n.start >= lo && n.start < hi;
+}
+
+/** 只对范围内的音符做变换，并夹回片段范围。 */
+function transform(c: Clip, range: NoteRange | undefined, fn: (n: Note) => Note): void {
+  c.notes = c.notes.map((n) => (inRange(n, range) ? clampNote(fn(n), c.length) : n));
+}
+
+/** 一小节的拍数（4/4 = 4）。 */
+function barLength(): number {
+  const den = state.transport.time_sig_den || 4;
+  return (state.transport.time_sig_num * 4) / den;
+}
+
+/** 确定性伪随机（mulberry32）：同一个种子给同一串数。 */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1175,6 +1246,359 @@ export const mockApi = {
       }
     }),
 
+  // ---- 编曲：批量音符与变换（与引擎同语义，供浏览器预览） ----
+
+  addNotes: (trackId: number, clipId: number, notes: Note[]): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c) return;
+      let next = nextNoteId(c);
+      for (const n of notes) c.notes.push(clampNote({ ...n, id: next++ }, c.length));
+    }),
+
+  replaceNotes: (trackId: number, clipId: number, notes: Note[]): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c) return;
+      c.notes = notes.map((n, i) => clampNote({ ...n, id: i + 1 }, c.length));
+    }),
+
+  updateNotes: (trackId: number, clipId: number, updates: NotePatch[]): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c) return;
+      for (const patch of updates) {
+        const i = c.notes.findIndex((n) => n.id === patch.id);
+        if (i < 0) continue;
+        const merged = { ...c.notes[i], ...patch, id: c.notes[i].id };
+        c.notes[i] = clampNote(merged, c.length);
+      }
+    }),
+
+  removeNotesById: (trackId: number, clipId: number, ids: number[]): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c) return;
+      const drop = new Set(ids);
+      c.notes = c.notes.filter((n) => !drop.has(n.id ?? 0));
+    }),
+
+  transposeNotes: (trackId: number, clipId: number, semitones: number, range?: NoteRange): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c || semitones === 0) return;
+      transform(c, range, (n) => ({ ...n, pitch: Math.min(127, Math.max(0, n.pitch + semitones)) }));
+    }),
+
+  setNoteVelocity: (
+    trackId: number,
+    clipId: number,
+    shape: VelocityShape,
+    range?: NoteRange,
+  ): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c) return;
+      const picked = c.notes.filter((n) => inRange(n, range));
+      if (picked.length === 0) return;
+      const lo = range ? Math.min(range.start, range.end) : Math.min(...picked.map((n) => n.start));
+      const hi = range ? Math.max(range.start, range.end) : Math.max(...picked.map((n) => n.start));
+      transform(c, range, (n) => {
+        let value: number;
+        if ("fixed" in shape) value = shape.fixed;
+        else if ("scale" in shape) value = n.velocity * shape.scale;
+        else {
+          const span = hi - lo;
+          const t = span > 0 ? Math.min(1, Math.max(0, (n.start - lo) / span)) : 0;
+          value = shape.ramp.from + (shape.ramp.to - shape.ramp.from) * t;
+        }
+        return { ...n, velocity: Math.min(127, Math.max(0, Math.round(value))) };
+      });
+    }),
+
+  quantizeNotes: (
+    trackId: number,
+    clipId: number,
+    grid: number,
+    strength: number,
+    range?: NoteRange,
+  ): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c) return;
+      const g = Math.min(4, Math.max(1 / 64, grid));
+      const s = Math.min(1, Math.max(0, strength));
+      if (s <= 0) return;
+      transform(c, range, (n) => ({ ...n, start: n.start + (Math.round(n.start / g) * g - n.start) * s }));
+    }),
+
+  applySwing: (
+    trackId: number,
+    clipId: number,
+    subdivision: number,
+    ratio: number,
+    strength: number,
+    range?: NoteRange,
+  ): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c) return;
+      const sub = Math.min(4, Math.max(1 / 64, subdivision));
+      const r = Math.min(0.8, Math.max(0.5, ratio));
+      const s = Math.min(1, Math.max(0, strength));
+      if (s <= 0 || Math.abs(r - 0.5) < 1e-9) return;
+      transform(c, range, (n) => {
+        if (n.start < 0) return n;
+        const slot = Math.floor(n.start / sub);
+        if (slot % 2 === 0) return n;
+        const target = (slot - 1) * sub + r * 2 * sub;
+        return { ...n, start: n.start + (target - n.start) * s };
+      });
+    }),
+
+  humanizeNotes: (
+    trackId: number,
+    clipId: number,
+    timing: number,
+    velocity: number,
+    range?: NoteRange,
+    seed?: number,
+  ): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c) return;
+      const rnd = mulberry32(seed ?? 0x5eed1234);
+      const t = Math.min(0.5, Math.max(0, timing));
+      const v = Math.min(127, Math.max(0, velocity));
+      // 每个音符都取两个随机数（与引擎一致：范围不改变其他音符的抖动）。
+      const draws = c.notes.map(() => ({ dt: (rnd() * 2 - 1) * t, dv: (rnd() * 2 - 1) * v }));
+      c.notes = c.notes.map((n, i) => {
+        if (!inRange(n, range) || n.start < 0) return n;
+        return clampNote(
+          {
+            ...n,
+            start: n.start + draws[i].dt,
+            velocity: Math.min(127, Math.max(0, Math.round(n.velocity + draws[i].dv))),
+          },
+          c.length,
+        );
+      });
+    }),
+
+  fitNotesToRange: (
+    trackId: number,
+    clipId: number,
+    minPitch: number,
+    maxPitch: number,
+    mode: FitMode,
+    range?: NoteRange,
+  ): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c || mode === "report") return;
+      const lo = Math.min(minPitch, maxPitch);
+      const hi = Math.max(minPitch, maxPitch);
+      transform(c, range, (n) => {
+        if (n.pitch >= lo && n.pitch <= hi) return n;
+        let pitch = n.pitch;
+        while (pitch > hi && pitch - 12 >= 0) pitch -= 12;
+        while (pitch < lo && pitch + 12 <= 127) pitch += 12;
+        return { ...n, pitch: Math.min(hi, Math.max(lo, pitch)) };
+      });
+    }),
+
+  duplicateClip: (
+    trackId: number,
+    clipId: number,
+    toTrack?: number,
+    start?: number,
+  ): Project =>
+    commit(() => {
+      const src = clip(trackId, clipId);
+      const dest = track(toTrack ?? trackId);
+      if (!src || !dest) return;
+      let next = 1;
+      dest.clips.push({
+        id: nextClipId++,
+        start: Math.max(0, start ?? src.start + src.length),
+        length: src.length,
+        notes: src.notes.map((n) => ({ ...n, id: next++ })),
+        ...(src.audio ? { audio: { ...src.audio } } : {}),
+      });
+    }),
+
+  mergeClips: (trackId: number, clipIds: number[]): Project =>
+    commit(() => {
+      const t = track(trackId);
+      if (!t || clipIds.length < 2) return;
+      const picked = clipIds
+        .map((id) => t.clips.find((c) => c.id === id))
+        .filter((c): c is NonNullable<typeof c> => !!c && !c.audio)
+        .sort((a, b) => a.start - b.start);
+      if (picked.length < 2) return;
+      const start = picked[0].start;
+      const end = Math.max(...picked.map((c) => c.start + c.length));
+      const target = picked[0];
+      let next = 1;
+      target.notes = picked.flatMap((c) =>
+        c.notes.map((n) => ({ ...n, start: n.start + (c.start - start), id: next++ })),
+      );
+      target.start = start;
+      target.length = end - start;
+      const drop = new Set(picked.slice(1).map((c) => c.id));
+      t.clips = t.clips.filter((c) => !drop.has(c.id));
+    }),
+
+  getTrackNoteStats: (trackId: number, clipId?: number): NoteStats => {
+    const t = track(trackId);
+    if (!t) throw new Error(`没有轨道 ${trackId}`);
+    const clips = clipId == null ? t.clips : t.clips.filter((c) => c.id === clipId);
+    const spans = clips.flatMap((c) =>
+      c.notes.map((n) => ({ pitch: n.pitch, velocity: n.velocity, start: c.start + n.start, end: c.start + n.start + n.duration, outside: n.start < 0 || n.start >= c.length })),
+    );
+    const barBeats = barLength();
+    const counts = new Map<number, number>();
+    for (const s of spans) {
+      if (s.start < 0) continue;
+      const bar = Math.floor(s.start / barBeats);
+      counts.set(bar, (counts.get(bar) ?? 0) + 1);
+    }
+    const bars = [...counts.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([bar, count]) => ({ bar, start: bar * barBeats, count }));
+    const pitches = spans.map((s) => s.pitch);
+    const mean = (xs: number[]): number | undefined =>
+      xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : undefined;
+    const byPitch = new Map<number, { start: number; end: number }[]>();
+    for (const s of spans) {
+      const list = byPitch.get(s.pitch) ?? [];
+      list.push({ start: s.start, end: s.end });
+      byPitch.set(s.pitch, list);
+    }
+    let overlapping = 0;
+    for (const list of byPitch.values()) {
+      list.sort((a, b) => a.start - b.start);
+      let end = list[0]?.end ?? 0;
+      for (const span of list.slice(1)) {
+        if (span.start < end - 1e-9) overlapping += 1;
+        end = Math.max(end, span.end);
+      }
+    }
+    const lo = pitches.length ? Math.min(...pitches) : undefined;
+    const hi = pitches.length ? Math.max(...pitches) : undefined;
+    return {
+      track: trackId,
+      clip: clipId,
+      note_count: spans.length,
+      lowest_pitch: lo,
+      highest_pitch: hi,
+      mean_pitch: mean(pitches),
+      range_semitones: lo != null && hi != null ? hi - lo : undefined,
+      mean_velocity: mean(spans.map((s) => s.velocity)),
+      span_beats: spans.length ? Math.max(...spans.map((s) => s.end)) - Math.min(...spans.map((s) => s.start)) : 0,
+      mean_notes_per_bar: bars.length ? spans.length / bars.length : 0,
+      bars,
+      overlapping_notes: overlapping,
+      notes_outside_clip: spans.filter((s) => s.outside).length,
+    };
+  },
+
+  analyzeTrackOverlap: (trackIds: number[], clipId?: number): OverlapReport => {
+    const picked = trackIds.map((id) => {
+      const t = track(id);
+      if (!t) throw new Error(`没有轨道 ${id}`);
+      return t;
+    });
+    const spansOf = (id: number) => {
+      const t = track(id)!;
+      const clips = clipId == null ? t.clips : t.clips.filter((c) => c.id === clipId);
+      return clips.flatMap((c) =>
+        c.notes
+          .filter((n) => n.start >= 0)
+          .map((n) => ({ pitch: n.pitch, start: c.start + n.start, end: c.start + n.start + n.duration })),
+      );
+    };
+    const pairs: TrackOverlap[] = [];
+    for (let i = 0; i < picked.length; i += 1) {
+      for (let j = i + 1; j < picked.length; j += 1) {
+        const a = spansOf(picked[i].id);
+        const b = spansOf(picked[j].id);
+        let overlap = 0;
+        let unison = 0;
+        for (const x of a) {
+          for (const y of b) {
+            const span = Math.min(x.end, y.end) - Math.max(x.start, y.start);
+            if (span > 0) {
+              overlap += span;
+              if (x.pitch === y.pitch) unison += 1;
+            }
+          }
+        }
+        const meanOf = (v: typeof a) => (v.length ? v.reduce((s, n) => s + n.pitch, 0) / v.length : undefined);
+        const [ma, mb] = [meanOf(a), meanOf(b)];
+        const gap = ma != null && mb != null ? Math.round(ma - mb) : undefined;
+        const conflict = overlap >= 4 && gap != null && Math.abs(gap) < 12;
+        pairs.push({
+          a: picked[i].id,
+          b: picked[j].id,
+          overlap_beats: Math.round(overlap * 1000) / 1000,
+          unison_notes: unison,
+          shared_pitch_classes: [...new Set(a.map((n) => n.pitch % 12))].filter((pc) =>
+            b.some((n) => n.pitch % 12 === pc),
+          ),
+          pitch_gap_semitones: gap,
+          conflict,
+          suggestion: conflict
+            ? `轨道 ${picked[i].id} 与 ${picked[j].id} 在相近音区同时发声，建议拉开一个八度或收窄音域。`
+            : "",
+        });
+      }
+    }
+    return { tracks: trackIds, pairs, summary: pairs.filter((p) => p.conflict).map((p) => p.suggestion) };
+  },
+
+  analyzeHarmony: (bars?: HarmonyBar[], tracks?: number[]): HarmonyReport => {
+    const chart = bars ?? state.harmony ?? [];
+    if (chart.length === 0) throw new Error("没有和弦信息：传 bars，或先写入工程和弦表");
+    // 浏览器预览不做完整和声分析（和弦解析在后端）：给出小节表，提示未检查。
+    const report: HarmonyReport = {
+      bars: chart.map((b, i) => ({
+        bar: i,
+        start: b.start,
+        length: b.length,
+        symbol: b.symbol,
+        chord_tones: [],
+        tension: "info",
+        issues: 0,
+      })),
+      issues: [],
+      conflict_level: "info",
+      notes: [`浏览器预览不做和声分析（${chart.length} 个小节未检查${tracks ? `，轨道 ${tracks.join("/")}` : ""}）`],
+    };
+    return report;
+  },
+
+  setProjectHarmony: (bars: HarmonyBar[]): Project =>
+    commit(() => {
+      state.harmony = [...bars].sort((a, b) => a.start - b.start);
+    }),
+
+  setProjectSections: (sections: Section[]): Project =>
+    commit(() => {
+      state.sections = [...sections].sort((a, b) => a.start - b.start);
+    }),
+
+  setTrackMeta: (trackId: number, role?: string, pitchRange?: PitchRange): Project =>
+    commit(() => {
+      const t = track(trackId);
+      if (!t) return;
+      const meta: TrackMeta = {};
+      if (role) meta.role = role;
+      if (pitchRange) meta.pitch_range = pitchRange;
+      if (Object.keys(meta).length === 0) delete t.meta;
+      else t.meta = meta;
+    }),
+
   setGain: (id: number, gainDb: number): Project =>
     commit(() => {
       const t = track(id);
@@ -1294,6 +1718,33 @@ export const mockApi = {
     mcpConfig = { enabled, port };
     return mockMcpStatus();
   },
+
+  // 写歌智能体：预览里配置存内存、会话为空、发送只回一个假 id（不模拟流式回答）。
+  agentConfig: (): AgentConfig => agentConfigState,
+  agentSetConfig: (baseUrl: string, apiKey: string, model: string): AgentConfig => {
+    agentConfigState = { base_url: baseUrl, api_key: apiKey, model };
+    return agentConfigState;
+  },
+  agentModels: (): string[] => ["gpt-4o-mini", "gpt-4o", "deepseek-chat"],
+  agentTest: (): AgentProbe => ({ ok: true, detail: "预览模式：假装连接成功", ms: 12 }),
+  agentSessions: (): AgentSessionSummary[] => [],
+  agentSession: (id: string): AgentSession => {
+    const found = mockSessions.get(id);
+    if (!found) throw new Error(`会话不存在：${id}`);
+    return found;
+  },
+  agentDeleteSession: (id: string): void => {
+    mockSessions.delete(id);
+  },
+  agentSetHead: (id: string, nodeId: string): AgentSession => {
+    const found = mockSessions.get(id);
+    if (!found) throw new Error(`会话不存在：${id}`);
+    found.head = nodeId;
+    return found;
+  },
+  agentSend: (_sessionId: string | null, _parentId: string | null, _text: string): string => "mock-session",
+  agentCancel: (): void => {},
+  onAgentEvent: (_handler: (event: AgentEvent) => void): Promise<() => void> => Promise.resolve(() => {}),
 
   cliStatus: (): CliStatus => mockCliStatus(),
   installCli: (): CliStatus => {

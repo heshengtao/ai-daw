@@ -1,6 +1,12 @@
 /** 与引擎 `ai_daw_engine::model` 对应的前端视图类型（snake_case，id 为裸数字）。 */
 
 export interface Note {
+  /**
+   * 片段内**稳定**标识（批量工具用它定位，而不是数组下标）。
+   *
+   * 旧工程没有这个字段，读入时由引擎按片段顺序补齐；界面构造新音符时可以不填。
+   */
+  id?: number;
   pitch: number;
   start: number;
   duration: number;
@@ -9,6 +15,35 @@ export interface Note {
   /** 单音音量（0..=127，127 = 不衰减）：纯增益微调，不改变音色。 */
   volume: number;
 }
+
+/** 按 id 定位的音符改写项：只带要改的字段。 */
+export interface NotePatch {
+  id: number;
+  pitch?: number;
+  start?: number;
+  duration?: number;
+  velocity?: number;
+  volume?: number;
+}
+
+/** 片段内拍范围（左闭右开）：批量变换只作用于起点落在其中的音符。 */
+export interface NoteRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * 力度变换的形状（与 Rust `VelocityShape` 的外部标记一致）。
+ *
+ * 三选一：`{ fixed }` 固定值 / `{ ramp: { from, to } }` 渐变 / `{ scale }` 相对缩放。
+ */
+export type VelocityShape =
+  | { fixed: number }
+  | { ramp: { from: number; to: number } }
+  | { scale: number };
+
+/** 音域约束的处理方式：八度折返 / 只报告。 */
+export type FitMode = "fold" | "report";
 
 /** 音频素材引用：片段指向一段外部音频文件（绝对路径）。 */
 export interface AudioSource {
@@ -109,6 +144,37 @@ export interface Track {
   sends?: Send[];
   /** 自动化车道；空数组时后端不写这个键。 */
   automation?: AutomationLane[];
+  /** 编曲元数据（分工 / 目标音域）；为空时后端不写这个键。 */
+  meta?: TrackMeta;
+}
+
+/** 轨道目标音域（MIDI 音高，含两端）。 */
+export interface PitchRange {
+  min: number;
+  max: number;
+}
+
+/** 编曲元数据：轨道在曲子里的分工与目标音域。 */
+export interface TrackMeta {
+  /** `lead` / `chords` / `bass` / `drums` / `pad` / `fx`… */
+  role?: string;
+  pitch_range?: PitchRange;
+}
+
+/** 一个小节的和弦标记（工程元数据）。 */
+export interface HarmonyBar {
+  start: number;
+  length: number;
+  symbol: string;
+  source?: string;
+}
+
+/** 段落标记（前奏 / 主歌 / 副歌…）。 */
+export interface Section {
+  name: string;
+  start: number;
+  end: number;
+  role?: string;
 }
 
 /** 时间轴上的一个关键点：从 `beat` 起 BPM 与拍号切换。 */
@@ -138,6 +204,109 @@ export interface Project {
   transport: Transport;
   tracks: Track[];
   master: MixerChannel;
+  /** 小节和弦表；空时后端不写这个键。 */
+  harmony?: HarmonyBar[];
+  /** 段落表；空时后端不写这个键。 */
+  sections?: Section[];
+}
+
+// ---------------------------------------------------------------------------
+// 编曲分析结果（只读工具的输出形状，与 `crates/ipc/src/report.rs` 一一对应）
+// ---------------------------------------------------------------------------
+
+/** 严重程度：`info < warning < error`。 */
+export type Severity = "info" | "warning" | "error";
+
+/** 每小节的音符密度。 */
+export interface BarDensity {
+  bar: number;
+  start: number;
+  count: number;
+}
+
+/** 单条轨道（或其中某个片段）的音符统计。 */
+export interface NoteStats {
+  track: number;
+  clip?: number;
+  note_count: number;
+  lowest_pitch?: number;
+  highest_pitch?: number;
+  mean_pitch?: number;
+  range_semitones?: number;
+  mean_velocity?: number;
+  span_beats: number;
+  mean_notes_per_bar: number;
+  bars: BarDensity[];
+  overlapping_notes: number;
+  notes_outside_clip: number;
+}
+
+/** 两条轨道之间的音区重叠。 */
+export interface TrackOverlap {
+  a: number;
+  b: number;
+  overlap_beats: number;
+  unison_notes: number;
+  shared_pitch_classes: number[];
+  pitch_gap_semitones?: number;
+  conflict: boolean;
+  suggestion: string;
+}
+
+/** 跨轨重叠报告。 */
+export interface OverlapReport {
+  tracks: number[];
+  pairs: TrackOverlap[];
+  summary: string[];
+}
+
+/** 和声问题类别。 */
+export type HarmonyIssueKind =
+  | "non_chord_tone"
+  | "unresolved_leading_tone"
+  | "suspension"
+  | "extension"
+  | "track_overlap";
+
+/** 一条和声问题。 */
+export interface HarmonyIssue {
+  kind: HarmonyIssueKind;
+  severity: Severity;
+  bar: number;
+  bar_start: number;
+  /** 小节内拍位（0 起）。 */
+  beat: number;
+  track: number;
+  pitch: number;
+  pitch_name: string;
+  duration: number;
+  message: string;
+}
+
+/** 每个小节的和声判定。 */
+export interface HarmonyBarReport {
+  bar: number;
+  start: number;
+  length: number;
+  symbol: string;
+  chord_tones: string[];
+  tension: Severity;
+  issues: number;
+}
+
+/** 和声检查报告。 */
+export interface HarmonyReport {
+  bars: HarmonyBarReport[];
+  issues: HarmonyIssue[];
+  conflict_level: Severity;
+  notes: string[];
+}
+
+/** 和声检查的宽松策略（默认：允许延伸音与短经过音）。 */
+export interface HarmonyPolicy {
+  allow_extensions: boolean;
+  allow_approach_notes: boolean;
+  allow_non_chord_tone_duration: number;
 }
 
 /** 撤销 / 重做之后的返回：工程快照 + 最新历史深度 + 是否有未保存改动。 */
@@ -592,6 +761,79 @@ export interface ProxyProbe extends ProxyStatus {
   /** 成功是耗时，失败是原因。 */
   detail: string;
 }
+
+// ---------------------------------------------------------------------------
+// 写歌智能体（与后端 `src-tauri/src/agent/` 一一对应）
+// ---------------------------------------------------------------------------
+
+/** OpenAI 兼容端点配置（与后端 `agent::AgentConfig` 一一对应）。 */
+export interface AgentConfig {
+  /** 形如 `https://api.openai.com/v1`。 */
+  base_url: string;
+  /** API Key。 */
+  api_key: string;
+  /** 模型名。 */
+  model: string;
+}
+
+/** 连通性探测结果（与后端 `agent::openai::AgentProbe` 一一对应）。 */
+export interface AgentProbe {
+  ok: boolean;
+  /** 成功=延迟说明，失败=原因。 */
+  detail: string;
+  /** 耗时（毫秒）。 */
+  ms: number;
+}
+
+/** 助手发起的一次工具调用。 */
+export interface AgentToolCallRef {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
+/** 会话树上的一个节点（与后端 `agent::store::Node` 一一对应）。 */
+export interface AgentNode {
+  id: string;
+  parent: string | null;
+  role: "user" | "assistant" | "tool";
+  content: string;
+  reasoning: string | null;
+  tool_calls: AgentToolCallRef[];
+  tool_call_id: string | null;
+  name: string | null;
+  created_at: number;
+  error: string | null;
+}
+
+/** 一个完整会话（与后端 `agent::store::Session` 一一对应）。 */
+export interface AgentSession {
+  id: string;
+  title: string;
+  created_at: number;
+  updated_at: number;
+  nodes: AgentNode[];
+  head: string | null;
+}
+
+/** 历史列表的一项（不含节点）。 */
+export interface AgentSessionSummary {
+  id: string;
+  title: string;
+  updated_at: number;
+  count: number;
+}
+
+/** `engine://agent` 推来的事件（与后端 `agent::AgentEvent` 一一对应，按 `type` 区分）。 */
+export type AgentEvent =
+  | { type: "turn_started"; session_id: string; user_node: AgentNode }
+  | { type: "delta"; node_id: string; text: string }
+  | { type: "reasoning"; node_id: string; text: string }
+  | { type: "tool_call"; node_id: string; call_id: string; name: string; args: unknown }
+  | { type: "tool_result"; node_id: string; call_id: string; ok: boolean; output: string }
+  | { type: "node_added"; node: AgentNode }
+  | { type: "turn_finished"; session_id: string; head: string; title: string; stopped: boolean }
+  | { type: "error"; message: string };
 
 /**
  * 用户**自己安装**的插件（与后端 `manager::ForeignPlugin` 一一对应）。

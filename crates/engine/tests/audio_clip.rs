@@ -58,6 +58,7 @@ fn project_with_audio(path: &str, start_beats: f64, length_beats: f64) -> Projec
     let mut p = Project::new("audio");
     p.transport.tempo = 120.0;
     p.tracks.push(Track {
+        meta: None,
         id: TrackId(1),
         name: "Audio".into(),
         instrument: None,
@@ -249,7 +250,7 @@ fn audio_and_instrument_sum_on_the_same_track() {
         id: ClipId(2),
         start: 0.0,
         length: 2.0,
-        notes: vec![Note { pitch: 69, start: 0.0, duration: 1.5, velocity: 100, volume: 127 }],
+        notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 1.5, velocity: 100, volume: 127 }],
         audio: None,
     });
 

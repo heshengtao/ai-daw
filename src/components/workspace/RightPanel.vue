@@ -10,6 +10,7 @@ import {
   MusicalNoteIcon,
   PuzzlePieceIcon,
   SparklesIcon,
+  ChatBubbleLeftRightIcon,
 } from "@heroicons/vue/24/outline";
 import InspectorPanel from "./InspectorPanel.vue";
 import MixerPanel from "./panes/MixerPanel.vue";
@@ -17,8 +18,12 @@ import PluginEditorPane from "./panes/PluginEditorPane.vue";
 import PluginsPane from "./panes/PluginsPane.vue";
 import ManagerPane from "./panes/ManagerPane.vue";
 import AiPanel from "./panes/AiPanel.vue";
+import { defineAsyncComponent } from "vue";
 import { PICKABLE_PANES, useLayoutStore, type PaneId } from "@/stores/layout";
 import { useI18n } from "@/i18n";
+
+// 写歌智能体带着 markdown 渲染（marked + dompurify），按需加载、别拖累首屏。
+const SongAgentPanel = defineAsyncComponent(() => import("./agent/SongAgentPanel.vue"));
 
 const layout = useLayoutStore();
 const i18n = useI18n();
@@ -29,6 +34,7 @@ const ICONS: Record<PaneId, unknown> = {
   editor: MusicalNoteIcon,
   plugins: CircleStackIcon,
   manager: PuzzlePieceIcon,
+  agent: ChatBubbleLeftRightIcon,
   ai: SparklesIcon,
 };
 </script>
@@ -58,6 +64,7 @@ const ICONS: Record<PaneId, unknown> = {
       <PluginEditorPane v-else-if="layout.activeTab === 'editor'" />
       <PluginsPane v-else-if="layout.activeTab === 'plugins'" />
       <ManagerPane v-else-if="layout.activeTab === 'manager'" />
+      <SongAgentPanel v-else-if="layout.activeTab === 'agent'" />
       <AiPanel v-else-if="layout.activeTab === 'ai'" />
     </div>
   </aside>

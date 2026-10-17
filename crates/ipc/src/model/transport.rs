@@ -58,6 +58,14 @@ impl Transport {
     /// 关键点合法的最小 beat：第 0 拍由基准字段承载，关键点必须在 0 之后。
     pub const MIN_KEYFRAME_BEAT: f64 = 1e-6;
 
+    /// 一小节有多少拍（4/4 = 4、3/4 = 3、6/8 = 3）。
+    ///
+    /// 编曲统计（每小节密度）与「和弦表只覆盖到第几拍」都按它换算。
+    pub fn bar_beats(&self) -> f64 {
+        let den = if self.time_sig_den == 0 { 4 } else { self.time_sig_den };
+        self.time_sig_num as f64 * 4.0 / den as f64
+    }
+
     /// 归一化单个关键点；beat 非法时返回 `None`。
     pub fn normalize_keyframe(kf: Keyframe) -> Option<Keyframe> {
         if !kf.beat.is_finite() || kf.beat <= Self::MIN_KEYFRAME_BEAT {

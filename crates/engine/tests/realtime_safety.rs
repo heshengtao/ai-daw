@@ -47,6 +47,7 @@ fn schedule() -> ScheduledEvents {
     let mut project = Project::new("safety");
     project.transport.tempo = 120.0;
     project.tracks.push(Track {
+        meta: None,
         id: TrackId(1),
         name: "Lead".into(),
         instrument: Some(PluginInstance {
@@ -72,7 +73,7 @@ fn schedule() -> ScheduledEvents {
             id: ClipId(1),
             start: 0.0,
             length: 4.0,
-            notes: vec![Note { pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
+            notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
             audio: None,
         }],
         mixer: Default::default(),
@@ -107,6 +108,7 @@ fn schedule() -> ScheduledEvents {
     });
     // 一条总线轨道：接收上面那条轨道的发送。
     project.tracks.push(Track {
+        meta: None,
         id: TrackId(2),
         name: "Bus".into(),
         instrument: None,

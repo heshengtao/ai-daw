@@ -5,11 +5,14 @@ pub mod audio;
 pub mod bus;
 pub mod command;
 pub mod command_queue;
+pub mod compose;
 pub mod event;
+pub mod harmony;
 pub mod model;
 pub mod player;
 pub mod registry;
 pub mod render;
+pub mod report;
 #[cfg(feature = "realtime")]
 pub mod realtime;
 #[cfg(feature = "realtime")]

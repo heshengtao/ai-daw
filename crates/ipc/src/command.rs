@@ -1,5 +1,6 @@
 use crate::model::{
-    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, Send, TrackId,
+    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, FitMode, HarmonyBar, Note,
+    NoteEdit, NotePatch, NoteRange, PitchRange, Section, Send, TrackId, VelocityShape,
 };
 
 /// 命令：期望的状态变更请求。
@@ -118,4 +119,82 @@ pub enum Command {
     /// `track_names` 是**按模板顺序**给出的分轨名（界面按当前语言生成）。
     /// 传 `None` 就用模板自带的默认名（引擎侧不认语言，只有界面知道该写什么）。
     NewProject { name: String, track_names: Option<Vec<String>> },
+
+    // ---- 批量音符（编曲主力） ----
+    /// 一次新增一组音符（**一次事务** = 一条撤销记录）。
+    ///
+    /// 编曲通常一次产生几十到几百个音符；逐个 `AddNote` 会让撤销变成灾难。
+    /// 音符的 `id` 由引擎发放，调用方给的 id 会被忽略。
+    AddNotes { track: TrackId, clip: ClipId, notes: Vec<Note> },
+    /// **原子替换**片段内的全部音符（清空后写入；`notes` 为空 = 清空片段）。
+    ReplaceNotes { track: TrackId, clip: ClipId, notes: Vec<Note> },
+    /// 按 **id** 批量改写音符；只改给出的字段。
+    UpdateNotes { track: TrackId, clip: ClipId, updates: Vec<NotePatch> },
+    /// 按 **id** 批量删除音符。
+    RemoveNotesById { track: TrackId, clip: ClipId, ids: Vec<u64> },
+    /// 批量移调（半音）；可选范围限定。
+    TransposeNotes { track: TrackId, clip: ClipId, semitones: i32, range: Option<NoteRange> },
+    /// 批量设置力度（固定值 / 渐变 / 缩放）。
+    SetNoteVelocity {
+        track: TrackId,
+        clip: ClipId,
+        shape: VelocityShape,
+        range: Option<NoteRange>,
+    },
+    /// 量化：把起点吸到 `grid`（拍）的整数倍，`strength` 决定吸多少（0 = 不动，1 = 完全对齐）。
+    QuantizeNotes { track: TrackId, clip: ClipId, grid: f64, strength: f64, range: Option<NoteRange> },
+    /// Swing：把指定 `subdivision`（拍）的**第二个子拍**往后推，`ratio` 是它与前一个子拍的距离占比。
+    ///
+    /// 8 分 swing = `subdivision: 0.5` + `ratio: 0.66`（第二拍落到约 2/3 拍处）。
+    ApplySwing {
+        track: TrackId,
+        clip: ClipId,
+        subdivision: f64,
+        ratio: f64,
+        strength: f64,
+        range: Option<NoteRange>,
+    },
+    /// 人性化：给位置 / 力度加**确定性**随机偏移（同一个 `seed` 结果完全一致，重放不会漂）。
+    HumanizeNotes {
+        track: TrackId,
+        clip: ClipId,
+        /// 位置抖动上限（拍）。
+        timing: f64,
+        /// 力度抖动上限（0..=127 的绝对量）。
+        velocity: f64,
+        range: Option<NoteRange>,
+        seed: Option<u64>,
+    },
+    /// 把音符收进指定音域：`Fold` 做八度折返（不改音级），`Report` 只统计不改动。
+    FitNotesToRange {
+        track: TrackId,
+        clip: ClipId,
+        min_pitch: u8,
+        max_pitch: u8,
+        mode: FitMode,
+        range: Option<NoteRange>,
+    },
+
+    // ---- 片段编辑（复制 / 合并） ----
+    /// 复制片段：默认贴在原片段末尾（`start = 原起点 + 原长度`），可换轨道。
+    DuplicateClip {
+        track: TrackId,
+        clip: ClipId,
+        /// 目标轨道（`None` = 原轨道）。
+        to_track: Option<TrackId>,
+        /// 目标起点（`None` = 紧接在原片段之后）。
+        start: Option<f64>,
+    },
+    /// 把同一轨道上的多个 MIDI 片段合并成一个（保留第一个的 id，跨度取并集）。
+    ///
+    /// 音频片段不参与合并（各自的素材窗口无法用「挪音符」表达）——遇到就整体拒绝。
+    MergeClips { track: TrackId, clips: Vec<ClipId> },
+
+    // ---- 编曲元数据 ----
+    /// 整体替换工程的小节和弦表（空 = 清除）。
+    SetProjectHarmony { bars: Vec<HarmonyBar> },
+    /// 整体替换工程的段落表（空 = 清除）。
+    SetProjectSections { sections: Vec<Section> },
+    /// 设置轨道的编曲元数据（分工 / 目标音域）；两者都为空 = 清除。
+    SetTrackMeta { track: TrackId, role: Option<String>, pitch_range: Option<PitchRange> },
 }

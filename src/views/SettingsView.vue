@@ -18,11 +18,16 @@ import { useProjectStore } from "@/stores/project";
 import { useSettingsStore, MAX_DEFAULT_TEMPO, MIN_DEFAULT_TEMPO } from "@/stores/settings";
 import Md3Slider from "@/components/common/Md3Slider.vue";
 import NumberField from "@/components/common/NumberField.vue";
+import ComboField from "@/components/common/ComboField.vue";
 import { usePluginsStore } from "@/stores/plugins";
 import { useI18n } from "@/i18n";
 import { copyText } from "@/utils/clipboard";
 import { lastWorkspace } from "@/router";
 import {
+  agentConfig,
+  agentModels,
+  agentSetConfig,
+  agentTest,
   aiBackendInfo,
   aiSetBackend,
   cliStatus,
@@ -364,11 +369,79 @@ async function testProxy(): Promise<void> {
   }
 }
 
+// ---- 写歌智能体（OpenAI 兼容端点）----
+
+const agentBaseUrl = ref("");
+const agentApiKey = ref("");
+const agentModel = ref("");
+const agentModelList = ref<string[]>([]);
+const agentSaving = ref(false);
+const agentFetchingModels = ref(false);
+const agentTesting = ref(false);
+const agentProbe = ref("");
+
+async function loadAgent(): Promise<void> {
+  try {
+    const cfg = await agentConfig();
+    agentBaseUrl.value = cfg.base_url;
+    agentApiKey.value = cfg.api_key;
+    agentModel.value = cfg.model;
+  } catch {
+    // 读取失败就保持空白，用户照常可以填。
+  }
+}
+
+/** 用输入框里的值拉模型列表（不写盘）。 */
+async function fetchAgentModels(): Promise<void> {
+  agentFetchingModels.value = true;
+  agentProbe.value = "";
+  try {
+    agentModelList.value = await agentModels(agentBaseUrl.value.trim(), agentApiKey.value.trim(), agentModel.value.trim());
+    if (!agentModel.value.trim() && agentModelList.value.length) agentModel.value = agentModelList.value[0];
+  } catch (err) {
+    agentProbe.value = String(err);
+  } finally {
+    agentFetchingModels.value = false;
+  }
+}
+
+/** 用输入框里的值测连通性（不写盘）。 */
+async function testAgent(): Promise<void> {
+  agentTesting.value = true;
+  agentProbe.value = "";
+  try {
+    const probe = await agentTest(agentBaseUrl.value.trim(), agentApiKey.value.trim(), agentModel.value.trim());
+    agentProbe.value = probe.ok ? `✅ ${probe.detail}（${probe.ms} ms）` : `❌ ${probe.detail}`;
+  } catch (err) {
+    agentProbe.value = String(err);
+  } finally {
+    agentTesting.value = false;
+  }
+}
+
+async function saveAgent(): Promise<void> {
+  agentSaving.value = true;
+  try {
+    await agentSetConfig(agentBaseUrl.value.trim(), agentApiKey.value.trim(), agentModel.value.trim());
+    layout.notify(i18n.t("settings.ai.openai.saved"));
+  } catch (err) {
+    layout.notify(String(err));
+  } finally {
+    agentSaving.value = false;
+  }
+}
+
 onMounted(() => {
   void loadMcp();
   void loadCli();
   void loadStoreNetwork();
   void loadBackend();
+  void loadAgent();
+  // 深链：`/settings?section=ai` 直接落到 AI / MCP 子页（写歌智能体的「去配置」会这么跳）。
+  const section = router.currentRoute.value.query.section;
+  if (typeof section === "string" && SECTIONS.some((s) => s.id === section)) {
+    active.value = section as Section;
+  }
 });
 </script>
 
@@ -794,8 +867,65 @@ onMounted(() => {
           </div>
         </template>
 
-        <!-- AI / MCP：本地模型执行后端 + MCP 代理接入（原两节已合并） -->
+        <!-- AI / MCP：OpenAI 兼容端点（写歌智能体）+ 本地模型执行后端 + MCP 代理接入 -->
         <template v-else-if="active === 'ai'">
+          <!-- OpenAI 兼容端点：右侧「写歌智能体」面板直连它 -->
+          <div class="group">
+            <div class="group-title">{{ i18n.t("settings.ai.openai.title") }}</div>
+            <div class="card">
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.ai.openai.baseUrl") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.ai.openai.baseUrlHint") }}</span>
+                <input
+                  v-model="agentBaseUrl"
+                  class="net-input"
+                  type="text"
+                  spellcheck="false"
+                  placeholder="https://api.openai.com/v1"
+                />
+              </div>
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.ai.openai.apiKey") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.ai.openai.apiKeyHint") }}</span>
+                <input
+                  v-model="agentApiKey"
+                  class="net-input"
+                  type="password"
+                  spellcheck="false"
+                  placeholder="sk-…"
+                />
+              </div>
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.ai.openai.model") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.ai.openai.modelHint") }}</span>
+                <ComboField
+                  :model-value="agentModel"
+                  :options="agentModelList"
+                  :label="i18n.t('settings.ai.openai.model')"
+                  :placeholder="i18n.t('settings.ai.openai.modelPlaceholder')"
+                  :empty="i18n.t('settings.ai.openai.modelEmpty')"
+                  @update:model-value="agentModel = $event"
+                />
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-sub">{{ agentProbe || i18n.t("settings.ai.openai.probeHint") }}</span>
+                </div>
+                <div class="row-actions">
+                  <button class="scan-btn" :disabled="agentFetchingModels" @click="fetchAgentModels">
+                    {{ i18n.t("settings.ai.openai.fetchModels") }}
+                  </button>
+                  <button class="scan-btn" :disabled="agentTesting" @click="testAgent">
+                    {{ i18n.t("settings.ai.openai.test") }}
+                  </button>
+                  <button class="scan-btn" :disabled="agentSaving" @click="saveAgent">
+                    {{ i18n.t("settings.ai.openai.save") }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="group">
             <div class="group-title">{{ i18n.t("settings.ai.title") }}</div>
             <div class="card">
@@ -1303,5 +1433,13 @@ onMounted(() => {
 }
 .port-input:disabled {
   opacity: 0.5;
+}
+
+/* ---- 写歌智能体（OpenAI 兼容端点） ---- */
+.row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 </style>

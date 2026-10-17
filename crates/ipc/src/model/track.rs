@@ -131,6 +131,52 @@ pub fn lane_value_at(points: &[AutomationPoint], beat: f64) -> Option<f32> {
     Some(last.value)
 }
 
+/// 轨道目标音域（MIDI 音高，含两端）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PitchRange {
+    pub min: u8,
+    pub max: u8,
+}
+
+impl PitchRange {
+    /// 归一化：夹到 0..=127，并保证 `min <= max`。
+    pub fn normalize(self) -> Self {
+        let min = self.min.min(127);
+        let max = self.max.min(127);
+        if min <= max {
+            PitchRange { min, max }
+        } else {
+            PitchRange { min: max, max: min }
+        }
+    }
+
+    /// 该音高是否落在音域内。
+    pub fn contains(&self, pitch: u8) -> bool {
+        pitch >= self.min && pitch <= self.max
+    }
+}
+
+/// 编曲元数据：轨道在曲子里的**分工**与目标音域。
+///
+/// 全部可选、全部不写进 JSON 当为空——旧工程的文件形状逐字不变。工具在没有这些字段时
+/// 仍然接受显式参数，所以它们是「备忘 + 默认值」，不是必需品。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct TrackMeta {
+    /// 分工：`lead` / `chords` / `bass` / `drums` / `pad` / `fx`…（自由字符串）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// 目标音域；`fit_notes_to_range` 不传参数时用它。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch_range: Option<PitchRange>,
+}
+
+impl TrackMeta {
+    /// 是否什么都没设（用于决定要不要序列化）。
+    pub fn is_empty(&self) -> bool {
+        self.role.is_none() && self.pitch_range.is_none()
+    }
+}
+
 /// 轨道。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Track {
@@ -149,6 +195,21 @@ pub struct Track {
     /// 自动化车道。旧工程缺省为空，且空时不写进 JSON。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub automation: Vec<AutomationLane>,
+    /// 编曲元数据（分工 / 目标音域）。缺省或为空时不写进 JSON。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<TrackMeta>,
+}
+
+impl Track {
+    /// 轨道分工（没有元数据时为 `None`）。
+    pub fn role(&self) -> Option<&str> {
+        self.meta.as_ref().and_then(|m| m.role.as_deref())
+    }
+
+    /// 轨道目标音域（没有元数据时为 `None`）。
+    pub fn pitch_range(&self) -> Option<PitchRange> {
+        self.meta.as_ref().and_then(|m| m.pitch_range)
+    }
 }
 
 #[cfg(test)]

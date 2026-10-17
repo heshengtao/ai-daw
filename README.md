@@ -21,9 +21,7 @@ It is a real DAW: a multi-track timeline, a piano roll, a mixer with sends and b
 
 Everything runs on your own machine. No account, no API key, no audio leaving your computer.
 
-<p align="center">
-  <img src="./assets/screenshots/01-arrange.png" width="100%" alt="The AI DAW arrange view: MIDI clips on three tracks, the timeline ruler, the inspector, and the AI panel">
-</p>
+https://github.com/user-attachments/assets/e0da890d-854d-4727-9cfb-3eb82c2a9bd1
 
 ## Why this matters
 

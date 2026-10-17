@@ -92,6 +92,16 @@ const fileBase = computed(() => {
 const appWindow = isTauri() ? getCurrentWindow() : null;
 const isMainWindow = appWindow?.label === "main";
 
+/**
+ * 「主」窗口：真正的应用窗口（浏览器预览里没有多窗口这回事，也按主窗口对待）。
+ *
+ * 二级窗口（合成器 / 效果器面板、插件界面宿主页）**不**订阅传输、也**不**做工程初始化：
+ * 它们根本不显示走带，订阅了却会在 `mode` 从 preview 切回 realtime 时把**自己那份**
+ * 循环区间 / 循环开关补推给引擎。多一扇窗就多一份全局状态写入——它的快照一旦比主窗口旧，
+ * 用户刚划好的循环段就被冲掉了。工程写入（`localizeStarterTracks`）同理只该由主窗口做。
+ */
+const isPrimaryWindow = !isTauri() || isMainWindow;
+
 /** 工程名对话框（重命名 / 保存共用）。 */
 const projectDialogOpen = ref(false);
 const projectDialogMode = ref<"rename" | "save">("rename");
@@ -391,10 +401,16 @@ onMounted(async () => {
   window.addEventListener("resize", onWindowResize);
   layout.clampPanes();
   // 每一步都独立：合成器那个二级窗口里，某一步失败不该把它拖成「永远空白」。
-  await Promise.allSettled([events.start(), transport.init(), project.reload()]);
+  // 传输状态只有主窗口订阅：二级窗口不显示走带，订阅了反而会把本窗口的循环区间写回引擎。
+  await Promise.allSettled(
+    isPrimaryWindow
+      ? [events.start(), transport.init(), project.reload()]
+      : [events.start(), project.reload()],
+  );
   // 初始工程是在界面起来之前建的（那时还不知道界面语言），这里按当前语言把默认分轨名改过来。
   // 后端只在工程仍是默认模板时才改——用户动过就一个字都不动；改名不进撤销栈。
-  await project.localizeStarterTracks().catch(() => {});
+  // 只由主窗口做：二级窗口同时来一遍是多余的工程写入。
+  if (isPrimaryWindow) await project.localizeStarterTracks().catch(() => {});
   // 用户预设：跨工程，取一次就够（保存/删除后会各自刷新）。
   void presets.refresh();
   // 插件目录：先取一次当前值，再等后端的后台扫描完成推送。

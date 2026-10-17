@@ -27,6 +27,7 @@ pub fn apply(project: &mut Project, event: &Event) {
         Event::KeyframeRemoved { beat, .. } => project.transport.remove_keyframe(*beat),
         Event::TrackAdded { id, name, at, .. } => {
             let track = crate::model::Track {
+                meta: None,
                 id: *id,
                 name: name.clone(),
                 instrument: None,
@@ -162,7 +163,55 @@ pub fn apply(project: &mut Project, event: &Event) {
         }
         Event::NoteAdded { track, clip, note, .. } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
-                c.notes.push(Note::normalize(*note));
+                // 事件里的 id 正常由命令层发放；手写 / 旧事件可能带 0，就地补一个。
+                let mut note = Note::normalize(*note);
+                if note.id == 0 {
+                    note.id = c.next_note_id();
+                }
+                c.notes.push(note);
+            }
+        }
+        Event::NotesAdded { track, clip, notes, .. } => {
+            if let Some(c) = find_clip_mut(project, *track, *clip) {
+                // 先算一次高水位，避免逐个 `next_note_id()` 反复扫描整段音符。
+                let mut next = c.next_note_id();
+                let mut seen: std::collections::HashSet<u64> =
+                    c.notes.iter().map(|n| n.id).collect();
+                for note in notes {
+                    let mut note = Note::normalize(*note);
+                    if note.id == 0 || !seen.insert(note.id) {
+                        note.id = next;
+                        next += 1;
+                        seen.insert(note.id);
+                    }
+                    c.notes.push(note);
+                }
+            }
+        }
+        Event::NotesReplaced { track, clip, notes, .. } => {
+            if let Some(c) = find_clip_mut(project, *track, *clip) {
+                let mut next = 1u64;
+                c.notes = notes
+                    .iter()
+                    .map(|note| {
+                        let mut note = Note::normalize(*note);
+                        if note.id == 0 {
+                            note.id = next;
+                        }
+                        next = next.max(note.id + 1);
+                        note
+                    })
+                    .collect();
+                // 同一批里出现重复 id（手写事件）时补号，保证「片段内唯一」这条不变式。
+                let mut seen = std::collections::HashSet::new();
+                let mut next = c.notes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+                for note in &mut c.notes {
+                    if !seen.insert(note.id) {
+                        note.id = next;
+                        next += 1;
+                        seen.insert(note.id);
+                    }
+                }
             }
         }
         Event::NoteChanged { track, clip, index, note, .. } => {
@@ -308,6 +357,46 @@ pub fn apply(project: &mut Project, event: &Event) {
         }
         Event::ProjectRenamed { name, .. } => project.name = name.clone(),
         Event::ProjectCleared { name, .. } => *project = Project::new(name.clone()),
+        Event::TrackMetaChanged { track, role, pitch_range, .. } => {
+            if let Some(t) = project.track_mut(*track) {
+                // 两者都空 → 元数据整个消失（JSON 里不再出现 `meta` 键）。
+                let meta = crate::model::TrackMeta {
+                    role: role.clone().filter(|r| !r.trim().is_empty()),
+                    pitch_range: pitch_range.map(|r| r.normalize()),
+                };
+                t.meta = if meta.is_empty() { None } else { Some(meta) };
+            }
+        }
+        Event::ProjectHarmonyChanged { bars, .. } => {
+            let mut bars: Vec<crate::model::HarmonyBar> = bars
+                .iter()
+                .filter(|b| b.start.is_finite() && b.length.is_finite() && b.length > 0.0)
+                .map(|b| crate::model::HarmonyBar {
+                    start: b.start.max(0.0),
+                    length: b.length.max(1e-6),
+                    symbol: b.symbol.trim().to_string(),
+                    source: b.source.clone(),
+                })
+                .filter(|b| !b.symbol.is_empty())
+                .collect();
+            bars.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+            project.harmony = bars;
+        }
+        Event::ProjectSectionsChanged { sections, .. } => {
+            let mut sections: Vec<crate::model::Section> = sections
+                .iter()
+                .filter(|s| s.start.is_finite() && s.end.is_finite())
+                .map(|s| crate::model::Section {
+                    name: s.name.trim().to_string(),
+                    start: s.start.max(0.0),
+                    end: s.end.max(0.0),
+                    role: s.role.clone(),
+                })
+                .filter(|s| !s.name.is_empty() && s.end > s.start)
+                .collect();
+            sections.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+            project.sections = sections;
+        }
     }
 }
 
@@ -344,7 +433,7 @@ mod tests {
                 actor: Actor::Human,
                 track: t,
                 clip: c,
-                note: Note { pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 },
+                note: Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 },
             },
         );
         assert_eq!(p.track(t).unwrap().clips[0].notes.len(), 1);
@@ -406,7 +495,7 @@ mod tests {
                     actor: Actor::Human,
                     track: t,
                     clip: c,
-                    note: Note { pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127 },
+                    note: Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127 },
                 },
             );
         }
@@ -417,7 +506,7 @@ mod tests {
                 track: t,
                 clip: c,
                 index: 1,
-                note: Note { pitch: 200, start: -1.0, duration: 0.0, velocity: 255, volume: 127 },
+                note: Note { id: 0, pitch: 200, start: -1.0, duration: 0.0, velocity: 255, volume: 127 },
             },
         );
         let n = p.track(t).unwrap().clips[0].notes[1];

@@ -328,6 +328,7 @@ fn run_job(
         let notes: Vec<Note> = detected
             .iter()
             .map(|n| Note {
+                id: 0,
                 pitch: n.pitch,
                 start: n.start_sec * beats_per_second,
                 duration: (n.duration_sec * beats_per_second).max(Note::MIN_DURATION_BEATS),

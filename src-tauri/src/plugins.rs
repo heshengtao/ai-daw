@@ -171,6 +171,7 @@ mod tests {
                 track,
                 clip,
                 note: Note {
+                    id: 0,
                     pitch: 60,
                     start: 0.0,
                     duration: 1.0,

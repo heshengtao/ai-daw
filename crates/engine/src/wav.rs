@@ -78,7 +78,7 @@ mod tests {
             Command::AddNote {
                 track,
                 clip,
-                note: Note { pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 },
+                note: Note { id: 0, pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 },
             },
             Actor::Human,
         );

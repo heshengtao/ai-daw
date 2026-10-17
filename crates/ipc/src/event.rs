@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, Note, NoteEdit, Send, TrackId,
+    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, HarmonyBar, Note, NoteEdit,
+    PitchRange, Section, Send, TrackId,
 };
 
 /// 变更来源。
@@ -76,6 +77,12 @@ pub enum Event {
     ClipResized { actor: Actor, track: TrackId, clip: ClipId, length: f64 },
     /// 音符新增。
     NoteAdded { actor: Actor, track: TrackId, clip: ClipId, note: Note },
+    /// 一批音符新增（**一次事务**：整批只占一条撤销记录）。
+    ///
+    /// 音符自带稳定 `id`，因此重放不需要引擎再发号——撤销/重做得到完全一样的 id。
+    NotesAdded { actor: Actor, track: TrackId, clip: ClipId, notes: Vec<Note> },
+    /// 片段内的音符被**整体替换**（原子替换；空数组 = 清空）。
+    NotesReplaced { actor: Actor, track: TrackId, clip: ClipId, notes: Vec<Note> },
     /// 音符被改写（`index` 为片段内的序号）。
     NoteChanged { actor: Actor, track: TrackId, clip: ClipId, index: usize, note: Note },
     /// 多个音符被改写（多选拖动 / 属性面板）。
@@ -114,6 +121,17 @@ pub enum Event {
     ProjectRenamed { actor: Actor, name: String },
     /// 工程被重置为空。`actor` 为发起者。
     ProjectCleared { actor: Actor, name: String },
+    /// 轨道编曲元数据被改写（分工 / 目标音域；两者皆空 = 清除）。
+    TrackMetaChanged {
+        actor: Actor,
+        track: TrackId,
+        role: Option<String>,
+        pitch_range: Option<PitchRange>,
+    },
+    /// 工程的小节和弦表被整体替换（空 = 清除）。
+    ProjectHarmonyChanged { actor: Actor, bars: Vec<HarmonyBar> },
+    /// 工程的段落表被整体替换（空 = 清除）。
+    ProjectSectionsChanged { actor: Actor, sections: Vec<Section> },
 }
 
 impl Event {
@@ -139,6 +157,8 @@ impl Event {
             | Event::ClipsMoved { actor, .. }
             | Event::ClipResized { actor, .. }
             | Event::NoteAdded { actor, .. }
+            | Event::NotesAdded { actor, .. }
+            | Event::NotesReplaced { actor, .. }
             | Event::NoteChanged { actor, .. }
             | Event::NotesChanged { actor, .. }
             | Event::NoteRemoved { actor, .. }
@@ -157,7 +177,10 @@ impl Event {
             | Event::EffectMoved { actor, .. }
             | Event::EffectParamChanged { actor, .. }
             | Event::ProjectRenamed { actor, .. }
-            | Event::ProjectCleared { actor, .. } => actor,
+            | Event::ProjectCleared { actor, .. }
+            | Event::TrackMetaChanged { actor, .. }
+            | Event::ProjectHarmonyChanged { actor, .. }
+            | Event::ProjectSectionsChanged { actor, .. } => actor,
         }
     }
 
@@ -212,7 +235,7 @@ mod tests {
                 track: crate::model::TrackId(1),
                 clip: crate::model::ClipId(2),
                 index: 0,
-                note: crate::model::Note { pitch: 64, start: 1.0, duration: 0.5, velocity: 90, volume: 127 },
+                note: crate::model::Note { id: 0, pitch: 64, start: 1.0, duration: 0.5, velocity: 90, volume: 127 },
             },
             Event::NoteRemoved { actor: Actor::Human, track: crate::model::TrackId(1), clip: crate::model::ClipId(2), index: 1 },
             Event::NotesChanged {
@@ -221,7 +244,7 @@ mod tests {
                 clip: crate::model::ClipId(2),
                 entries: vec![crate::model::NoteEdit {
                     index: 0,
-                    note: crate::model::Note { pitch: 60, start: 0.0, duration: 1.0, velocity: 64, volume: 127 },
+                    note: crate::model::Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 64, volume: 127 },
                 }],
             },
             Event::NotesRemoved {

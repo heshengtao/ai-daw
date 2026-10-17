@@ -8,8 +8,9 @@ use ai_daw_engine::bus::Engine;
 use ai_daw_engine::command::Command;
 use ai_daw_engine::event::{Actor, Event};
 use ai_daw_engine::model::{
-    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, Keyframe, Note, NoteEdit, Project,
-    Send, TrackId, Transport,
+    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, FitMode, HarmonyBar, Keyframe,
+    Note, NoteEdit, NotePatch, NoteRange, PitchRange, Project, Section, Send, TrackId, Transport,
+    VelocityShape,
 };
 use ai_daw_engine::registry::{PluginRegistry, PluginSlot};
 use ai_daw_engine::render::{render_with_assets, RenderOptions};
@@ -137,7 +138,9 @@ fn capture_plugin_states(state: &AppState) {
     let mut cursor: HashMap<(u64, String), usize> = HashMap::new();
     for ((track, slot), plugin_id, bytes) in captured {
         match slot {
-            PluginSlot::Instrument => engine.set_instrument_state(TrackId(track), bytes),
+            // 带上**句柄自己的** plugin id：引擎会核对它是否还是轨道当前的乐器。
+            // 换乐器时句柄要等这一轮重建后才清理，不核对就会把旧乐器的状态写进新乐器。
+            PluginSlot::Instrument => engine.set_instrument_state(TrackId(track), &plugin_id, bytes),
             PluginSlot::Effect(_) => {
                 let Some(ids) = chain_ids.get(&track) else { continue };
                 let start = *cursor.get(&(track, plugin_id.clone())).unwrap_or(&0);
@@ -156,12 +159,23 @@ fn run(app: &tauri::AppHandle, state: &State<'_, AppState>, command: Command) ->
     run_as(app, state, Actor::Human, command).0
 }
 
-/// MCP 服务器走的编辑入口：署名 `Actor::Agent`，其余管线与界面**完全一致**。
+/// MCP 服务器走的编辑入口：署名 `Actor::Agent("mcp")`，其余管线与界面**完全一致**。
 ///
 /// 返回新工程与本次产生的事件，便于工具把手边新对象的 id 回给代理。
 pub(crate) fn run_agent(app: &tauri::AppHandle, command: Command) -> (Project, Vec<Event>) {
+    run_agent_as(app, Actor::Agent("mcp".into()), command)
+}
+
+/// 以**任意代理身份**执行单条命令：署名由 `actor` 决定（MCP 用 `"mcp"`，内置写歌智能体用 `"chat"`）。
+///
+/// 与 [`run_agent`] 同一条管线，只是署名不同——事件流与撤销历史因此能区分是哪个代理在写。
+pub(crate) fn run_agent_as(
+    app: &tauri::AppHandle,
+    actor: Actor,
+    command: Command,
+) -> (Project, Vec<Event>) {
     let state = app.state::<AppState>();
-    run_as(app, &state, Actor::Agent("mcp".into()), command)
+    run_as(app, &state, actor, command)
 }
 
 /// 以代理身份执行**一批**命令（**合成一个撤销步骤**）：用于一次产出多条轨道的 AI 动作
@@ -515,15 +529,16 @@ pub(crate) fn apply_preset_inner(
     (engine.project().clone(), events)
 }
 
-/// 应用一条预设（MCP 入口）：取状态 → 执行 → 广播 → 同步音频线程。
-pub(crate) fn apply_preset_agent(
+/// 应用一条预设（代理入口）：取状态 → 执行 → 广播 → 同步音频线程；署名由 `actor` 决定。
+pub(crate) fn apply_preset_agent_as(
     app: &tauri::AppHandle,
+    actor: Actor,
     track: TrackId,
     params: &HashMap<String, f32>,
     effects: &[EffectSpec],
 ) -> (Project, Vec<Event>) {
     let state = app.state::<AppState>();
-    let (project, events) = apply_preset_inner(&state, track, params, effects, Actor::Agent("mcp".into()));
+    let (project, events) = apply_preset_inner(&state, track, params, effects, actor);
     for event in &events {
         let _ = app.emit(EVENT_ENGINE, event);
     }
@@ -677,6 +692,7 @@ pub fn trim_clip(
                 .map(|(index, n)| NoteEdit {
                     index,
                     note: Note {
+                        id: 0,
                         pitch: n.pitch,
                         start: n.start - shift,
                         duration: n.duration,
@@ -945,6 +961,343 @@ pub fn remove_clips(
     items: Vec<ClipRef>,
 ) -> Project {
     run(&app, &state, Command::RemoveClips { items })
+}
+
+// ---------------------------------------------------------------------------
+// 编曲：批量音符、律动与音域变换
+// ---------------------------------------------------------------------------
+
+/// 一次新增一组音符（一次事务 = 一条撤销记录）。
+#[tauri::command]
+pub fn add_notes(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    notes: Vec<Note>,
+) -> Project {
+    run(&app, &state, Command::AddNotes { track: TrackId(track), clip: ClipId(clip), notes })
+}
+
+/// 原子替换片段内的全部音符（空数组 = 清空片段）。
+#[tauri::command]
+pub fn replace_notes(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    notes: Vec<Note>,
+) -> Project {
+    run(&app, &state, Command::ReplaceNotes { track: TrackId(track), clip: ClipId(clip), notes })
+}
+
+/// 按稳定 id 批量改写音符（只改给出的字段）。
+#[tauri::command]
+pub fn update_notes(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    updates: Vec<NotePatch>,
+) -> Project {
+    run(&app, &state, Command::UpdateNotes { track: TrackId(track), clip: ClipId(clip), updates })
+}
+
+/// 按稳定 id 批量删除音符。
+#[tauri::command]
+pub fn remove_notes_by_id(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    ids: Vec<u64>,
+) -> Project {
+    run(&app, &state, Command::RemoveNotesById { track: TrackId(track), clip: ClipId(clip), ids })
+}
+
+/// 批量移调（半音），可限定范围。
+#[tauri::command]
+pub fn transpose_notes(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    semitones: i32,
+    range: Option<NoteRange>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::TransposeNotes { track: TrackId(track), clip: ClipId(clip), semitones, range },
+    )
+}
+
+/// 批量设置力度（固定 / 渐变 / 缩放）。
+#[tauri::command]
+pub fn set_note_velocity(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    shape: VelocityShape,
+    range: Option<NoteRange>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::SetNoteVelocity { track: TrackId(track), clip: ClipId(clip), shape, range },
+    )
+}
+
+/// 量化：把起点吸到 `grid` 的整数倍。
+#[tauri::command]
+pub fn quantize_notes(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    grid: f64,
+    strength: f64,
+    range: Option<NoteRange>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::QuantizeNotes { track: TrackId(track), clip: ClipId(clip), grid, strength, range },
+    )
+}
+
+/// Swing：把指定子拍的第二个往后推。
+#[tauri::command]
+pub fn apply_swing(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    subdivision: f64,
+    ratio: f64,
+    strength: f64,
+    range: Option<NoteRange>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::ApplySwing {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            subdivision,
+            ratio,
+            strength,
+            range,
+        },
+    )
+}
+
+/// 人性化：位置 / 力度的确定性抖动。
+#[tauri::command]
+pub fn humanize_notes(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    timing: f64,
+    velocity: f64,
+    range: Option<NoteRange>,
+    seed: Option<u64>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::HumanizeNotes {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            timing,
+            velocity,
+            range,
+            seed,
+        },
+    )
+}
+
+/// 把音符收进目标音域（`fold` 八度折返 / `report` 只报告）。
+#[tauri::command]
+pub fn fit_notes_to_range(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    min_pitch: u8,
+    max_pitch: u8,
+    mode: FitMode,
+    range: Option<NoteRange>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::FitNotesToRange {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            min_pitch,
+            max_pitch,
+            mode,
+            range,
+        },
+    )
+}
+
+/// 复制片段（缺省贴在原片段之后）。
+#[tauri::command]
+pub fn duplicate_clip(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    to_track: Option<u64>,
+    start: Option<f64>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::DuplicateClip {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            to_track: to_track.map(TrackId),
+            start,
+        },
+    )
+}
+
+/// 合并同一轨道上的多个 MIDI 片段。
+#[tauri::command]
+pub fn merge_clips(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clips: Vec<u64>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::MergeClips { track: TrackId(track), clips: clips.into_iter().map(ClipId).collect() },
+    )
+}
+
+// ---------------------------------------------------------------------------
+// 编曲分析（只读）：音域 / 密度 / 重叠 / 和声
+// ---------------------------------------------------------------------------
+
+/// 单条轨道（或其中某个片段）的音符统计。
+#[tauri::command]
+pub fn get_track_note_stats(
+    state: State<'_, AppState>,
+    track: u64,
+    clip: Option<u64>,
+) -> Result<ai_daw_engine::report::NoteStats, String> {
+    let project = state.engine.lock().unwrap().project().clone();
+    let found = project
+        .track(TrackId(track))
+        .ok_or_else(|| format!("没有轨道 {track}"))?;
+    Ok(ai_daw_engine::compose::note_stats(
+        found,
+        clip.map(ClipId),
+        project.transport.bar_beats(),
+    ))
+}
+
+/// 多条轨道之间的音区重叠与分工冲突。
+#[tauri::command]
+pub fn analyze_track_overlap(
+    state: State<'_, AppState>,
+    tracks: Vec<u64>,
+    clip: Option<u64>,
+) -> Result<ai_daw_engine::report::OverlapReport, String> {
+    let project = state.engine.lock().unwrap().project().clone();
+    let picked: Vec<&ai_daw_engine::model::Track> = tracks
+        .iter()
+        .map(|id| project.track(TrackId(*id)).ok_or_else(|| format!("没有轨道 {id}")))
+        .collect::<Result<_, _>>()?;
+
+    let mut pairs = Vec::new();
+    for (i, a) in picked.iter().enumerate() {
+        for b in picked.iter().skip(i + 1) {
+            pairs.push(ai_daw_engine::compose::track_overlap(a, b, clip.map(ClipId)));
+        }
+    }
+    let summary: Vec<String> = pairs
+        .iter()
+        .filter(|p| p.conflict && !p.suggestion.is_empty())
+        .map(|p| p.suggestion.clone())
+        .collect();
+    Ok(ai_daw_engine::report::OverlapReport { tracks, pairs, summary })
+}
+
+/// 和声检查：`bars` 缺省时用工程里存的和弦表；`tracks` 缺省时检查所有有音符的轨道。
+#[tauri::command]
+pub fn analyze_harmony(
+    state: State<'_, AppState>,
+    bars: Option<Vec<HarmonyBar>>,
+    tracks: Option<Vec<u64>>,
+    policy: Option<ai_daw_engine::report::HarmonyPolicy>,
+) -> Result<ai_daw_engine::report::HarmonyReport, String> {
+    let project = state.engine.lock().unwrap().project().clone();
+    let bars = match bars {
+        Some(bars) if !bars.is_empty() => bars,
+        _ if !project.harmony.is_empty() => project.harmony.clone(),
+        _ => {
+            return Err(
+                "没有和弦信息：传 bars（[{start, length, symbol}]），或先用 set_project_harmony 存一份"
+                    .into(),
+            )
+        }
+    };
+    let picked: Vec<&ai_daw_engine::model::Track> = match tracks {
+        Some(ids) => ids
+            .iter()
+            .map(|id| project.track(TrackId(*id)).ok_or_else(|| format!("没有轨道 {id}")))
+            .collect::<Result<_, _>>()?,
+        None => project.tracks.iter().filter(|t| t.clips.iter().any(|c| !c.notes.is_empty())).collect(),
+    };
+    if picked.is_empty() {
+        return Err("没有可检查的音符：指定的轨道上没有任何音符".into());
+    }
+    ai_daw_engine::harmony::analyze(
+        &bars,
+        &picked,
+        policy.unwrap_or_default(),
+        project.transport.bar_beats(),
+    )
+}
+
+/// 整体替换工程的小节和弦表（空 = 清除）。
+#[tauri::command]
+pub fn set_project_harmony(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    bars: Vec<HarmonyBar>,
+) -> Project {
+    run(&app, &state, Command::SetProjectHarmony { bars })
+}
+
+/// 整体替换工程的段落表（空 = 清除）。
+#[tauri::command]
+pub fn set_project_sections(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    sections: Vec<Section>,
+) -> Project {
+    run(&app, &state, Command::SetProjectSections { sections })
+}
+
+/// 设置轨道的编曲元数据（分工 / 目标音域）；两者都空 = 清除。
+#[tauri::command]
+pub fn set_track_meta(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    role: Option<String>,
+    pitch_range: Option<PitchRange>,
+) -> Project {
+    run(&app, &state, Command::SetTrackMeta { track: TrackId(track), role, pitch_range })
 }
 
 // ---------------------------------------------------------------------------
@@ -1804,25 +2157,36 @@ pub async fn rescan_plugins(app: tauri::AppHandle) -> Result<Vec<CatalogPlugin>,
 }
 
 /// 取某个插件的参数表（内置插件从注册表拿，外部插件按目录加载）。
+///
+/// **会加载插件**（外部插件要 dlopen），只能在阻塞线程上调用。抽成普通函数是为了让
+/// `describe_plugin` 这个 MCP 工具复用同一份逻辑——两个入口看到同一张参数表。
+pub(crate) fn plugin_params_with(
+    catalog: &[CatalogPlugin],
+    plugin_id: &str,
+) -> Result<Vec<ParamInfo>, String> {
+    if let Some(plugin) =
+        PluginRegistry::with_builtins().create(plugin_id, TrackId(0), PluginSlot::Instrument)
+    {
+        return Ok(plugin.params());
+    }
+    let entry = catalog
+        .iter()
+        .find(|e| e.id == plugin_id)
+        .ok_or_else(|| format!("未知插件：{plugin_id}"))?;
+    let plugin = ai_daw_host_vst3::load_catalog_plugin(entry).map_err(|e| e.to_string())?;
+    Ok(plugin.params())
+}
+
+/// 取某个插件的参数表（内置插件从注册表拿，外部插件按目录加载）。
 #[tauri::command]
 pub async fn plugin_params(
     state: State<'_, AppState>,
     plugin_id: String,
 ) -> Result<Vec<ParamInfo>, String> {
     let catalog = state.catalog_snapshot();
-    tauri::async_runtime::spawn_blocking(move || {
-        if let Some(plugin) = PluginRegistry::with_builtins().create(&plugin_id, TrackId(0), PluginSlot::Instrument) {
-            return Ok(plugin.params());
-        }
-        let entry = catalog
-            .into_iter()
-            .find(|e| e.id == plugin_id)
-            .ok_or_else(|| format!("未知插件：{plugin_id}"))?;
-        let plugin = ai_daw_host_vst3::load_catalog_plugin(&entry).map_err(|e| e.to_string())?;
-        Ok(plugin.params())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || plugin_params_with(&catalog, &plugin_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// 在轨道效果链末尾追加一个效果器。
@@ -2425,6 +2789,7 @@ mod tests {
         let mut p = Project::new("t");
         p.transport.tempo = 120.0;
         p.tracks = vec![Track {
+            meta: None,
             id: TrackId(1),
             name: "a".into(),
             instrument: None,

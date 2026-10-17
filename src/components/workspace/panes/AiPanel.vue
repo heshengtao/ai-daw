@@ -170,6 +170,11 @@ async function runSeparation(): Promise<void> {
   }
 }
 
+/** 打开右侧的「写歌智能体」面板。 */
+function openAgent(): void {
+  layout.openTab("agent");
+}
+
 /** 确认框点了「下载」：跳到「管理器 → 模型」并开始下载。 */
 async function confirmDownloadModel(): Promise<void> {
   const model = pendingModel.value;
@@ -297,6 +302,17 @@ onUnmounted(() => {
   <div class="pane">
     <ul class="list">
       <!-- MCP 服务器：接入地址并入同一个容器 -->
+      <!-- 写歌智能体：对话式编曲入口 -->
+      <li class="item">
+        <div class="item-row">
+          <div class="item-main">
+            <span class="item-name">{{ i18n.t("panes.agent") }}</span>
+            <span class="item-note">{{ i18n.t("panes.agentHint") }}</span>
+          </div>
+          <button class="run-btn" @click="openAgent">{{ i18n.t("ai.run") }}</button>
+        </div>
+      </li>
+
       <li class="item">
         <div class="item-row">
           <div class="item-main">

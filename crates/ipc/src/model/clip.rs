@@ -12,8 +12,15 @@ pub struct ClipId(pub u64);
 /// - `velocity` **演奏强度**：手弹得多重。真实乐器里它决定音色（明亮度、击弦力度），
 ///   内置合成器则把它折算成振幅。将来接入的插件会各自解释它。
 /// - `volume` **音量**：单音电平微调，纯粹的增益，不改变音色。默认 127（不衰减）。
+///
+/// `id` 是**片段内稳定**的标识：批量工具（`update_notes` / `remove_notes`）靠它定位，
+/// 而不是靠数组下标——删掉一个音符不该让后面所有音符的定位全部漂移。旧工程没有这个字段，
+/// 读入时按片段顺序补齐（见 `Project::ensure_note_ids`）。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Note {
+    /// 片段内唯一标识。旧工程 / 手写 JSON 缺这个字段时按 0 读入，由引擎补号。
+    #[serde(default)]
+    pub id: u64,
     pub pitch: u8,
     pub start: f64,
     pub duration: f64,
@@ -42,8 +49,10 @@ impl Note {
     /// 归一化：音高/力度/音量夹到 MIDI 0..=127，起点非负且有上界，时长落在合法区间。
     ///
     /// 手写工程、旧文件、AI 代理都可能送来越界值；所有写入路径都必须经过这里。
+    /// `id` 原样保留——它是**定位依据**，不能被「修正」。
     pub fn normalize(note: Note) -> Note {
         Note {
+            id: note.id,
             pitch: note.pitch.min(127),
             // 音符起点是**相对片段起点**的拍，**允许为负**：左边缘往右拖时音符要停在原处（被
             // 方框裁掉但不删），往回拖就能恢复。
@@ -52,6 +61,16 @@ impl Note {
             velocity: note.velocity.min(127),
             volume: note.volume.min(Self::MAX_VOLUME),
         }
+    }
+
+    /// 音高 → 音级（0..=11，C=0）。八度折返只改音级上方的八度，不改音级本身。
+    pub fn pitch_class(pitch: u8) -> u8 {
+        pitch % 12
+    }
+
+    /// 该音高属于哪个八度（MIDI 60 = C4 → 4）。
+    pub fn octave(pitch: u8) -> i16 {
+        (pitch as i16) / 12 - 1
     }
 }
 
@@ -169,10 +188,119 @@ pub struct ClipPlacement {
 ///
 /// 音符没有独立 id（模型刻意保持扁平），因此片段内**序号**是唯一的定位方式；批量改写
 /// 一次带上全部项，才能保证「改 10 个音符」只产生一条撤销记录。
+///
+/// 界面（多选拖动、属性面板）继续用它；AI 侧的新工具改用 [`NotePatch`]（按稳定 id 定位）。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct NoteEdit {
     pub index: usize,
     pub note: Note,
+}
+
+/// 按 **id** 定位的音符改写项：只带需要改的字段，其余保持不变。
+///
+/// 与 [`NoteEdit`] 的差别只在定位方式——批量工具需要「删掉几个之后仍然指得准」，
+/// 数组下标做不到，稳定 id 可以。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NotePatch {
+    /// 目标音符的 id（片段内唯一）。
+    pub id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub velocity: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<u8>,
+}
+
+impl NotePatch {
+    /// 把改写项落到一个音符上；未给出的字段保持不变。
+    pub fn apply_to(&self, note: Note) -> Note {
+        Note {
+            id: note.id,
+            pitch: self.pitch.unwrap_or(note.pitch),
+            start: self.start.unwrap_or(note.start),
+            duration: self.duration.unwrap_or(note.duration),
+            velocity: self.velocity.unwrap_or(note.velocity),
+            volume: self.volume.unwrap_or(note.volume),
+        }
+    }
+}
+
+/// 音符范围（**片段内**拍坐标，左闭右开）：批量变换只作用于起点落在区间内的音符。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NoteRange {
+    pub start: f64,
+    pub end: f64,
+}
+
+impl NoteRange {
+    /// 该音符是否落在范围内（按**起点**判定，与钢琴卷帘的框选一致）。
+    pub fn contains(&self, note: &Note) -> bool {
+        note.start >= self.start && note.start < self.end
+    }
+
+    /// 归一化：保证 `start <= end`，非有限值视为「整段」。
+    pub fn normalize(self) -> Self {
+        let start = if self.start.is_finite() { self.start } else { f64::NEG_INFINITY };
+        let end = if self.end.is_finite() { self.end } else { f64::INFINITY };
+        if start <= end {
+            NoteRange { start, end }
+        } else {
+            NoteRange { start: end, end: start }
+        }
+    }
+}
+
+/// 力度变换的形状（`set_note_velocity`）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VelocityShape {
+    /// 全部设为同一力度。
+    Fixed(u8),
+    /// 按拍位在范围内线性变化（渐强 / 渐弱）。
+    Ramp { from: u8, to: u8 },
+    /// 相对缩放（1.0 = 不变，0.5 = 减半，1.5 = 放大一半）。
+    Scale(f64),
+}
+
+/// 音域约束的处理方式（`fit_notes_to_range`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FitMode {
+    /// 八度折返：只把越界的音上下挪整八度，**不改音级**。
+    Fold,
+    /// 只报告，不改动任何音符。
+    Report,
+}
+
+impl FitMode {
+    /// 解析字符串（MCP / CLI 传的是字面量）。
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "fold" | "octave" | "octave_fold" => Some(FitMode::Fold),
+            "report" | "none" | "dry_run" => Some(FitMode::Report),
+            _ => None,
+        }
+    }
+}
+
+impl Clip {
+    /// 按 id 找音符下标。
+    pub fn note_index(&self, id: u64) -> Option<usize> {
+        self.notes.iter().position(|n| n.id == id)
+    }
+
+    /// 片段内下一个可用的音符 id（当前最大值 + 1，至少 1）。
+    ///
+    /// 只用于**给新音符发号**：id 只需在片段内唯一，删掉的号不回收——回收会让
+    /// 「刚删掉的 id」被新音符复用，外部拿着旧 id 的操作就会打到别的音符上。
+    pub fn next_note_id(&self) -> u64 {
+        self.notes.iter().map(|n| n.id).max().unwrap_or(0) + 1
+    }
 }
 
 impl Clip {
@@ -248,7 +376,7 @@ mod tests {
 
     #[test]
     fn note_normalization_clamps_every_field() {
-        let n = Note::normalize(Note { pitch: 200, start: -3.0, duration: 0.0, velocity: 250, volume: 250 });
+        let n = Note::normalize(Note { id: 0, pitch: 200, start: -3.0, duration: 0.0, velocity: 250, volume: 250 });
         assert_eq!(n.pitch, 127);
         // 起点是**相对片段起点**的拍，允许为负（收起时被裁掉的音符要留着）。
         assert_eq!(n.start, -3.0);
@@ -259,7 +387,7 @@ mod tests {
 
     #[test]
     fn note_normalization_rejects_non_finite() {
-        let n = Note::normalize(Note { pitch: 60, start: f64::NAN, duration: f64::INFINITY, velocity: 100, volume: 127 });
+        let n = Note::normalize(Note { id: 0, pitch: 60, start: f64::NAN, duration: f64::INFINITY, velocity: 100, volume: 127 });
         // 非有限的起点回落到 0；非有限的时长回落到最短时长（而不是让它永远挂着）。
         assert_eq!(n.start, 0.0);
         assert_eq!(n.duration, Note::MIN_DURATION_BEATS);
@@ -305,7 +433,7 @@ mod tests {
             id: ClipId(2),
             start: -3.0,
             length: 0.0,
-            notes: vec![Note { pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 }],
+            notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 }],
             audio: Some(AudioSource {
                 path: "/tmp/kick.wav".into(),
                 offset_frames: 0,

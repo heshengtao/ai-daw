@@ -13,6 +13,7 @@ import {
   MusicalNoteIcon,
   PuzzlePieceIcon,
   SparklesIcon,
+  ChatBubbleLeftRightIcon,
 } from "@heroicons/vue/24/outline";
 import Tooltip from "@/components/common/Tooltip.vue";
 import { PANES, PICKABLE_PANES, useLayoutStore, type PaneId } from "@/stores/layout";
@@ -32,6 +33,7 @@ const ICONS: Record<PaneId, unknown> = {
   editor: MusicalNoteIcon,
   plugins: CircleStackIcon,
   manager: PuzzlePieceIcon,
+  agent: ChatBubbleLeftRightIcon,
   ai: SparklesIcon,
 };
 

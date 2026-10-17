@@ -13,6 +13,7 @@ export type PaneId =
   | "plugins"
   | "manager"
   | "editor"
+  | "agent"
   | "ai";
 
 /**
@@ -35,6 +36,7 @@ export const PANES: { id: PaneId; labelKey: string; hintKey: string }[] = [
   { id: "editor", labelKey: "panes.editor", hintKey: "panes.editorHint" },
   { id: "plugins", labelKey: "panes.plugins", hintKey: "panes.pluginsHint" },
   { id: "manager", labelKey: "panes.manager", hintKey: "panes.managerHint" },
+  { id: "agent", labelKey: "panes.agent", hintKey: "panes.agentHint" },
   { id: "ai", labelKey: "panes.ai", hintKey: "panes.aiHint" },
 ];
 

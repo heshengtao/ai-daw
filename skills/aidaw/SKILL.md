@@ -1,6 +1,6 @@
 ---
 name: aidaw
-description: 通过内嵌 MCP 工具或 aidaw 命令行操作正在运行的 AI DAW——读写工程、轨道、片段、音符、混音（增益/声像/发送/自动化）、传输播放、音频导入与录音、响度与频谱分析、导出 WAV、扫描插件。凡用户要求编曲、建轨、写音符、调混音、录音、分析或导出音频时使用。
+description: 通过内嵌 MCP 工具或 aidaw 命令行操作正在运行的 AI DAW——读写工程、轨道、片段、音符、批量编曲（转调/量化/摇摆/人性化/和弦分析）、混音（增益/声像/发送/自动化）、传输播放、音频导入与录音、响度与频谱分析、导出 WAV、扫描插件。凡用户要求编曲、建轨、写音符、改和弦、量化节奏、调混音、录音、分析或导出音频时使用。
 license: Apache-2.0
 ---
 
@@ -70,31 +70,43 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 
 | 域 | 加载 | 覆盖 |
 | --- | --- | --- |
-| 工程 | `references/project.md` | 读工程、新建/重命名、保存/打开、会话缓存 |
+| 工程 | `references/project.md` | 读工程、速度/拍号、撤销/重做、**工程元数据（和弦表 / 段落 / 轨道分工与音域）** |
 | 轨道 | `references/track.md` | 增删改轨道、挂/换乐器、效果链 |
-| 片段 | `references/clip.md` | MIDI / 音频片段的增删改、移动、缩放、切分 |
+| 片段 | `references/clip.md` | MIDI / 音频片段的增删改、**移动、缩放、切分、复制、合并** |
 | 音符 | `references/note.md` | 钢琴卷帘里的音符与力度 / 音量 |
+| 编曲 | `references/composition.md` | **批量改音符（一个撤销步）、量化 / 摇摆 / 人性化、音域折叠、节奏统计、和弦分析** |
 | 混音 | `references/mix.md` | 增益/声像/静音/独奏/总输出、**发送 → 总线**、**自动化** |
 | 音频 | `references/audio.md` | 导入音频、波形、**录音** |
 | 传输 | `references/transport.md` | 播放 / 暂停 / 停止 / 定位 / 循环 |
 | 分析导出 | `references/analysis.md` | 渲染预览、响度 / 频谱分析、导出 WAV |
-| 插件 | `references/plugin.md` | 扫描 / 列出插件、参数、用户预设 |
+| 插件 | `references/plugin.md` | **按分类与音色描述挑乐器/效果器**、参数表、效果链、用户预设 |
 
 ## 典型闭环（建轨 → 编曲 → 导出 → 分析）
 
 1. `references/project.md`：`get_project` 看清现状（轨道 id、片段 id、速度、拍号）。
-2. `references/track.md`：`add_track` 建轨 → `set_track_instrument` 选音色。
-3. `references/clip.md` + `references/note.md`：`add_clip` 画片段 → `add_note` 写音符。
-4. `references/mix.md`：`set_gain` / `set_pan` 调平衡；要总线就再建一条轨 + `set_sends`。
-5. `references/analysis.md`：`analyze_project` 看响度 / 频谱 → 回头微调。
-6. `references/analysis.md`：`export_wav` 导出。
+2. `references/track.md`：`add_track` 建轨 → 先 `list_plugins`（读分类与音色描述）再
+   `set_track_instrument` 选音色。
+3. `references/clip.md`：`add_clip` 画片段（`move_clip` / `resize_clip` / `split_clip` / `duplicate_clip` 调结构）。
+4. `references/composition.md` + `references/note.md`：`add_notes` **一次写完一个乐句**
+   → `quantize_notes` / `apply_swing` 定节奏 → `set_project_harmony` 写和弦 → `analyze_harmony` 查错音。
+5. `references/mix.md`：`set_gain` / `set_pan` 调平衡；要总线就再建一条轨 + `set_sends`。
+6. `references/analysis.md`：`analyze_project` 看响度 / 频谱 → 回头微调。
+7. `references/analysis.md`：`export_wav` 导出。
 
 ## 约定与坑
 
 - **先读后写**：`get_project` 拿到的 id 才是真相；`add_track` / `add_clip` / `add_note` 会在返回文本里
   给出新建对象的 id，下一步要用它。
-- **整体替换类操作**：`set_sends` / `set_automation` 是**整体替换**（空数组 = 清空 / 删除该车道）；
-  `apply_preset` 的 `effects` 是**替换**整条效果链，不是叠加。
+- **挑音色先看目录**：插件名只是型号（`JC303` 是 TB-303 克隆的**单音酸性贝斯**，不是普通合成器）。
+  `list_plugins` 给分类 + 一句话描述 + 推荐分工 + 建议音域；参数表用 `describe_plugin`。
+  `set_track_instrument` / `add_effect` 也接受名字，但**别凭名字猜音色**——认不出的条目会自己说明「未收录」。
+- **批量优先，别一条条加**：写一个乐句用 `add_notes`（一次事务 = 一个撤销步），不要循环 `add_note`；
+  改一批音符用 `update_notes` / `transpose_notes`，别删了重加（删了 id 就变了）。
+- **音符 id 是片段内的**：`clip` 换了，同一个 `id` 指的是另一颗音符；跨片段要先 `get_project` 确认。
+- **改音符的工具会自动夹住越界**：起点 ≥ 片段起点、时长 > 0、不超出片段——被夹的条数会在返回里报出来。
+- **整体替换类操作**：`set_sends` / `set_automation` / `replace_notes` / `set_project_harmony` /
+  `set_project_sections` 是**整体替换**（空数组 = 清空 / 删除该车道）；`apply_preset` 的 `effects`
+  是**替换**整条效果链，不是叠加。
 - **自动化的 `param` 命名空间**：`gain_db` / `pan`，或 `inst:<参数id>`（轨道乐器）、
   `fx<i>:<参数id>`（效果链第 i 个，i 从 0 起）。
 - **音频片段的时间语义**：片段拍长是唯一真相，素材铺满跨度——**改速度 / 缩放会变调**（v1 不做保音高变速）。

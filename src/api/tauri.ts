@@ -8,6 +8,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { mockApi, mockEnabled } from "./mock";
 import type {
+  AgentConfig,
+  AgentEvent,
+  AgentProbe,
+  AgentSession,
+  AgentSessionSummary,
   AiModels,
   AiStatus,
   AnalysisReport,
@@ -19,7 +24,11 @@ import type {
   CliStatus,
   ClipPlacement,
   ClipRef,
+  FitMode,
   ForeignPlugin,
+  HarmonyBar,
+  HarmonyPolicy,
+  HarmonyReport,
   HistoryDepths,
   HistoryState,
   ImportProgress,
@@ -36,14 +45,21 @@ import type {
   ModelStatus,
   Note,
   NoteEdit,
+  NotePatch,
+  NoteRange,
+  NoteStats,
+  OverlapReport,
+  PitchRange,
   Preset,
   Project,
   ProxyMode,
   ProxyProbe,
   ProxyStatus,
+  Section,
   Send,
   StoreNetwork,
   TransportSnapshot,
+  VelocityShape,
 } from "./types";
 
 /** 引擎事件广播通道名，与后端 `state::EVENT_ENGINE` 保持一致。 */
@@ -59,6 +75,8 @@ export const EVENT_MANAGER = "engine://manager";
 export const EVENT_MODEL = "engine://model";
 /** 音频导入解码进度广播通道名，与后端 `state::EVENT_IMPORT` 保持一致。 */
 export const EVENT_IMPORT = "engine://import";
+/** 写歌智能体事件广播通道名，与后端 `agent::EVENT_AGENT` 保持一致。 */
+export const EVENT_AGENT = "engine://agent";
 
 /** 读取当前工程。 */
 export function getProject(): Promise<Project> {
@@ -244,6 +262,208 @@ export function removeNotes(track: number, clip: number, indices: number[]): Pro
 export function removeClips(items: ClipRef[]): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.removeClips(items));
   return invoke<Project>("remove_clips", { items });
+}
+
+// ---------------------------------------------------------------------------
+// 编曲：批量音符、律动与音域（一次调用 = 一个撤销步骤）
+// ---------------------------------------------------------------------------
+
+/** 一次写入一组音符。 */
+export function addNotes(track: number, clip: number, notes: Note[]): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.addNotes(track, clip, notes));
+  return invoke<Project>("add_notes", { track, clip, notes });
+}
+
+/** 原子替换片段内的全部音符（空数组 = 清空）。 */
+export function replaceNotes(track: number, clip: number, notes: Note[]): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.replaceNotes(track, clip, notes));
+  return invoke<Project>("replace_notes", { track, clip, notes });
+}
+
+/** 按稳定 id 批量改写音符（只改给出的字段）。 */
+export function updateNotes(track: number, clip: number, updates: NotePatch[]): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.updateNotes(track, clip, updates));
+  return invoke<Project>("update_notes", { track, clip, updates });
+}
+
+/** 按稳定 id 批量删除音符。 */
+export function removeNotesById(track: number, clip: number, ids: number[]): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.removeNotesById(track, clip, ids));
+  return invoke<Project>("remove_notes_by_id", { track, clip, ids });
+}
+
+/** 批量移调（半音）。 */
+export function transposeNotes(
+  track: number,
+  clip: number,
+  semitones: number,
+  range?: NoteRange,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.transposeNotes(track, clip, semitones, range));
+  return invoke<Project>("transpose_notes", { track, clip, semitones, range: range ?? null });
+}
+
+/** 批量设置力度（固定 / 渐变 / 缩放）。 */
+export function setNoteVelocity(
+  track: number,
+  clip: number,
+  shape: VelocityShape,
+  range?: NoteRange,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setNoteVelocity(track, clip, shape, range));
+  return invoke<Project>("set_note_velocity", { track, clip, shape, range: range ?? null });
+}
+
+/** 量化：把起点吸到 grid 的整数倍。 */
+export function quantizeNotes(
+  track: number,
+  clip: number,
+  grid: number,
+  strength = 1,
+  range?: NoteRange,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.quantizeNotes(track, clip, grid, strength, range));
+  return invoke<Project>("quantize_notes", { track, clip, grid, strength, range: range ?? null });
+}
+
+/** Swing：把指定子拍的第二个往后推。 */
+export function applySwing(
+  track: number,
+  clip: number,
+  subdivision = 0.5,
+  ratio = 0.66,
+  strength = 1,
+  range?: NoteRange,
+): Promise<Project> {
+  if (mockEnabled())
+    return Promise.resolve(mockApi.applySwing(track, clip, subdivision, ratio, strength, range));
+  return invoke<Project>("apply_swing", {
+    track,
+    clip,
+    subdivision,
+    ratio,
+    strength,
+    range: range ?? null,
+  });
+}
+
+/** 人性化：位置 / 力度的确定性抖动。 */
+export function humanizeNotes(
+  track: number,
+  clip: number,
+  timing = 0.02,
+  velocity = 8,
+  range?: NoteRange,
+  seed?: number,
+): Promise<Project> {
+  if (mockEnabled())
+    return Promise.resolve(mockApi.humanizeNotes(track, clip, timing, velocity, range, seed));
+  return invoke<Project>("humanize_notes", {
+    track,
+    clip,
+    timing,
+    velocity,
+    range: range ?? null,
+    seed: seed ?? null,
+  });
+}
+
+/** 把音符收进目标音域（`fold` 八度折返 / `report` 只报告）。 */
+export function fitNotesToRange(
+  track: number,
+  clip: number,
+  minPitch: number,
+  maxPitch: number,
+  mode: FitMode = "fold",
+  range?: NoteRange,
+): Promise<Project> {
+  if (mockEnabled())
+    return Promise.resolve(mockApi.fitNotesToRange(track, clip, minPitch, maxPitch, mode, range));
+  return invoke<Project>("fit_notes_to_range", {
+    track,
+    clip,
+    minPitch,
+    maxPitch,
+    mode,
+    range: range ?? null,
+  });
+}
+
+/** 复制片段（缺省贴在原片段之后）。 */
+export function duplicateClip(
+  track: number,
+  clip: number,
+  toTrack?: number,
+  start?: number,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.duplicateClip(track, clip, toTrack, start));
+  return invoke<Project>("duplicate_clip", {
+    track,
+    clip,
+    toTrack: toTrack ?? null,
+    start: start ?? null,
+  });
+}
+
+/** 合并同一轨道上的多个 MIDI 片段。 */
+export function mergeClips(track: number, clips: number[]): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.mergeClips(track, clips));
+  return invoke<Project>("merge_clips", { track, clips });
+}
+
+/** 只读：轨道的音域、密度、重叠统计。 */
+export function getTrackNoteStats(track: number, clip?: number): Promise<NoteStats> {
+  if (mockEnabled()) return Promise.resolve(mockApi.getTrackNoteStats(track, clip));
+  return invoke<NoteStats>("get_track_note_stats", { track, clip: clip ?? null });
+}
+
+/** 只读：多条轨道之间的音区重叠与分工冲突。 */
+export function analyzeTrackOverlap(tracks: number[], clip?: number): Promise<OverlapReport> {
+  if (mockEnabled()) return Promise.resolve(mockApi.analyzeTrackOverlap(tracks, clip));
+  return invoke<OverlapReport>("analyze_track_overlap", { tracks, clip: clip ?? null });
+}
+
+/** 只读：按小节和弦表检查和声（`bars` 缺省用工程里存的那份）。 */
+export function analyzeHarmony(
+  bars?: HarmonyBar[],
+  tracks?: number[],
+  policy?: Partial<HarmonyPolicy>,
+): Promise<HarmonyReport> {
+  if (mockEnabled()) return Promise.resolve(mockApi.analyzeHarmony(bars, tracks));
+  return invoke<HarmonyReport>("analyze_harmony", {
+    bars: bars ?? null,
+    tracks: tracks ?? null,
+    allowExtensions: policy?.allow_extensions ?? null,
+    allowApproachNotes: policy?.allow_approach_notes ?? null,
+    allowNonChordToneDuration: policy?.allow_non_chord_tone_duration ?? null,
+  });
+}
+
+/** 写入工程的小节和弦表（整体替换；空数组 = 清除）。 */
+export function setProjectHarmony(bars: HarmonyBar[]): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setProjectHarmony(bars));
+  return invoke<Project>("set_project_harmony", { bars });
+}
+
+/** 写入工程的段落表（整体替换）。 */
+export function setProjectSections(sections: Section[]): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setProjectSections(sections));
+  return invoke<Project>("set_project_sections", { sections });
+}
+
+/** 设置轨道的编曲元数据（分工 / 目标音域）。 */
+export function setTrackMeta(
+  track: number,
+  role?: string,
+  pitchRange?: PitchRange,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setTrackMeta(track, role, pitchRange));
+  return invoke<Project>("set_track_meta", {
+    track,
+    role: role ?? null,
+    minPitch: pitchRange?.min ?? null,
+    maxPitch: pitchRange?.max ?? null,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +656,76 @@ export function mcpStatus(): Promise<McpStatus> {
 export function setMcpConfig(enabled: boolean, port: number): Promise<McpStatus> {
   if (mockEnabled()) return Promise.resolve(mockApi.setMcpConfig(enabled, port));
   return invoke<McpStatus>("set_mcp_config", { enabled, port });
+}
+
+// ---------------------------------------------------------------------------
+// 写歌智能体
+// ---------------------------------------------------------------------------
+
+/** 读取写歌智能体配置。 */
+export function agentConfig(): Promise<AgentConfig> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentConfig());
+  return invoke<AgentConfig>("agent_config");
+}
+
+/** 保存写歌智能体配置。 */
+export function agentSetConfig(baseUrl: string, apiKey: string, model: string): Promise<AgentConfig> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentSetConfig(baseUrl, apiKey, model));
+  return invoke<AgentConfig>("agent_set_config", { baseUrl, apiKey, model });
+}
+
+/** 拉取端点上的模型 id 列表（用传入的配置，不写盘）。 */
+export function agentModels(baseUrl: string, apiKey: string, model: string): Promise<string[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentModels());
+  return invoke<string[]>("agent_models", { baseUrl, apiKey, model });
+}
+
+/** 测试连通性（用传入的配置，不写盘）。 */
+export function agentTest(baseUrl: string, apiKey: string, model: string): Promise<AgentProbe> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentTest());
+  return invoke<AgentProbe>("agent_test", { baseUrl, apiKey, model });
+}
+
+/** 全部会话摘要（历史列表）。 */
+export function agentSessions(): Promise<AgentSessionSummary[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentSessions());
+  return invoke<AgentSessionSummary[]>("agent_sessions");
+}
+
+/** 载入一个会话（含完整节点树）。 */
+export function agentSession(id: string): Promise<AgentSession> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentSession(id));
+  return invoke<AgentSession>("agent_session", { id });
+}
+
+/** 删除一个会话。 */
+export function agentDeleteSession(id: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentDeleteSession(id));
+  return invoke<void>("agent_delete_session", { id });
+}
+
+/** 切换某会话的活跃分支（`head`）。 */
+export function agentSetHead(id: string, nodeId: string): Promise<AgentSession> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentSetHead(id, nodeId));
+  return invoke<AgentSession>("agent_set_head", { id, nodeId });
+}
+
+/** 发起一轮对话：返回会话 id（回答经 `engine://agent` 流式推回）。 */
+export function agentSend(sessionId: string | null, parentId: string | null, text: string): Promise<string> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentSend(sessionId, parentId, text));
+  return invoke<string>("agent_send", { sessionId, parentId, text });
+}
+
+/** 停止当前一轮。 */
+export function agentCancel(): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentCancel());
+  return invoke<void>("agent_cancel");
+}
+
+/** 订阅写歌智能体事件。 */
+export function onAgentEvent(handler: (event: AgentEvent) => void): Promise<UnlistenFn> {
+  if (mockEnabled()) return mockApi.onAgentEvent(handler);
+  return listen<AgentEvent>(EVENT_AGENT, (e) => handler(e.payload));
 }
 
 /** 读取 `aidaw` 命令行工具的安装状态。 */

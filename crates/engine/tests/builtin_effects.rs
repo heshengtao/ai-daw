@@ -26,6 +26,7 @@ fn project(effects: Vec<PluginInstance>) -> Project {
     let mut p = Project::new("fx");
     p.transport.tempo = 120.0;
     p.tracks.push(Track {
+        meta: None,
         id: TrackId(1),
         name: "Synth".into(),
         instrument: Some(PluginInstance {
@@ -41,6 +42,7 @@ fn project(effects: Vec<PluginInstance>) -> Project {
             start: 0.0,
             length: 0.5,
             notes: vec![Note {
+                id: 0,
                 pitch: 60,
                 start: 0.0,
                 duration: 0.25,

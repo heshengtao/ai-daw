@@ -275,6 +275,14 @@ pub struct SharedStatus {
     message: Arc<Mutex<Option<String>>>,
     /// 单调递增的代数，初值 1；`clear()` 递增它（即 retire 旧 generation）。
     epoch: Arc<AtomicU64>,
+    /// 回调心跳：数据回调每处理一块就 +1（只有一次原子写，实时安全）。
+    ///
+    /// 「流还活着、但已经不再出声」是错误回调**抓不到**的一种失效：cpal 那边没报错，
+    /// `host` 也还在，可 CoreAudio 就是不叫我们的 IOProc 了（设备刚被别的客户端重新
+    /// 配置、旧 AudioUnit 还没释放完就建了新流……）。这种情况下所有传输/试听命令都
+    /// 排进队列没人消费，界面看着「在播」，实际一点声音都没有，**只有重启应用才能恢复**。
+    /// 控制侧靠这份心跳判断停摆并重建（见 `stream_stalled`）。
+    heartbeat: Arc<AtomicU64>,
 }
 
 impl Default for SharedStatus {
@@ -283,6 +291,7 @@ impl Default for SharedStatus {
             dead: Arc::new(AtomicBool::new(false)),
             message: Arc::new(Mutex::new(None)),
             epoch: Arc::new(AtomicU64::new(1)),
+            heartbeat: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -336,6 +345,43 @@ impl SharedStatus {
         self.dead.store(false, Ordering::Relaxed);
         *self.message.lock().unwrap() = None;
     }
+
+    /// 记一次回调心跳（**音频回调内调用**：单次原子加，不加锁、不分配）。
+    pub fn beat(&self) {
+        self.heartbeat.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 累计心跳次数。控制侧隔一段时间读一次，前后两次相同 = 回调没再跑过。
+    pub fn heartbeats(&self) -> u64 {
+        self.heartbeat.load(Ordering::Relaxed)
+    }
+}
+
+/// 判定「流还活着，但回调已经停摆」。
+///
+/// `alive` = 宿主存在且流没报错（报错的情况由 `dead` 那条路径处理，不归这里管）。
+/// 停摆时心跳计数在两轮轮询之间一动不动——设备拔了/换了也一样会走到这里，但那条路
+/// 通常先被错误回调标记为 `dead`，两者互不冲突。
+pub fn stream_stalled(alive: bool, beats_before: u64, beats_now: u64) -> bool {
+    alive && beats_before == beats_now
+}
+
+/// 停摆判定的基础阈值：连续这么多个轮询周期（控制侧每周期约 1 秒）没有心跳才算停摆。
+///
+/// 取 2 而不是 1，是给「刚建好流、还没跑第一块」留一格余量：建流与第一次回调之间
+/// 隔着 CoreAudio 的启动，一次轮询太容易正好落在缝里。
+pub const STALL_POLLS: u32 = 2;
+
+/// 第 `backoff` 次「重建完又立刻停摆」时，判定阈值该是多少个轮询周期。
+///
+/// 阈值按 2 → 4 → 8 → 16 → 32 翻倍（32 个周期约半分钟），之后不再增长。
+///
+/// **为什么必须退避**：如果一条流建起来就再也不回调（设备被别的进程独占、驱动的
+/// IOProc 干脆不跑），固定阈值会让看门狗每 2 秒把流推倒重建一次，永远循环——每次
+/// 重建都要丢掉旧 `AudioUnit` 再建新的，正是最容易被卡成「有流、没回调」的时机。
+/// 退避之后它仍然一直尝试（真恢复了就立刻出声），但不会把机器拖进抖动。
+pub fn stall_polls_required(backoff: u32) -> u32 {
+    STALL_POLLS.saturating_mul(1u32 << backoff.min(4))
 }
 
 /// 默认输出设备的采样率（Hz）；无法查询时返回 `None`（例如无音频设备的 CI 环境）。
@@ -540,8 +586,11 @@ impl AudioHost {
             end: shared.loop_end_frames(),
         });
         let mut staging: Vec<f32> = Vec::with_capacity(max_block * 2);
+        // 心跳：回调每跑一块就记一次，供控制侧判断「流还在、但已经不出声」。
+        let status_cb = Arc::clone(&options.status);
 
         let on_data = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            status_cb.beat();
             player.drain_commands(&mut rx);
 
             let frames = data.len() / channels.max(1);
@@ -743,6 +792,7 @@ mod tests {
     fn schedule() -> ScheduledEvents {
         let mut p = Project::new("rt");
         let mut track = Track {
+            meta: None,
             id: TrackId(1),
             name: "Lead".into(),
             instrument: Some(PluginInstance {
@@ -761,6 +811,7 @@ mod tests {
             start: 0.0,
             length: 1.0,
             notes: vec![Note {
+                id: 0,
                 pitch: 69,
                 start: 0.0,
                 duration: 0.5,
@@ -906,6 +957,35 @@ mod tests {
         }
     }
 
+    /// 心跳必须由**真实的回调**推进——这是看门狗的立身之本。
+    ///
+    /// 两种错法都只有真机才暴露：`beat()` 没被回调调用 → 看门狗误判「永远停摆」、把流
+    /// 无限重建；`beat()` 在别处被调用 → 停摆永远抓不到。所以这里真的开一条流、等它跑
+    /// 若干块，再断言计数确实涨了。
+    #[test]
+    fn a_live_stream_beats_its_heartbeat() {
+        let status = Arc::new(SharedStatus::new());
+        let options = RealtimeOptions {
+            max_block: 2048,
+            command_capacity: 64,
+            scope: Arc::new(ScopeBuffer::new(crate::SCOPE_CAPACITY)),
+            status: Arc::clone(&status),
+        };
+        let Ok(host) = AudioHost::start(schedule(), &PluginRegistry::with_builtins(), options) else {
+            // 无可用设备（无头 CI）：这条测试无从验证，跳过而不是失败。
+            return;
+        };
+        let before = status.heartbeats();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let after = status.heartbeats();
+        drop(host);
+        assert!(
+            after > before,
+            "真实回调必须推进心跳（before={before} after={after}）"
+        );
+        assert!(!stream_stalled(true, before, after), "有心跳就不是停摆");
+    }
+
     #[test]
     fn choose_format_rejects_non_f32() {
         let ranges = [range(OutputFormat::Other, 2, 44_100, 44_100)];
@@ -999,5 +1079,54 @@ mod tests {
         assert!(!device_changed(Some(&a), Some(&a2)));
         assert!(device_changed(Some(&a), Some(&b)));
         assert!(device_changed(Some(&a), Some(&a44)));
+    }
+
+    /// 心跳计数只增不减，控制侧靠「前后两次相同」判断停摆。
+    #[test]
+    fn heartbeat_only_moves_when_the_callback_runs() {
+        let status = SharedStatus::new();
+        let before = status.heartbeats();
+        // 还没跑过任何一块：与上一轮相同 → 停摆（刚建好的流由调用方重置基线兜住）。
+        assert!(stream_stalled(true, before, status.heartbeats()));
+        status.beat();
+        status.beat();
+        assert_eq!(status.heartbeats(), before + 2);
+        assert!(
+            !stream_stalled(true, before, status.heartbeats()),
+            "回调跑过就不是停摆"
+        );
+        // 两轮轮询之间一动不动 → 停摆。
+        let idle = status.heartbeats();
+        assert!(stream_stalled(true, idle, idle));
+    }
+
+    /// 没有宿主 / 流已报错时不走「停摆」这条判定：那两种情况另有专门的处理路径。
+    #[test]
+    fn stall_check_ignores_dead_or_missing_hosts() {
+        assert!(!stream_stalled(false, 7, 7), "宿主不存在时不判停摆");
+    }
+
+    /// `clear()`（重建前调用）不重置心跳：计数必须单调，否则「前后相同」会被误判。
+    #[test]
+    fn clear_keeps_the_heartbeat_monotonic() {
+        let status = SharedStatus::new();
+        status.beat();
+        let beats = status.heartbeats();
+        status.clear();
+        assert_eq!(status.heartbeats(), beats);
+    }
+
+    /// 退避阈值：翻倍增长、封顶，且第一次永远是最灵敏的那一档。
+    #[test]
+    fn stall_threshold_doubles_then_caps() {
+        assert_eq!(stall_polls_required(0), STALL_POLLS, "第一次必须最灵敏");
+        assert_eq!(stall_polls_required(1), STALL_POLLS * 2);
+        assert_eq!(stall_polls_required(2), STALL_POLLS * 4);
+        // 封顶：再多次连续停摆也不会让判定间隔无限变长（否则真恢复也要等太久）。
+        let cap = stall_polls_required(4);
+        assert_eq!(stall_polls_required(5), cap);
+        assert_eq!(stall_polls_required(1_000), cap);
+        // 不溢出：极端入参也得给出一个有限的正数。
+        assert!(stall_polls_required(u32::MAX) > 0);
     }
 }

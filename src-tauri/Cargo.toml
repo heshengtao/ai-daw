@@ -47,6 +47,12 @@ tokio = { version = "1", features = ["net"] }
 tokio-util = "0.7"
 schemars = "1"
 
+# 内置「写歌智能体」的 OpenAI 兼容 HTTP 客户端：Chat Completions 用 SSE 流式，需要能逐块读、
+# 能干净取消的异步客户端；`ureq` 是同步的、取消别扭。`reqwest` 已在依赖树里（tauri 的传递依赖），
+# 加为直接依赖不引入新 crate 树。TLS 用 native-tls，与 `ureq` 的既定策略一致（不用 rustls）。
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "native-tls"] }
+futures-util = { version = "0.3", default-features = false }
+
 # 插件管理器：拉取开放注册表（HTTPS）、校验、解压归档。
 # `ureq` 已在依赖树里（`ort` 的传递依赖），这里启用 `native-tls` 复用系统 TLS，
 # 不引入 rustls 那棵树；`gzip` 让注册表（1.9 MB → 约 280 KB）传输快一个量级；

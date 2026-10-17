@@ -1261,6 +1261,7 @@ mod tests {
         let mut p = Project::new("p");
         p.transport.tempo = 120.0;
         p.tracks.push(Track {
+            meta: None,
             id: TrackId(1),
             name: "Lead".into(),
             instrument: Some(PluginInstance { plugin_id: "builtin.synth".into(), params: Default::default(), state: vec![] }),
@@ -1269,7 +1270,7 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 1.0,
-                notes: vec![Note { pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
+                notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -1962,6 +1963,7 @@ mod tests {
     fn solo_mutes_every_other_track() {
         let mut p = project();
         p.tracks.push(Track {
+            meta: None,
             id: TrackId(2),
             name: "Bass".into(),
             instrument: Some(PluginInstance { plugin_id: "builtin.synth".into(), params: Default::default(), state: vec![] }),
@@ -1970,7 +1972,7 @@ mod tests {
                 id: ClipId(2),
                 start: 0.0,
                 length: 1.0,
-                notes: vec![Note { pitch: 40, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
+                notes: vec![Note { id: 0, pitch: 40, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -2074,6 +2076,7 @@ mod tests {
     /// 造一条只有 `test.stateful` 音源的轨道，电平由 `state[0]` 决定（满幅或 0）。
     fn tone_track(id: u64, name: &str, state: u8) -> Track {
         Track {
+            meta: None,
             id: TrackId(id),
             name: name.into(),
             instrument: Some(PluginInstance {
@@ -2191,6 +2194,7 @@ mod tests {
         let mut p = Project::new("p");
         p.transport.tempo = 120.0;
         p.tracks.push(Track {
+            meta: None,
             id: TrackId(1),
             name: "T".into(),
             instrument: Some(PluginInstance {
@@ -2262,6 +2266,7 @@ mod tests {
         let mut p = Project::new("p");
         p.transport.tempo = 120.0;
         p.tracks.push(Track {
+            meta: None,
             id: TrackId(1),
             name: "T".into(),
             instrument: Some(PluginInstance {

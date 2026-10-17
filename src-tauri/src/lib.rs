@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod agent;
 mod ai;
 mod audio;
 mod assets;
@@ -10,6 +11,7 @@ mod main_thread;
 mod manager;
 mod mcp;
 mod models;
+mod plugin_info;
 mod plugins;
 mod presets;
 mod session;
@@ -64,6 +66,7 @@ fn spawn_transport_ticker(app: tauri::AppHandle, audio: Arc<AudioEngine>) {
         .name("ai-daw-transport".into())
         .spawn(move || {
             let mut last: Option<TransportSnapshot> = None;
+            let mut warned = false;
             loop {
                 thread::sleep(TRANSPORT_TICK);
                 let snapshot = audio.snapshot();
@@ -71,9 +74,22 @@ fn spawn_transport_ticker(app: tauri::AppHandle, audio: Arc<AudioEngine>) {
                     continue;
                 }
                 if app.emit(EVENT_TRANSPORT, &snapshot).is_err() {
-                    // 窗口已关闭：没有订阅者了，线程可以退出。
-                    break;
+                    // 建窗 / 关窗的那一瞬间，某个 webview 还没准备好，这一次广播会失败。
+                    // **一次失败绝不能退出**：线程一退，所有窗口的传输状态就永久冻结了——
+                    // 界面停在「正在播放」、播放头不动，实际早已没声，按播放键也没反应。
+                    if !warned {
+                        warned = true;
+                        eprintln!("[transport] 状态广播失败（窗口正在建/销毁？），下一拍重试");
+                    }
+                    // 真的一个窗口都不剩了才收工。
+                    if app.webview_windows().is_empty() {
+                        break;
+                    }
+                    // 清掉基线，保证下一拍**重发**同一份快照，而不是被「没变化」跳过。
+                    last = None;
+                    continue;
                 }
+                warned = false;
                 last = Some(snapshot);
             }
         })
@@ -225,6 +241,16 @@ pub(crate) fn session_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf>
     app.path().app_config_dir().ok().map(|dir| dir.join("session.json"))
 }
 
+/// 写歌智能体配置文件的位置：应用配置目录下的 `ai.json`。
+fn agent_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("ai.json"))
+}
+
+/// 写歌智能体会话目录：应用配置目录下的 `agent/sessions/`。
+fn agent_sessions_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("agent").join("sessions"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -267,6 +293,9 @@ pub fn run() {
             let mcp = crate::mcp::McpRuntime::load(app.handle().clone(), mcp_file(app.handle()));
             mcp.autostart();
             app.manage(mcp);
+            // 写歌智能体：OpenAI 兼容端点配置（`ai.json`）+ 会话运行时（`agent/sessions/`）。
+            app.manage(crate::agent::AgentConfigRuntime::load(agent_file(app.handle())));
+            app.manage(crate::agent::AgentRuntime::new(agent_sessions_dir(app.handle())));
             // 注意：`aidaw` CLI 的挂载**不做任何自动动作**——它是设置页里的一个显式开关
             // （见 `cli.rs`）。启动时碰 PATH 会平白弹一次密码框，体验很差。
             // 但要**登记自己在哪**：别的 AI harness 按 bundle id 推导配置目录、读 `cli-path`
@@ -319,6 +348,24 @@ pub fn run() {
             commands::remove_note,
             commands::remove_notes,
             commands::remove_clips,
+            commands::add_notes,
+            commands::replace_notes,
+            commands::update_notes,
+            commands::remove_notes_by_id,
+            commands::transpose_notes,
+            commands::set_note_velocity,
+            commands::quantize_notes,
+            commands::apply_swing,
+            commands::humanize_notes,
+            commands::fit_notes_to_range,
+            commands::duplicate_clip,
+            commands::merge_clips,
+            commands::get_track_note_stats,
+            commands::analyze_track_overlap,
+            commands::analyze_harmony,
+            commands::set_project_harmony,
+            commands::set_project_sections,
+            commands::set_track_meta,
             commands::set_gain,
             commands::set_pan,
             commands::set_mute,
@@ -377,6 +424,16 @@ pub fn run() {
             commands::delete_preset,
             mcp::mcp_status,
             mcp::set_mcp_config,
+            agent::agent_config,
+            agent::agent_set_config,
+            agent::agent_models,
+            agent::agent_test,
+            agent::agent_sessions,
+            agent::agent_session,
+            agent::agent_delete_session,
+            agent::agent_set_head,
+            agent::agent_send,
+            agent::agent_cancel,
             cli::cli_status,
             cli::install_cli,
             cli::uninstall_cli,

@@ -402,6 +402,7 @@ mod tests {
         let mut p = Project::new("p");
         p.transport.tempo = 120.0;
         p.tracks.push(Track {
+            meta: None,
             id: TrackId(1),
             name: "Lead".into(),
             instrument: None,
@@ -410,7 +411,7 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 4.0,
-                notes: vec![Note { pitch: 60, start: 1.0, duration: 1.0, velocity: 100, volume: 127 }],
+                notes: vec![Note { id: 0, pitch: 60, start: 1.0, duration: 1.0, velocity: 100, volume: 127 }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -439,6 +440,7 @@ mod tests {
         let mut p = project_with_note();
         // 片段长 4 拍：再加一个「起点已在框外」的音符（第 5 拍起）。
         p.tracks[0].clips[0].notes.push(Note {
+            id: 0,
             pitch: 62,
             start: 5.0,
             duration: 1.0,
@@ -527,6 +529,7 @@ mod tests {
         p.transport.tempo = 120.0;
         p.transport.upsert_keyframe(Keyframe { beat: 2.0, tempo: 240.0, time_sig_num: 4, time_sig_den: 4 });
         p.tracks.push(Track {
+            meta: None,
             id: TrackId(1),
             name: "L".into(),
             instrument: None,
@@ -535,7 +538,7 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 4.0,
-                notes: vec![Note { pitch: 60, start: 3.0, duration: 0.5, velocity: 100, volume: 127 }],
+                notes: vec![Note { id: 0, pitch: 60, start: 3.0, duration: 0.5, velocity: 100, volume: 127 }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -571,6 +574,7 @@ mod tests {
     fn sends_and_lanes_are_resolved_into_the_schedule() {
         let mut p = project_with_note();
         p.tracks.push(Track {
+            meta: None,
             id: TrackId(2),
             name: "Bus".into(),
             instrument: None,

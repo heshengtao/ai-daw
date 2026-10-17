@@ -12,3 +12,4 @@
 pub mod command;
 pub mod event;
 pub mod model;
+pub mod report;

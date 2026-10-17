@@ -20,3 +20,6 @@ src-tauri/gen/
 
 # 技能工具（Command Code）的本地状态，不进仓库。
 .agents/
+
+# WorkBuddy AI 的本地记忆/会话状态，不进仓库。
+.workbuddy-ai/

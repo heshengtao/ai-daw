@@ -3,6 +3,36 @@ use serde::{Deserialize, Serialize};
 use super::track::{MixerChannel, Track, TrackId};
 use super::transport::Transport;
 
+/// 一个小节的和弦标记（编曲元数据）。
+///
+/// v1 不强制工程带它：`analyze_harmony` 也接受调用时显式传入的 `bars`。存进工程只是让
+/// 「和弦谱」跟着工程走，AI 下次不必再问一遍。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HarmonyBar {
+    /// 起始拍。
+    pub start: f64,
+    /// 长度（拍）；缺省由下一小节推出。
+    pub length: f64,
+    /// 和弦符号，如 `Dm9` / `G13` / `Cmaj7`。
+    pub symbol: String,
+    /// 来源（`manual` / `ai` / …）。缺省不写。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// 段落标记（前奏 / 主歌 / 副歌…）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Section {
+    pub name: String,
+    /// 起始拍。
+    pub start: f64,
+    /// 结束拍（不含）。
+    pub end: f64,
+    /// 角色：`intro` / `verse` / `chorus` / `bridge` / `outro`…。缺省不写。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
+
 /// 工程：领域聚合根。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -10,6 +40,12 @@ pub struct Project {
     pub transport: Transport,
     pub tracks: Vec<Track>,
     pub master: MixerChannel,
+    /// 小节和弦表。空时不写进 JSON（旧工程形状不变）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub harmony: Vec<HarmonyBar>,
+    /// 段落表。空时不写进 JSON。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<Section>,
 }
 
 impl Project {
@@ -20,6 +56,8 @@ impl Project {
             transport: Transport::default(),
             tracks: vec![],
             master: MixerChannel::default(),
+            harmony: vec![],
+            sections: vec![],
         }
     }
 
@@ -56,6 +94,26 @@ impl Project {
         out.dedup();
         out
     }
+
+    /// 给缺 id 的音符补号（旧工程 / 手写 JSON 的 `id` 全是 0）。
+    ///
+    /// 按**片段内顺序**发号，因此同一个旧工程每次加载得到的 id 完全一致——「稳定」指的就是
+    /// 这个：一次会话内不会被后续编辑改动，跨会话也可复现。
+    pub fn ensure_note_ids(&mut self) {
+        for track in &mut self.tracks {
+            for clip in &mut track.clips {
+                let mut next = clip.notes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+                let mut seen = std::collections::HashSet::new();
+                for note in &mut clip.notes {
+                    if note.id == 0 || !seen.insert(note.id) {
+                        note.id = next;
+                        next += 1;
+                        seen.insert(note.id);
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -68,6 +126,7 @@ mod tests {
     fn project_roundtrips_through_json() {
         let mut p = Project::new("demo");
         p.tracks.push(Track {
+            meta: None,
             id: TrackId(1),
             name: "Lead".into(),
             instrument: None,
@@ -87,6 +146,7 @@ mod tests {
     fn length_beats_is_max_clip_end() {
         let mut p = Project::new("demo");
         p.tracks.push(Track {
+            meta: None,
             id: TrackId(1),
             name: "Lead".into(),
             instrument: None,
@@ -105,6 +165,7 @@ mod tests {
         // 往返测试无法发现形状漂移，这里断言具体 JSON 形状。
         let mut p = Project::new("t");
         p.tracks.push(Track {
+            meta: None,
             id: TrackId(7),
             name: "Lead".into(),
             instrument: None,
@@ -113,7 +174,7 @@ mod tests {
                 id: ClipId(3),
                 start: 0.0,
                 length: 1.0,
-                notes: vec![Note { pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 }],
+                notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 }],
                 audio: None,
             }],
             mixer: MixerChannel::default(),
@@ -135,6 +196,7 @@ mod tests {
         use crate::model::{AutomationLane, AutomationPoint, Send};
         let mut p = Project::new("t");
         p.tracks.push(Track {
+            meta: None,
             id: TrackId(1),
             name: "Bus".into(),
             instrument: None,

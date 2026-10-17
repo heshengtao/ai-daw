@@ -18,8 +18,8 @@ use ai_daw_engine::event::Event;
 use ai_daw_engine::model::{Project, TrackId};
 use ai_daw_engine::player::ReusableInstances;
 use ai_daw_engine::realtime::{
-    default_output_sample_rate, default_output_signature, device_changed, AudioHost,
-    RealtimeOptions, SharedStatus, SharedTransport,
+    default_output_sample_rate, default_output_signature, device_changed, stall_polls_required,
+    stream_stalled, AudioHost, DeviceSignature, RealtimeOptions, SharedStatus, SharedTransport,
 };
 use ai_daw_engine::registry::PluginSlot;
 use ai_daw_engine::schedule::ScheduledEvents;
@@ -563,13 +563,38 @@ fn run_audio_thread(
     let mut current: Option<Project> = None;
     // 已知的默认输出设备身份：用来判断设备是否换了。每次重建后同步刷新。
     let mut signature = default_output_signature();
+    // 上一次看到的回调心跳与「连续停摆的轮询次数」：用来发现「流还活着但已经不出声」。
+    let mut last_beats = status.heartbeats();
+    let mut stalled_polls = 0u32;
+    // 「重建完、还没来得及跑一块就又停摆」的连续次数，用来给看门狗做指数退避。
+    //
+    // 没有它的话，一条**建起来就再也不回调**的流会每 2 秒被推倒重建一次，永远循环：
+    // 每次都丢掉旧 AudioUnit、再建新的，CPU 白烧、日志刷屏，而用户还是没声音。
+    // 有它之后判定阈值按 2 → 4 → 8 → 16 → 32 个轮询周期翻倍（上限约半分钟一次），
+    // 既不会放过真正恢复的机会，也不会把机器拖进抖动。
+    let mut stall_backoff = 0u32;
+    // 设备身份的「候选变化」：连续两轮探到同一个新身份才真的重建（见轮询分支）。
+    let mut pending_signature: Option<DeviceSignature> = None;
+    // 队列满只在第一次丢命令时提示一次（停摆期间会连续发生，不能刷屏）。
+    let mut drop_warned = false;
 
     // 所有发送端都析构后 `recv_timeout` 返回 `Disconnected`，线程随之退出（并释放宿主）。
     loop {
         match rx.recv_timeout(POLL) {
             Ok(AudioMessage::Command(command)) => {
-                if let Some(h) = host.as_mut() {
-                    h.send(command);
+                match host.as_mut() {
+                    Some(h) => {
+                        if h.send(command) {
+                            drop_warned = false;
+                        } else if !drop_warned {
+                            // 队列满 = 回调没在消费。这正是「界面在播、却没声音」的样子，
+                            // 留一条日志便于定位（看门狗随后会重建流）。
+                            drop_warned = true;
+                            eprintln!("[audio] 命令队列已满（音频回调可能已停摆），命令被丢弃");
+                        }
+                    }
+                    // 没有宿主：命令无处可去，直接丢弃（界面侧已按 `available` 门控）。
+                    None => {}
                 }
             }
             // 目录更新（启动时扫描完成）：重建注册表，重新装载当前工程。
@@ -598,6 +623,11 @@ fn run_audio_thread(
                 );
                 restore_transport(&mut host, frame, was_playing);
                 signature = default_output_signature();
+                pending_signature = None;
+                last_beats = status.heartbeats();
+                stalled_polls = 0;
+                // 用户/工程触发的重建是全新开始，退避清零。
+                stall_backoff = 0;
             }
             Ok(AudioMessage::Load(project)) => {
                 current = Some((*project).clone());
@@ -625,6 +655,12 @@ fn run_audio_thread(
                 restore_transport(&mut host, frame, was_playing);
                 // 重建后记录当前设备身份，避免下一次轮询把同一设备误判为「变化」。
                 signature = default_output_signature();
+                pending_signature = None;
+                // 新流的基线：刚重建过，别把「还没跑第一块」当成停摆。
+                last_beats = status.heartbeats();
+                stalled_polls = 0;
+                // 用户/工程触发的重建是全新开始，退避清零。
+                stall_backoff = 0;
             }
             Ok(AudioMessage::Retry) => {
                 let was_playing = shared.is_playing();
@@ -649,6 +685,11 @@ fn run_audio_thread(
                 );
                 restore_transport(&mut host, frame, was_playing);
                 signature = default_output_signature();
+                pending_signature = None;
+                last_beats = status.heartbeats();
+                stalled_polls = 0;
+                // 用户/工程触发的重建是全新开始，退避清零。
+                stall_backoff = 0;
             }
             Ok(AudioMessage::ArmInput(device, reply)) => {
                 let result = match host.as_mut() {
@@ -690,9 +731,49 @@ fn run_audio_thread(
                 // `host.is_none()` 让建流失败后每秒自动重试；`status.dead()` 让「设备名
                 // 没变但流死了」也能救。
                 let now = default_output_signature();
-                let needs = host.is_none()
-                    || status.dead()
-                    || device_changed(signature.as_ref(), now.as_ref());
+                // 「流还活着、但回调不再跑」是错误回调抓不到的失效：此时所有命令都排进
+                // 队列没人消费，界面看着在播却一点声音都没有，**只有重启应用才能恢复**。
+                // 靠回调心跳把它揪出来并重建——这正是「开独立面板后没声、重启也没声」的
+                // 兜底（旧流可能已经停摆，新进程里又因为同样的竞争再停摆一次）。
+                let beats = status.heartbeats();
+                let stalled = stream_stalled(host.is_some() && !status.dead(), last_beats, beats);
+                stalled_polls = if stalled { stalled_polls + 1 } else { 0 };
+                last_beats = beats;
+                // 回调跑过任何一块就算这条流是健康的：把退避清零，下次停摆仍按最灵敏的
+                // 阈值抓（用户不该为「上次修过」多等半分钟）。
+                if !stalled {
+                    stall_backoff = 0;
+                }
+                // 阈值随「连续空手而归的重建次数」翻倍，见 `stall_polls_required`。
+                let required = stall_polls_required(stall_backoff);
+                let stalled_dead = stalled_polls >= required;
+                if stalled_dead {
+                    eprintln!(
+                        "[audio] 输出流已连续 {} 次轮询没有回调（流还活着但不出声），重建（第 {} 次连续停摆）",
+                        stalled_polls,
+                        stall_backoff + 1
+                    );
+                }
+                // 设备查询失败（`None`）本身**不**触发重建：查询可能只是瞬时的，而真的没
+                // 设备时错误回调会把流标成 dead（上面那条分支会重建）。否则一次查询抖动就会
+                // 白扔掉一条健康的流，还多两次「建流 → 丢弃」的抖动。
+                //
+                // 身份**变了**也要求连续两轮都探到同一个新值才动手：有些设备（蓝牙、聚合
+                // 设备、刚被别的客户端改了格式的内建设备）会在两个采样率之间来回跳，
+                // 一次抖动就重建一次的话，流会被反复推倒重来——而每次重建都要丢掉旧
+                // AudioUnit 再建新的，正是最容易被卡成「有流、没回调」的时机。
+                let changed = if now.is_none() {
+                    pending_signature = None;
+                    false
+                } else if device_changed(signature.as_ref(), now.as_ref()) {
+                    let confirmed = pending_signature.as_ref() == now.as_ref();
+                    pending_signature = now.clone();
+                    confirmed
+                } else {
+                    pending_signature = None;
+                    false
+                };
+                let needs = host.is_none() || status.dead() || stalled_dead || changed;
                 if !needs {
                     continue;
                 }
@@ -719,6 +800,15 @@ fn run_audio_thread(
                 restore_transport(&mut host, frame, was_playing);
                 // 记录本次探测到（并已据此重建）的设备身份，稳住下一轮判定。
                 signature = now;
+                pending_signature = None;
+                // 新流的基线：重建后从当前心跳重新开始数，避免把上一代的计数算进来。
+                last_beats = status.heartbeats();
+                stalled_polls = 0;
+                // 只有「因为停摆而重建」才累加退避；设备换了 / 流真的死了不算——那是
+                // 一次性事件，下一次仍然该按最灵敏的阈值抓。
+                if stalled_dead {
+                    stall_backoff += 1;
+                }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
@@ -740,5 +830,84 @@ fn resolve_sample_rate(cache: &AtomicU32) -> Result<u32, String> {
             Ok(rate)
         }
         None => Err("未找到可用的音频输出设备".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! 真机冒烟：**这条链路**（AudioEngine → 音频线程 → cpal 设备）必须真的出声。
+    //!
+    //! 引擎侧的单测只能证明「渲染出来的 buffer 有波形」；这里证明的是「波形走到了设备」。
+    //! 「内置合成器没有声音」这类问题正好落在两者之间，只有真开一条流才抓得到。
+
+    use super::*;
+
+    /// 一条内置合成器轨道 + 一个长音（用 JSON 造，免得模型加字段就得改测试）。
+    fn synth_project() -> Project {
+        serde_json::from_str(
+            r#"{
+                "name": "smoke",
+                "transport": { "tempo": 120.0, "time_sig_num": 4, "time_sig_den": 4, "keyframes": [] },
+                "tracks": [{
+                    "id": 1,
+                    "name": "Lead",
+                    "instrument": { "plugin_id": "builtin.synth", "params": {}, "state": [] },
+                    "clips": [{
+                        "id": 1, "start": 0.0, "length": 4.0,
+                        "notes": [{ "id": 1, "pitch": 69, "start": 0.0, "duration": 2.0, "velocity": 100, "volume": 100 }]
+                    }],
+                    "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false }
+                }],
+                "master": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false }
+            }"#,
+        )
+        .expect("工程 JSON 应能解析")
+    }
+
+    /// 开一台真引擎；设备起不来（无头 CI）返回 `None`，测试据此跳过而不是失败。
+    fn live_engine(project: &Project) -> Option<AudioEngine> {
+        let handles: EditorHandles = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let engine = AudioEngine::new(project, Vec::new(), handles, Arc::new(AssetCache::new()));
+        for _ in 0..60 {
+            if engine.snapshot().available {
+                return Some(engine);
+            }
+            thread::sleep(std::time::Duration::from_millis(50));
+        }
+        None
+    }
+
+    /// 最近一段输出的峰值（`scope` 是音频线程每块写进去的）。
+    fn peak(engine: &AudioEngine) -> f32 {
+        engine
+            .scope_snapshot(512)
+            .iter()
+            .fold(0.0f32, |m, v| m.max(v.abs()))
+    }
+
+    /// 播放时内置合成器必须出声。
+    #[test]
+    fn builtin_synth_track_is_audible_while_playing() {
+        let Some(engine) = live_engine(&synth_project()) else {
+            return;
+        };
+        engine.send(TransportCommand::Play).expect("实时可用时应能发命令");
+        thread::sleep(std::time::Duration::from_millis(300));
+        let playing = peak(&engine);
+        let _ = engine.send(TransportCommand::Stop);
+        assert!(playing > 1e-4, "内置合成器轨道必须出声（peak={playing}）");
+    }
+
+    /// 停止状态下按试听键也必须出声——合成器界面上的键盘走的就是这条路径。
+    #[test]
+    fn audition_note_is_audible_while_stopped() {
+        let Some(engine) = live_engine(&synth_project()) else {
+            return;
+        };
+        engine.audition_note(TrackId(1), 69, 100, true);
+        thread::sleep(std::time::Duration::from_millis(200));
+        let sounding = peak(&engine);
+        engine.audition_note(TrackId(1), 69, 0, false);
+        assert!(sounding > 1e-4, "试听音必须出声（peak={sounding}）");
     }
 }
