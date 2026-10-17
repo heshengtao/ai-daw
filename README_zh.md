@@ -103,6 +103,10 @@ AI DAW 支持 **VST3** 与 **CLAP** 插件，你已有的工具可以直接带�
 - **本地导入** —— 把已经在别处装好的插件接进来
 - **界面与参数** —— 打开插件自带的界面，或从检查器与自动化车道驱动它的参数
 
+<p align="center">
+  <img src="./assets/screenshots/04-plugins.png" width="100%" alt="插件面板：内置合成器与效果器列表，可按内置 / 外部插件筛选">
+</p>
+
 ### 🤖 本地 AI —— 把音频变成能继续加工的材料
 
 这些 AI 功能是为真实的作品准备的，不是演示品。把一段素材交给它，拿回来的是能接着编辑的东西：可以挪动的 MIDI 音符、更干净的人声、可以重新配比的分轨。全部跑在你自己的硬件上——默认 CPU，可选 CoreML（macOS）与 DirectML（Windows）加速。
@@ -114,7 +118,7 @@ AI DAW 支持 **VST3** 与 **CLAP** 插件，你已有的工具可以直接带�
 - **生来离线** —— 不要账号、不要 API Key、不上传任何东西
 
 <p align="center">
-  <img src="./assets/screenshots/04-ai-panel.png" width="100%" alt="AI 面板：MCP 服务器状态，以及音频转 MIDI、人声降噪、音源分离、节拍检测的入口">
+  <img src="./assets/screenshots/05-ai-panel.png" width="100%" alt="AI 面板：MCP 服务器状态，以及音频转 MIDI、人声降噪、音源分离、节拍检测的入口">
 </p>
 
 ### 🔌 MCP 服务器 —— 让 AI 代理在你的工程里干活
@@ -126,7 +130,7 @@ AI DAW 支持 **VST3** 与 **CLAP** 插件，你已有的工具可以直接带�
 - **`aidaw` 命令行** —— 可在设置里一键挂到 `PATH`
 
 <p align="center">
-  <img src="./assets/screenshots/05-settings-ai-mcp.png" width="100%" alt="设置 → AI / MCP：执行后端选择与 MCP 服务器接入地址">
+  <img src="./assets/screenshots/06-settings-ai-mcp.png" width="100%" alt="设置 → AI / MCP：执行后端选择与 MCP 服务器接入地址">
 </p>
 
 ## 安装

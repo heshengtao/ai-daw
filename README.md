@@ -103,6 +103,10 @@ AI DAW hosts **VST3** and **CLAP** plugins, so the tools you already own come wi
 - **Local import** — bring in a plugin you have installed elsewhere
 - **Editors & parameters** — open a plugin's own UI, or drive its parameters from the inspector and automation lanes
 
+<p align="center">
+  <img src="./assets/screenshots/04-plugins.png" width="100%" alt="The plugins panel: a built-in synth and effect list, with filters for built-in and external plugins">
+</p>
+
 ### 🤖 Local AI — Turn audio into material you can work with
 
 The AI features are built for real sessions, not demos. Point them at a track and they hand back something you can keep editing: MIDI notes you can move, a vocal take with less room noise, stems you can rebalance. Everything runs on your own hardware — CPU by default, with optional CoreML (macOS) and DirectML (Windows) acceleration.
@@ -114,7 +118,7 @@ The AI features are built for real sessions, not demos. Point them at a track an
 - **Offline by design** — no account, no API key, no uploads
 
 <p align="center">
-  <img src="./assets/screenshots/04-ai-panel.png" width="100%" alt="The AI panel: MCP server status, plus entries for audio-to-MIDI, voice cleanup, stem separation and tempo detection">
+  <img src="./assets/screenshots/05-ai-panel.png" width="100%" alt="The AI panel: MCP server status, plus entries for audio-to-MIDI, voice cleanup, stem separation and tempo detection">
 </p>
 
 ### 🔌 MCP Server — Let an AI agent work in your session
@@ -126,7 +130,7 @@ Flip one switch and your project becomes something an AI assistant can operate. 
 - **`aidaw` CLI** — installable onto your `PATH` from Settings
 
 <p align="center">
-  <img src="./assets/screenshots/05-settings-ai-mcp.png" width="100%" alt="Settings → AI / MCP: execution backend selection and the MCP server endpoint">
+  <img src="./assets/screenshots/06-settings-ai-mcp.png" width="100%" alt="Settings → AI / MCP: execution backend selection and the MCP server endpoint">
 </p>
 
 ## Installation
