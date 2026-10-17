@@ -37,7 +37,7 @@ import {
 } from "@/api/tauri";
 import type { BackendInfo, BackendPreference, CliStatus, McpStatus, ModelSourcePreference, ProxyMode } from "@/api/types";
 
-type Section = "general" | "appearance" | "layout" | "plugins" | "network" | "ai" | "mcp" | "cli" | "about";
+type Section = "general" | "appearance" | "layout" | "plugins" | "network" | "ai" | "cli" | "about";
 
 const SECTIONS: { id: Section; labelKey: string; captionKey: string }[] = [
   { id: "general", labelKey: "settings.section.general", captionKey: "settings.section.general.caption" },
@@ -46,7 +46,6 @@ const SECTIONS: { id: Section; labelKey: string; captionKey: string }[] = [
   { id: "plugins", labelKey: "settings.section.plugins", captionKey: "settings.section.plugins.caption" },
   { id: "network", labelKey: "settings.section.network", captionKey: "settings.section.network.caption" },
   { id: "ai", labelKey: "settings.section.ai", captionKey: "settings.section.ai.caption" },
-  { id: "mcp", labelKey: "settings.section.mcp", captionKey: "settings.section.mcp.caption" },
   { id: "cli", labelKey: "settings.section.cli", captionKey: "settings.section.cli.caption" },
   { id: "about", labelKey: "settings.section.about", captionKey: "settings.section.about.caption" },
 ];
@@ -781,7 +780,7 @@ onMounted(() => {
           </div>
         </template>
 
-        <!-- AI -->
+        <!-- AI / MCP：本地模型执行后端 + MCP 代理接入（原两节已合并） -->
         <template v-else-if="active === 'ai'">
           <div class="group">
             <div class="group-title">{{ i18n.t("settings.ai.title") }}</div>
@@ -813,10 +812,7 @@ onMounted(() => {
               </div>
             </div>
           </div>
-        </template>
-
-        <!-- MCP -->
-        <template v-else-if="active === 'mcp'">
+        <!-- MCP：并入本节（服务器 + 接入） -->
           <div class="group">
             <div class="group-title">{{ i18n.t("settings.mcp.server") }}</div>
             <div class="card">
