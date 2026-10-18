@@ -83,6 +83,7 @@ impl ScannedPlugin {
                 let (plugin, _) = load_clap_plugin(&self.id, &self.path, &plugin_id)?;
                 Ok(Box::new(plugin))
             }
+            "au" => crate::au::load(&self.id).map(|(plugin, _)| plugin),
             other => Err(HostError::Load(format!("未知插件格式：{other}"))),
         }
     }
@@ -128,27 +129,34 @@ pub fn load_clap_plugin(
 /// 会遍历标准安装目录并**实例化**每个插件来读元数据，可能耗时数秒——**不可**在音频线程调用。
 /// 单个插件出错会被跳过，不影响整体结果。
 pub fn scan() -> Vec<ScannedPlugin> {
-    scan_with(&[], &[])
+    scan_with(&[], &[], &[])
 }
 
 /// 同 [`scan`]，但额外扫描给定的目录。
 ///
 /// 宿主用它把「插件管理器安装/导入的库」也纳入扫描：那些插件由应用自己管在应用数据目录里，
 /// 不在系统标准目录下，所以必须显式传进来。
-pub fn scan_with(vst3_extra: &[PathBuf], clap_extra: &[PathBuf]) -> Vec<ScannedPlugin> {
+///
+/// `au_extra` 只在 macOS 上有意义（AU 的托管目录是用户级 Components 目录）。
+pub fn scan_with(vst3_extra: &[PathBuf], clap_extra: &[PathBuf], au_extra: &[PathBuf]) -> Vec<ScannedPlugin> {
     let mut out = scan_vst3(vst3_extra);
     out.extend(scan_clap(clap_extra));
+    out.extend(crate::au::scan(au_extra));
     out
 }
 
 /// 扫描并产出可持久化的目录。
 pub fn scan_catalog() -> Vec<CatalogPlugin> {
-    scan_catalog_with(&[], &[])
+    scan_catalog_with(&[], &[], &[])
 }
 
 /// 同 [`scan_catalog`]，但额外扫描给定的目录（宿主传入插件管理器的托管目录）。
-pub fn scan_catalog_with(vst3_extra: &[PathBuf], clap_extra: &[PathBuf]) -> Vec<CatalogPlugin> {
-    scan_with(vst3_extra, clap_extra)
+pub fn scan_catalog_with(
+    vst3_extra: &[PathBuf],
+    clap_extra: &[PathBuf],
+    au_extra: &[PathBuf],
+) -> Vec<CatalogPlugin> {
+    scan_with(vst3_extra, clap_extra, au_extra)
         .iter()
         .map(ScannedPlugin::catalog)
         .collect()
@@ -178,6 +186,7 @@ pub fn load_catalog_plugin_with_editor(
             let (hosted, handle) = load_clap_plugin(&entry.id, &entry.path, &plugin_id)?;
             Ok((Box::new(hosted), Some(EditorHandle::Clap(handle))))
         }
+        "au" => crate::au::load(&entry.id),
         other => Err(HostError::Load(format!("未知插件格式：{other}"))),
     }
 }
@@ -329,7 +338,8 @@ mod tests {
     #[test]
     fn scan_returns_well_formed_entries() {
         // 结果取决于本机装了什么插件（CI 上可能为空），这里只要求扫描不 panic、id 格式正确。
-        for p in scan() {
+        let plugins = scan();
+        for p in &plugins {
             assert!(
                 p.id.starts_with(&format!("{}:", p.format)),
                 "插件 id 必须以 `<format>:` 开头：{}",
@@ -337,5 +347,11 @@ mod tests {
             );
             assert!(!p.name.is_empty());
         }
+        // 「目录扫描」与「AudioComponent 注册表枚举」必须按 id 去重：同一个 AU 不能出现两次。
+        let mut ids: Vec<&str> = plugins.iter().map(|p| p.id.as_str()).collect();
+        let total = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), total, "扫描结果里有重复的插件 id");
     }
 }

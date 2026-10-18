@@ -13,3 +13,20 @@ clack-host = "0.2"
 clack-extensions = { version = "0.2", features = ["params", "state", "gui", "thread-check", "clack-host"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
+
+# AU（Audio Units）后端，仅 macOS：托管走 `AUAudioUnit`（统一 AUv2 与 AUv3，界面走
+# `requestViewControllerWithCompletionHandler:`）；objc2-* 是苹果官方维护的绑定；
+# plist 用来读 .component 包里的 Info.plist（扫描阶段读元数据）。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-audio-toolbox = { version = "0.3.2", default-features = false, features = ["AUComponent", "AudioComponent", "AUAudioUnit", "AUParameters", "AudioUnitProperties", "AudioFormat", "block2", "objc2-core-audio-types", "objc2-core-foundation"] }
+objc2-core-audio-types = "0.3.2"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["CFString", "CFData", "CFPropertyList", "CFError", "CFURL", "CFBundle", "CFDictionary"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSString", "NSBundle", "NSObject", "NSValue", "NSURL", "NSGeometry", "NSData", "NSArray", "NSDictionary", "NSError", "NSPropertyList", "NSDate", "NSRunLoop", "std"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWindow", "NSView", "NSViewController", "NSApplication", "NSGraphics", "NSResponder"] }
+# AUAudioUnit 的总线格式是 `AVAudioFormat`（不是 ASBD），要用它把采样率/通道数告诉插件。
+objc2-avf-audio = { version = "0.3", default-features = false, features = ["AVAudioFormat", "objc2-core-audio-types"] }
+# 裸 msg_send：`AUAudioUnitBus.setFormat:` 等绑定里没生成，只能自己发消息。
+objc2 = "0.6"
+# `renderBlock` / `scheduleMIDIEventBlock` 是 Objective-C block，用 block2 调用与构造。
+block2 = "0.6"
+plist = "1"

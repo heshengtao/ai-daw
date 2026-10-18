@@ -198,4 +198,64 @@ mod tests {
             buffer.peak()
         );
     }
+
+    /// 端到端：把 Apple 自带的 AU（DLSMusicDevice）挂到一条轨道上，离线渲染。
+    ///
+    /// 对应「在乐器/效果器里选 AU 插件直接闪退」那个问题：走的就是应用里真实那条路径
+    /// （注册表 → 工厂 → `from_loaded` → `prepare` → `process`），并且 `process` 跑在**非主线程**上。
+    #[test]
+    fn renders_a_track_hosting_an_au() {
+        install_fake_main_thread();
+        let catalog = ai_daw_host_vst3::scan_catalog();
+        let Some(entry) = catalog.iter().find(|p| p.id == "au:aumu:dls:appl") else {
+            eprintln!("本机未安装 DLSMusicDevice，跳过。");
+            return;
+        };
+
+        let mut engine = Engine::new("au-e2e");
+        let events = engine.execute(Command::AddTrack { name: "AU".into() }, Actor::Human);
+        let track = match events[0] {
+            Event::TrackAdded { id, .. } => id,
+            _ => unreachable!("AddTrack 应当产出 TrackAdded"),
+        };
+        engine.execute(
+            Command::SetTrackInstrument { track, plugin_id: entry.id.clone() },
+            Actor::Human,
+        );
+        let events = engine.execute(
+            Command::AddClip { track, start: 0.0, length: 2.0 },
+            Actor::Human,
+        );
+        let clip = match events[0] {
+            Event::ClipAdded { clip, .. } => clip,
+            _ => unreachable!("AddClip 应当产出 ClipAdded"),
+        };
+        engine.execute(
+            Command::AddNote {
+                track,
+                clip,
+                note: Note {
+                    id: 0,
+                    pitch: 60,
+                    start: 0.0,
+                    duration: 1.0,
+                    velocity: 100,
+                    volume: 127,
+                },
+            },
+            Actor::Human,
+        );
+        let project = engine.project().clone();
+
+        let handles = Arc::new(Mutex::new(HashMap::new()));
+        let registry = build_registry(&catalog, &project, Arc::clone(&handles));
+        let options = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5 };
+        let buffer = render(&project, &registry, &options);
+
+        assert!(
+            buffer.peak() > 0.001,
+            "挂 AU 插件的轨道必须出声（峰值 {}）",
+            buffer.peak()
+        );
+    }
 }

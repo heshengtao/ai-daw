@@ -792,7 +792,7 @@ const zh: Record<string, string> = {
   "dialog.projectFilter": "AI DAW 工程",
   "dialog.wavFilter": "WAV 音频",
   "dialog.audioFilter": "音频文件",
-  "dialog.pluginFilter": "插件（VST3 / CLAP）",
+  "dialog.pluginFilter": "插件（VST3 / CLAP / AU）",
   "dialog.downloadModelTitle": "下载模型",
   "dialog.downloadModelMessage": "「{name}」还需下载 {size}，现在下载吗？已经下好的文件会跳过。下载完成后回到刚才那个面板点对应按钮即可。",
   "dialog.downloadModelOk": "下载",

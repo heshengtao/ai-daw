@@ -30,7 +30,7 @@ pub struct Entry {
     pub name: String,
     pub vendor: String,
     pub kind: PluginKind,
-    /// `builtin` / `vst3` / `clap`。
+    /// `builtin` / `vst3` / `clap` / `au`。
     pub format: String,
     pub builtin: bool,
     /// 外部插件的包路径（读 `moduleinfo.json` 用）；内置为 `None`。
@@ -1018,12 +1018,18 @@ mod tests {
         // 测试里没有 AppHandle，按 macOS 的固定配置目录推出「插件管理器」的托管目录；
         // 其它平台就只扫系统标准目录（够用来核对收录表）。
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-        let managed = home.map(|h| h.join("Library/Application Support/com.aidaw.app/plugins"));
+        let managed = home
+            .as_ref()
+            .map(|h| h.join("Library/Application Support/com.aidaw.app/plugins"));
         let (vst3, clap) = match managed {
             Some(root) => (vec![root.join("vst3")], vec![root.join("clap")]),
             None => (Vec::new(), Vec::new()),
         };
-        let catalog = ai_daw_host_vst3::scan_catalog_with(&vst3, &clap);
+        // AU 的托管目录是用户级 Components 目录（见 `manager::au_managed_dir`）。
+        let au = home
+            .map(|h| vec![h.join("Library/Audio/Plug-Ins/Components")])
+            .unwrap_or_default();
+        let catalog = ai_daw_host_vst3::scan_catalog_with(&vst3, &clap, &au);
         for entry in entries(&catalog) {
             let card = brief(&entry);
             println!(

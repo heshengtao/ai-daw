@@ -9,7 +9,7 @@
 //! **安全**：只下载并**校验 sha256**后解压；解压时防目录穿越；`installer` 类型的条目
 //! **绝不自动执行**，只提供「在浏览器打开下载页」。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -157,7 +157,7 @@ pub struct RegistryFile {
     pub size: u64,
     /// `archive`（可一键安装）或 `installer`（只能打开下载页，绝不自动执行）。
     pub kind: String,
-    /// 归档里包含的插件格式（我们只留 `vst3` / `clap`）。
+    /// 归档里包含的插件格式（我们只留 `vst3` / `clap` / `au`）。
     pub contains: Vec<String>,
     pub platforms: Vec<String>,
     pub archs: Vec<String>,
@@ -244,11 +244,16 @@ pub struct InstallRequest {
 // 托管目录
 // ---------------------------------------------------------------------------
 
-/// 管理器自己的目录布局（全部在应用数据目录下）。
+/// 管理器自己的目录布局。
+///
+/// VST3 / CLAP 装在应用数据目录下；**AU 例外**：AU 的 `.component` 只能被系统的
+/// `AudioComponent` 从标准目录发现（见 [`au_managed_dir`]），放应用数据目录加载不了。
 struct ManagedDirs {
     root: PathBuf,
     vst3: PathBuf,
     clap: PathBuf,
+    /// AU 的托管目录（macOS 上是用户级 Components 目录；其它平台是占位路径）。
+    au: PathBuf,
     downloads: PathBuf,
     staging: PathBuf,
 }
@@ -263,6 +268,7 @@ impl ManagedDirs {
         Ok(Self {
             vst3: root.join("vst3"),
             clap: root.join("clap"),
+            au: au_managed_dir().unwrap_or_else(|| root.join("au")),
             downloads: root.join("downloads"),
             staging: root.join("staging"),
             root,
@@ -274,6 +280,7 @@ impl ManagedDirs {
             &self.root,
             &self.vst3,
             &self.clap,
+            &self.au,
             &self.downloads,
             &self.staging,
         ] {
@@ -283,10 +290,10 @@ impl ManagedDirs {
     }
 
     fn dir_for(&self, kind: &str) -> &Path {
-        if kind == "clap" {
-            &self.clap
-        } else {
-            &self.vst3
+        match kind {
+            "clap" => &self.clap,
+            "au" => &self.au,
+            _ => &self.vst3,
         }
     }
 
@@ -295,20 +302,39 @@ impl ManagedDirs {
     }
 }
 
-/// 宿主扫描时要额外扫描的目录（VST3、CLAP 各一组）。
+/// AU 的托管目录：macOS 上必须是**系统会扫描的用户级 Components 目录**。
+///
+/// 与 VST3 / CLAP 不同，AU 的 `.component` **不能**由宿主从任意路径加载——它只能通过系统的
+/// `AudioComponent` 注册表发现，而注册表只扫标准目录。所以「导入 AU」= 把它装到
+/// `~/Library/Audio/Plug-Ins/Components`，随后系统与宿主都能看到它。其它平台没有 AU。
+///
+/// 删除 / 更新仍然照常：管理器是按 manifest 里记录的文件路径操作的，与目录无关。
+fn au_managed_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join("Library/Audio/Plug-Ins/Components"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// 宿主扫描时要额外扫描的目录（VST3、CLAP、AU 各一组）。
 ///
 /// 拿不到应用数据目录时返回空（扫描照常，只是看不到托管的插件）。
-pub fn managed_scan_dirs(app: &AppHandle) -> (Vec<PathBuf>, Vec<PathBuf>) {
+pub fn managed_scan_dirs(app: &AppHandle) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
     match ManagedDirs::resolve(app) {
-        Ok(dirs) => (vec![dirs.vst3], vec![dirs.clap]),
-        Err(_) => (Vec::new(), Vec::new()),
+        Ok(dirs) => (vec![dirs.vst3.clone()], vec![dirs.clap.clone()], vec![dirs.au.clone()]),
+        Err(_) => (Vec::new(), Vec::new(), Vec::new()),
     }
 }
 
 /// 重新扫描插件（含托管目录），更新共享状态并广播给界面。
 pub fn rescan_with_managed(app: &AppHandle) -> Vec<CatalogPlugin> {
-    let (vst3, clap) = managed_scan_dirs(app);
-    let catalog = ai_daw_host_vst3::scan_catalog_with(&vst3, &clap);
+    let (vst3, clap, au) = managed_scan_dirs(app);
+    let catalog = ai_daw_host_vst3::scan_catalog_with(&vst3, &clap, &au);
     let state = app.state::<AppState>();
     state.install_catalog(catalog.clone());
     let _ = app.emit(EVENT_PLUGINS, &catalog);
@@ -370,7 +396,7 @@ fn file_compatible(file: &RawFile, plat: &str, arch: &str) -> bool {
     os_ok && arch_ok
 }
 
-/// 把原始注册表归一成一份精简列表：只保留我们能加载（含 VST3 / CLAP）的插件与文件。
+/// 把原始注册表归一成一份精简列表：只保留我们能加载（含 VST3 / CLAP / AU）的插件与文件。
 fn normalize(raw: RawRegistry, plat: &str, arch: &str) -> Vec<RegistryPlugin> {
     let mut out = Vec::new();
     for (map_key, pkg) in raw.plugins {
@@ -394,7 +420,12 @@ fn normalize(raw: RawRegistry, plat: &str, arch: &str) -> Vec<RegistryPlugin> {
         let files: Vec<RegistryFile> = ver
             .files
             .iter()
-            .filter(|f| !f.url.is_empty() && f.contains.iter().any(|c| c == "vst3" || c == "clap"))
+            .filter(|f| {
+                !f.url.is_empty()
+                    && f.contains
+                        .iter()
+                        .any(|c| c == "vst3" || c == "clap" || c == "au")
+            })
             .map(|f| RegistryFile {
                 url: f.url.clone(),
                 sha256: f.sha256.clone(),
@@ -403,7 +434,7 @@ fn normalize(raw: RawRegistry, plat: &str, arch: &str) -> Vec<RegistryPlugin> {
                 contains: f
                     .contains
                     .iter()
-                    .filter(|c| *c == "vst3" || *c == "clap")
+                    .filter(|c| *c == "vst3" || *c == "clap" || *c == "au")
                     .cloned()
                     .collect(),
                 platforms: f.systems.iter().map(|s| s.kind.clone()).collect(),
@@ -1299,6 +1330,19 @@ fn collect_plugin_paths(root: &Path) -> Vec<(String, PathBuf)> {
     out
 }
 
+/// 当前平台上，这个 `.component` **目录**（AU bundle）是否是本机可加载的。
+///
+/// AU 只在 macOS 上存在，且必须是含 `Contents/Info.plist` 的 bundle。
+#[cfg(target_os = "macos")]
+fn au_bundle_ok(dir: &Path) -> bool {
+    dir.join("Contents").join("Info.plist").is_file()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn au_bundle_ok(_dir: &Path) -> bool {
+    false
+}
+
 fn collect_into(dir: &Path, out: &mut Vec<(String, PathBuf)>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -1311,13 +1355,20 @@ fn collect_into(dir: &Path, out: &mut Vec<(String, PathBuf)>) {
             .unwrap_or("")
             .to_lowercase();
         if path.is_dir() {
-            if ext == "vst3" {
+            match ext.as_str() {
                 // VST3 bundle 本身就是插件，不再往下钻；只收当前平台能加载的那种。
-                if vst3_bundle_ok(&path) {
-                    out.push(("vst3".into(), path));
+                "vst3" => {
+                    if vst3_bundle_ok(&path) {
+                        out.push(("vst3".into(), path));
+                    }
                 }
-            } else {
-                collect_into(&path, out);
+                // AU bundle 同理（非 macOS 一律不收）。
+                "component" => {
+                    if au_bundle_ok(&path) {
+                        out.push(("au".into(), path));
+                    }
+                }
+                _ => collect_into(&path, out),
             }
             continue;
         }
@@ -1526,7 +1577,7 @@ fn install_from_registry(app: &AppHandle, req: &InstallRequest) -> Result<(), St
         extract_archive(&download, &staging, &req.url)?;
         let found = collect_plugin_paths(&staging);
         if found.is_empty() {
-            return Err("归档里没有找到能在当前系统加载的 VST3 / CLAP 插件（可能只提供了其它平台的构建）".into());
+            return Err("归档里没有找到能在当前系统加载的 VST3 / CLAP / AU 插件（可能只提供了其它平台的构建）".into());
         }
 
         emit_progress(app, &req.slug, "installing", 0, 0, None);
@@ -1575,7 +1626,7 @@ fn install_from_registry(app: &AppHandle, req: &InstallRequest) -> Result<(), St
     Ok(())
 }
 
-/// 导入本地插件（`.vst3` bundle / 文件，或 `.clap` 文件）到托管库。
+/// 导入本地插件（`.vst3` bundle / 文件、`.clap` 文件，或 macOS 的 `.component`）到托管库。
 fn import_local(app: &AppHandle, path: &str) -> Result<(), String> {
     let dirs = ManagedDirs::resolve(app)?;
     dirs.ensure()?;
@@ -1592,7 +1643,10 @@ fn import_local(app: &AppHandle, path: &str) -> Result<(), String> {
     let kind = match ext.as_str() {
         "vst3" => "vst3",
         "clap" => "clap",
-        _ => return Err("只支持导入 .vst3 或 .clap".into()),
+        // AU 只能装到 macOS 上系统会扫描的用户 Components 目录（见 `au_managed_dir`）。
+        #[cfg(target_os = "macos")]
+        "component" => "au",
+        _ => return Err("只支持导入 .vst3 / .clap（macOS 上还有 .component）".into()),
     };
     let name = source
         .file_name()
@@ -1736,7 +1790,7 @@ pub fn plugin_manager_resolve_url(runtime: tauri::State<'_, StoreRuntime>, url: 
     rewrite_download_url(&url, &runtime.network().download_prefix)
 }
 
-/// 导入本地 `.vst3` / `.clap`。
+/// 导入本地 `.vst3` / `.clap`（macOS 上还有 `.component`）。
 #[tauri::command]
 pub async fn plugin_manager_import(app: AppHandle, path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || import_local(&app, &path))
@@ -1762,10 +1816,17 @@ pub fn plugin_manager_open(url: String) -> Result<(), String> {
 #[tauri::command]
 pub fn plugin_manager_foreign(app: AppHandle) -> Result<Vec<ForeignPlugin>, String> {
     let dirs = ManagedDirs::resolve(&app)?;
+    // VST3 / CLAP 的托管目录是应用数据目录，位置即身份；AU 装在**共享的**用户 Components
+    // 目录里，只能靠 manifest 记录区分「管理器装的」与「用户自己装的」。
+    let installed: HashSet<PathBuf> = read_manifest(&dirs)
+        .into_values()
+        .flat_map(|record| record.files)
+        .map(PathBuf::from)
+        .collect();
     let catalog = app.state::<AppState>().catalog_snapshot();
     let mut out: Vec<ForeignPlugin> = catalog
         .into_iter()
-        .filter(|p| !path_is_managed(&p.path, &dirs))
+        .filter(|p| !path_is_managed(&p.path, &dirs, &installed))
         .map(|p| ForeignPlugin {
             id: p.id,
             name: p.name,
@@ -1779,9 +1840,13 @@ pub fn plugin_manager_foreign(app: AppHandle) -> Result<Vec<ForeignPlugin>, Stri
     Ok(out)
 }
 
-/// 该路径是否落在托管库里（vst3 / clap 目录下）。
-fn path_is_managed(path: &Path, dirs: &ManagedDirs) -> bool {
-    path.starts_with(&dirs.vst3) || path.starts_with(&dirs.clap)
+/// 该路径是不是「本管理器装在托管库里」的。
+///
+/// - VST3 / CLAP：落在应用数据目录的托管目录下即算（位置即身份）；
+/// - AU：托管目录是共享的用户 Components 目录，所以另看 manifest 记录——
+///   用户自己装在同一个目录里的 AU 仍算「外部（只读）」。
+fn path_is_managed(path: &Path, dirs: &ManagedDirs, installed: &HashSet<PathBuf>) -> bool {
+    path.starts_with(&dirs.vst3) || path.starts_with(&dirs.clap) || installed.contains(path)
 }
 
 /// 读取插件源的网络配置（镜像 / 下载代理）。
@@ -1981,11 +2046,66 @@ mod tests {
     fn normalize_drops_plugins_without_hostable_files() {
         let raw = registry_with(vec![raw_file(
             "https://x/a.zip",
-            &["au"],
+            &["lv2"],
             &["mac"],
             &["arm64"],
         )]);
         assert!(normalize(raw, "mac", "arm64").is_empty());
+    }
+
+    /// AU 现在也是可托管的格式，注册表里只提供 AU 的文件也要留下。
+    #[test]
+    fn normalize_keeps_au_files_too() {
+        let raw = registry_with(vec![raw_file("https://x/a.zip", &["au"], &["mac"], &["arm64"])]);
+        let out = normalize(raw, "mac", "arm64");
+        assert_eq!(out.len(), 1, "只提供 AU 的插件应当在列表里");
+        assert_eq!(out[0].files[0].contains, vec!["au".to_string()]);
+    }
+
+    /// AU 装在**共享**的用户 Components 目录里：只有 manifest 记过的才算「已安装」，
+    /// 用户自己放进去的仍算「外部（只读）」。
+    #[test]
+    fn au_in_the_shared_dir_is_managed_only_when_recorded() {
+        let dirs = ManagedDirs {
+            root: PathBuf::from("/tmp/root"),
+            vst3: PathBuf::from("/tmp/root/vst3"),
+            clap: PathBuf::from("/tmp/root/clap"),
+            au: PathBuf::from("/Users/u/Library/Audio/Plug-Ins/Components"),
+            downloads: PathBuf::from("/tmp/root/downloads"),
+            staging: PathBuf::from("/tmp/root/staging"),
+        };
+        let ours = dirs.au.join("Ours.component");
+        let user_installed = dirs.au.join("UserOne.component");
+        let installed: HashSet<PathBuf> = [ours.clone()].into_iter().collect();
+
+        assert!(path_is_managed(&ours, &dirs, &installed), "管理器导入的 AU 算已安装");
+        assert!(
+            !path_is_managed(&user_installed, &dirs, &installed),
+            "用户自己装在同一个目录里的 AU 仍是外部只读"
+        );
+        assert!(
+            path_is_managed(&dirs.vst3.join("X.vst3"), &dirs, &installed),
+            "vst3 仍按托管目录判定"
+        );
+    }
+
+    /// macOS 上：`.component` 目录（含 `Contents/Info.plist`）应当被认出是 AU。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn collect_finds_au_components() {
+        let root = std::env::temp_dir().join(format!("ai-daw-pm-au-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // 合法的 AU bundle：含 Contents/Info.plist。
+        fs::create_dir_all(root.join("Cool.component/Contents")).unwrap();
+        fs::write(root.join("Cool.component/Contents/Info.plist"), b"plist").unwrap();
+        // 缺 Info.plist 的目录不算插件。
+        fs::create_dir_all(root.join("Junk.component/Contents")).unwrap();
+
+        let found = collect_plugin_paths(&root);
+        assert_eq!(found.len(), 1, "只应认出一个合法的 AU：{found:?}");
+        assert_eq!(found[0].0, "au");
+        assert!(found[0].1.to_string_lossy().contains("Cool.component"));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

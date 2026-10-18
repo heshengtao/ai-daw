@@ -5,6 +5,7 @@
 //!
 //! 本 crate 是工作区里唯一允许 `unsafe` 的地方（原生窗口 / 裸指针），对上层只暴露安全 API。
 
+pub mod au;
 pub mod clap;
 pub mod dispatch;
 pub mod editor;
@@ -23,3 +24,6 @@ pub use scan::{
     scan_with, CatalogPlugin, ScannedPlugin,
 };
 pub use vst3::{Vst3EditorHandle, Vst3HostedPlugin};
+
+#[cfg(target_os = "macos")]
+pub use au::{AuEditorHandle, AuHostedPlugin};

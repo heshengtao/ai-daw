@@ -18,19 +18,25 @@ use crate::vst3::Vst3EditorHandle;
 pub enum EditorHandle {
     Vst3(Vst3EditorHandle),
     Clap(ClapEditorHandle),
+    /// AU（仅 macOS）。
+    #[cfg(target_os = "macos")]
+    Au(crate::au::AuEditorHandle),
 }
 
 impl EditorHandle {
     /// 这个界面需要**宿主提供原生窗口**吗？需要的话给出插件建议的尺寸。
     ///
     /// - VST3：`vst3-host` 的 `PluginWindow` 自带建窗，宿主不用管 → `None`；
-    /// - CLAP：只有「嵌入模式」的插件（比如 KR-106 的 CLAP）才需要 → `Some(size)`。
+    /// - CLAP：只有「嵌入模式」的插件（比如 KR-106 的 CLAP）才需要 → `Some(size)`；
+    /// - AU：宿主自建 `NSWindow` 承载插件自带视图 → `None`。
     ///
     /// 会去问插件实例，**必须在主 / UI 线程调用**。
     pub fn host_window_size(&self) -> Option<(u32, u32)> {
         match self {
             EditorHandle::Vst3(_) => None,
             EditorHandle::Clap(handle) => handle.host_view_size(),
+            #[cfg(target_os = "macos")]
+            EditorHandle::Au(_) => None,
         }
     }
 
@@ -52,6 +58,8 @@ impl EditorHandle {
                 .map(|plugin| plugin.save_state().unwrap_or_default())
                 .unwrap_or_default(),
             EditorHandle::Clap(handle) => handle.save_state(),
+            #[cfg(target_os = "macos")]
+            EditorHandle::Au(handle) => handle.save_state(),
         }
     }
 
@@ -84,6 +92,8 @@ impl EditorHandle {
             EditorHandle::Clap(handle) => {
                 WindowKind::Clap(handle.open_window(title, host_view)?)
             }
+            #[cfg(target_os = "macos")]
+            EditorHandle::Au(handle) => WindowKind::Au(handle.open(title)?),
         };
         Ok(PluginEditorWindow { kind })
     }
@@ -93,6 +103,8 @@ impl EditorHandle {
 enum WindowKind {
     Vst3(vst3_host::PluginWindow),
     Clap(ClapGuiWindow),
+    #[cfg(target_os = "macos")]
+    Au(crate::au::AuEditorWindow),
 }
 
 /// 一个已打开的插件窗口。
@@ -110,6 +122,9 @@ impl PluginEditorWindow {
                 let _ = window.service_platform_events();
             }
             WindowKind::Clap(window) => window.service(),
+            // AU 的窗口事件由应用自己的 NSApplication 事件循环处理，无需每帧泵。
+            #[cfg(target_os = "macos")]
+            WindowKind::Au(_) => {}
         }
     }
 
@@ -118,15 +133,14 @@ impl PluginEditorWindow {
         match &self.kind {
             WindowKind::Vst3(window) => window.is_open(),
             WindowKind::Clap(window) => window.is_open(),
+            #[cfg(target_os = "macos")]
+            WindowKind::Au(window) => window.is_open(),
         }
     }
 
     /// 用户自己把窗口关了（宿主不会被通知，需要每帧轮询）。
     pub fn closed_by_user(&self) -> bool {
-        match &self.kind {
-            WindowKind::Vst3(window) => window.closed_by_user(),
-            WindowKind::Clap(window) => window.closed_by_user(),
-        }
+        !self.is_open()
     }
 
     /// 关闭窗口（`Drop` 也会做）。
@@ -134,6 +148,8 @@ impl PluginEditorWindow {
         match self.kind {
             WindowKind::Vst3(mut window) => window.close(),
             WindowKind::Clap(window) => window.close(),
+            #[cfg(target_os = "macos")]
+            WindowKind::Au(window) => window.close(),
         }
     }
 }

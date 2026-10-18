@@ -794,7 +794,7 @@ const en: Record<string, string> = {
   "dialog.projectFilter": "AI DAW project",
   "dialog.wavFilter": "WAV audio",
   "dialog.audioFilter": "Audio files",
-  "dialog.pluginFilter": "Plugins (VST3 / CLAP)",
+  "dialog.pluginFilter": "Plugins (VST3 / CLAP / AU)",
   "dialog.downloadModelTitle": "Download model",
   "dialog.downloadModelMessage": "“{name}” still needs {size}. Download it now? Files already on disk are skipped. Once done, return to the panel you came from and click the button.",
   "dialog.downloadModelOk": "Download",

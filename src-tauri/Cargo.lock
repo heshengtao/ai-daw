@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-analysis"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ebur128",
  "rustfft",
@@ -28,7 +28,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-app"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ai-daw-analysis",
  "ai-daw-asset",
@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-asset"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ai-daw-engine",
  "symphonia",
@@ -70,14 +70,14 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-effects"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ai-daw-plugin-api",
 ]
 
 [[package]]
 name = "ai-daw-engine"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ai-daw-effects",
  "ai-daw-ipc",
@@ -93,11 +93,20 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-host-vst3"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ai-daw-plugin-api",
+ "block2",
  "clack-extensions",
  "clack-host",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-audio-toolbox",
+ "objc2-avf-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-foundation",
+ "plist",
  "serde",
  "thiserror 1.0.69",
  "vst3-host",
@@ -105,14 +114,14 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-ipc"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ai-daw-local-ai"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "beat-this",
  "ort",
@@ -121,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-mastering"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ai-daw-analysis",
  "serde",
@@ -129,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-plugin-api"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -137,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-synth"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ai-daw-plugin-api",
 ]
@@ -2691,6 +2700,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6948501a91121d6399b79abaa33a8aa4ea7857fe019f341b8c23ad6e81b79b08"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
  "libc",
  "objc2",
  "objc2-core-audio",
@@ -2707,6 +2717,7 @@ checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
 dependencies = [
  "bitflags 2.13.2",
  "objc2",
+ "objc2-core-audio-types",
  "objc2-foundation",
 ]
 

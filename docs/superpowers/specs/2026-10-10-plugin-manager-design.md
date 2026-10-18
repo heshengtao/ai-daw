@@ -36,7 +36,7 @@ Roadmap **Stage E · E1** 原计划「前端用 `@open-audio-stack/core` 搜索�
   只提供「打开下载页」，由用户在浏览器里下载并自己装。这是安全边界，不商量。
 - **不做签名 / 公证校验**：只校验注册表给出的 sha256（数据完整性），不做代码签名。
 - **不做断点续传 / 增量更新**：整包重下。
-- **不支持 AU / LV2 / VST2**：本宿主只载 VST3 与 CLAP（改了也没用）。
+- **不支持 LV2 / VST2**：本宿主只载 VST3、CLAP 与（macOS 上的）AU。AU 的导入落点是用户级 `~/Library/Audio/Plug-Ins/Components`（AU 只能被系统的 `AudioComponent` 从标准目录发现），其余格式装进应用数据目录的托管库。
 - 不做只读的「全网插件百科」（那是 PluginDB 那类发现层的活）。
 
 ## 3 关键决策
