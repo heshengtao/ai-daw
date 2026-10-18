@@ -76,6 +76,20 @@ function onScroll(): void {
   laneScrollTop.value = el.scrollTop;
 }
 
+/**
+ * 面板顶部（品牌区 / 「音轨」表头）上的滚轮：这两块在滚动容器**之外**，
+ * 滚轮落在上面时浏览器找不到可滚的祖先，于是什么都不发生——鼠标停在左上角滚一下就
+ * 会以为「音轨栏滚不动」。这里把滚轮转发给列表；落在列表自己身上的事件照旧走原生滚动。
+ */
+function onPanelWheel(e: WheelEvent): void {
+  const el = listEl.value;
+  if (!el) return;
+  if (e.target instanceof Node && el.contains(e.target)) return;
+  e.preventDefault();
+  const step = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1;
+  el.scrollTop += e.deltaY * step;
+}
+
 // 编排视图滚动时跟随。
 watch(laneScrollTop, (v) => {
   const el = listEl.value;
@@ -89,7 +103,7 @@ watch(laneScrollTop, (v) => {
 </script>
 
 <template>
-  <div class="track-panel">
+  <div class="track-panel" @wheel="onPanelWheel">
     <!-- 品牌区：与顶栏同高；macOS 下折叠按钮紧随红绿灯之后 -->
     <div class="brand" :class="{ 'pad-mac': isMac }">
       <Tooltip :text="i18n.t('tracks.hide')" align="end">

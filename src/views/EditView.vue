@@ -734,6 +734,13 @@ watch(
   },
 );
 
+/** 滚轮的一格折算成多少像素（`deltaMode` 为行 / 页时 `deltaY` 不是像素）。 */
+function wheelPixels(e: WheelEvent, pageSize: number): number {
+  if (e.deltaMode === 1) return e.deltaY * 16;
+  if (e.deltaMode === 2) return e.deltaY * pageSize;
+  return e.deltaY;
+}
+
 /** Ctrl/Cmd + 滚轮缩放：锚点在指针下，两个视图同步。 */
 function onWheel(e: WheelEvent): void {
   if (!(e.ctrlKey || e.metaKey)) return;
@@ -742,6 +749,29 @@ function onWheel(e: WheelEvent): void {
   if (!el) return;
   const rect = el.getBoundingClientRect();
   el.scrollLeft = timeline.zoomAt(e.clientX - rect.left, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+}
+
+/**
+ * 卷帘**四周的固定栏**（左侧 60px 的标尺留白 + 琴键列、顶部标尺）上的滚轮。
+ *
+ * 这几块都在卷帘的滚动容器**之外**：它们不参与横向滚动（纵向靠 `scrollTop` 平移、横向靠
+ * `translateX`），所以滚轮落在上面时浏览器找不到可滚的祖先，什么都不发生——鼠标从卷帘上
+ * 移过来，就会觉得「左边 / 上面滚不动」。这里把滚轮显式转发给卷帘：纵向滚 `scrollTop`，
+ * Ctrl/Cmd 与卷帘内一致地缩放（锚点落在卷帘左边缘，因为指针本就在它左边）。
+ */
+function onChromeWheel(e: WheelEvent): void {
+  const el = scroller.value;
+  if (!el) return;
+  e.preventDefault();
+  if (e.ctrlKey || e.metaKey) {
+    const rect = el.getBoundingClientRect();
+    el.scrollLeft = timeline.zoomAt(
+      Math.max(0, e.clientX - rect.left),
+      e.deltaY < 0 ? 1.15 : 1 / 1.15,
+    );
+    return;
+  }
+  el.scrollTop += wheelPixels(e, el.clientHeight);
 }
 
 const playheadPx = computed(() => transport.positionBeats * timeline.zoom);
@@ -865,12 +895,13 @@ onUnmounted(() => {
 
 <template>
   <div class="editor">
-    <!-- 顶部标尺：左侧 60px 与琴键列对齐；其余与卷帘内容同一横坐标原点 -->
+    <!-- 顶部标尺：左侧 60px 与琴键列对齐；其余与卷帘内容同一横坐标原点。
+         两块都在卷帘的滚动容器之外，滚轮要显式转发给卷帘（见 onChromeWheel）。 -->
     <div class="ruler-row">
-      <div class="ruler-gutter">
+      <div class="ruler-gutter" @wheel="onChromeWheel">
         <span class="grid-label" :title="i18n.t('edit.snapGrid', { grid: gridLabel })">{{ gridLabel }}</span>
       </div>
-      <div class="ruler-view">
+      <div class="ruler-view" @wheel="onChromeWheel">
         <div class="ruler-inner" :style="{ width: rollWidth, transform: `translateX(${-timeline.scrollLeft}px)` }">
           <TimelineRuler />
         </div>
@@ -879,7 +910,12 @@ onUnmounted(() => {
 
     <!-- 主体：琴键列（不随横向滚动）+ 卷帘 -->
     <div class="body-row">
-      <div class="keys" role="group" :aria-label="i18n.t('edit.auditionKeys')">
+      <div
+        class="keys"
+        role="group"
+        :aria-label="i18n.t('edit.auditionKeys')"
+        @wheel="onChromeWheel"
+      >
         <div class="keys-inner" :style="{ transform: `translateY(${-scrollTop}px)` }">
           <div
             v-for="p in rows"
@@ -949,8 +985,10 @@ onUnmounted(() => {
       </div>
 
       <!-- 没有片段时的入口：覆盖整块卷帘、垂直居中。放在滚动容器**外**，
-           否则遮罩会跟着内容滚走，只盖住可见区顶部、提示也会偏上。 -->
-      <div v-if="!clip" class="roll-blank">
+           否则遮罩会跟着内容滚走，只盖住可见区顶部、提示也会偏上。
+           遮罩本身 `pointer-events: none`（滚轮穿透到卷帘），只有按钮会截住事件，
+           所以滚轮也要在按钮上转发一次，否则停在按钮上就滚不动了。 -->
+      <div v-if="!clip" class="roll-blank" @wheel="onChromeWheel">
         <p class="text-body-md">{{ i18n.t("edit.noClip") }}</p>
         <button v-if="trackId !== null" class="btn-filled" @click="createClipHere">
           {{ i18n.t("edit.createBarClip") }}
