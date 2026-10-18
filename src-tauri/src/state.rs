@@ -166,3 +166,6 @@ pub const EVENT_PLUGINS: &str = "engine://plugins";
 
 /// 音频导入解码进度的前端事件名。
 pub const EVENT_IMPORT: &str = "engine://import";
+
+/// 音频导出（渲染 + 编码）进度的前端事件名。
+pub const EVENT_EXPORT: &str = "engine://export";

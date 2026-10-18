@@ -23,7 +23,7 @@ import { useRouter } from "vue-router";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useClipboardStore } from "@/stores/clipboard";
-import { useLayoutStore } from "@/stores/layout";
+import { useLayoutStore, gridStepFor, NOTE_GRIDS, type NoteGrid } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
 import { usePluginsStore } from "@/stores/plugins";
@@ -32,6 +32,7 @@ import { useParamBrowserStore } from "@/stores/paramBrowser";
 import ControllerLane from "@/components/workspace/ControllerLane.vue";
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
+import Md3Select from "@/components/common/Md3Select.vue";
 import { capturePointer } from "@/utils/pointer";
 import { shouldDeferToBrowser } from "@/utils/editable";
 import { automationTargetsFor, curateTargets, defaultBoundKeys } from "@/utils/automation";
@@ -90,10 +91,58 @@ const clipBand = computed(() => {
     width: `${Math.max(2, c.length * timeline.zoom)}px`,
   };
 });
-/** 网格细分标签（例如 1/16）：按片段起点所在段的吸附步长计算。 */
-const gridLabel = computed(() => {
-  const snap = timeline.snapAt(clipStart.value);
-  return `1/${Math.round(4 / snap)}`;
+/** 网格细分标签：显示当前选择（自由模式直接写「自由」）。 */
+const gridLabel = computed(() => (layout.noteGrid === "free" ? i18n.t("edit.gridFree") : layout.noteGrid));
+
+/**
+ * 当前网格在 `beat` 处的一步（拍）；自由模式 = `null`（不吸附）。
+ *
+ * 用 `timeline.snapAt` 的分段口径（关键点换拍号时步长跟着变），但**步长由编辑视图自己的
+ * `noteGrid` 决定**——全局吸附（编排视图 / 标尺 / 自动化）不受这里影响。
+ */
+function stepAt(beat: number): number | null {
+  return gridStepFor(layout.noteGrid, timeline.snapAt(beat) * 4);
+}
+
+/** 按当前网格吸附一个绝对拍；自由模式原样返回（`floor` 到 0）。 */
+function snapToGrid(beat: number): number {
+  const step = stepAt(beat);
+  if (step === null) return Math.max(0, beat);
+  return Math.max(0, Math.round(beat / step) * step);
+}
+
+/** 网格下拉的候选项。 */
+const gridOptions = computed(() =>
+  NOTE_GRIDS.map((grid) => ({
+    id: grid,
+    label: grid === "free" ? i18n.t("edit.gridFree") : grid,
+  })),
+);
+
+/** 网格下拉的双向绑定（`Md3Select` 用字符串）。 */
+const gridChoice = computed({
+  get: () => layout.noteGrid as NoteGrid,
+  set: (grid: string) => (layout.noteGrid = grid as NoteGrid),
+});
+
+/**
+ * 细分线（比拍线更淡）：只画到「网格这一层的格」，`free` 不画。
+ *
+ * 与 `timeline.gridStyle`（小节线 + 拍线）**拼成同一条 background 栈**：CSS 里靠前的层画在
+ * 最上面，所以细分线放在最后 = 压在最底下。
+ */
+const rollGridStyle = computed(() => {
+  const base = timeline.gridStyle;
+  const step = stepAt(clipStart.value);
+  if (step === null) return base;
+  const cell = Math.max(3, step * timeline.zoom);
+  const sub = `repeating-linear-gradient(to right, var(--grid-sub) 0 1px, transparent 1px ${cell}px)`;
+  return {
+    backgroundImage: `${base.backgroundImage}, ${sub}`,
+    backgroundPosition: `${base.backgroundPosition}, 0 0`,
+    backgroundSize: `${base.backgroundSize}, 100% 100%`,
+    backgroundRepeat: `${base.backgroundRepeat}, no-repeat`,
+  };
 });
 
 // ---------------------------------------------------------------------------
@@ -130,7 +179,7 @@ function pointAt(clientX: number, clientY: number): { beat: number; pitch: numbe
   const el = rollEl.value;
   if (!el) return { beat: 0, pitch: HIGH, rel: 0 };
   const rect = el.getBoundingClientRect();
-  const beat = Math.max(0, timeline.snapBeats((clientX - rect.left) / timeline.zoom));
+  const beat = snapToGrid((clientX - rect.left) / timeline.zoom);
   const row = Math.floor((clientY - rect.top) / ROW_H);
   const pitch = Math.min(HIGH, Math.max(LOW, HIGH - row));
   return { beat, pitch, rel: Math.max(0, beat - clipStart.value) };
@@ -180,6 +229,25 @@ function noteStyle(note: Note): Record<string, string> {
     left: `${(clipStart.value + note.start) * timeline.zoom}px`,
     width: `${Math.max(8, note.duration * timeline.zoom)}px`,
   };
+}
+
+/**
+ * 音符的悬浮说明：基础信息 + 扫弦偏移 / 连奏（都只在非缺省时才写出来）。
+ *
+ * 扫弦在卷帘里**不挪位置**——音符画在记谱位置上（网格保持诚实），偏移靠这行文字与检查器读数。
+ */
+function noteTitle(note: Note): string {
+  const parts = [
+    i18n.t("edit.noteTitle", {
+      name: noteName(note.pitch),
+      start: note.start.toFixed(2),
+      velocity: note.velocity,
+      volume: note.volume,
+    }),
+  ];
+  if (note.offset) parts.push(i18n.t("edit.noteOffset", { beats: note.offset.toFixed(3) }));
+  if (note.legato) parts.push(i18n.t("edit.noteLegato"));
+  return parts.join(" · ");
 }
 
 // ---------------------------------------------------------------------------
@@ -358,9 +426,11 @@ function onPointerMove(e: PointerEvent): void {
       const d = moveDrag.value;
       if (!d) break;
       const p = pointAt(e.clientX, e.clientY);
-      // 相对拖动：起点变化量 = 绝对拍变化量（片段偏移是常量，直接抵消）；按指针所在分段的步长吸附。
-      const snap = timeline.snapAt(p.beat);
-      const db = Math.round((p.beat - d.originBeat) / snap) * snap;
+      // 相对拖动：起点变化量 = 绝对拍变化量（片段偏移是常量，直接抵消）；按**当前网格**吸附，
+      // 自由模式（`step === null`）就用原始位移。
+      const step = stepAt(p.beat);
+      const raw = p.beat - d.originBeat;
+      const db = step === null ? raw : Math.round(raw / step) * step;
       const dp = p.pitch - d.originPitch;
       if (db !== d.deltaBeat || dp !== d.deltaPitch) {
         d.deltaBeat = db;
@@ -375,7 +445,7 @@ function onPointerMove(e: PointerEvent): void {
       const r = resizeDrag.value;
       if (!r) break;
       const p = pointAt(e.clientX, e.clientY);
-      const next = Math.max(MIN_CREATE_BEATS, timeline.snapBeats(r.base + (p.beat - r.originBeat)));
+      const next = Math.max(MIN_CREATE_BEATS, snapToGrid(r.base + (p.beat - r.originBeat)));
       if (next !== r.next) {
         r.next = next;
         r.moved = true;
@@ -845,7 +915,7 @@ onUnmounted(() => {
         <div
           ref="rollEl"
           class="roll"
-          :style="{ width: rollWidth, height: rollHeight, ...timeline.gridStyle }"
+          :style="{ width: rollWidth, height: rollHeight, ...rollGridStyle }"
           @pointerdown="onRollPointerDown"
           @pointermove="onPointerMove"
           @contextmenu="onRollContextMenu"
@@ -874,17 +944,11 @@ onUnmounted(() => {
             :class="{
               selected: selection.isNoteSelected(i),
               dragging: moveDrag?.base.some((b) => b.index === i),
+              legato: !!noteOf(i, n).legato,
             }"
             :style="noteStyle(noteOf(i, n))"
             :data-index="i"
-            :title="
-              i18n.t('edit.noteTitle', {
-                name: noteName(noteOf(i, n).pitch),
-                start: noteOf(i, n).start.toFixed(2),
-                velocity: noteOf(i, n).velocity,
-                volume: noteOf(i, n).volume,
-              })
-            "
+            :title="noteTitle(noteOf(i, n))"
             @pointerdown="onNotePointerDown($event, i)"
             @contextmenu="onNoteContextMenu($event, i)"
           >
@@ -907,6 +971,20 @@ onUnmounted(() => {
           {{ i18n.t("edit.createBarClip") }}
         </button>
       </div>
+    </div>
+
+    <!-- 底部：网格细分（卷帘自己的吸附步长；与编排视图的全局吸附互不影响） -->
+    <div class="grid-bar">
+      <span class="grid-bar-label">{{ i18n.t("edit.grid") }}</span>
+      <Md3Select
+        v-model="gridChoice"
+        :options="gridOptions"
+        :label="i18n.t('edit.grid')"
+        class="grid-select"
+      />
+      <span class="grid-bar-hint">
+        {{ layout.noteGrid === "free" ? i18n.t("edit.gridFreeHint") : i18n.t("edit.gridHint") }}
+      </span>
     </div>
 
     <!-- 底部窗格（顶栏开关控制，默认打开）：分隔线 + 控制器泳道 -->
@@ -1113,6 +1191,10 @@ onUnmounted(() => {
 .roll-note.selected {
   box-shadow: 0 0 0 2px rgb(var(--md-surface)), 0 0 0 3px rgb(var(--md-primary));
 }
+/* 连奏：右边缘画成虚线——表示「这个音的 NoteOff 会一直延到下一个同音高」 */
+.roll-note.legato {
+  border-right: 3px dashed rgb(var(--md-surface) / 0.75);
+}
 /* 右边缘的时长热区 */
 .note-handle {
   position: absolute;
@@ -1166,5 +1248,39 @@ onUnmounted(() => {
 .marquee.danger {
   border-color: rgb(var(--md-error));
   background-color: rgb(var(--md-error) / 0.16);
+}
+/* ---- 底部网格栏 ---- */
+/*
+ * 一条很薄的条：卷帘之下、控制器泳道之上，**不依赖泳道是否打开**（泳道关掉时它照样在）。
+ * 只放「网格」一项——它决定画音符时的吸附步长与画不画细分线，是卷帘最高频的一个开关。
+ */
+.grid-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--grid-line-row);
+  background-color: var(--app-inset);
+}
+.grid-bar-label {
+  font-size: 10.5px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: rgb(var(--md-on-surface-variant));
+}
+/* 下拉本身是宽度 100% 的药丸，这里给它一个固定的窄宽度。 */
+.grid-select {
+  flex: 0 0 92px;
+  width: 92px;
+}
+.grid-bar-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: rgb(var(--md-on-surface-muted));
 }
 </style>

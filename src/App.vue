@@ -12,6 +12,7 @@ import ToastHost from "@/components/common/ToastHost.vue";
 import ProjectDialog from "@/components/common/ProjectDialog.vue";
 import ShortcutsDialog from "@/components/common/ShortcutsDialog.vue";
 import UnsavedChangesDialog from "@/components/common/UnsavedChangesDialog.vue";
+import ExportDialog, { type ExportChoice } from "@/components/common/ExportDialog.vue";
 import ParameterBrowser from "@/components/common/ParameterBrowser.vue";
 import { useProjectSync } from "@/composables/useProjectSync";
 import { useProjectStore } from "@/stores/project";
@@ -23,11 +24,11 @@ import { useUpdaterStore } from "@/stores/updater";
 import { usePresetsStore } from "@/stores/presets";
 import { useSelectionStore } from "@/stores/selection";
 import { useParamBrowserStore } from "@/stores/paramBrowser";
-import { useImportingStore } from "@/stores/importing";
+import { useImportingStore, useExportingStore } from "@/stores/importing";
 import { useTimelineStore } from "@/stores/timeline";
 import { useI18n } from "@/i18n";
-import { exportWav, onPluginsEvent } from "@/api/tauri";
-import { pickAudioToOpen, pickProjectToOpen, pickProjectToSave, pickWavToSave } from "@/api/dialogs";
+import { exportAudio, onPluginsEvent, type ExportFormat } from "@/api/tauri";
+import { pickAudioToOpen, pickAudioToSave, pickProjectToOpen, pickProjectToSave } from "@/api/dialogs";
 import { isTauri } from "@/utils/platform";
 import { shouldDeferToBrowser } from "@/utils/editable";
 
@@ -41,6 +42,8 @@ const presets = usePresetsStore();
 const selection = useSelectionStore();
 const paramBrowser = useParamBrowserStore();
 const importing = useImportingStore();
+/** 导出**任务**的进度 store（名字让开同文件里的 `exporting` 开关：那是「正在导出」的防重入标志）。 */
+const exportJob = useExportingStore();
 const timeline = useTimelineStore();
 const i18n = useI18n();
 const route = useRoute();
@@ -76,9 +79,12 @@ const aiActive = ref(false);
 /** 最近被 AI 代理改动过的轨道（用于音轨栏高亮）。 */
 const aiTracks = ref<number[]>([]);
 const exporting = ref(false);
+/** 导出对话框是否打开（格式 / 采样率 / 比特率）。 */
+const exportOpen = ref(false);
 let pollTimer: number | null = null;
 let unlistenPlugins: (() => void) | null = null;
 let unlistenImport: (() => void) | null = null;
+let unlistenExport: (() => void) | null = null;
 let unlistenClose: (() => void) | null = null;
 let autosaveTimer: number | null = null;
 
@@ -259,13 +265,27 @@ async function onProjectDialogSubmit(name: string): Promise<void> {
   await writeProject(path);
 }
 
-async function onExport(): Promise<void> {
+/**
+ * 顶栏「导出」：先开导出对话框选格式 / 采样率 / 比特率（`onExportConfirm` 才真正写文件）。
+ */
+function onExport(): void {
+  exportOpen.value = true;
+}
+
+/** 导出参数在对话框里选好了：选路径 → 渲染 → 编码。 */
+async function onExportConfirm(choice: ExportChoice): Promise<void> {
   if (exporting.value) return;
   exporting.value = true;
   try {
-    const path = await pickWavToSave(`${fileBase.value}.wav`);
+    const ext = choice.format === "mp3" ? "mp3" : "wav";
+    const path = await pickAudioToSave(`${fileBase.value}.${ext}`);
     if (!path) return;
-    const written = await exportWav(path, 44100);
+    // **以返回的路径为准**：用户可能在保存对话框里换了过滤器、也可能手打了别的扩展名
+    // （见 `dialogs.ts` 的 `pickAudioToSave`）。文件名写 `.mp3` 就一定得到 MP3；路径没有
+    // 认识的扩展名时才退回对话框里选的那个格式。
+    const lower = path.toLowerCase();
+    const format: ExportFormat = lower.endsWith(".mp3") ? "mp3" : lower.endsWith(".wav") ? "wav" : choice.format;
+    const written = await exportAudio(path, format, choice.sampleRate, choice.bitrateKbps);
     layout.notify(i18n.t("app.exported", { path: written }));
   } catch (err) {
     layout.notify(i18n.t("error.export", { error: String(err) }));
@@ -273,6 +293,28 @@ async function onExport(): Promise<void> {
     exporting.value = false;
   }
 }
+
+/**
+ * 顶栏下边缘那条进度条要显示什么：导入优先，其次导出。
+ *
+ * 两者都是用户主动触发的长任务，实际不会并发；真撞上就先显示导入——它更短，也更需要即时反馈。
+ */
+const jobBar = computed(() => {
+  if (importing.active) {
+    return { active: true, pct: importing.progressPct, label: i18n.t("import.progressLabel") };
+  }
+  if (exportJob.active) {
+    const phase = exportJob.progress?.phase;
+    const label =
+      phase === "rendering"
+        ? i18n.t("export.phaseRendering")
+        : phase === "encoding"
+          ? i18n.t("export.phaseEncoding")
+          : i18n.t("export.phasePreparing");
+    return { active: true, pct: exportJob.progressPct, label };
+  }
+  return { active: false, pct: null, label: "" };
+});
 
 async function onUndo(): Promise<void> {
   try {
@@ -431,6 +473,8 @@ onMounted(async () => {
   unlistenPlugins = await onPluginsEvent(() => void plugins.refresh());
   // 音频导入解码进度：顶栏下边缘的进度条据此更新。
   unlistenImport = importing.watchProgress();
+  // 导出（渲染 + 编码）进度：同一条进度条。
+  unlistenExport = exportJob.watchProgress();
   pollTimer = window.setInterval(() => {
     // 只统计**代理**发起的事件：人类自己的编辑不该点亮「AI 正在写」。
     aiActive.value = events.agentActive();
@@ -453,6 +497,7 @@ onUnmounted(() => {
   unlistenClose?.();
   unlistenPlugins?.();
   unlistenImport?.();
+  unlistenExport?.();
   events.stop();
   transport.dispose();
 });
@@ -465,6 +510,7 @@ onUnmounted(() => {
   <AppShell
     v-else
     :ai-active="aiActive"
+    :job-bar="jobBar"
     @import="onImport"
     @import-audio="onImportAudio"
     @new="onNew"
@@ -538,6 +584,9 @@ onUnmounted(() => {
 
   <!-- 关闭工程前的未保存改动确认：窗口关闭请求会打开它并等待选择 -->
   <UnsavedChangesDialog v-model:open="unsavedOpen" @choose="onUnsavedChoice" />
+
+  <!-- 导出：选格式 / 采样率 / 比特率，再去系统保存对话框选路径（扩展名决定最终格式） -->
+  <ExportDialog v-model:open="exportOpen" @confirm="onExportConfirm" />
 
   <!-- 参数页（挑参数给自动化用）：挂在根部，车道下拉与检查器两个入口共用 -->
   <ParameterBrowser v-if="paramBrowser.isOpen" />

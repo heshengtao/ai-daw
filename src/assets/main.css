@@ -66,6 +66,9 @@
     --grid-line-strong: rgb(var(--md-outline) / 0.75);
     --grid-bar:         rgb(var(--md-on-surface) / 0.34);
     --grid-line-row:    rgb(var(--md-outline-variant) / 0.55);
+    /* 钢琴卷帘的**细分线**（拍线之间那一层，比拍线淡）：编排视图不画它，
+       只有卷帘按用户选的网格（1/16、1/12、1/32…）画。 */
+    --grid-sub:         rgb(var(--md-outline-variant) / 0.4);
 
     /* 钢琴卷帘的琴键：白键 / 黑键必须一眼可分，所以不走 MD3 的层级色，
        而是给一组专用 token（亮暗各一套）。 */
@@ -169,6 +172,7 @@
     --grid-line-strong: rgb(var(--md-outline) / 0.62);
     --grid-bar:         rgb(var(--md-outline) / 0.82);
     --grid-line-row:    rgb(var(--md-outline) / 0.22);
+    --grid-sub:         rgb(var(--md-outline) / 0.3);
 
     /* 深色琴键：白键用中间调灰紫（不用纯白，否则刺眼），黑键压到近黑 */
     --piano-white:      #4b4853;

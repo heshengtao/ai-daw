@@ -18,6 +18,10 @@ thiserror = "1"
 hound = "3"
 rtrb = "0.4"
 cpal = { version = "0.18", optional = true }
+# MP3 导出（见 `src/mp3.rs`）。`mp3lame-encoder` 封装的是**原封不动**的 LAME 3.100 —— 全仓库
+# 唯一一处 LGPL 依赖，许可证例外写在仓库根的 `deny.toml`，声明写在 `NOTICE`。
+# `std` = 让它的错误类型实现 `std::error::Error`（默认不带，`thiserror` 的 `#[from]` 需要它）。
+mp3lame-encoder = { version = "0.2", features = ["std"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # 仅用于给输入设备标注连接类型（内置 / 蓝牙 / 虚拟…）；cpal 的 DeviceDescription

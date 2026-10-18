@@ -78,7 +78,7 @@ mod tests {
             Command::AddNote {
                 track,
                 clip,
-                note: Note { id: 0, pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 },
+                note: Note { id: 0, pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false },
             },
             Actor::Human,
         );
@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn wav_bytes_starts_with_riff_and_exceeds_header() {
         let project = demo();
-        let opts = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.1 };
+        let opts = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.1, settle_seconds: 0.0 };
         let buffer = render(&project, &PluginRegistry::with_builtins(), &opts);
 
         let bytes = wav_bytes(&buffer, 44_100);

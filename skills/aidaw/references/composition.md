@@ -7,13 +7,19 @@
 
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
-| `add_notes` | `track`,`clip`,`notes[]` | 一次写入一组音符（最多 5000）。返回 `added_ids` 与片段摘要。 |
+| `add_notes` | `track`,`clip`,`notes[]`,`snap?` | 一次写入一组音符（最多 5000）。返回 `added_ids` 与片段摘要。 |
 | `replace_notes` | `track`,`clip`,`notes[]` | **原子替换**片段内全部音符；空数组 = 清空片段。 |
-| `update_notes` | `track`,`clip`,`updates[]` | 按**稳定 id** 改写：`{id, pitch?, start?, duration?, velocity?, volume?}`。 |
+| `update_notes` | `track`,`clip`,`updates[]` | 按**稳定 id** 改写：`{id, pitch?, start?, duration?, velocity?, volume?, offset?, legato?}`。 |
 | `remove_notes` | `track`,`clip`,`ids[]` | 按稳定 id 删除。 |
 
 `notes[]` 的字段：`pitch`（0..127）、`start`/`duration`（拍，**片段内相对**）、
-`velocity`（0..127，缺省 100）、`volume`（0..127，缺省 127）。`id` 由引擎发放，不用自己填。
+`velocity`（0..127，缺省 100）、`volume`（0..127，缺省 127）、
+`offset`（起始偏移，拍，缺省 0 = 与 `start` 同时发声）、`legato`（连奏，缺省 false）。
+`id` 由引擎发放，不用自己填。
+
+`snap`（可选）把**起点**吸到网格上：`off`（缺省，原样写入）/ `bar` / `1/4` / `1/8` / `1/16` /
+`1/12`（三连音）/ `1/24` / `1/32`。**只吸起点**，时值与 `offset` 都原样保留——所以要写精确的
+三连音就显式传 `snap: "1/12"`，或者干脆不传、自己把拍值算准。
 
 **为什么用 id 而不是下标**：删掉一个音符后，后面所有音符的数组下标都会前移。`get_project`
 返回的每个音符都带 `id`，`update_notes` / `remove_notes` 用它定位，改完还是指得准。
@@ -32,6 +38,7 @@
 | `transpose_notes` | `track`,`clip`,`semitones`,`range?` | 移调（半音）。 |
 | `set_note_velocity` | `track`,`clip`,`value` 或 `from`+`to` 或 `scale`,`range?` | 固定 / 渐变 / 缩放（三选一）。 |
 | `quantize_notes` | `track`,`clip`,`grid`,`strength?`,`range?` | 起点吸到 `grid` 的整数倍。 |
+| `strum_notes` | `track`,`clip`,`step_ms`,`direction?`,`range?` | 扫弦：同一起点的一组音按音高依次错开。 |
 | `apply_swing` | `track`,`clip`,`subdivision?`,`ratio?`,`strength?`,`range?` | 每对子拍的第二个往后推。 |
 | `humanize_notes` | `track`,`clip`,`timing?`,`velocity?`,`range?`,`seed?` | 确定性抖动（同 seed 同结果）。 |
 | `fit_notes_to_range` | `track`,`clip`,`min_pitch?`,`max_pitch?`,`mode?`,`range?` | 八度折返 / 只报告。 |
@@ -39,7 +46,12 @@
 要点：
 
 - `range` 是 `{start, end}`（**片段内**拍，左闭右开），只作用于起点落在其中的音符；不给 = 整段。
-- `quantize_notes` 的 `grid`：16 分 = 0.25、8 分 = 0.5、4 分 = 1.0；`strength` 0..1（0 = 不动，1 = 完全对齐，0.5 = 吸一半）。
+- `quantize_notes` 的 `grid`：16 分 = 0.25、8 分 = 0.5、4 分 = 1.0，**三连音 = 1/3**
+  （也可以写 `0.3333333`）；`strength` 0..1（0 = 不动，1 = 完全对齐，0.5 = 吸一半）。
+- `strum_notes` 写的是每个音符的 `offset`（不碰 `start`）：`step_ms` = 相邻两音的毫秒差
+  （30 是常见的吉他扫弦），`direction: "down"`（缺省，低音先响）/ `"up"`。间隔按当前速度换算成拍，
+  所以改速度不会毁掉扫弦；`step_ms: 0` = 清掉扫弦、回到同时发声。和弦轨写完和弦后调用它，
+  听感立刻从「块状」变成「扫过去」。
 - `apply_swing` 的 `subdivision` 是**子拍长度**：8 分 swing = `0.5`，16 分 = `0.25`；
   `ratio` 是第二个子拍在一对子拍里的位置（0.5 平直 / 0.66 ≈ 三连音 / 0.75 硬 shuffle）。
   只动第二个子拍，小节长度不变。
@@ -110,7 +122,7 @@
 2. `set_project_harmony` 写一份和弦谱（也可以只在分析时传 `bars`）。
 3. `set_track_meta` 给每条轨标分工与目标音域（`lead` 60..84、`bass` 28..48…）。
 4. `add_notes` 一次写出整段旋律 / 伴奏（别循环 `add_note`）。
-5. `quantize_notes` + `apply_swing` 定节奏感；`humanize_notes` 去掉机械感。
+5. `quantize_notes` + `apply_swing` 定节奏感；`strum_notes` 让和弦扫起来；`humanize_notes` 去掉机械感。
 6. `fit_notes_to_range` 把跑出音域的音折回来（`mode: "report"` 先看一眼）。
 7. `analyze_harmony` 查和声，`analyze_track_overlap` 查轨道打架，按返回的 `message` 修。
 8. `analyze_project` 听感确认 → `export_wav` 导出。
@@ -122,4 +134,6 @@
   别在一个循环里反复 `transpose_notes`——一次算好总移调量再调。
 - **`range` 是片段内拍**，不是工程绝对拍；`split_clip` 的 `beat` 反而是绝对拍。
 - **变换只作用于可见音符**（起点 >= 0）；被片段左边缘裁掉的音符留在原地。
+- **`start` 是记谱位置，`offset` 是演奏位置**：量化、对齐、复制粘贴都只看 `start`——这也正是扫弦
+  不会被量化抹掉的原因。想让一个音「晚一点响」用 `offset`，不要改 `start`。
 - **`analyze_harmony` 不自动改音**：它只指出问题。要不要改、怎么改，由你（或人）决定。

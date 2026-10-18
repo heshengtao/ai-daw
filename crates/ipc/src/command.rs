@@ -1,6 +1,6 @@
 use crate::model::{
     AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, FitMode, HarmonyBar, Note,
-    NoteEdit, NotePatch, NoteRange, PitchRange, Section, Send, TrackId, VelocityShape,
+    NoteEdit, NotePatch, NoteRange, PitchRange, Section, Send, StrumDirection, TrackId, VelocityShape,
 };
 
 /// 命令：期望的状态变更请求。
@@ -143,6 +143,18 @@ pub enum Command {
     },
     /// 量化：把起点吸到 `grid`（拍）的整数倍，`strength` 决定吸多少（0 = 不动，1 = 完全对齐）。
     QuantizeNotes { track: TrackId, clip: ClipId, grid: f64, strength: f64, range: Option<NoteRange> },
+    /// 扫弦：把**起点相同**的音符按音高依次错开。
+    ///
+    /// `step_ms` 是相邻两音的毫秒差（0 = 清掉扫弦、回到同时发声），`direction` 决定谁先响。
+    /// 毫秒在引擎里按**该处生效的速度**换算成拍（模型里的时间是拍），所以改工程速度不会改变扫弦
+    /// 的「几根弦差这么多」。写入的是每个音符的 `Note::offset`。
+    StrumNotes {
+        track: TrackId,
+        clip: ClipId,
+        step_ms: f64,
+        direction: StrumDirection,
+        range: Option<NoteRange>,
+    },
     /// Swing：把指定 `subdivision`（拍）的**第二个子拍**往后推，`ratio` 是它与前一个子拍的距离占比。
     ///
     /// 8 分 swing = `subdivision: 0.5` + `ratio: 0.66`（第二拍落到约 2/3 拍处）。

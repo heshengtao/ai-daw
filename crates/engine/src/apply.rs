@@ -433,7 +433,7 @@ mod tests {
                 actor: Actor::Human,
                 track: t,
                 clip: c,
-                note: Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 },
+                note: Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
             },
         );
         assert_eq!(p.track(t).unwrap().clips[0].notes.len(), 1);
@@ -495,7 +495,7 @@ mod tests {
                     actor: Actor::Human,
                     track: t,
                     clip: c,
-                    note: Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127 },
+                    note: Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
                 },
             );
         }
@@ -506,7 +506,7 @@ mod tests {
                 track: t,
                 clip: c,
                 index: 1,
-                note: Note { id: 0, pitch: 200, start: -1.0, duration: 0.0, velocity: 255, volume: 127 },
+                note: Note { id: 0, pitch: 200, start: -1.0, duration: 0.0, velocity: 255, volume: 127, offset: 0.0, legato: false },
             },
         );
         let n = p.track(t).unwrap().clips[0].notes[1];

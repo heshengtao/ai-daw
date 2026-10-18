@@ -45,3 +45,14 @@ source files, and we publish no modifications to Symphonia. The licence text is
 available at https://www.mozilla.org/en-US/MPL/2.0/ and in the crate's own source
 distribution.
 --------------------------------------------------------------------------------
+
+LAME (https://lame.sourceforge.io/)
+Licensed under the GNU Lesser General Public License, version 3 (LGPL-3.0).
+
+Used **unmodified** for MP3 export (via the `mp3lame-encoder` / `mp3lame-sys` crates,
+which build the bundled LAME 3.100). We publish no modifications to LAME and do not
+incorporate its source into this project's own files; the exception that allows this
+dependency is scoped to those two crates in `deny.toml`. The licence text is available
+at https://www.gnu.org/licenses/lgpl-3.0.html and in the crate's own source
+distribution.
+--------------------------------------------------------------------------------

@@ -7,8 +7,8 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
-import { onImportEvent } from "@/api/tauri";
-import type { ImportProgress } from "@/api/types";
+import { onExportEvent, onImportEvent } from "@/api/tauri";
+import type { ExportProgress, ImportProgress } from "@/api/types";
 
 export const useImportingStore = defineStore("importing", () => {
   /** 当前解码进度；`null` = 没在导入（进度条隐藏）。 */
@@ -29,6 +29,43 @@ export const useImportingStore = defineStore("importing", () => {
     let stop: (() => void) | null = null;
     void onImportEvent((p) => {
       progress.value = p.state === "decoding" ? p : null;
+    }).then((off) => {
+      stop = off;
+    });
+    return () => stop?.();
+  }
+
+  return { progress, active, progressPct, watchProgress };
+});
+
+/**
+ * 音频导出进度：订阅 `engine://export`，与导入**共用顶栏下边缘那一条**进度条。
+ *
+ * 与导入的差别只有阶段：
+ * - `preparing`（建实例 / 等外部插件装载）与 `encoding` 没有可细分的进度 → 不确定态；
+ * - `rendering` 有总帧数 → 按百分比填充；
+ * - `done` / `error` 清空 —— 进度条随之隐藏（成功/失败提示由 `App.vue` 的通知负责）。
+ */
+export const useExportingStore = defineStore("exporting", () => {
+  /** 当前导出进度；`null` = 没在导出。 */
+  const progress = ref<ExportProgress | null>(null);
+
+  /** 是否正在导出（进度条是否可见）。 */
+  const active = computed(() => progress.value !== null);
+
+  /** 进度百分比（0–100）；没有总帧数时给 `null`。 */
+  const progressPct = computed(() => {
+    const p = progress.value;
+    if (!p || p.phase !== "rendering") return null;
+    if (!p.total_frames || p.frames <= 0) return null;
+    return Math.min(100, Math.round((p.frames / p.total_frames) * 100));
+  });
+
+  /** 订阅后端进度（返回取消订阅函数）。`done` / `error` 清空。 */
+  function watchProgress(): () => void {
+    let stop: (() => void) | null = null;
+    void onExportEvent((p) => {
+      progress.value = p.phase === "done" || p.phase === "error" ? null : p;
     }).then((off) => {
       stop = off;
     });

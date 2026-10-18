@@ -1,6 +1,8 @@
 # 域：轨道（track）
 
-建/删/改轨道，挂换乐器。新增轨道会拿到一个自增 `id`（后续所有操作都用它定位）。
+建/删/改轨道，挂换乐器。**所有工具都用 `id` 定位轨道**——`id` 是**分配序号**，不是行号，
+也不是「第几条」：新建工程后它从 1 开始，打开旧工程则可能从任意数字继续（老工程里的第一行
+就可能是 `id: 93`）。一律以 `get_project` / `add_track` 返回的 `id` 为准。
 
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
@@ -12,6 +14,8 @@
 | `apply_preset` | `track`,`params`,`effects` | 一次写整组乐器参数 + 整条效果链（`effects` 是替换）。 |
 
 **要点**
+- **要说「第几条轨道」就用 `get_project` 里 `tracks` 数组的顺序**（第 1 个元素 = 界面第一行），
+  再把那条轨道的 `id` 传给工具；别把 id 当成序号（`id: 93` 完全可以就是第一行）。
 - 挑音色前先 `list_plugins`（`kind="instrument"`）读 `category` / `description` / `roles` /
   `pitch_range`——插件名只是型号，`JC303` 是**单音酸性贝斯**而不是普通合成器。
 - 乐器挂上后建议 `set_track_meta` 写 `role` 与 `pitch_range`：`fit_notes_to_range` 会照它折返，

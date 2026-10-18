@@ -5,7 +5,7 @@ pub mod transport;
 
 pub use clip::{
     clamp_beats, clamp_range, AudioSource, Clip, ClipId, ClipPlacement, ClipRef, FitMode, Note,
-    NoteEdit, NotePatch, NoteRange, VelocityShape,
+    NoteEdit, NotePatch, NoteRange, StrumDirection, VelocityShape,
 };
 pub use project::{HarmonyBar, Project, Section};
 pub use track::{

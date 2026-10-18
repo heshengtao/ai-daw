@@ -14,6 +14,17 @@ pub struct RenderOptions {
     pub sample_rate: f64,
     /// 工程内容结束后的额外渲染时长（秒）。
     pub tail_seconds: f64,
+    /// 渲染前的**装载等待**（秒）。`0` = 不等。
+    ///
+    /// 外部插件（尤其是**采样流式**音源，如 MusicLab RealGuitar）在 `prepare` 之后还要在自己的
+    /// 线程里异步装载采样，**需要一点真实时间**才出得了声。实时播放感觉不到——它本来就按真实
+    /// 时间走，等的这一秒正好是「按下播放到出声」的间隔；而离线渲染比实时快几十倍，同一段
+    /// 装载时间会被渲染成**好几分钟**的静音，听感就是「导出文件的开头几个小节没有声音」。
+    ///
+    /// 所以宿主在**引用了外部插件**的工程上给一点等待时间（见 `src-tauri` 的 `render_offline`）。
+    /// 内置插件是纯 DSP、不装载任何东西，传 `0`（测试与 CLI 也一律传 `0`，不拖慢跑批）。
+    /// 等待只影响墙钟时间：相同选项与工程仍然产出逐位相同的结果。
+    pub settle_seconds: f64,
 }
 
 /// 把工程离线渲染为立体声交错缓冲。
@@ -32,25 +43,53 @@ pub fn render_with_assets(
     options: &RenderOptions,
     assets: &dyn SampleProvider,
 ) -> AudioBuffer {
+    render_with_assets_progress(project, registry, options, assets, |_, _| {})
+}
+
+/// 同 [`render_with_assets`]，另外**回报进度**：`on_progress(已渲染帧, 总帧数)`。
+///
+/// 导出时用来画进度条。回报**按百分比节流**（每跨过 1% 一次，末尾补一次 100%）——总帧数在
+/// 渲染前就已知，而这个循环正是全流程里最慢的一段，进度条反映的主要就是它。
+///
+/// 回调在渲染线程上同步调用，必须很轻（记个数、发个事件）：不要在里面做 IO 或等待锁。
+pub fn render_with_assets_progress(
+    project: &Project,
+    registry: &PluginRegistry,
+    options: &RenderOptions,
+    assets: &dyn SampleProvider,
+    mut on_progress: impl FnMut(usize, usize),
+) -> AudioBuffer {
     let sr = options.sample_rate;
     let map = TempoMap::from_transport(&project.transport);
     let body_sec = map.beats_to_seconds(project.length_beats());
     let total_frames = ((body_sec + options.tail_seconds) * sr) as usize;
 
     let schedule = ScheduledEvents::from_project_with_assets(project, sr, assets);
+    // 插件实例（连同它们的 `prepare`）在构造 `Player` 时就已经就绪；这里的等待是留给
+    // **自己异步装载素材**的外部插件（见 [`RenderOptions::settle_seconds`]）。
     let mut player = Player::new(schedule, registry, sr, BLOCK_SIZE);
+    if options.settle_seconds > 0.0 {
+        std::thread::sleep(std::time::Duration::from_secs_f64(options.settle_seconds));
+    }
     player.apply_command(TransportCommand::Play);
 
     let mut buffer = AudioBuffer::silence(2, total_frames);
     let data = buffer.data_mut();
     let mut block_start = 0usize;
+    let mut reported = 0usize;
     while block_start < total_frames {
         let frames = BLOCK_SIZE.min(total_frames - block_start);
         let start = block_start * 2;
         let end = start + frames * 2;
         player.process_block(&mut data[start..end], frames);
         block_start += frames;
+        let percent = block_start.saturating_mul(100) / total_frames.max(1);
+        if percent > reported {
+            reported = percent;
+            on_progress(block_start, total_frames);
+        }
     }
+    on_progress(total_frames, total_frames);
     buffer
 }
 
@@ -71,7 +110,7 @@ mod tests {
         let ev = e.execute(Command::AddClip { track, start: 0.0, length: 2.0 }, Actor::Human);
         let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
         e.execute(
-            Command::AddNote { track, clip, note: Note { id: 0, pitch: 69, start: 0.0, duration: 1.0, velocity: 100, volume: 127 } },
+            Command::AddNote { track, clip, note: Note { id: 0, pitch: 69, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false } },
             Actor::Human,
         );
         e.project().clone()
@@ -80,7 +119,7 @@ mod tests {
     #[test]
     fn render_duration_matches_project_length_plus_tail() {
         let project = demo();
-        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.5 };
+        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.5, settle_seconds: 0.0 };
         let buf = render(&project, &PluginRegistry::with_builtins(), &opts);
         let expected = (TempoMap::from_transport(&project.transport).beats_to_seconds(project.length_beats())
             * 48_000.0) as usize
@@ -98,7 +137,7 @@ mod tests {
         project.transport.upsert_keyframe(Keyframe { beat: 1.0, tempo: 240.0, time_sig_num: 4, time_sig_den: 4 });
         let map = crate::tempo::TempoMap::from_transport(&project.transport);
         let expected_body = map.beats_to_seconds(project.length_beats());
-        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.1 };
+        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.1, settle_seconds: 0.0 };
         let buf = render(&project, &PluginRegistry::with_builtins(), &opts);
         let expected = (expected_body * 48_000.0) as usize + (0.1 * 48_000.0) as usize;
         assert!((buf.frames() as i64 - expected as i64).abs() <= 1);
@@ -107,7 +146,7 @@ mod tests {
     #[test]
     fn render_is_deterministic_and_audible() {
         let project = demo();
-        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.2 };
+        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.2, settle_seconds: 0.0 };
         let r = PluginRegistry::with_builtins();
         let a = render(&project, &r, &opts);
         let b = render(&project, &r, &opts);
@@ -119,7 +158,7 @@ mod tests {
     #[test]
     fn render_matches_player_at_different_block_size() {
         let project = demo();
-        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.2 };
+        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.2, settle_seconds: 0.0 };
         let registry = PluginRegistry::with_builtins();
         let buffer = render(&project, &registry, &opts);
 
@@ -166,7 +205,7 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 0.05,
-                notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.05, velocity: 100, volume: 127 }],
+                notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.05, velocity: 100, volume: 127, offset: 0.0, legato: false }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -174,7 +213,7 @@ mod tests {
             automation: vec![],
         });
 
-        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.5 };
+        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.5, settle_seconds: 0.0 };
         let buffer = render(&p, &PluginRegistry::with_builtins(), &opts);
         let data = buffer.data();
         let frames = buffer.frames();
@@ -193,6 +232,33 @@ mod tests {
         assert!(
             data[(frames - last_100ms) * 2..].iter().any(|s| *s != 0.0),
             "note release must survive into the final 100ms of the tail"
+        );
+    }
+
+    /// 进度回调：单调不减、以 100% 收尾，而且**不改变渲染结果**。
+    #[test]
+    fn progress_reports_monotonically_and_does_not_change_the_output() {
+        let project = demo();
+        let registry = PluginRegistry::with_builtins();
+        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.5, settle_seconds: 0.0 };
+
+        let mut seen: Vec<(usize, usize)> = Vec::new();
+        let with = render_with_assets_progress(
+            &project,
+            &registry,
+            &opts,
+            &crate::audio::no_assets(),
+            |done, total| seen.push((done, total)),
+        );
+        let plain = render(&project, &registry, &opts);
+
+        assert_eq!(with.data(), plain.data(), "进度回调不该改变输出");
+        assert!(seen.len() >= 2, "至少有中间回报 + 末尾一次：{seen:?}");
+        assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0), "进度必须单调不减：{seen:?}");
+        assert_eq!(
+            seen.last().copied(),
+            Some((with.frames(), with.frames())),
+            "最后一次必须是 100%：{seen:?}"
         );
     }
 }

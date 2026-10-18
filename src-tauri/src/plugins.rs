@@ -70,6 +70,24 @@ pub fn referenced_plugin_ids(project: &Project) -> Vec<String> {
     out
 }
 
+/// 工程引用的插件里，有没有**外部插件**（目录里的 VST3 / CLAP / AU）。
+///
+/// 用来决定离线渲染前要不要「等一会儿」（见 `commands::EXTERNAL_PLUGIN_SETTLE_SECONDS`）：
+/// 外部插件（尤其是采样流式音源）在 `prepare` 之后还要异步装载素材，这期间只出静音，而离线
+/// 渲染快得多，会把这段静音原样录成「开头几个小节没声音」。
+///
+/// 内置插件是纯 DSP、没有可装载的东西，所以内置插件工程**不等**——预览与 AI 侧的
+/// `analyze_project` 会被反复调用，这个等待不能白付。
+pub fn uses_external_plugins(project: &Project, catalog: &[CatalogPlugin]) -> bool {
+    if catalog.is_empty() {
+        return false;
+    }
+    let external: HashSet<&str> = catalog.iter().map(|entry| entry.id.as_str()).collect();
+    referenced_plugin_ids(project)
+        .iter()
+        .any(|id| external.contains(id.as_str()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +195,8 @@ mod tests {
                     duration: 1.0,
                     velocity: 100,
                     volume: 127,
+                    offset: 0.0,
+                    legato: false,
                 },
             },
             Actor::Human,
@@ -185,7 +205,7 @@ mod tests {
 
         let handles = Arc::new(Mutex::new(HashMap::new()));
         let registry = build_registry(&catalog, &project, Arc::clone(&handles));
-        let options = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5 };
+        let options = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5, settle_seconds: 0.0 };
         let buffer = render(&project, &registry, &options);
 
         assert!(
@@ -196,6 +216,66 @@ mod tests {
             buffer.peak() > 0.01,
             "挂 CLAP 插件的轨道必须出声（峰值 {}）",
             buffer.peak()
+        );
+    }
+
+    /// 「离线渲染前要不要等一会儿」的判定：工程引用了**目录里的**外部插件才等。
+    ///
+    /// 这是「导出开头几个小节没声音」那个 bug 的修复开关（见 `commands::EXTERNAL_PLUGIN_SETTLE_SECONDS`），
+    /// 判定一旦失效就会静默复发，所以钉住它：内置插件不等（预览 / `analyze_project` 会被反复调用，
+    /// 不能白等）、缺失插件也不等（占位是透传的，没有东西在装载）。
+    #[test]
+    fn external_plugins_trigger_the_settle_wait() {
+        use ai_daw_engine::model::{PluginInstance, Track, TrackId};
+        use ai_daw_host_vst3::CatalogPlugin;
+        use ai_daw_plugin_api::PluginKind;
+
+        let catalog = vec![CatalogPlugin {
+            id: "vst3:cool-synth".into(),
+            name: "Cool Synth".into(),
+            vendor: "ACME".into(),
+            kind: PluginKind::Instrument,
+            format: "vst3".into(),
+            accepts_midi: true,
+            has_editor: true,
+            path: std::path::PathBuf::from("/tmp/CoolSynth.vst3"),
+        }];
+
+        let with_instrument = |plugin_id: &str| {
+            let mut project = Project::new("p");
+            project.tracks.push(Track {
+                meta: None,
+                id: TrackId(1),
+                name: "T".into(),
+                instrument: Some(PluginInstance {
+                    plugin_id: plugin_id.into(),
+                    params: Default::default(),
+                    state: vec![],
+                }),
+                effects: vec![],
+                clips: vec![],
+                mixer: Default::default(),
+                sends: vec![],
+                automation: vec![],
+            });
+            project
+        };
+
+        assert!(
+            uses_external_plugins(&with_instrument("vst3:cool-synth"), &catalog),
+            "引用了目录里的外部插件 → 必须等（采样流式音源要时间装载）"
+        );
+        assert!(
+            !uses_external_plugins(&with_instrument("builtin.synth.lead"), &catalog),
+            "内置插件是纯 DSP → 不等"
+        );
+        assert!(
+            !uses_external_plugins(&with_instrument("vst3:not-installed"), &catalog),
+            "本机没有的插件只是占位 → 不等"
+        );
+        assert!(
+            !uses_external_plugins(&with_instrument("vst3:cool-synth"), &[]),
+            "目录还没扫出来（空目录）→ 不等：这一轮它只会是占位"
         );
     }
 
@@ -241,6 +321,8 @@ mod tests {
                     duration: 1.0,
                     velocity: 100,
                     volume: 127,
+                    offset: 0.0,
+                    legato: false,
                 },
             },
             Actor::Human,
@@ -249,7 +331,7 @@ mod tests {
 
         let handles = Arc::new(Mutex::new(HashMap::new()));
         let registry = build_registry(&catalog, &project, Arc::clone(&handles));
-        let options = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5 };
+        let options = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5, settle_seconds: 0.0 };
         let buffer = render(&project, &registry, &options);
 
         assert!(

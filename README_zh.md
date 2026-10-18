@@ -87,6 +87,7 @@ Install this Skill: https://github.com/heshengtao/ai-daw
 - **内置效果器** —— 动态、均衡与时间类效果，随手加到任意轨道
 - **母带链** —— 响度归一、真峰值限幅、立体声宽度
 - **内置合成器** —— 振荡器、包络、滤波，配实时示波器
+- **导出** —— 无损 WAV 或 LAME 编码的 MP3，采样率与比特率自己挑
 
 <p align="center">
   <img src="./assets/screenshots/03-mix.png" width="100%" alt="调音台：总输出与各轨道的通道条，含推子、声像与静音 / 独奏">

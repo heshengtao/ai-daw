@@ -73,7 +73,7 @@ fn schedule() -> ScheduledEvents {
             id: ClipId(1),
             start: 0.0,
             length: 4.0,
-            notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127 }],
+            notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false }],
             audio: None,
         }],
         mixer: Default::default(),

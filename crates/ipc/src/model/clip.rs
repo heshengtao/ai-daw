@@ -28,12 +28,29 @@ pub struct Note {
     /// 单音音量（0..=127，127 = 不衰减）。旧工程文件缺这个字段时按 127 读入。
     #[serde(default = "default_note_volume")]
     pub volume: u8,
+    /// **起始偏移**（拍；正 = 延后发声）。缺省 0 = 与 `start` 同时发声。
+    ///
+    /// 记谱位置（`start`，网格上的那一格）与演奏位置分开：扫弦就是给同一 `start` 的一组音符
+    /// 写递增偏移（下扫 = 低音先响），「自由网格」下的手感微调也用它。**不参与网格吸附**，
+    /// 量化也只动 `start`。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub offset: f64,
+    /// **连奏**：NoteOff 延到同音高的下一个音起点（同片段内），没有下一个就按原时值。
+    ///
+    /// 指弹 / 单音线条里很常用：重复同一个音高时不该在音与音之间留一道缝（采样器会听成断音）。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub legato: bool,
 }
 
 /// 旧工程文件（以及手写的 JSON）可能没有 `volume` 字段——按「不衰减」读入，
 /// 这样老工程的听感完全不变。
 fn default_note_volume() -> u8 {
     Note::MAX_VOLUME
+}
+
+/// 是否为 `false`（`legato` 缺省）——为假时不写进 JSON。
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl Note {
@@ -43,13 +60,18 @@ impl Note {
     pub const MAX_DURATION_BEATS: f64 = 256.0;
     /// 起点上界（拍）：约 250000 小节，仅用于挡住非有限/荒谬输入。
     pub const MAX_START_BEATS: f64 = 1_000_000.0;
+    /// 起始偏移的上界（拍，正负对称）。
+    ///
+    /// 4 拍（4/4 的一整小节）远超任何扫弦与手感微调的需要，只用来挡住非有限/荒谬输入；
+    /// 非有限值回落到 0，别把 NaN 带进播放。
+    pub const MAX_OFFSET_BEATS: f64 = 4.0;
     /// 音量的上界（= 不衰减）。
     pub const MAX_VOLUME: u8 = 127;
 
     /// 归一化：音高/力度/音量夹到 MIDI 0..=127，起点非负且有上界，时长落在合法区间。
     ///
     /// 手写工程、旧文件、AI 代理都可能送来越界值；所有写入路径都必须经过这里。
-    /// `id` 原样保留——它是**定位依据**，不能被「修正」。
+    /// `id` 原样保留——它是**定位依据**，不能被「修正」。`legato` 是布尔，没有可夹的东西。
     pub fn normalize(note: Note) -> Note {
         Note {
             id: note.id,
@@ -60,6 +82,9 @@ impl Note {
             duration: clamp_range(note.duration, Self::MIN_DURATION_BEATS, Self::MAX_DURATION_BEATS),
             velocity: note.velocity.min(127),
             volume: note.volume.min(Self::MAX_VOLUME),
+            // 偏移同样允许为负（提前一点起音也是演奏姿态），只夹上下界。
+            offset: clamp_signed_beats(note.offset, Self::MAX_OFFSET_BEATS),
+            legato: note.legato,
         }
     }
 
@@ -214,6 +239,12 @@ pub struct NotePatch {
     pub velocity: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume: Option<u8>,
+    /// 新的起始偏移（拍）。扫弦 / 手感微调用它；`Some(0.0)` = 回到「同时发声」。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<f64>,
+    /// 新的连奏开关。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legato: Option<bool>,
 }
 
 impl NotePatch {
@@ -226,6 +257,8 @@ impl NotePatch {
             duration: self.duration.unwrap_or(note.duration),
             velocity: self.velocity.unwrap_or(note.velocity),
             volume: self.volume.unwrap_or(note.volume),
+            offset: self.offset.unwrap_or(note.offset),
+            legato: self.legato.unwrap_or(note.legato),
         }
     }
 }
@@ -265,6 +298,27 @@ pub enum VelocityShape {
     Ramp { from: u8, to: u8 },
     /// 相对缩放（1.0 = 不变，0.5 = 减半，1.5 = 放大一半）。
     Scale(f64),
+}
+
+/// 扫弦方向（`strum_notes`）：同一位置上的一组音符谁先响。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrumDirection {
+    /// 下扫：低音先响（吉他上最常用）。
+    Down,
+    /// 上扫：高音先响。
+    Up,
+}
+
+impl StrumDirection {
+    /// 解析字符串（MCP / CLI 传的是字面量）。
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "down" | "d" | "下扫" => Some(StrumDirection::Down),
+            "up" | "u" | "上扫" => Some(StrumDirection::Up),
+            _ => None,
+        }
+    }
 }
 
 /// 音域约束的处理方式（`fit_notes_to_range`）。
@@ -376,7 +430,7 @@ mod tests {
 
     #[test]
     fn note_normalization_clamps_every_field() {
-        let n = Note::normalize(Note { id: 0, pitch: 200, start: -3.0, duration: 0.0, velocity: 250, volume: 250 });
+        let n = Note::normalize(Note { id: 0, pitch: 200, start: -3.0, duration: 0.0, velocity: 250, volume: 250, offset: 0.0, legato: false });
         assert_eq!(n.pitch, 127);
         // 起点是**相对片段起点**的拍，允许为负（收起时被裁掉的音符要留着）。
         assert_eq!(n.start, -3.0);
@@ -387,10 +441,35 @@ mod tests {
 
     #[test]
     fn note_normalization_rejects_non_finite() {
-        let n = Note::normalize(Note { id: 0, pitch: 60, start: f64::NAN, duration: f64::INFINITY, velocity: 100, volume: 127 });
+        let n = Note::normalize(Note { id: 0, pitch: 60, start: f64::NAN, duration: f64::INFINITY, velocity: 100, volume: 127, offset: 0.0, legato: false });
         // 非有限的起点回落到 0；非有限的时长回落到最短时长（而不是让它永远挂着）。
         assert_eq!(n.start, 0.0);
         assert_eq!(n.duration, Note::MIN_DURATION_BEATS);
+    }
+
+    /// `offset` 夹到 ±4 拍、非有限值回落 0；`legato` 原样保留。
+    #[test]
+    fn note_normalization_clamps_the_offset() {
+        let base = Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false };
+        assert_eq!(Note::normalize(Note { offset: 99.0, ..base }).offset, Note::MAX_OFFSET_BEATS);
+        assert_eq!(Note::normalize(Note { offset: -99.0, ..base }).offset, -Note::MAX_OFFSET_BEATS);
+        assert_eq!(Note::normalize(Note { offset: f64::NAN, ..base }).offset, 0.0);
+        assert!(Note::normalize(Note { legato: true, ..base }).legato);
+    }
+
+    /// 扫弦 / 连奏要能往返；缺省的 0 / false 则**不写进 JSON**（旧工程形状逐字不变）。
+    #[test]
+    fn offset_and_legato_round_trip_and_stay_optional() {
+        let json = r#"{"pitch":60,"start":0.0,"duration":1.0,"velocity":100}"#;
+        let n: Note = serde_json::from_str(json).unwrap();
+        assert_eq!((n.offset, n.legato), (0.0, false), "旧工程缺字段时按「同时发声、不连奏」读入");
+
+        let plain = serde_json::to_string(&n).unwrap();
+        assert!(!plain.contains("offset") && !plain.contains("legato"), "缺省值不该进 JSON：{plain}");
+
+        let strummed = Note { offset: 0.0625, legato: true, ..n };
+        let back: Note = serde_json::from_str(&serde_json::to_string(&strummed).unwrap()).unwrap();
+        assert_eq!(back, strummed);
     }
 
     #[test]
@@ -433,7 +512,7 @@ mod tests {
             id: ClipId(2),
             start: -3.0,
             length: 0.0,
-            notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 }],
+            notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }],
             audio: Some(AudioSource {
                 path: "/tmp/kick.wav".into(),
                 offset_frames: 0,

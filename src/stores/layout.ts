@@ -74,6 +74,40 @@ interface Persisted {
   automationHeight: number;
   /** 钢琴卷帘下方的控制器（力度 / 音量）泳道是否打开。 */
   showControllerLane: boolean;
+  /** 钢琴卷帘的网格细分（吸附步长 + 是否画细分线）。 */
+  noteGrid: NoteGrid;
+}
+
+/**
+ * 钢琴卷帘的网格细分。
+ *
+ * 与编排视图的 `timeline.snap`（全局 1/16）**无关**：编排视图拖片段、标尺、自动化曲线照旧用
+ * 全局吸附，这里是编辑视图自己的偏好，改它不会影响别处的吸附手感。
+ */
+export type NoteGrid = "1/4" | "1/8" | "1/16" | "1/12" | "1/24" | "1/32" | "free";
+
+/** 网格选项（顺序即下拉里的顺序：从粗到细，最后是自由）。 */
+export const NOTE_GRIDS: NoteGrid[] = ["1/4", "1/8", "1/16", "1/12", "1/24", "1/32", "free"];
+
+/**
+ * 网格在一「拍」（拍号里的那一拍，4/4 即四分音符）里的等分数：`1/16` → 4 等分。
+ *
+ * 三分 / 六分（三连音）不是 2 的幂，所以直接记等分数，而不是「几分之几」。
+ * `free` = 不吸附。
+ */
+const GRID_DIVISIONS: Record<Exclude<NoteGrid, "free">, number> = {
+  "1/4": 1,
+  "1/8": 2,
+  "1/16": 4,
+  "1/12": 3,
+  "1/24": 6,
+  "1/32": 8,
+};
+
+/** 该网格在某「拍」长度下的一步（拍）；自由模式返回 `null`。 */
+export function gridStepFor(grid: NoteGrid, meterBeat: number): number | null {
+  if (grid === "free") return null;
+  return meterBeat / GRID_DIVISIONS[grid];
 }
 
 function load(): Partial<Persisted> {
@@ -128,6 +162,10 @@ export const useLayoutStore = defineStore("layout", () => {
   const showAutomation = ref(saved.showAutomation ?? true);
   const automationHeight = ref(clampAutomationHeight(saved.automationHeight ?? 150));
   const showControllerLane = ref(saved.showControllerLane ?? true);
+  // 默认 1/16：与编排视图的吸附一致，也是旋律/伴奏最常用的细分。
+  const noteGrid = ref<NoteGrid>(
+    NOTE_GRIDS.includes(saved.noteGrid as NoteGrid) ? (saved.noteGrid as NoteGrid) : "1/16",
+  );
   const devDrawer = ref(false);
 
   /** 当前提示文案（自动消失）。 */
@@ -147,6 +185,7 @@ export const useLayoutStore = defineStore("layout", () => {
       showAutomation,
       automationHeight,
       showControllerLane,
+      noteGrid,
     ],
     () => {
       localStorage.setItem(
@@ -163,6 +202,7 @@ export const useLayoutStore = defineStore("layout", () => {
           showAutomation: showAutomation.value,
           automationHeight: automationHeight.value,
           showControllerLane: showControllerLane.value,
+          noteGrid: noteGrid.value,
         } satisfies Persisted),
       );
     },
@@ -280,6 +320,7 @@ export const useLayoutStore = defineStore("layout", () => {
     showAutomation,
     automationHeight,
     showControllerLane,
+    noteGrid,
     setTool,
     resizeLane,
     resizeAutomation,

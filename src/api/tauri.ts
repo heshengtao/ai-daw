@@ -31,6 +31,7 @@ import type {
   HarmonyReport,
   HistoryDepths,
   HistoryState,
+  ExportProgress,
   ImportProgress,
   InputDeviceInfo,
   ManagerInstallRequest,
@@ -75,6 +76,8 @@ export const EVENT_MANAGER = "engine://manager";
 export const EVENT_MODEL = "engine://model";
 /** 音频导入解码进度广播通道名，与后端 `state::EVENT_IMPORT` 保持一致。 */
 export const EVENT_IMPORT = "engine://import";
+/** 音频导出（渲染 + 编码）进度广播通道名，与后端 `state::EVENT_EXPORT` 保持一致。 */
+export const EVENT_EXPORT = "engine://export";
 /** 写歌智能体事件广播通道名，与后端 `agent::EVENT_AGENT` 保持一致。 */
 export const EVENT_AGENT = "engine://agent";
 
@@ -324,6 +327,18 @@ export function quantizeNotes(
 ): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.quantizeNotes(track, clip, grid, strength, range));
   return invoke<Project>("quantize_notes", { track, clip, grid, strength, range: range ?? null });
+}
+
+/** 扫弦：把**起点相同**的音符按音高依次错开（`stepMs = 0` = 回到同时发声）。 */
+export function strumNotes(
+  track: number,
+  clip: number,
+  stepMs: number,
+  direction: "down" | "up" = "down",
+  range?: NoteRange,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.strumNotes(track, clip));
+  return invoke<Project>("strum_notes", { track, clip, stepMs, direction, range: range ?? null });
 }
 
 /** Swing：把指定子拍的第二个往后推。 */
@@ -634,10 +649,22 @@ export async function renderPreview(sampleRate = 44100): Promise<Blob> {
   return new Blob([bytes], { type: "audio/wav" });
 }
 
-/** 将当前工程导出为 WAV 文件，返回写入路径。 */
-export function exportWav(path: string, sampleRate = 44100): Promise<string> {
-  if (mockEnabled()) return Promise.resolve(mockApi.exportWav(path));
-  return invoke<string>("export_wav", { path, sampleRate });
+/** 导出格式：与后端 `ExportFormat` 一一对应。 */
+export type ExportFormat = "wav" | "mp3";
+
+/**
+ * 将当前工程导出为音频文件，返回写入路径。
+ *
+ * `format` 决定编码器（WAV = 16-bit PCM 无损；MP3 = LAME，有损）；`bitrateKbps` 只对 MP3 有意义。
+ */
+export function exportAudio(
+  path: string,
+  format: ExportFormat,
+  sampleRate = 44100,
+  bitrateKbps?: number,
+): Promise<string> {
+  if (mockEnabled()) return Promise.resolve(mockApi.exportAudio(path));
+  return invoke<string>("export_audio", { path, sampleRate, format, bitrateKbps });
 }
 
 /** 离线分析当前工程：响度 / 频谱 / 峰值（AI 的「听感」入口）。 */
@@ -822,6 +849,12 @@ export function clipBounds(track: number, clip: number): Promise<ClipBounds> {
 export function onImportEvent(handler: (p: ImportProgress) => void): Promise<UnlistenFn> {
   if (mockEnabled()) return Promise.resolve(() => {});
   return listen<ImportProgress>(EVENT_IMPORT, (event) => handler(event.payload));
+}
+
+/** 订阅音频导出进度（返回取消订阅函数）。 */
+export function onExportEvent(handler: (p: ExportProgress) => void): Promise<UnlistenFn> {
+  if (mockEnabled()) return Promise.resolve(() => {});
+  return listen<ExportProgress>(EVENT_EXPORT, (event) => handler(event.payload));
 }
 
 // ---------------------------------------------------------------------------

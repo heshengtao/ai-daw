@@ -5,14 +5,18 @@
  * 面板开关按钮固定放在那里，展开/收起时鼠标不用移动。
  */
 import TopBar from "./TopBar.vue";
-import ImportProgressBar from "./ImportProgressBar.vue";
+import TopProgressBar from "./TopProgressBar.vue";
 import BottomBar from "./BottomBar.vue";
 import WindowControls from "./WindowControls.vue";
 import DevDrawer from "./DevDrawer.vue";
 import ToolDock from "./ToolDock.vue";
 import { isLinux, isTauri, isWindows } from "@/utils/platform";
 
-defineProps<{ aiActive: boolean }>();
+defineProps<{
+  aiActive: boolean;
+  /** 顶边进度条的状态：由 `App.vue` 决定现在该显示哪个长任务（导入 / 导出）。 */
+  jobBar: { active: boolean; pct: number | null; label: string };
+}>();
 const emit = defineEmits<{
   (e: "import"): void;
   (e: "importAudio"): void;
@@ -48,8 +52,8 @@ const showWindowControls = isTauri() && (isWindows() || isLinux());
           @shortcuts="emit('shortcuts')"
         />
 
-        <!-- 导入进度条：绝对定位贴住顶栏下边缘，不占布局 -->
-        <ImportProgressBar />
+        <!-- 长任务进度条（导入 / 导出共用）：绝对定位贴住顶栏下边缘，不占布局 -->
+        <TopProgressBar v-bind="jobBar" />
 
         <div class="app-row">
           <main class="app-main">

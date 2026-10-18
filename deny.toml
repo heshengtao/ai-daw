@@ -22,3 +22,20 @@ allow = [
 ]
 # 低于该置信度的许可证判定（如文件头兜底）视为不确定 → 报错，逼人显式确认。
 confidence-threshold = 0.8
+
+# ---- 许可证例外（只对列出的 crate 生效） ----
+#
+# MP3 导出（`crates/engine/src/mp3.rs`）用 `mp3lame-encoder`，它封装的是**原封不动**的
+# LAME 3.100（LGPL-3.0）。评估结论：只作为未修改的第三方库参与链接——本项目既不分发它的
+# 源码改动，也没有把它并进本项目的源文件，声明写在 `NOTICE`；「不改动它」正是 LGPL 允许
+# 这样用的前提。
+#
+# 例外**只覆盖这两个 crate**：其它依赖再引入 LGPL 依旧会在 `cargo deny check licenses` 报错，
+# 所以护栏还在，只是多了这一处显式签字。要换掉 / 升级 LAME，改这里即可。
+[[licenses.exceptions]]
+crate = "mp3lame-encoder"
+allow = ["LGPL-3.0"]
+
+[[licenses.exceptions]]
+crate = "mp3lame-sys"
+allow = ["LGPL-3.0"]

@@ -10,7 +10,9 @@
 //! 约束（全部在 [`clamp_into_clip`] 里实现）：起点不得早于片段起点、时值必须为正、
 //! 变换后不得越出片段范围。被夹住的音符数量会返回给调用方（`clamped`）。
 
-use crate::model::{Clip, ClipId, Note, NoteEdit, NotePatch, NoteRange, Track, VelocityShape};
+use crate::model::{
+    Clip, ClipId, Note, NoteEdit, NotePatch, NoteRange, StrumDirection, Track, VelocityShape,
+};
 
 /// 一次变换的结果。
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -166,6 +168,58 @@ pub fn quantize(clip: &Clip, grid: f64, strength: f64, range: Option<NoteRange>)
             (i, Note { start, ..*n })
         }),
     )
+}
+
+/// 扫弦：把**起点相同**的音符按音高依次错开（下扫 = 低音先响）。
+///
+/// 写的是每个音符的 [`Note::offset`]（拍），**不动记谱位置**——所以量化、对齐、复制粘贴都不会
+/// 把扫弦搞乱，而「同位置的几个音」这件事也一眼看得出来。
+///
+/// `step_ms` 是相邻两音的毫秒差；毫秒按**该处生效的速度**（`map`）换算成拍，`step_ms = 0` 就是
+/// 清掉扫弦、回到同时发声。同音高的音按片段内顺序排——顺序确定，所以同一个工程每次结果逐字相同。
+pub fn strum(
+    clip: &Clip,
+    step_ms: f64,
+    direction: StrumDirection,
+    map: &crate::tempo::TempoMap,
+    range: Option<NoteRange>,
+) -> Transform {
+    let step_ms = if step_ms.is_finite() { step_ms.max(0.0) } else { 0.0 };
+
+    // 1) 按起点分组（1e-6 拍以内算同一格；保持片段内顺序，结果才确定）。
+    let key = |note: &Note| (note.start * 1e6).round() as i64;
+    let mut groups: Vec<(i64, Vec<usize>)> = Vec::new();
+    for (index, note) in clip.notes.iter().enumerate() {
+        if !in_range(note, range) {
+            continue;
+        }
+        let bucket = key(note);
+        match groups.iter_mut().find(|(k, _)| *k == bucket) {
+            Some((_, indices)) => indices.push(index),
+            None => groups.push((bucket, vec![index])),
+        }
+    }
+
+    // 2) 每组按音高排序（同音高按片段内顺序），写递增偏移。
+    let mut updates = Vec::new();
+    for (_, indices) in groups {
+        let first = &clip.notes[indices[0]];
+        // 毫秒 → 拍：用该组起点处生效的 BPM。
+        let beats = (step_ms / 1000.0) * (map.tempo_at(clip.start + first.start) / 60.0);
+        let mut ordered = indices.clone();
+        ordered.sort_by(|a, b| {
+            let (left, right) = (&clip.notes[*a], &clip.notes[*b]);
+            match direction {
+                StrumDirection::Down => left.pitch.cmp(&right.pitch).then(a.cmp(b)),
+                StrumDirection::Up => right.pitch.cmp(&left.pitch).then(a.cmp(b)),
+            }
+        });
+        for (rank, index) in ordered.iter().enumerate() {
+            let note = clip.notes[*index];
+            updates.push((*index, Note { offset: rank as f64 * beats, ..note }));
+        }
+    }
+    collect(clip, updates)
 }
 
 /// Swing：把每对子拍里的**第二个**往后推。
@@ -571,7 +625,7 @@ mod tests {
     }
 
     fn note(id: u64, pitch: u8, start: f64) -> Note {
-        Note { id, pitch, start, duration: 0.25, velocity: 100, volume: 127 }
+        Note { id, pitch, start, duration: 0.25, velocity: 100, volume: 127, offset: 0.0, legato: false }
     }
 
     fn track(notes: Vec<Note>) -> Track {
@@ -618,6 +672,57 @@ mod tests {
         assert!((t.edits[0].note.start - 0.625).abs() < 1e-9);
     }
 
+    /// 下扫：同一位置的一组音按音高依次错开，毫秒按该处速度换算成拍。
+    ///
+    /// 120 BPM 下 30 ms = 0.03 × 120/60 = 0.06 拍。
+    #[test]
+    fn strum_offsets_a_chord_in_pitch_order() {
+        let c = clip(vec![note(1, 67, 0.0), note(2, 60, 0.0), note(3, 64, 0.0)], 4.0);
+        let map = crate::tempo::TempoMap::from_transport(&crate::model::Transport::default());
+        let t = strum(&c, 30.0, StrumDirection::Down, &map, None);
+
+        // 没出现在 edits 里的音符 = 偏移本来就是 0（排序第一的那个不会产生改写）。
+        let offset_of = |pitch: u8| {
+            t.edits.iter().find(|e| e.note.pitch == pitch).map(|e| e.note.offset).unwrap_or(0.0)
+        };
+        assert!((offset_of(60) - 0.0).abs() < 1e-9, "低音先响");
+        assert!((offset_of(64) - 0.06).abs() < 1e-9);
+        assert!((offset_of(67) - 0.12).abs() < 1e-9);
+        // 记谱位置一个都没动。
+        assert!(t.edits.iter().all(|e| e.note.start == 0.0));
+    }
+
+    #[test]
+    fn strum_up_reverses_the_order_and_zero_clears_it() {
+        let c = clip(vec![note(1, 60, 0.0), note(2, 67, 0.0)], 4.0);
+        let map = crate::tempo::TempoMap::from_transport(&crate::model::Transport::default());
+
+        let up = strum(&c, 30.0, StrumDirection::Up, &map, None);
+        let offset_of = |t: &Transform, pitch: u8| {
+            t.edits.iter().find(|e| e.note.pitch == pitch).map(|e| e.note.offset).unwrap_or(0.0)
+        };
+        assert!((offset_of(&up, 67) - 0.0).abs() < 1e-9, "上扫：高音先响");
+        assert!((offset_of(&up, 60) - 0.06).abs() < 1e-9);
+
+        // 已经扫开的一组，再传 0 ms → 偏移全部归零（回到同时发声）。
+        let mut swept = clip(vec![note(1, 60, 0.0), note(2, 67, 0.0)], 4.0);
+        swept.notes[0].offset = 0.0;
+        swept.notes[1].offset = 0.06;
+        let cleared = strum(&swept, 0.0, StrumDirection::Down, &map, None);
+        assert_eq!(cleared.edits.len(), 1, "只有偏移非零的那个需要写回：{:?}", cleared.edits);
+        assert_eq!(cleared.edits[0].note.offset, 0.0);
+    }
+
+    /// 不同起点各自成组：一组的扫弦不影响另一组，也不会把两组合成一组。
+    #[test]
+    fn strum_groups_by_start() {
+        let c = clip(vec![note(1, 60, 0.0), note(2, 64, 0.0), note(3, 62, 2.0)], 4.0);
+        let map = crate::tempo::TempoMap::from_transport(&crate::model::Transport::default());
+        let t = strum(&c, 30.0, StrumDirection::Down, &map, None);
+        // 单独一个音的那一组：排名 0 → 偏移 0（原本就是 0，因此不写回）。
+        assert!(t.edits.iter().all(|e| e.note.pitch != 62), "孤音不该被写回：{:?}", t.edits);
+    }
+
     #[test]
     fn humanize_is_deterministic_and_bounded() {
         let c = clip(vec![note(1, 60, 1.0), note(2, 62, 2.0)], 8.0);
@@ -652,7 +757,7 @@ mod tests {
     #[test]
     fn transforms_clamp_into_the_clip() {
         // 起点 3.9 的 1 拍音符在 4 拍的片段里放不下：时值会被夹到 0.1。
-        let c = clip(vec![Note { id: 1, pitch: 60, start: 3.9, duration: 1.0, velocity: 100, volume: 127 }], 4.0);
+        let c = clip(vec![Note { id: 1, pitch: 60, start: 3.9, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }], 4.0);
         let t = quantize(&c, 1.0, 1.0, None);
         assert_eq!(t.clamped, 1);
         let n = t.edits[0].note;
@@ -698,9 +803,9 @@ mod tests {
     #[test]
     fn stats_report_range_density_and_overlap() {
         let t = track(vec![
-            Note { id: 1, pitch: 60, start: 0.0, duration: 2.0, velocity: 100, volume: 127 },
-            Note { id: 2, pitch: 60, start: 1.0, duration: 1.0, velocity: 80, volume: 127 },
-            Note { id: 3, pitch: 72, start: 5.0, duration: 1.0, velocity: 90, volume: 127 },
+            Note { id: 1, pitch: 60, start: 0.0, duration: 2.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
+            Note { id: 2, pitch: 60, start: 1.0, duration: 1.0, velocity: 80, volume: 127, offset: 0.0, legato: false },
+            Note { id: 3, pitch: 72, start: 5.0, duration: 1.0, velocity: 90, volume: 127, offset: 0.0, legato: false },
         ]);
         let s = note_stats(&t, None, 4.0);
         assert_eq!(s.note_count, 3);
@@ -715,8 +820,8 @@ mod tests {
 
     #[test]
     fn overlap_flags_two_tracks_in_the_same_register() {
-        let a = track(vec![Note { id: 1, pitch: 60, start: 0.0, duration: 8.0, velocity: 100, volume: 127 }]);
-        let mut b = track(vec![Note { id: 1, pitch: 64, start: 0.0, duration: 8.0, velocity: 100, volume: 127 }]);
+        let a = track(vec![Note { id: 1, pitch: 60, start: 0.0, duration: 8.0, velocity: 100, volume: 127, offset: 0.0, legato: false }]);
+        let mut b = track(vec![Note { id: 1, pitch: 64, start: 0.0, duration: 8.0, velocity: 100, volume: 127, offset: 0.0, legato: false }]);
         b.id = TrackId(2);
         b.meta = Some(TrackMeta { role: Some("chords".into()), pitch_range: None });
         let o = track_overlap(&a, &b, None);

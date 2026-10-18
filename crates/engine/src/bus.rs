@@ -48,15 +48,7 @@ impl Engine {
     /// 批量工具才能用 id 稳定定位。
     pub fn from_project(mut project: Project) -> Self {
         project.ensure_note_ids();
-        let next_track_id = project.tracks.iter().map(|t| t.id.0).max().unwrap_or(0) + 1;
-        let next_clip_id = project
-            .tracks
-            .iter()
-            .flat_map(|t| t.clips.iter())
-            .map(|c| c.id.0)
-            .max()
-            .unwrap_or(0)
-            + 1;
+        let (next_track_id, next_clip_id) = next_ids(&project);
         let initial_name = project.name.clone();
         let initial = project.clone();
         let saved = project.clone();
@@ -279,6 +271,9 @@ impl Engine {
     }
 
     /// 重做上一次被撤销的命令；成功返回 true。
+    ///
+    /// 与撤销一样要**重算 id 计数器**：重做是把事件重新应用一遍，可能把高位 id 的对象装回来
+    /// （典型例子：重做「新建工程」，其事件自带 1..5）——不重算就可能与它们撞号。
     pub fn redo(&mut self) -> bool {
         match self.redo.pop() {
             None => false,
@@ -287,6 +282,7 @@ impl Engine {
                     apply(&mut self.project, ev);
                 }
                 self.history.push(batch);
+                self.resync_id_counters();
                 true
             }
         }
@@ -298,6 +294,10 @@ impl Engine {
     }
 
     /// 从初始工程重放当前历史，重建撤销后的状态。
+    ///
+    /// 重放结束后**必须重算 id 计数器**：计数器不在撤销历史里，而回放可能把高位 id 的轨道
+    /// 从初始工程里「请回来」。不重算的话计数器会停在低位，下一次分配就可能与已有 id 撞号——
+    /// 两条轨道同 id 时 `project.track(id)` 只认第一条，之后的编辑会打错轨道。
     fn replay_history(&mut self) {
         self.project = self.initial.clone();
         for batch in self.history.clone() {
@@ -305,6 +305,14 @@ impl Engine {
                 apply(&mut self.project, &ev);
             }
         }
+        self.resync_id_counters();
+    }
+
+    /// 按当前工程重算两个 id 计数器（现有最大 id + 1）。
+    fn resync_id_counters(&mut self) {
+        let (tracks, clips) = next_ids(&self.project);
+        self.next_track_id = tracks;
+        self.next_clip_id = clips;
     }
 
     fn translate(&mut self, command: &Command, actor: &Actor) -> Vec<Event> {
@@ -787,6 +795,12 @@ impl Engine {
                 let transform = crate::compose::quantize(existing, *grid, *strength, *range);
                 changed_notes(actor, *track, *clip, transform)
             }
+            Command::StrumNotes { track, clip, step_ms, direction, range } => {
+                let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
+                let map = crate::tempo::TempoMap::from_transport(&self.project.transport);
+                let transform = crate::compose::strum(existing, *step_ms, *direction, &map, *range);
+                changed_notes(actor, *track, *clip, transform)
+            }
             Command::ApplySwing { track, clip, subdivision, ratio, strength, range } => {
                 let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
                 let transform =
@@ -921,9 +935,15 @@ impl Engine {
                 pitch_range: *pitch_range,
             }],
 
-            Command::NewProject { name, track_names } => {                // 先清空，再铺默认分轨：每一步都走正常事件，因此整条链天然可撤销。
+            Command::NewProject { name, track_names } => {
+                // 先清空，再铺默认分轨：每一步都走正常事件，因此整条链天然可撤销。
                 let mut events =
                     vec![Event::ProjectCleared { actor: actor.clone(), name: name.clone() }];
+                // **id 计数器归零**：工程整体清空了，重新从 1 开始才是用户（和 AI）期待的编号——
+                // 不重置的话「新建工程」会接着用旧计数器，新工程的第一条轨道可能叫「93 号轨」，
+                // 让人以为 AI 操作错了轨道（其实它就是第一行）。
+                self.next_track_id = 1;
+                self.next_clip_id = 1;
                 for (index, starter) in crate::STARTER_TRACKS.iter().enumerate() {
                     let id = self.alloc_track_id();
                     // 名字由界面按语言给出（数量对不上就退回模板默认名，绝不 panic）。
@@ -948,6 +968,24 @@ impl Engine {
             }
         }
     }
+}
+
+/// 两个 id 计数器的下一个可用值：轨道 / 片段现有 id 的最大值 + 1（没有任何轨道时是 1）。
+///
+/// 「不重用已发出的 id」是这里的核心约定：外部（界面选区、AI 代理）拿着的 id 在后续编辑里
+/// 必须仍然指得准，所以分配只会往上走。**例外是 `Command::NewProject`**——那个命令把整个工程
+/// 清空了，重新从 1 开始不会与任何既有对象冲突。
+fn next_ids(project: &Project) -> (u64, u64) {
+    let tracks = project.tracks.iter().map(|t| t.id.0).max().unwrap_or(0) + 1;
+    let clips = project
+        .tracks
+        .iter()
+        .flat_map(|t| t.clips.iter())
+        .map(|c| c.id.0)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    (tracks, clips)
 }
 
 /// 给一批音符发号：保留调用方给出的非零且不重复的 id，其余按「当前最大值 + 1」顺延。
@@ -1071,7 +1109,7 @@ mod tests {
             Command::AddNote {
                 track,
                 clip,
-                note: Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 },
+                note: Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
             },
             Actor::Human,
         );
@@ -1162,6 +1200,84 @@ mod tests {
         assert_eq!(e.project().name, "demo");
     }
 
+    /// **新建工程必须把 id 计数器归零。**
+    ///
+    /// 不归零的话「新建工程」会接着用旧计数器：真实会话里反复新建 + 加轨之后计数器能到 90+，
+    /// 于是新工程的**第一条轨道 id = 93**——AI 从 `get_project` 读到 `93`，用户却以为「93 号轨」
+    /// 是另一条轨道，看起来就像 AI 操作错了轨道。
+    #[test]
+    fn new_project_restarts_ids_from_one() {
+        let mut e = Engine::new("demo");
+        // 把计数器顶到高位（只加轨、不新建，计数器就一路涨上去）。
+        for i in 0..90 {
+            e.execute(Command::AddTrack { name: format!("t{i}") }, Actor::Human);
+        }
+
+        let events = e.execute(Command::NewProject { name: "fresh".into(), track_names: None }, Actor::Human);
+        let ids: Vec<u64> = events
+            .iter()
+            .filter_map(|ev| match ev {
+                Event::TrackAdded { id, .. } => Some(id.0),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            (1..=crate::STARTER_TRACKS.len() as u64).collect::<Vec<_>>(),
+            "新工程的默认分轨必须从 1 号开始编号"
+        );
+
+        // 之后新加的轨道接着往下排。
+        let events = e.execute(Command::AddTrack { name: "after".into() }, Actor::Human);
+        assert_eq!(track_added_id(&events), crate::STARTER_TRACKS.len() as u64 + 1);
+    }
+
+    /// 撤销 / 重做之后，id 计数器必须按**回放结果**重算。
+    ///
+    /// 计数器不在撤销历史里：新建工程把它压到 1，撤销回旧工程后若还停在低位，下一次分配就会
+    /// 与「刚回来的」轨道撞同一个 id——两条轨道同 id 时 `project.track(id)` 只认第一条。
+    #[test]
+    fn undo_never_lets_a_new_id_collide_with_a_restored_track() {
+        let mut e = Engine::new("demo");
+        e.execute(Command::AddTrack { name: "A".into() }, Actor::Human); // id 1
+        e.execute(Command::AddTrack { name: "B".into() }, Actor::Human); // id 2
+        e.execute(Command::NewProject { name: "gone".into(), track_names: None }, Actor::Human);
+        assert_eq!(e.project().tracks[0].id.0, 1, "新工程从 1 重新编号");
+
+        // 撤销回「A + B」，再加一条：不能与 1 / 2 撞号。
+        assert!(e.undo());
+        let events = e.execute(Command::AddTrack { name: "C".into() }, Actor::Human);
+        let id = track_added_id(&events);
+        let ids: Vec<u64> = e.project().tracks.iter().map(|t| t.id.0).collect();
+        assert_eq!(id, 3, "A(1)、B(2) 都在，下一个应当是 3（实际 {ids:?}）");
+        assert_eq!(ids.len(), 3);
+    }
+
+    /// 重做回「新建工程」之后，id 计数同样要按回放结果重算（1..5 → 下一条是 6）。
+    #[test]
+    fn redo_recomputes_ids_from_the_replayed_project() {
+        let mut e = Engine::new("demo");
+        e.execute(Command::AddTrack { name: "A".into() }, Actor::Human); // id 1
+        e.execute(Command::AddTrack { name: "B".into() }, Actor::Human); // id 2
+        e.execute(Command::NewProject { name: "gone".into(), track_names: None }, Actor::Human);
+
+        assert!(e.undo());
+        assert!(e.redo());
+        let events = e.execute(Command::AddTrack { name: "D".into() }, Actor::Human);
+        assert_eq!(track_added_id(&events), crate::STARTER_TRACKS.len() as u64 + 1);
+    }
+
+    /// 从事件里取新轨道的 id（测试用）。
+    fn track_added_id(events: &[Event]) -> u64 {
+        events
+            .iter()
+            .find_map(|ev| match ev {
+                Event::TrackAdded { id, .. } => Some(id.0),
+                _ => None,
+            })
+            .expect("应当有 TrackAdded")
+    }
+
     #[test]
     fn redo_reapplies_the_undone_command() {
         let mut e = Engine::new("demo");
@@ -1237,7 +1353,7 @@ mod tests {
                 id: ClipId(3),
                 start: 0.0,
                 length: 4.0,
-                notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 }],
+                notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -1411,7 +1527,7 @@ mod tests {
         let (track, clip) = seeded(&mut e);
         for pitch in [60u8, 64] {
             e.execute(
-                Command::AddNote { track, clip, note: crate::model::Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127 } },
+                Command::AddNote { track, clip, note: crate::model::Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false } },
                 Actor::Human,
             );
         }
@@ -1420,7 +1536,7 @@ mod tests {
                 track,
                 clip,
                 index: 0,
-                note: crate::model::Note { id: 0, pitch: 62, start: 1.5, duration: 0.5, velocity: 80, volume: 127 },
+                note: crate::model::Note { id: 0, pitch: 62, start: 1.5, duration: 0.5, velocity: 80, volume: 127, offset: 0.0, legato: false },
             },
             Actor::Human,
         );
@@ -1461,7 +1577,7 @@ mod tests {
         let (track, clip) = seeded(&mut e);
         for pitch in [60u8, 64, 67, 71] {
             e.execute(
-                Command::AddNote { track, clip, note: Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127 } },
+                Command::AddNote { track, clip, note: Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false } },
                 Actor::Human,
             );
         }
@@ -1470,7 +1586,7 @@ mod tests {
         let entries: Vec<NoteEdit> = (0..4)
             .map(|i| NoteEdit {
                 index: i,
-                note: Note { id: 0, pitch: 60 + i as u8, start: 0.0, duration: 1.0, velocity: 40, volume: 127 },
+                note: Note { id: 0, pitch: 60 + i as u8, start: 0.0, duration: 1.0, velocity: 40, volume: 127, offset: 0.0, legato: false },
             })
             .collect();
         e.execute(Command::SetNotes { track, clip, entries }, Actor::Human);
@@ -1500,7 +1616,7 @@ mod tests {
         assert!(e.execute(Command::RemoveClips { items: vec![] }, Actor::Human).is_empty());
         assert_eq!(e.undo_depth(), depth);
         // 仅仅是构造一下类型，确保它在公开 API 上可用。
-        let _ = NoteEdit { index: 0, note: crate::model::Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127 } };
+        let _ = NoteEdit { index: 0, note: crate::model::Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false } };
     }
 
     #[test]
@@ -1740,7 +1856,7 @@ mod tests {
         let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
         let ev = e.execute(Command::AddClip { track, start: 0.0, length: 4.0 }, Actor::Human);
         let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
-        let note = |pitch, start, duration| crate::model::Note { id: 0, pitch, start, duration, velocity: 100, volume: 127 };
+        let note = |pitch, start, duration| crate::model::Note { id: 0, pitch, start, duration, velocity: 100, volume: 127, offset: 0.0, legato: false };
         e.execute(Command::AddNote { track, clip, note: note(60, 0.0, 1.0) }, Actor::Human);
         e.execute(Command::AddNote { track, clip, note: note(62, 1.0, 2.0) }, Actor::Human); // 跨过第 2 拍
         e.execute(Command::AddNote { track, clip, note: note(64, 3.0, 0.5) }, Actor::Human);
@@ -1816,8 +1932,8 @@ mod tests {
         let mut e = Engine::new("demo");
         let depth = e.undo_depth();
         let notes = vec![
-            Note { id: 0, pitch: 60, start: 0.0, duration: 0.5, velocity: 100, volume: 127 },
-            Note { id: 0, pitch: 64, start: 0.5, duration: 0.5, velocity: 90, volume: 127 },
+            Note { id: 0, pitch: 60, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false },
+            Note { id: 0, pitch: 64, start: 0.5, duration: 0.5, velocity: 90, volume: 127, offset: 0.0, legato: false },
         ];
         e.execute(
             Command::AddNoteTrack { name: "MIDI".into(), start: 2.0, length: 4.0, notes, at: None },

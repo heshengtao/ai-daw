@@ -15,11 +15,11 @@ fn main() {
     let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
     for (i, pitch) in [60u8, 64, 67, 72, 67, 64].into_iter().enumerate() {
         e.execute(
-            Command::AddNote { track, clip, note: Note { id: 0, pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100, volume: 127 } },
+            Command::AddNote { track, clip, note: Note { id: 0, pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false } },
             Actor::Human,
         );
     }
-    let buffer = render(e.project(), &PluginRegistry::with_builtins(), &RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5 });
+    let buffer = render(e.project(), &PluginRegistry::with_builtins(), &RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5, settle_seconds: 0.0 });
     write_wav("demo.wav", &buffer, 44_100).unwrap();
     println!("wrote demo.wav ({} frames)", buffer.frames());
 }

@@ -632,6 +632,8 @@ mod tests {
                         duration,
                         velocity: 100,
                         volume: 127,
+                        offset: 0.0,
+                        legato: false,
                     })
                     .collect(),
                 audio: None,

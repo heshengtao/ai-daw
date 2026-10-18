@@ -48,6 +48,8 @@ fn project(effects: Vec<PluginInstance>) -> Project {
                 duration: 0.25,
                 velocity: 110,
                 volume: 127,
+                offset: 0.0,
+                legato: false,
             }],
             audio: None,
         }],
@@ -61,7 +63,7 @@ fn project(effects: Vec<PluginInstance>) -> Project {
 /// 渲染成单声道（左右取平均）：多给 2 s 尾音，才看得到效果器的尾巴。
 fn render_mono(effects: Vec<PluginInstance>) -> Vec<f32> {
     let registry = PluginRegistry::with_builtins();
-    let options = RenderOptions { sample_rate: SR, tail_seconds: 2.0 };
+    let options = RenderOptions { sample_rate: SR, tail_seconds: 2.0, settle_seconds: 0.0 };
     let buffer = render(&project(effects), &registry, &options);
     let data = buffer.data();
     data.chunks(2).map(|c| (c[0] + c[1]) * 0.5).collect()

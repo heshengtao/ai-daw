@@ -87,6 +87,7 @@ Balance the song, then make it loud. Channel strips give you gain, pan, sends, b
 - **Built-in effects** — dynamics, EQ, and time-based effects, ready to drop on any track
 - **Mastering chain** — loudness normalization, true-peak limiting, and stereo width
 - **Built-in synth** — oscillators, envelopes, and a filter with a live oscilloscope
+- **Export** — lossless WAV or LAME-encoded MP3, with the sample rate and bitrate you pick
 
 <p align="center">
   <img src="./assets/screenshots/03-mix.png" width="100%" alt="The mixer: channel strips for the master bus and each track, with faders, pan and mute/solo">

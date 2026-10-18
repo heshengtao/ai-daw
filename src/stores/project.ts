@@ -10,7 +10,7 @@ import * as api from "@/api/tauri";
 import { useI18n } from "@/i18n";
 import { useParamBindingsStore } from "@/stores/paramBindings";
 import { useSettingsStore } from "@/stores/settings";
-import type { AutomationPoint, ClipPlacement, ClipRef, HistoryState, Keyframe, MixerState, Note, NoteEdit, Project, Send } from "@/api/types";
+import type { AutomationPoint, ClipPlacement, ClipRef, HistoryState, Keyframe, MixerState, Note, NoteEdit, NotePatch, Project, Send } from "@/api/types";
 import { meterAt, meterBeatAt, tempoAt } from "@/utils/tempo";
 
 /**
@@ -268,11 +268,36 @@ export const useProjectStore = defineStore("project", () => {
     return edit(() => api.setNotes(track, clip, entries));
   }
 
+  /**
+   * 按 **id** 批量改写音符，只给要改的字段（`NotePatch`）。
+   *
+   * 与 [`setNotes`] 的差别是定位方式：`setNotes` 用片段内下标，这里用稳定 id——检查器里的
+   * 「扫弦 / 连奏」要一次改写整组音符，按 id 定位才不会因为数组顺序变化打偏。
+   */
+  function updateNotes(track: number, clip: number, patches: NotePatch[]): Promise<void> {
+    if (patches.length === 0) return Promise.resolve();
+    return edit(() => api.updateNotes(track, clip, patches));
+  }
+
+  /**
+   * 扫弦：把**起点相同**的音符按音高依次错开（`stepMs = 0` = 回到同时发声）。
+   *
+   * 手势在引擎里算（`Command::StrumNotes`）：界面与 AI 侧（`strum_notes` 工具）共用同一套
+   * 「毫秒 → 拍」换算，不会两边各写一份、各错一处。
+   */
+  function strumNotes(
+    track: number,
+    clip: number,
+    stepMs: number,
+    direction: "down" | "up" = "down",
+  ): Promise<void> {
+    return edit(() => api.strumNotes(track, clip, stepMs, direction));
+  }
+
   /** 删除音符（按片段内索引）。 */
   function removeNote(track: number, clip: number, index: number): Promise<void> {
     return edit(() => api.removeNote(track, clip, index));
   }
-
   /** 批量删除音符（框选后删除）。 */
   function removeNotes(track: number, clip: number, indices: number[]): Promise<void> {
     if (indices.length === 0) return Promise.resolve();
@@ -511,6 +536,8 @@ export const useProjectStore = defineStore("project", () => {
     addNote,
     setNote,
     setNotes,
+    updateNotes,
+    strumNotes,
     removeNote,
     removeNotes,
     removeClips,

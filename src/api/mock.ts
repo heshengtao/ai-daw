@@ -1332,6 +1332,37 @@ export const mockApi = {
       transform(c, range, (n) => ({ ...n, start: n.start + (Math.round(n.start / g) * g - n.start) * s }));
     }),
 
+  strumNotes: (
+    trackId: number,
+    clipId: number,
+    stepMs = 30,
+    direction: "down" | "up" = "down",
+  ): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c) return;
+      // 与引擎同一套语义：按**起点**分组、组内按音高排序、写递增偏移。毫秒→拍用基础速度
+      // （mock 不处理速度关键点，预览里够用）。
+      const beats = (Math.max(0, stepMs) / 1000) * ((state.transport.tempo || 120) / 60);
+      const groups = new Map<number, number[]>();
+      c.notes.forEach((n, i) => {
+        const key = Math.round(n.start * 1e6);
+        const bucket = groups.get(key);
+        if (bucket) bucket.push(i);
+        else groups.set(key, [i]);
+      });
+      for (const indices of groups.values()) {
+        const ordered = [...indices].sort((a, b) => {
+          const left = c.notes[a]!.pitch;
+          const right = c.notes[b]!.pitch;
+          return direction === "down" ? left - right || a - b : right - left || a - b;
+        });
+        ordered.forEach((index, rank) => {
+          c.notes[index] = { ...c.notes[index]!, offset: rank * beats };
+        });
+      }
+    }),
+
   applySwing: (
     trackId: number,
     clipId: number,
@@ -1695,7 +1726,7 @@ export const mockApi = {
   },
 
   renderPreview: (): Blob => new Blob([new Uint8Array(0)], { type: "audio/wav" }),
-  exportWav: (path: string): string => path,
+  exportAudio: (path: string): string => path,
 
   // 浏览器预览没有真实渲染：给一份「静音」报告，字段与后端对齐（非有限值 → null）。
   analyzeProject: (): AnalysisReport => ({

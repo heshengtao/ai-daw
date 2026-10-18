@@ -13,7 +13,7 @@ fn agent() -> Actor {
 }
 
 fn note(pitch: u8, start: f64, duration: f64, velocity: u8) -> Note {
-    Note { id: 0, pitch, start, duration, velocity, volume: 127 }
+    Note { id: 0, pitch, start, duration, velocity, volume: 127, offset: 0.0, legato: false }
 }
 
 /// 一条轨道 + 一个 16 拍的 MIDI 片段。
@@ -124,6 +124,8 @@ fn update_and_remove_by_stable_id() {
                 duration: None,
                 velocity: Some(40),
                 volume: None,
+                offset: None,
+                legato: None,
             }],
         },
         agent(),

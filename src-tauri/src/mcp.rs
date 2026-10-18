@@ -30,8 +30,10 @@ use tokio_util::sync::CancellationToken;
 use ai_daw_engine::command::Command;
 use ai_daw_engine::event::{Actor, Event};
 use ai_daw_engine::model::{
-    AudioSource, Clip, ClipId, FitMode, Note, NotePatch, NoteRange, Project, TrackId, VelocityShape,
+    AudioSource, Clip, ClipId, FitMode, Note, NotePatch, NoteRange, Project, StrumDirection,
+    TrackId, VelocityShape,
 };
+use ai_daw_engine::tempo::TempoMap;
 use ai_daw_engine::transport::TransportCommand;
 use ai_daw_plugin_api::PluginKind;
 
@@ -212,6 +214,19 @@ pub(crate) struct NoteArgs {
     duration: f64,
     /// 力度（0..=127）。
     velocity: u8,
+    /// 单音音量（0..=127，127 = 不衰减）；缺省 127。
+    #[serde(default)]
+    volume: Option<u8>,
+    /// 起始偏移（拍，正 = 延后发声）；缺省 0 = 与 `start` 同时发声。
+    #[serde(default)]
+    offset: Option<f64>,
+    /// 连奏（NoteOff 延到同音高的下一个音）；缺省 false。
+    #[serde(default)]
+    legato: Option<bool>,
+    /// 放置吸附：`off`（缺省，原样写入）/ `bar` / `1/4` / `1/8` / `1/16` / `1/12` / `1/24` / `1/32`。
+    /// **只吸起点**。
+    #[serde(default)]
+    snap: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -392,6 +407,12 @@ pub(crate) struct NoteInput {
     /// 单音音量（0..=127，127 = 不衰减）；缺省 127。
     #[serde(default = "default_note_volume")]
     volume: u8,
+    /// 起始偏移（拍；正 = 延后发声）。扫弦与手感微调用它；缺省 0 = 与 `start` 同时发声。
+    #[serde(default)]
+    offset: f64,
+    /// 连奏：NoteOff 延到同音高的下一个音起点；缺省 false。
+    #[serde(default)]
+    legato: bool,
 }
 
 fn default_velocity() -> u8 {
@@ -411,6 +432,8 @@ impl NoteInput {
             duration: self.duration,
             velocity: self.velocity,
             volume: self.volume,
+            offset: self.offset,
+            legato: self.legato,
         }
     }
 }
@@ -438,6 +461,10 @@ pub(crate) struct NotesArgs {
     clip: u64,
     /// 音符列表（一次事务写入，可整体撤销）。
     notes: Vec<NoteInput>,
+    /// 放置吸附：`off`（缺省，原样写入）/ `bar` / `1/4` / `1/8` / `1/16` / `1/12` / `1/24` / `1/32`。
+    /// **只吸起点**（时值按调用方给的算，偏移是演奏姿态、不动）。
+    #[serde(default)]
+    snap: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -470,6 +497,12 @@ pub(crate) struct NotePatchInput {
     /// 新音量（0..=127）。
     #[serde(default)]
     volume: Option<u8>,
+    /// 新起始偏移（拍，正 = 延后发声；0 = 与记谱位置同时发声）。扫弦与手感微调用它。
+    #[serde(default)]
+    offset: Option<f64>,
+    /// 新连奏开关（true = NoteOff 延到同音高的下一个音）。
+    #[serde(default)]
+    legato: Option<bool>,
 }
 
 impl NotePatchInput {
@@ -481,6 +514,8 @@ impl NotePatchInput {
             duration: self.duration,
             velocity: self.velocity,
             volume: self.volume,
+            offset: self.offset,
+            legato: self.legato,
         }
     }
 }
@@ -563,6 +598,22 @@ pub(crate) struct SwingArgs {
     #[serde(default)]
     strength: Option<f64>,
     /// 只处理这个范围内的音符。
+    #[serde(default)]
+    range: Option<RangeArg>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct StrumArgs {
+    /// 轨道 id。
+    track: u64,
+    /// 片段 id。
+    clip: u64,
+    /// 相邻两音的毫秒差（30 ≈ 常见扫弦；0 = 清掉扫弦、回到同时发声）。
+    step_ms: f64,
+    /// `"down"`（下扫，低音先响，缺省）或 `"up"`。
+    #[serde(default)]
+    direction: Option<String>,
+    /// 只处理这个范围内的音符（缺省 = 整个片段）。
     #[serde(default)]
     range: Option<RangeArg>,
 }
@@ -1213,9 +1264,42 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     }
 
     pub(crate) fn add_note(app: &AppHandle, actor: &Actor, args: NoteArgs) -> Result<String, String> {
-        let note = Note { id: 0, pitch: args.pitch, start: args.start, duration: args.duration, velocity: args.velocity, volume: Note::MAX_VOLUME };
-        commands::run_agent_as(app, actor.clone(), Command::AddNote { track: TrackId(args.track), clip: ClipId(args.clip), note });
-        Ok(format!("已在片段 {} 加入音高 {} @ {} 拍", args.clip, args.pitch, args.start))
+        let before = note_count(app, args.track, args.clip)?;
+        let project = app.state::<AppState>().engine.lock().unwrap().project().clone();
+        let clip = clip_of(&project, args.track, args.clip)?;
+        let mut note = Note {
+            id: 0,
+            pitch: args.pitch,
+            start: args.start,
+            duration: args.duration,
+            velocity: args.velocity,
+            volume: args.volume.unwrap_or(Note::MAX_VOLUME),
+            offset: args.offset.unwrap_or(0.0),
+            legato: args.legato.unwrap_or(false),
+        };
+        snap_note_starts(&project, &clip, std::slice::from_mut(&mut note), args.snap.as_deref())?;
+        let snapped = args.snap.is_some() && (note.start - args.start).abs() > 1e-9;
+
+        let (project, _) = commands::run_agent_as(
+            app,
+            actor.clone(),
+            Command::AddNote { track: TrackId(args.track), clip: ClipId(args.clip), note },
+        );
+        let summary = clip_summary(&project, args.track, args.clip)?;
+        let added = summary
+            .get("note_count")
+            .and_then(serde_json::Value::as_u64)
+            .map(|count| count.saturating_sub(before as u64))
+            .unwrap_or(1);
+        Ok(format!(
+            "已在轨道 {} 的片段 {} 加入 {} 个音符（音高 {} @ {} 拍{}）",
+            args.track,
+            args.clip,
+            added,
+            note.pitch,
+            note.start,
+            if snapped { "，已按 snap 吸附" } else { "" }
+        ))
     }
 
     // ---- 批量音符 ----
@@ -1252,6 +1336,60 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             .and_then(|t| t.clips.iter().find(|c| c.id == ClipId(clip)))
             .ok_or_else(|| format!("轨道 {track} 上没有片段 {clip}"))?;
         Ok(c.notes.len())
+    }
+
+    /// 取片段（不存在时报错，信息里带轨道 / 片段 id，便于代理自我纠正）。
+    fn clip_of(project: &Project, track: u64, clip: u64) -> Result<Clip, String> {
+        project
+            .track(TrackId(track))
+            .and_then(|t| t.clips.iter().find(|c| c.id == ClipId(clip)))
+            .cloned()
+            .ok_or_else(|| format!("轨道 {track} 上没有片段 {clip}"))
+    }
+
+    /// 把 `snap` 字面量换算成步长（拍）；`None` = 不吸附。
+    ///
+    /// 口径与卷帘里的网格一致：「一拍」指拍号里那一拍（4/4 = 四分音符、6/8 = 八分音符），
+    /// `1/12` / `1/24` 是三分（三连音），`bar` = 一小节。
+    pub(crate) fn grid_step_beats(spec: &str, meter_beat: f64, bar_beats: f64) -> Result<Option<f64>, String> {
+        Ok(match spec.trim().to_ascii_lowercase().as_str() {
+            "" | "off" | "none" | "free" => None,
+            "bar" | "measure" => Some(bar_beats),
+            "1/4" | "quarter" => Some(meter_beat),
+            "1/8" | "eighth" => Some(meter_beat / 2.0),
+            "1/16" | "sixteenth" => Some(meter_beat / 4.0),
+            "1/32" => Some(meter_beat / 8.0),
+            "1/12" | "triplet" => Some(meter_beat / 3.0),
+            "1/24" => Some(meter_beat / 6.0),
+            other => {
+                return Err(format!(
+                    "snap 不认识「{other}」：可用 off / bar / 1/4 / 1/8 / 1/16 / 1/12 / 1/24 / 1/32"
+                ))
+            }
+        })
+    }
+
+    /// 按 `snap` 吸附一批音符的**起点**（`duration` 原样，偏移也不动）。
+    ///
+    /// 步长按**每个音符自己所在位置**的拍号取——关键点可以在片段中途换拍号，与卷帘里的
+    /// `stepAt(beat)` 是同一套口径。
+    fn snap_note_starts(
+        project: &Project,
+        clip: &Clip,
+        notes: &mut [Note],
+        snap: Option<&str>,
+    ) -> Result<(), String> {
+        let Some(spec) = snap else { return Ok(()) };
+        let map = TempoMap::from_transport(&project.transport);
+        for note in notes.iter_mut() {
+            let (num, den) = map.meter_at(clip.start + note.start);
+            let meter_beat = 4.0 / f64::from(den.max(1));
+            let bar_beats = f64::from(num.max(1)) * meter_beat;
+            if let Some(step) = grid_step_beats(spec, meter_beat, bar_beats)? {
+                note.start = (note.start / step).round() * step;
+            }
+        }
+        Ok(())
     }
 
     /// 这次命令真正改了几个音符（从事件里数，和撤销记录一一对应）。
@@ -1295,7 +1433,12 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             return Err(format!("一次最多写 {MAX_BATCH_NOTES} 个音符（收到 {}）", args.notes.len()));
         }
         let before = note_count(app, args.track, args.clip)?;
-        let notes: Vec<Note> = args.notes.iter().map(|n| n.to_note()).collect();
+        let mut notes: Vec<Note> = args.notes.iter().map(|n| n.to_note()).collect();
+        // 放置吸附：只吸**起点**（时值由调用方按网格算好；偏移是演奏姿态，更不该被吸）。
+        let project_before = app.state::<AppState>().engine.lock().unwrap().project().clone();
+        let clip_before = clip_of(&project_before, args.track, args.clip)?;
+        snap_note_starts(&project_before, &clip_before, &mut notes, args.snap.as_deref())?;
+
         let (project, _) = commands::run_agent_as(
             app,
             actor.clone(),
@@ -1460,6 +1603,34 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
                 subdivision: args.subdivision.unwrap_or(0.5),
                 ratio,
                 strength: args.strength.unwrap_or(1.0),
+                range: args.range.map(|r| r.to_range()),
+            },
+        );
+        batch_result(app, args.track, args.clip, &events, serde_json::json!({}))
+    }
+
+    /// 扫弦：把**起点相同**的音符按音高依次错开（`step_ms = 0` 清掉扫弦）。
+    pub(crate) fn strum_notes(
+        app: &AppHandle,
+        actor: &Actor,
+        args: StrumArgs,
+    ) -> Result<String, String> {
+        if !(args.step_ms.is_finite() && args.step_ms >= 0.0) {
+            return Err(format!("step_ms 必须是非负数（毫秒），收到 {}", args.step_ms));
+        }
+        let direction = match args.direction.as_deref().map(str::trim) {
+            None | Some("") => StrumDirection::Down,
+            Some(value) => StrumDirection::parse(value)
+                .ok_or_else(|| format!("direction 只认 \"down\" / \"up\"，收到 {value}"))?,
+        };
+        let (_, events) = commands::run_agent_as(
+            app,
+            actor.clone(),
+            Command::StrumNotes {
+                track: TrackId(args.track),
+                clip: ClipId(args.clip),
+                step_ms: args.step_ms,
+                direction,
                 range: args.range.map(|r| r.to_range()),
             },
         );
@@ -2071,7 +2242,8 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("remove_notes", "按**稳定 id** 批量删除音符。", NoteIdsArgs),
             tool_def!("transpose_notes", "批量移调（半音），可限定拍范围。", TransposeArgs),
             tool_def!("set_note_velocity", "批量设置力度：`value` 固定值 / `from`+`to` 渐变 / `scale` 相对缩放（三选一），可限定拍范围。", VelocityArgs),
-            tool_def!("quantize_notes", "量化：把音符起点吸到 `grid`（拍）的整数倍，`strength` 0..1 控制吸附程度。", QuantizeArgs),
+            tool_def!("quantize_notes", "量化：把音符起点吸到 `grid`（拍）的整数倍，`strength` 0..1 控制吸附程度。三连音用 `grid = 1/3`。", QuantizeArgs),
+            tool_def!("strum_notes", "扫弦：把**起点相同**的一组音按音高依次错开（下扫 = 低音先响），写出每个音符的起始偏移。`step_ms` 是相邻两音的毫秒差（0 = 回到同时发声）；间隔按当前速度换算，改速度不会毁掉扫弦。", StrumArgs),
             tool_def!("apply_swing", "Swing：把每对子拍里的第二个往后推。8 分 swing = subdivision 0.5 + ratio 0.66；ratio 0.5 是平直。", SwingArgs),
             tool_def!("humanize_notes", "人性化：给位置与力度加确定性抖动（同一 seed 结果一致，撤销重做不漂移）。", HumanizeArgs),
             tool_def!("fit_notes_to_range", "把音符收进目标音域：`fold` 做八度折返（不改音级），`report` 只统计不改动。音域缺省取轨道的 pitch_range 元数据。", FitArgs),
@@ -2152,6 +2324,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             "transpose_notes" => transpose_notes(app, actor, parse_args(args)?),
             "set_note_velocity" => set_note_velocity(app, actor, parse_args(args)?),
             "quantize_notes" => quantize_notes(app, actor, parse_args(args)?),
+            "strum_notes" => strum_notes(app, actor, parse_args(args)?),
             "apply_swing" => apply_swing(app, actor, parse_args(args)?),
             "humanize_notes" => humanize_notes(app, actor, parse_args(args)?),
             "fit_notes_to_range" => fit_notes_to_range(app, actor, parse_args(args)?),
@@ -2365,6 +2538,11 @@ impl DawMcpServer {
     #[tool(description = "量化：把音符起点吸到 `grid`（拍）的整数倍，`strength` 0..1 控制吸附程度。")]
     fn quantize_notes(&self, Parameters(args): Parameters<QuantizeArgs>) -> Result<String, ErrorData> {
         tools::quantize_notes(&self.app, &self.actor(), args).map_err(fail)
+    }
+
+    #[tool(description = "扫弦：把**起点相同**的一组音按音高依次错开（下扫 = 低音先响），写出每个音符的起始偏移。`step_ms` 是相邻两音的毫秒差（0 = 回到同时发声）。")]
+    fn strum_notes(&self, Parameters(args): Parameters<StrumArgs>) -> Result<String, ErrorData> {
+        tools::strum_notes(&self.app, &self.actor(), args).map_err(fail)
     }
 
     #[tool(description = "Swing：把每对子拍里的第二个往后推。8 分 swing = subdivision 0.5 + ratio 0.66；ratio 0.5 是平直。")]
@@ -2868,6 +3046,7 @@ mod tests {
             "transpose_notes",
             "set_note_velocity",
             "quantize_notes",
+            "strum_notes",
             "apply_swing",
             "humanize_notes",
             "fit_notes_to_range",
@@ -2912,6 +3091,25 @@ mod tests {
             assert!(defs.contains(&name), "tools::definitions 缺少 {name}");
         }
         assert_eq!(defs.len(), expected.len(), "tools::definitions 数量对不上：{defs:?}");
+    }
+
+    /// `snap` 字面量 → 步长（拍）：口径必须与卷帘里的网格一致（「一拍」= 拍号里那一拍）。
+    #[test]
+    fn snap_literals_match_the_piano_roll_grid() {
+        // 4/4：一拍 = 1 拍；16 分 = 0.25，三连音（12 分）= 1/3，32 分 = 0.125，一小节 = 4。
+        assert_eq!(tools::grid_step_beats("off", 1.0, 4.0).unwrap(), None);
+        assert_eq!(tools::grid_step_beats("", 1.0, 4.0).unwrap(), None);
+        assert_eq!(tools::grid_step_beats("bar", 1.0, 4.0).unwrap(), Some(4.0));
+        assert_eq!(tools::grid_step_beats("1/4", 1.0, 4.0).unwrap(), Some(1.0));
+        assert_eq!(tools::grid_step_beats("1/16", 1.0, 4.0).unwrap(), Some(0.25));
+        assert_eq!(tools::grid_step_beats("1/32", 1.0, 4.0).unwrap(), Some(0.125));
+        let triplet = tools::grid_step_beats("1/12", 1.0, 4.0).unwrap().unwrap();
+        assert!((triplet - 1.0 / 3.0).abs() < 1e-12, "12 分音符 = 一拍的三分之一");
+        // 6/8：一拍（八分音符）= 0.5 拍，一小节 = 3 拍。
+        assert_eq!(tools::grid_step_beats("1/8", 0.5, 3.0).unwrap(), Some(0.25));
+        assert_eq!(tools::grid_step_beats("bar", 0.5, 3.0).unwrap(), Some(3.0));
+        // 不认识的字面量必须报错（而不是悄悄不吸附）。
+        assert!(tools::grid_step_beats("1/5", 1.0, 4.0).is_err());
     }
 
     /// 每个工具都必须有描述，参数 schema 必须是一张 object 表——这是模型能不能正确调用它的下限。

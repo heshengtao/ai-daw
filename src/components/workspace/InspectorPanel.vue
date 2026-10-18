@@ -24,6 +24,7 @@ import { useParamBrowserStore } from "@/stores/paramBrowser";
 import { usePluginInterface } from "@/composables/usePluginInterface";
 import { canonicalPluginId } from "@/data/plugins";
 import { useI18n } from "@/i18n";
+import type { Note, NotePatch } from "@/api/types";
 
 const store = useProjectStore();
 const selection = useSelectionStore();
@@ -241,6 +242,103 @@ async function commitPitch(value: number): Promise<void> {
     layout.notify(i18n.t("error.setClipRate", { error: String(err) }));
   }
 }
+
+// ---- 音符（有音符选中时才出现）：扫弦偏移 / 连奏 ----
+//
+// 「起始偏移」是**每个音符**的字段（拍）：同一个 `start` 上的一组音，给它们写递增偏移就是扫弦
+// （下扫 = 低音先响）。缺省 0 = 同时发声。卷帘里音符仍画在**记谱位置**上（网格保持诚实），
+// 偏移只在这里读数与调整——这样量化、对齐、复制粘贴都不会把扫弦搞乱。
+
+/** 起点归组用的键：1e-6 拍以内的起点算「同一格」（浮点上的同一格不该被拆成两组）。 */
+function startKey(startBeat: number): string {
+  return (Math.round(startBeat * 1e6) / 1e6).toFixed(6);
+}
+
+/** 选中的音符（只取拿得到稳定 id 的——改写按 id 定位）。 */
+const pickedNotes = computed(() => {
+  const c = selection.clip;
+  if (!c) return [];
+  const out: { index: number; id: number; note: Note }[] = [];
+  for (const index of selection.noteIndices) {
+    const note = c.notes[index];
+    if (note && typeof note.id === "number") out.push({ index, id: note.id, note });
+  }
+  return out;
+});
+
+/**
+ * 参与扫弦的音符：选中音符所在**起点**上的**全部**音符。
+ *
+ * 展开成整组是有意的——选和弦里任意一个音再点「应用」就该把整组扫开，而不是只动那一个。
+ */
+const strumGroup = computed(() => {
+  const c = selection.clip;
+  if (!c || pickedNotes.value.length === 0) return [];
+  const starts = new Set(pickedNotes.value.map((p) => startKey(c.start + p.note.start)));
+  const out: { id: number; note: Note; startBeat: number }[] = [];
+  for (const note of c.notes) {
+    if (typeof note.id !== "number") continue;
+    const startBeat = c.start + note.start;
+    if (starts.has(startKey(startBeat))) out.push({ id: note.id, note, startBeat });
+  }
+  return out;
+});
+
+/** 扫弦间隔（ms）：每根弦之间差多少毫秒。0 = 同时发声。 */
+const strumMs = ref(28);
+/** 扫弦方向：下扫 = 低音先响（吉他上最常用的那一种）。 */
+const strumDirection = ref("down");
+
+const strumDirections = computed(() => [
+  { id: "down", label: i18n.t("inspector.strumDown") },
+  { id: "up", label: i18n.t("inspector.strumUp") },
+]);
+
+/** 参与扫弦的音符当前偏移范围（读数）。 */
+const offsetRange = computed(() => {
+  const offsets = strumGroup.value.map((entry) => entry.note.offset ?? 0);
+  if (offsets.length === 0) return null;
+  return { min: Math.min(...offsets), max: Math.max(...offsets) };
+});
+
+/** 连奏状态：整组都已连奏 / 都没有 / 混合。 */
+const legatoState = computed<"on" | "off" | "mixed">(() => {
+  const values = pickedNotes.value.map((p) => !!p.note.legato);
+  if (values.length === 0) return "off";
+  if (values.every(Boolean)) return "on";
+  return values.some(Boolean) ? "mixed" : "off";
+});
+
+/**
+ * 应用扫弦：把**起点相同**的一组音按音高依次错开。
+ *
+ * 手势（分组、排序、毫秒→拍）在引擎里做（`Command::StrumNotes`），界面只给参数——
+ * 这样界面与 AI 侧的 `strum_notes` 工具永远是同一套语义。间隔填 0 就是清掉扫弦。
+ */
+async function applyStrum(): Promise<void> {
+  const c = selection.clip;
+  const t = track.value;
+  if (!c || !t || strumGroup.value.length === 0) return;
+  try {
+    await store.strumNotes(t.id, c.id, strumMs.value, strumDirection.value as "down" | "up");
+    layout.notify(i18n.t("inspector.strumApplied", { count: strumGroup.value.length }));
+  } catch (err) {
+    layout.notify(i18n.t("error.updateNotes", { error: String(err) }));
+  }
+}
+
+/** 把选中的音符整体设为 / 取消连奏。 */
+async function setLegato(on: boolean): Promise<void> {
+  const c = selection.clip;
+  const t = track.value;
+  if (!c || !t || pickedNotes.value.length === 0) return;
+  const patches: NotePatch[] = pickedNotes.value.map((entry) => ({ id: entry.id, legato: on }));
+  try {
+    await store.updateNotes(t.id, c.id, patches);
+  } catch (err) {
+    layout.notify(i18n.t("error.updateNotes", { error: String(err) }));
+  }
+}
 </script>
 
 <template>
@@ -360,6 +458,76 @@ async function commitPitch(value: number): Promise<void> {
               @select="addFx"
               @action="fxBrowserOpen = true"
             />
+          </div>
+        </div>
+      </section>
+
+      <!-- 音符：只在该片段里有音符被选中时出现 -->
+      <section v-if="pickedNotes.length > 0" class="group">
+        <div class="group-title">{{ i18n.t("inspector.note") }}</div>
+        <div class="card">
+          <div class="row">
+            <span class="row-label">{{ i18n.t("inspector.noteSelected") }}</span>
+            <span class="row-value">{{ pickedNotes.length }}</span>
+          </div>
+
+          <!-- 扫弦：同一起点的一组音按音高依次错开（间隔 0 = 同时发声） -->
+          <div class="row">
+            <span class="row-label">{{ i18n.t("inspector.strum") }}</span>
+            <NumberField
+              v-model="strumMs"
+              :sr-label="i18n.t('inspector.strum')"
+              :min="0"
+              :max="500"
+              :step="1"
+            />
+          </div>
+          <div class="row">
+            <span class="row-label">{{ i18n.t("inspector.strumDirection") }}</span>
+            <Md3Select
+              v-model="strumDirection"
+              :options="strumDirections"
+              :label="i18n.t('inspector.strumDirection')"
+            />
+          </div>
+          <div class="row">
+            <span class="row-value">
+              {{ i18n.t("inspector.strumScope", { count: strumGroup.length }) }}
+            </span>
+            <button class="open-editor small" @click="applyStrum">
+              {{ i18n.t("inspector.strumApply") }}
+            </button>
+          </div>
+          <p v-if="offsetRange" class="hint">
+            {{
+              i18n.t("inspector.offsetRange", {
+                min: offsetRange.min.toFixed(3),
+                max: offsetRange.max.toFixed(3),
+              })
+            }}
+          </p>
+
+          <!-- 连奏：NoteOff 延到同音高的下一个音（重复同一个音不断音） -->
+          <div class="row">
+            <span class="row-label">{{ i18n.t("inspector.legato") }}</span>
+            <div class="strip-buttons">
+              <button
+                class="pill"
+                :class="{ on: legatoState === 'on' }"
+                :aria-pressed="legatoState === 'on'"
+                @click="setLegato(true)"
+              >
+                {{ i18n.t("inspector.legatoOn") }}
+              </button>
+              <button
+                class="pill"
+                :class="{ on: legatoState === 'off' }"
+                :aria-pressed="legatoState === 'off'"
+                @click="setLegato(false)"
+              >
+                {{ i18n.t("inspector.legatoOff") }}
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -539,6 +707,30 @@ async function commitPitch(value: number): Promise<void> {
 }
 .mini.danger:hover:not(:disabled) {
   background-color: rgb(var(--md-error) / 0.12);
+}
+/* 二选一的文字药丸（连奏 开 / 关）：选中的那颗用主色实心。 */
+.pill {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--md-on-surface-variant));
+  font-size: 11px;
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+.pill:hover {
+  background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
+}
+.pill.on {
+  border-color: rgb(var(--md-primary));
+  background-color: rgb(var(--md-primary));
+  color: rgb(var(--md-on-primary));
+}
+.pill:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 1px;
 }
 .hint {
   margin: 0 8px;

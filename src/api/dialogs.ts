@@ -11,8 +11,12 @@ function projectFilter() {
   return [{ name: useI18n().t("dialog.projectFilter"), extensions: ["json"] }];
 }
 
-function wavFilter() {
-  return [{ name: useI18n().t("dialog.wavFilter"), extensions: ["wav"] }];
+/** 导出可选的音频格式（两个过滤器都给：用户在这次对话框里改扩展名就等于改格式）。 */
+function exportFilter() {
+  return [
+    { name: useI18n().t("dialog.wavFilter"), extensions: ["wav"] },
+    { name: useI18n().t("dialog.mp3Filter"), extensions: ["mp3"] },
+  ];
 }
 
 /** 可导入的音频格式（与 `crates/asset` 的解码能力一致）。 */
@@ -43,13 +47,16 @@ export async function pickProjectToSave(defaultPath: string): Promise<string | n
   return selected ?? null;
 }
 
-/** 选择 WAV 导出路径；取消返回 null。 */
-export async function pickWavToSave(defaultPath: string): Promise<string | null> {
+/**
+ * 选择音频导出路径；取消返回 null。
+ *
+ * WAV 与 MP3 两个过滤器都给出去，`defaultPath` 的扩展名决定对话框默认选中哪个。**返回值里的
+ * 扩展名才是最终格式**（用户可能在对话框里换了过滤器、也可能手打扩展名），调用方按它决定用
+ * 哪个编码器——所以「文件名写 .mp3」永远会得到 MP3。
+ */
+export async function pickAudioToSave(defaultPath: string): Promise<string | null> {
   if (!isTauri()) return `mock://${defaultPath}`;
-  const selected = await saveDialog({
-    defaultPath,
-    filters: wavFilter(),
-  });
+  const selected = await saveDialog({ defaultPath, filters: exportFilter() });
   return selected ?? null;
 }
 

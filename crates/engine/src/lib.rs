@@ -9,6 +9,7 @@ pub mod compose;
 pub mod event;
 pub mod harmony;
 pub mod model;
+pub mod mp3;
 pub mod player;
 pub mod registry;
 pub mod render;

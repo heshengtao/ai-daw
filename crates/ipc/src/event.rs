@@ -235,7 +235,7 @@ mod tests {
                 track: crate::model::TrackId(1),
                 clip: crate::model::ClipId(2),
                 index: 0,
-                note: crate::model::Note { id: 0, pitch: 64, start: 1.0, duration: 0.5, velocity: 90, volume: 127 },
+                note: crate::model::Note { id: 0, pitch: 64, start: 1.0, duration: 0.5, velocity: 90, volume: 127, offset: 0.0, legato: false },
             },
             Event::NoteRemoved { actor: Actor::Human, track: crate::model::TrackId(1), clip: crate::model::ClipId(2), index: 1 },
             Event::NotesChanged {
@@ -244,7 +244,7 @@ mod tests {
                 clip: crate::model::ClipId(2),
                 entries: vec![crate::model::NoteEdit {
                     index: 0,
-                    note: crate::model::Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 64, volume: 127 },
+                    note: crate::model::Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 64, volume: 127, offset: 0.0, legato: false },
                 }],
             },
             Event::NotesRemoved {

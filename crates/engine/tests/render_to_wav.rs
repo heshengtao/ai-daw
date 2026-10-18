@@ -19,7 +19,7 @@ fn demo() -> ai_daw_engine::model::Project {
             Command::AddNote {
                 track,
                 clip,
-                note: Note { id: 0, pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100, volume: 127 },
+                note: Note { id: 0, pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false },
             },
             Actor::Human,
         );
@@ -30,7 +30,7 @@ fn demo() -> ai_daw_engine::model::Project {
 #[test]
 fn renders_project_to_readable_wav() {
     let project = demo();
-    let opts = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5 };
+    let opts = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5, settle_seconds: 0.0 };
     let buffer = render(&project, &PluginRegistry::with_builtins(), &opts);
 
     let dir = tempfile::tempdir().unwrap();

@@ -334,6 +334,8 @@ fn run_job(
                 duration: (n.duration_sec * beats_per_second).max(Note::MIN_DURATION_BEATS),
                 velocity: n.velocity,
                 volume: Note::MAX_VOLUME,
+                offset: 0.0,
+                legato: false,
             })
             .collect();
         let count = notes.len();

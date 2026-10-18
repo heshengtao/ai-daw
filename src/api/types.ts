@@ -14,6 +14,15 @@ export interface Note {
   velocity: number;
   /** 单音音量（0..=127，127 = 不衰减）：纯增益微调，不改变音色。 */
   volume: number;
+  /**
+   * 起始偏移（拍，正 = 延后发声）：**记谱位置**（`start`）与实际发声位置分开。
+   *
+   * 扫弦就是给同一 `start` 的一组音符写递增偏移；「自由网格」下的手感微调也用它。
+   * 缺省 0 = 与 `start` 同时发声。
+   */
+  offset?: number;
+  /** 连奏：NoteOff 延到同音高的下一个音起点（同片段内）；缺省 false。 */
+  legato?: boolean;
 }
 
 /** 按 id 定位的音符改写项：只带要改的字段。 */
@@ -24,6 +33,9 @@ export interface NotePatch {
   duration?: number;
   velocity?: number;
   volume?: number;
+  /** 起始偏移（拍）；`0` = 回到「同时发声」。 */
+  offset?: number;
+  legato?: boolean;
 }
 
 /** 片段内拍范围（左闭右开）：批量变换只作用于起点落在其中的音符。 */
@@ -867,6 +879,24 @@ export interface ManagerProgress {
   /** 总字节（0 = 未知）。 */
   total: number;
   /** 失败原因（仅 error 有意义）。 */
+  message: string | null;
+}
+
+/**
+ * 一次音频导出的进度（与后端 `commands::ExportProgress` 一一对应）。
+ *
+ * 由 `engine://export` 事件推送；前端据此在**顶栏下边缘**画进度条（与导入共用同一条）。
+ */
+export interface ExportProgress {
+  /** 目标文件路径。 */
+  path: string;
+  /** 阶段：`preparing`（建插件实例 / 等外部插件装载）→ `rendering` → `encoding` → `done` / `error`。 */
+  phase: "preparing" | "rendering" | "encoding" | "done" | "error";
+  /** 本阶段已完成的工作量（渲染阶段 = 已渲染帧数）。 */
+  frames: number;
+  /** 本阶段的总量；未知时 `null`（画不确定态）。 */
+  total_frames: number | null;
+  /** 失败原因（只有 `error` 阶段带）。 */
   message: string | null;
 }
 

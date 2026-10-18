@@ -288,13 +288,30 @@ impl ScheduledEvents {
                 // （音频片段同理：`start_frame..end_frame` 已经是窗口。）
                 let box_end = clip.start + clip.length;
                 for note in &clip.notes {
+                    // 裁剪按**记谱位置**判定：`offset` 是演奏姿态（扫弦 / 微调），不该让一个
+                    // 明明写在方框里的音符因为偏移而「掉出方框」。
                     let on = clip.start + note.start;
                     if on < clip.start - 1e-9 || on >= box_end - 1e-9 {
                         continue;
                     }
-                    let off = (on + note.duration).min(box_end);
+                    // 实际发声位置 = 记谱位置 + 偏移。
+                    let onset = on + note.offset;
+                    // 连奏：NoteOff 推到「同音高的下一个音」实际发声处（没有下一个就按原时值）。
+                    // 判据用**发声位置**（含各自偏移），所以扫弦里同一个音之间也不会有缝。
+                    let next_same_pitch = clip
+                        .notes
+                        .iter()
+                        .filter(|other| other.pitch == note.pitch)
+                        .map(|other| clip.start + other.start + other.offset)
+                        .filter(|sounded| *sounded > onset + 1e-9)
+                        .fold(f64::INFINITY, f64::min);
+                    let off = if note.legato && next_same_pitch.is_finite() {
+                        next_same_pitch.min(box_end)
+                    } else {
+                        (onset + note.duration).min(box_end)
+                    };
                     events.push(ScheduledMidi {
-                        frame: to_frame(on),
+                        frame: to_frame(onset),
                         // 只送「演奏强度」。插件各自解释它（音色 / 振幅）——这是设计如此。
                         event: MidiEvent::NoteOn { note: note.pitch, velocity: note.velocity },
                     });
@@ -302,7 +319,7 @@ impl ScheduledEvents {
                     // 默认值 127（不衰减）不需要事件。
                     if note.volume != Note::MAX_VOLUME {
                         events.push(ScheduledMidi {
-                            frame: to_frame(on),
+                            frame: to_frame(onset),
                             event: MidiEvent::NoteVolume { note: note.pitch, value: note.volume },
                         });
                     }
@@ -411,7 +428,7 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 4.0,
-                notes: vec![Note { id: 0, pitch: 60, start: 1.0, duration: 1.0, velocity: 100, volume: 127 }],
+                notes: vec![Note { id: 0, pitch: 60, start: 1.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -446,6 +463,8 @@ mod tests {
             duration: 1.0,
             velocity: 100,
             volume: 127,
+            offset: 0.0,
+            legato: false,
         });
         // 第 1 拍那个音符拉长到第 6 拍 → 越过框尾，应截断在第 4 拍。
         p.tracks[0].clips[0].notes[0].duration = 5.0;
@@ -466,6 +485,76 @@ mod tests {
             .find(|e| matches!(e.event, MidiEvent::NoteOff { note: 60 }))
             .expect("应有 NoteOff");
         assert_eq!(off.frame, 96_000, "越过框尾的音符应截断在框尾");
+    }
+
+    /// `offset` 把**实际发声位置**推后，但不改记谱位置，也不影响方框裁剪判定。
+    #[test]
+    fn note_offset_shifts_the_onset_but_not_the_grid() {
+        let mut p = project_with_note();
+        // 120 BPM / 48 kHz → 1 拍 = 24000 帧；音符原样是 1.0..2.0 拍。
+        p.tracks[0].clips[0].notes[0].offset = 0.25;
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        let ev = &s.tracks[0].events;
+        let on = ev.iter().find(|e| matches!(e.event, MidiEvent::NoteOn { .. })).unwrap();
+        assert_eq!(on.frame, 30_000, "1.0 + 0.25 拍 = 30000 帧");
+        let off = ev.iter().find(|e| matches!(e.event, MidiEvent::NoteOff { .. })).unwrap();
+        assert_eq!(off.frame, 54_000, "时值仍是 1 拍：1.25 + 1.0 = 2.25 拍 = 54000 帧");
+    }
+
+    /// 连奏：NoteOff 延到**同音高**的下一个音发声处；没有下一个就按原时值。
+    #[test]
+    fn legato_holds_the_note_until_the_next_same_pitch() {
+        let mut p = project_with_note();
+        // A：1.0 拍起、0.5 拍长、连奏；B：同音高、2.5 拍起。
+        p.tracks[0].clips[0].notes[0].duration = 0.5;
+        p.tracks[0].clips[0].notes[0].legato = true;
+        p.tracks[0].clips[0].notes.push(Note {
+            id: 2,
+            pitch: 60,
+            start: 2.5,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+        });
+
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        let offs: Vec<(u64, u8)> = s.tracks[0]
+            .events
+            .iter()
+            .filter_map(|e| match e.event {
+                MidiEvent::NoteOff { note } => Some((e.frame, note)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            offs,
+            vec![(60_000, 60), (84_000, 60)],
+            "A 的 NoteOff 必须延到 B 的发声处（2.5 拍 = 60000 帧），而不是 1.5 拍"
+        );
+
+        // 只有异音高的下一个音时，连奏不生效（仍按原时值）。
+        let mut p2 = project_with_note();
+        p2.tracks[0].clips[0].notes[0].duration = 0.5;
+        p2.tracks[0].clips[0].notes[0].legato = true;
+        p2.tracks[0].clips[0].notes.push(Note {
+            id: 2,
+            pitch: 62,
+            start: 2.5,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+        });
+        let s2 = ScheduledEvents::from_project(&p2, 48_000.0);
+        let first_off = s2.tracks[0]
+            .events
+            .iter()
+            .find(|e| matches!(e.event, MidiEvent::NoteOff { note: 60 }))
+            .unwrap();
+        assert_eq!(first_off.frame, 36_000, "异音高不算「下一个」，时值照写");
     }
 
     #[test]
@@ -538,7 +627,7 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 4.0,
-                notes: vec![Note { id: 0, pitch: 60, start: 3.0, duration: 0.5, velocity: 100, volume: 127 }],
+                notes: vec![Note { id: 0, pitch: 60, start: 3.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false }],
                 audio: None,
             }],
             mixer: Default::default(),

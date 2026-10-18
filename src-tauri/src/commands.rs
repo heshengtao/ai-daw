@@ -9,11 +9,11 @@ use ai_daw_engine::command::Command;
 use ai_daw_engine::event::{Actor, Event};
 use ai_daw_engine::model::{
     AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, FitMode, HarmonyBar, Keyframe,
-    Note, NoteEdit, NotePatch, NoteRange, PitchRange, Project, Section, Send, TrackId, Transport,
-    VelocityShape,
+    Note, NoteEdit, NotePatch, NoteRange, PitchRange, Project, Section, Send, StrumDirection,
+    TrackId, Transport, VelocityShape,
 };
 use ai_daw_engine::registry::{PluginRegistry, PluginSlot};
-use ai_daw_engine::render::{render_with_assets, RenderOptions};
+use ai_daw_engine::render::{render_with_assets_progress, RenderOptions};
 use ai_daw_engine::tempo::TempoMap;
 use ai_daw_engine::transport::TransportCommand;
 use ai_daw_engine::wav::wav_bytes;
@@ -21,9 +21,9 @@ use ai_daw_host_vst3::{CatalogPlugin, EditorHandle};
 use ai_daw_plugin_api::ParamInfo;
 
 use crate::audio::{EditorSlot, TransportSnapshot};
-use crate::plugins::build_registry;
+use crate::plugins::{build_registry, uses_external_plugins};
 use crate::presets::Preset;
-use crate::state::{with_editor_windows, AppState, EVENT_ENGINE, EVENT_IMPORT};
+use crate::state::{with_editor_windows, AppState, EVENT_ENGINE, EVENT_EXPORT, EVENT_IMPORT};
 
 /// 撤销/重做之后返回的历史状态（让界面能立刻更新按钮可用性）。
 #[derive(serde::Serialize)]
@@ -215,12 +215,42 @@ pub(crate) fn render_inputs(state: &AppState) -> RenderInputs {
     }
 }
 
+/// 离线渲染前留给**外部插件**的装载时间（秒）。
+///
+/// 采样流式音源（如 MusicLab RealGuitar）在 `prepare` 之后要在自己的线程里异步装载采样，这期间
+/// 只出静音。实时播放感觉不到（它就按真实时间走）；离线渲染比实时快几十倍，同一段装载时间会被
+/// 渲染成**几个小节**的静音——听感就是「导出文件开头两小节没声音」。
+///
+/// 实测本机 RealGuitar：等 0.4 s 仍有缺口、0.8 s 起就能从第一帧出声。取 1.5 s 留出余量（更重的
+/// 采样库只会更慢，这个值兜不住它们，但至少不会把常见音源的开头吃掉）。代价只是一次渲染多等
+/// 1.5 s，而且只在与外部插件有关时付。
+const EXTERNAL_PLUGIN_SETTLE_SECONDS: f64 = 1.5;
+
 /// 离线渲染一份快照（预览 / 导出 / 分析 / MCP 共用同一条路径）。
 pub(crate) fn render_offline(inputs: RenderInputs, sample_rate: u32, tail_seconds: f64) -> AudioBuffer {
+    render_offline_with_progress(inputs, sample_rate, tail_seconds, |_, _| {})
+}
+
+/// 同 [`render_offline`]，另外把渲染进度透给调用方（导出用它画进度条）。
+pub(crate) fn render_offline_with_progress(
+    inputs: RenderInputs,
+    sample_rate: u32,
+    tail_seconds: f64,
+    on_progress: impl FnMut(usize, usize),
+) -> AudioBuffer {
     let RenderInputs { project, catalog, editor_handles, samples } = inputs;
     let registry = build_registry(&catalog, &project, editor_handles);
-    let options = RenderOptions { sample_rate: sample_rate as f64, tail_seconds };
-    render_with_assets(&project, &registry, &options, &samples)
+    let options = RenderOptions {
+        sample_rate: sample_rate as f64,
+        tail_seconds,
+        // 用了外部插件才等：内置插件是纯 DSP，没有可装载的东西。
+        settle_seconds: if uses_external_plugins(&project, &catalog) {
+            EXTERNAL_PLUGIN_SETTLE_SECONDS
+        } else {
+            0.0
+        },
+    };
+    render_with_assets_progress(&project, &registry, &options, &samples, on_progress)
 }
 
 /// 该事件是否会导致播放器重建（混音与实时参数不会）。
@@ -698,6 +728,8 @@ pub fn trim_clip(
                         duration: n.duration,
                         velocity: n.velocity,
                         volume: n.volume,
+                        offset: 0.0,
+                        legato: false,
                     },
                 })
                 .collect();
@@ -1088,6 +1120,30 @@ pub fn apply_swing(
             subdivision,
             ratio,
             strength,
+            range,
+        },
+    )
+}
+
+/// 扫弦：把**起点相同**的音符按音高依次错开（`step_ms = 0` = 回到同时发声）。
+#[tauri::command]
+pub fn strum_notes(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    step_ms: f64,
+    direction: StrumDirection,
+    range: Option<NoteRange>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::StrumNotes {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            step_ms,
+            direction,
             range,
         },
     )
@@ -1694,19 +1750,111 @@ pub async fn analyze_project(
     .map_err(|e| e.to_string())?
 }
 
-/// 把当前工程导出为 WAV 文件，返回写入的绝对路径。
+/// 导出格式。
+///
+/// 由界面（导出对话框）选好再传进来。两种格式**共用同一条离线渲染路径**，只有最后一步的
+/// 编码器不同：WAV 是 16-bit PCM 无损，MP3 走 LAME（有损，且首尾会有几毫秒的编码器补零）。
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportFormat {
+    /// 16-bit PCM WAV。
+    Wav,
+    /// LAME 编码的 MP3。
+    Mp3,
+}
+
+/// 导出进度（前端顶边那条进度条据此更新）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExportProgress {
+    /// 目标文件路径。
+    pub path: String,
+    /// 阶段：`preparing`（建插件实例 / 等外部插件装载）→ `rendering`（离线渲染）→
+    /// `encoding`（编码 + 写盘）→ `done` / `error`。
+    pub phase: &'static str,
+    /// 本阶段已完成的工作量（渲染阶段 = 已渲染帧数）。
+    pub frames: u64,
+    /// 本阶段的总量；未知时 `None`（进度条走「不确定」态）。
+    pub total_frames: Option<u64>,
+    /// 失败原因（只有 `error` 阶段带）。
+    pub message: Option<String>,
+}
+
+/// 发一条导出进度事件（发后即忘；界面没在听也无所谓）。
+fn emit_export(
+    app: &tauri::AppHandle,
+    path: &str,
+    phase: &'static str,
+    frames: u64,
+    total_frames: Option<u64>,
+    message: Option<String>,
+) {
+    let _ = app.emit(
+        EVENT_EXPORT,
+        ExportProgress {
+            path: path.to_string(),
+            phase,
+            frames,
+            total_frames,
+            message,
+        },
+    );
+}
+
+/// 把当前工程导出为音频文件，返回写入的绝对路径。
+///
+/// `format` 决定编码器；`bitrate_kbps` 只对 MP3 有意义（缺省用
+/// [`ai_daw_engine::mp3::DEFAULT_BITRATE_KBPS`]）。
+///
+/// 渲染与编码都在阻塞线程池上跑，并且**边走边发** `engine://export` 进度事件——界面由此画顶边
+/// 进度条，同时继续响应其它操作（发事件是发后即忘，不会回头等界面）。
 #[tauri::command]
-pub async fn export_wav(
+pub async fn export_audio(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
     sample_rate: u32,
+    format: ExportFormat,
+    bitrate_kbps: Option<u32>,
 ) -> Result<String, String> {
     validate_sample_rate(sample_rate)?;
     // 同样只在锁内克隆，渲染与写盘都放到阻塞线程池，避免卡住主线程。
     let inputs = render_inputs(&state);
+    let progress_app = app.clone();
+    let progress_path = path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let buffer = render_offline(inputs, sample_rate, 0.5);
-        ai_daw_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| e.to_string())?;
+        // 阶段一：建实例 +（引用了外部插件时）等它把素材装载完。这一段没有可细分的进度，
+        // 就是「准备中」——但它是真实存在的等待（最长 EXTERNAL_PLUGIN_SETTLE_SECONDS）。
+        emit_export(&progress_app, &progress_path, "preparing", 0, None, None);
+        let buffer = render_offline_with_progress(inputs, sample_rate, 0.5, |done, total| {
+            emit_export(
+                &progress_app,
+                &progress_path,
+                "rendering",
+                done as u64,
+                Some(total as u64),
+                None,
+            );
+        });
+
+        emit_export(&progress_app, &progress_path, "encoding", 0, None, None);
+        let written = match format {
+            ExportFormat::Wav => {
+                ai_daw_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| e.to_string())
+            }
+            ExportFormat::Mp3 => {
+                let bitrate = bitrate_kbps.unwrap_or(ai_daw_engine::mp3::DEFAULT_BITRATE_KBPS);
+                ai_daw_engine::mp3::write_mp3(&path, &buffer, sample_rate, bitrate)
+                    .map_err(|e| e.to_string())
+            }
+        };
+
+        match &written {
+            Ok(()) => emit_export(&progress_app, &progress_path, "done", 0, None, None),
+            Err(err) => {
+                emit_export(&progress_app, &progress_path, "error", 0, None, Some(err.clone()))
+            }
+        }
+        written?;
         Ok::<String, String>(path)
     })
     .await
