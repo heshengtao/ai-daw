@@ -74,10 +74,14 @@ function beatAt(clientX: number): number {
   return Math.max(0, (clientX - rect.left - TIMELINE_INSET_PX + el.scrollLeft) / timeline.zoom);
 }
 
-/** 有符号吸附（拖动增量必须允许负值）。 */
+/**
+ * 有符号吸附（拖动增量必须允许负值）。
+ *
+ * 直接交给共享时间轴：编排视图的吸附网格与钢琴卷帘**是同一份设置**（`layout.noteGrid`），
+ * 所以两边的手感永远一致；自由模式下原样返回（不吸附）。
+ */
 function snapDelta(beat: number): number {
-  const s = timeline.snap;
-  return Math.round(beat / s) * s;
+  return timeline.snapDelta(beat);
 }
 
 /**
@@ -980,8 +984,8 @@ onUnmounted(() => {
 
     <!-- 自动化曲线编辑器：编排视图底部，与网格共用同一条时间轴（原点 = 同一份留白常量） -->
     <template v-if="layout.showAutomation">
-      <PanelResizer side="bottom" @resize="layout.resizeAutomation($event)" />
-      <AutomationLane :height="layout.automationHeight" :inset-px="TIMELINE_INSET_PX" />
+      <PanelResizer side="bottom" @resize="layout.resizeLane($event)" />
+      <AutomationLane :height="layout.laneHeight" :inset-px="TIMELINE_INSET_PX" />
     </template>
   </div>
 </template>

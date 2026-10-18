@@ -79,6 +79,13 @@ impl Vst3HostedPlugin {
             })
             .collect();
 
+        // 实例是按 `vst3-host` 的默认配置（44100 Hz）加载的，**不是**我们想要的采样率。
+        // 这里记下插件**真实**的配置：`prepare` 靠它判断要不要 `reconfigure`。
+        // 写死 48000 会出事——设备/导出正好是 48000 时，`prepare` 会以为「没变」而跳过重配，
+        // 插件就永远按 44100 走。
+        let loaded_rate = plugin.sample_rate();
+        let loaded_block = plugin.block_size();
+
         Vst3HostedPlugin {
             inner: Arc::new(Mutex::new(plugin)),
             id,
@@ -87,10 +94,10 @@ impl Vst3HostedPlugin {
             io,
             capabilities,
             params,
-            sample_rate: 48_000.0,
-            block_size: 512,
+            sample_rate: loaded_rate,
+            block_size: loaded_block,
             started: false,
-            buffers: AudioBuffers::new(inputs, ENGINE_CHANNELS, 512, 48_000.0),
+            buffers: AudioBuffers::new(inputs, ENGINE_CHANNELS, loaded_block, loaded_rate),
             pending_param_changes: Vec::new(),
         }
     }
@@ -158,17 +165,30 @@ impl Plugin for Vst3HostedPlugin {
 
     fn prepare(&mut self, sample_rate: f64, block_size: usize) {
         // 实例可能是**复用**来的（重建 Player 时从旧播放器搬过来）：它可能已在处理。
-        // 采样率没变时 `start_processing` 是幂等的，不必重来；采样率变了才先停再起，
-        // 让插件按新配置重新 setup。
-        let rate_changed = self.sample_rate != sample_rate;
+        // 配置没变时 `start_processing` 是幂等的，不必重来；变了才先停、重配、再起。
+        let block_size = block_size.max(1);
+        let reconfigure = self.sample_rate != sample_rate || self.block_size != block_size;
+        let was_started = self.started;
         self.sample_rate = sample_rate;
-        self.block_size = block_size.max(1);
+        self.block_size = block_size;
         let inputs = self.io.inputs as usize;
-        self.buffers = AudioBuffers::new(inputs, ENGINE_CHANNELS, self.block_size, sample_rate);
+        self.buffers = AudioBuffers::new(inputs, ENGINE_CHANNELS, block_size, sample_rate);
         self.started = match self.inner.lock() {
             Ok(mut plugin) => {
-                if rate_changed && self.started {
-                    let _ = plugin.stop_processing();
+                if reconfigure {
+                    if was_started {
+                        let _ = plugin.stop_processing();
+                    }
+                    // **必须**把真实采样率交给插件。实例是加载时按 `vst3-host` 的默认 44100
+                    // 配置的，不 `reconfigure` 就等于告诉插件「你在 44100 上跑」：它内部所有
+                    // 采样率相关的计算（振荡器相位、包络/LFO 时间、延迟线）都按 44100 走，
+                    // 而宿主按设备采样率消费它的样本——音高与速度整体被拉伸
+                    // 设备采样率/44100 倍。48000 的设备上正好 **+146.6 音分（≈一个半音，
+                    // 听上去像「高了一个大二度」）且快 8.8%**，且只影响 VST3：
+                    // CLAP 与 AU 后端都在激活时把采样率告诉了插件。
+                    if let Err(err) = plugin.reconfigure(sample_rate, block_size) {
+                        eprintln!("VST3 重配采样率失败（{}）：{err}", self.id);
+                    }
                 }
                 plugin.start_processing().is_ok()
             }

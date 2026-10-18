@@ -9,7 +9,9 @@
  * 网格推导（都以四分音符为「拍」的基准单位）：
  * - `meterBeat = 4 / 分母`：拍号里那一「拍」有多长。4/4 → 1，6/8 → 0.5；
  * - `barBeats = 分子 × meterBeat`：一小节多长。4/4 → 4，3/4 → 3，6/8 → 3，2/2 → 4；
- * - `snap = meterBeat / 4`：吸附网格。4/4 → 0.25（十六分音符），6/8 → 0.125。
+ * - `snap = meterBeat / 网格等分数`：吸附网格。等分数来自 `layout.noteGrid`（默认 1/16 → 4 等分），
+ *   4/4 下即 0.25（十六分音符），6/8 下 0.125。换拍号时步长跟着变，换网格时整条时间轴一起变——
+ *   钢琴卷帘与编排视图共用这一份网格，所以两边的吸附手感永远一致。
  *
  * 可见格线只画到「拍」：一个小节 = 分子个格子，小节线再叠一层。
  * 吸附用的细分（`snap` = 拍/4，4/4 是十六分音符、6/8 是 32 分音符）细线**不画**——
@@ -20,9 +22,10 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 import { useProjectStore } from "@/stores/project";
+import { gridStepFor, useLayoutStore } from "@/stores/layout";
 import {
   barBeatsAt as tempoBarBeatsAt,
-  meterBeatAt,
+  meterBeatAt as tempoMeterBeatAt,
   segments as tempoSegments,
 } from "@/utils/tempo";
 
@@ -53,6 +56,7 @@ function load(): { zoom?: number } {
 
 export const useTimelineStore = defineStore("timeline", () => {
   const project = useProjectStore();
+  const layout = useLayoutStore();
 
   const zoom = ref(clampZoom(load().zoom ?? DEFAULT_ZOOM));
   /** 横向滚动位置（px，从工程起点算起）。两个视图共用，所以切换视图时视角不变。 */
@@ -69,8 +73,13 @@ export const useTimelineStore = defineStore("timeline", () => {
   const meterBeat = computed(() => 4 / sigDen.value);
   /** 一小节的长度（四分音符数）。 */
   const barBeats = computed(() => sigNum.value * meterBeat.value);
-  /** 吸附 / 细分网格（四分音符数）。 */
-  const snap = computed(() => meterBeat.value / 4);
+  /**
+   * 吸附 / 细分网格（四分音符数）：由「一拍」按当前网格等分。
+   *
+   * 自由模式没有「一格」可言，但键盘步进（左右方向键）仍需要一个有意义的步长，
+   * 所以这里回落到 1/16（此前的固定值）；真正的吸附判断见 `gridStepAt`。
+   */
+  const snap = computed(() => gridStepFor(layout.noteGrid, meterBeat.value) ?? meterBeat.value / 4);
 
   /** 工程内容长度（四分音符）。 */
   const contentBeats = computed(() => {
@@ -111,9 +120,24 @@ export const useTimelineStore = defineStore("timeline", () => {
     return project.project ? tempoBarBeatsAt(beat, project.project.transport) : 4;
   }
 
-  /** 某拍处的吸附步长（四分音符数）。 */
+  /** 某拍处「一拍」的长度（四分音符数）：拍号关键点切换时跟着变。 */
+  function beatLengthAt(beat: number): number {
+    return project.project ? tempoMeterBeatAt(beat, project.project.transport) : 1;
+  }
+
+  /**
+   * 某拍处的一格（四分音符数）；自由模式 = `null`（不吸附）。
+   *
+   * 「一拍」的长度按该处的拍号算（关键点换拍号时步长跟着变），等分数取自 `layout.noteGrid`。
+   */
+  function gridStepAt(beat: number): number | null {
+    return gridStepFor(layout.noteGrid, beatLengthAt(beat));
+  }
+
+  /** 某拍处的吸附步长（四分音符数）；自由模式回落到 1/16（只给键盘步进用）。 */
   function snapAt(beat: number): number {
-    return project.project ? meterBeatAt(beat, project.project.transport) / 4 : 0.25;
+    const meter = beatLengthAt(beat);
+    return gridStepFor(layout.noteGrid, meter) ?? meter / 4;
   }
 
   /** 小节刻度（跨分段累计小节号）。 */
@@ -172,11 +196,20 @@ export const useTimelineStore = defineStore("timeline", () => {
     };
   });
 
-  /** 吸附到网格（按所在分段的 1/16 拍）。 */
+  /** 吸附到网格（按所在分段的拍长与当前网格）；自由模式原样返回（只夹到 ≥ 0）。 */
   function snapBeats(beat: number): number {
     if (!Number.isFinite(beat)) return 0;
-    const s = snapAt(beat);
+    const s = gridStepAt(beat);
+    if (s === null) return Math.max(0, beat);
     return Math.max(0, Math.round(beat / s) * s);
+  }
+
+  /** 有符号吸附：拖动增量可以是负数，所以不夹 0；自由模式原样返回。 */
+  function snapDelta(value: number): number {
+    if (!Number.isFinite(value)) return 0;
+    const s = gridStepAt(value);
+    if (s === null) return value;
+    return Math.round(value / s) * s;
   }
 
   /**
@@ -264,9 +297,12 @@ export const useTimelineStore = defineStore("timeline", () => {
     meterSegments,
     barMarks,
     barBeatsAt,
+    beatLengthAt,
+    gridStepAt,
     snapAt,
     gridStyle,
     snapBeats,
+    snapDelta,
     barAt,
     barRange,
     beatsAt,

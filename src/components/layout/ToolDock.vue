@@ -31,14 +31,16 @@ const bottomLaneOn = computed(() =>
   isActive("/edit") ? layout.showControllerLane : layout.showAutomation,
 );
 
-/** 车道本体之外固定占的高度（px）：编排 = 顶边框 1 + 表头 30；编辑 = 表头 28 + 本体上下留白 6。 */
-const LANE_CHROME = { arrange: 31, edit: 34 };
+/**
+ * 底部窗格的高度（px）：两个视图**共用**一份 `laneHeight`，窗格自身的固定开销也一致
+ * （1px 顶边框 + 30px 表头），所以切换页面时窗格高度不变、浮岛也就不会上下跳。
+ */
+const LANE_CHROME = 31;
 
 /** 当前视图的底部窗格整体高度（px）；未展开或该视图没有窗格时为 0。 */
 const paneHeight = computed(() => {
-  if (isActive("/edit")) return layout.showControllerLane ? layout.laneHeight + LANE_CHROME.edit : 0;
-  if (isActive("/arrange"))
-    return layout.showAutomation ? layout.automationHeight + LANE_CHROME.arrange : 0;
+  if (isActive("/edit")) return layout.showControllerLane ? layout.laneHeight + LANE_CHROME : 0;
+  if (isActive("/arrange")) return layout.showAutomation ? layout.laneHeight + LANE_CHROME : 0;
   return 0;
 });
 

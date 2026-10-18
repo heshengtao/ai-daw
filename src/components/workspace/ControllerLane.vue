@@ -16,10 +16,11 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { PlusIcon, XMarkIcon } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
+import GridSelect from "@/components/common/GridSelect.vue";
 import AutomationCurve from "@/components/workspace/AutomationCurve.vue";
 import { capturePointer } from "@/utils/pointer";
 import { useI18n } from "@/i18n";
-import { useLayoutStore } from "@/stores/layout";
+import { NOTE_GRIDS, useLayoutStore, type NoteGrid } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import type { AutomationPoint, Note } from "@/api/types";
 import type { AutomationTarget } from "@/utils/automation";
@@ -90,8 +91,8 @@ const scaleMax = computed(() => curveTarget.value?.max ?? spec.max);
 /**
  * 下拉选项：`力度` 单独一组（逐音符），其余按 `props.targets` 的 `group` 分组。
  *
- * 选项一律**只有一行**（不给 `hint`）：`力度` 曾经带第二行小字，于是它成了整个列表里唯一有描述的
- * 一项。说明文字只出现在表头——那里每条目标（含 `力度`）都会显示自己的 `hint`。
+ * 选项一律**只有一行**（不给 `hint`）：表头也不再放属性说明，只留「自动化 + 目标 + 网格」
+ * 这一行与选中读数，表头才能压得住 28px 的高度。
  */
 const chooserOptions = computed(() => [
   {
@@ -101,6 +102,22 @@ const chooserOptions = computed(() => [
   },
   ...props.targets.map((t) => ({ id: t.key, label: t.label, group: t.group })),
 ]);
+
+/** 卷帘网格的候选项（`free` 用 i18n 文案「自由」）。 */
+const gridOptions = computed(() =>
+  NOTE_GRIDS.map((g) => ({ id: g, label: g === "free" ? i18n.t("edit.gridFree") : g })),
+);
+
+/** 卷帘网格的双向绑定（`Md3Select` 交回的是字符串，这里收窄回 `NoteGrid`）。 */
+const noteGrid = computed({
+  get: () => layout.noteGrid,
+  set: (g: NoteGrid) => (layout.noteGrid = g),
+});
+
+/** 悬停提示：自由模式换成「不吸附」的说明，免得提示与当前行为对不上。 */
+const gridHint = computed(() =>
+  layout.noteGrid === "free" ? i18n.t("edit.gridFreeHint") : i18n.t("edit.gridHint"),
+);
 
 function onChoose(id: string): void {
   emit("update:targetKey", id);
@@ -292,9 +309,10 @@ onUnmounted(() => {
 
 <template>
   <div class="lane-block">
-    <!-- 头部：目标选择 + 读数 + 添加参数 / 收起 -->
+    <!-- 头部：一行读完「自动化 + 目标 + 网格」，右侧只留选中读数与两颗按钮 -->
     <div class="lane-head">
-      <!-- 目标选择：下拉（力度 + 该轨道收窄后的插件参数），说明文字在菜单里 -->
+      <!-- 目标选择：下拉（力度 + 该轨道收窄后的插件参数） -->
+      <span class="lane-title">{{ i18n.t("auto.title") }}</span>
       <div class="lane-chooser">
         <Md3Select
           :model-value="targetKey"
@@ -304,12 +322,17 @@ onUnmounted(() => {
         />
       </div>
 
-      <span v-if="curveTarget" class="readout muted">{{ curveTarget.hint ?? curveTarget.label }}</span>
-      <span v-else-if="readout" class="readout">
+      <!-- 网格：卷帘自己的吸附步长（画 / 拖音符落到这一格，细分线也按它画） -->
+      <GridSelect
+        v-model="noteGrid"
+        :options="gridOptions"
+        :title="gridHint"
+      />
+
+      <span v-if="readout" class="readout">
         {{ i18n.t("lane.selected", { count: readout.count }) }} · {{ i18n.t("lane.velocity") }}
         <strong class="tabular">{{ readout.value }}</strong>
       </span>
-      <span v-else class="readout muted">{{ i18n.t("lane.velocityHint") }}</span>
 
       <span class="lane-spacer" />
 
@@ -397,16 +420,27 @@ onUnmounted(() => {
   flex-direction: column;
   min-width: 0;
   background-color: var(--app-card);
+  /* 与编排视图的自动化车道同一条顶边：两个视图的底部窗格看起来是同一个窗格 */
+  border-top: 1px solid var(--grid-line-strong);
   user-select: none;
   -webkit-user-select: none;
 }
 .lane-head {
-  height: 28px;
+  height: 30px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   padding: 0 12px;
   border-bottom: 1px solid rgb(var(--md-outline-variant) / 0.35);
+}
+/* 表头前缀文字（「自动化」）：与「网格」前缀同款，一眼看出后面那颗药丸是什么 */
+.lane-title {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.2px;
+  color: rgb(var(--md-on-surface-variant));
+  white-space: nowrap;
 }
 /* 目标下拉：压到与泳道头部同高的小尺寸（`Md3Select` 默认是 34px 的宽药丸） */
 .lane-chooser {
@@ -426,14 +460,13 @@ onUnmounted(() => {
   height: 13px;
 }
 .readout {
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 11px;
   color: rgb(var(--md-on-surface-variant));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.readout.muted {
-  color: rgb(var(--md-on-surface-muted));
 }
 .readout strong {
   color: rgb(var(--md-on-surface));

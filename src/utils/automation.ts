@@ -32,7 +32,8 @@ export interface AutomationTarget {
    * 一句话说明（构建时**已本地化**，和 `label` 一样）。
    *
    * 内置目标（增益 / 声像）与合成器精选参数走手写文案；插件参数自动拼
-   * 「名称 · 单位 · 范围（默认 x）」。`velocity` 不在本列表里，它的说明见 `lane.velocityHint`。
+   * 「名称 · 单位 · 范围（默认 x）」。`velocity` 不在本列表里——它是逐音符属性，车道表头
+   * 只留一行「自动化 + 目标 + 网格」，不再显示说明文字。
    */
   hint?: string;
   /**

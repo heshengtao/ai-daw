@@ -23,7 +23,7 @@ import { useRouter } from "vue-router";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useClipboardStore } from "@/stores/clipboard";
-import { useLayoutStore, gridStepFor, NOTE_GRIDS, type NoteGrid } from "@/stores/layout";
+import { useLayoutStore, gridStepFor } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
 import { usePluginsStore } from "@/stores/plugins";
@@ -32,7 +32,6 @@ import { useParamBrowserStore } from "@/stores/paramBrowser";
 import ControllerLane from "@/components/workspace/ControllerLane.vue";
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
-import Md3Select from "@/components/common/Md3Select.vue";
 import { capturePointer } from "@/utils/pointer";
 import { shouldDeferToBrowser } from "@/utils/editable";
 import { automationTargetsFor, curateTargets, defaultBoundKeys } from "@/utils/automation";
@@ -97,11 +96,11 @@ const gridLabel = computed(() => (layout.noteGrid === "free" ? i18n.t("edit.grid
 /**
  * 当前网格在 `beat` 处的一步（拍）；自由模式 = `null`（不吸附）。
  *
- * 用 `timeline.snapAt` 的分段口径（关键点换拍号时步长跟着变），但**步长由编辑视图自己的
- * `noteGrid` 决定**——全局吸附（编排视图 / 标尺 / 自动化）不受这里影响。
+ * 「一拍」的长度取 `timeline.beatLengthAt`（关键点换拍号时步长跟着变），等分数由 `layout.noteGrid`
+ * 决定——这份网格**同时**决定编排视图的全局吸附，所以两个视图的吸附手感始终一致。
  */
 function stepAt(beat: number): number | null {
-  return gridStepFor(layout.noteGrid, timeline.snapAt(beat) * 4);
+  return gridStepFor(layout.noteGrid, timeline.beatLengthAt(beat));
 }
 
 /** 按当前网格吸附一个绝对拍；自由模式原样返回（`floor` 到 0）。 */
@@ -110,20 +109,6 @@ function snapToGrid(beat: number): number {
   if (step === null) return Math.max(0, beat);
   return Math.max(0, Math.round(beat / step) * step);
 }
-
-/** 网格下拉的候选项。 */
-const gridOptions = computed(() =>
-  NOTE_GRIDS.map((grid) => ({
-    id: grid,
-    label: grid === "free" ? i18n.t("edit.gridFree") : grid,
-  })),
-);
-
-/** 网格下拉的双向绑定（`Md3Select` 用字符串）。 */
-const gridChoice = computed({
-  get: () => layout.noteGrid as NoteGrid,
-  set: (grid: string) => (layout.noteGrid = grid as NoteGrid),
-});
 
 /**
  * 细分线（比拍线更淡）：只画到「网格这一层的格」，`free` 不画。
@@ -973,33 +958,22 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 底部：网格细分（卷帘自己的吸附步长；与编排视图的全局吸附互不影响） -->
-    <div class="grid-bar">
-      <span class="grid-bar-label">{{ i18n.t("edit.grid") }}</span>
-      <Md3Select
-        v-model="gridChoice"
-        :options="gridOptions"
-        :label="i18n.t('edit.grid')"
-        class="grid-select"
-      />
-      <span class="grid-bar-hint">
-        {{ layout.noteGrid === "free" ? i18n.t("edit.gridFreeHint") : i18n.t("edit.gridHint") }}
-      </span>
-    </div>
-
-    <!-- 底部窗格（顶栏开关控制，默认打开）：分隔线 + 控制器泳道 -->
+    <!-- 底部窗格（顶栏开关控制，默认打开）：分隔线 + 控制器泳道。
+         网格细分就在泳道表头里（「自动化 力度 网格 1/16」一行），不再单独占一条。 -->
     <template v-if="layout.showControllerLane">
       <!-- 卷帘与控制器泳道之间可拖拽 -->
       <PanelResizer side="bottom" @resize="layout.resizeLane($event)" />
 
-      <!-- 参数车道：力度 = 逐音符直角条；其余目标 = 编排视图那条自动化曲线 -->
+      <!-- 参数车道：力度 = 逐音符直角条；其余目标 = 编排视图那条自动化曲线。
+           本体高度比 `laneHeight` 少 6px（条形上下各 3px 留白），于是「顶边框 + 表头 + 本体」
+           的总高与编排视图的自动化车道完全相等，浮动工具岛切视图时不会上下跳。 -->
       <ControllerLane
         :notes="clip?.notes ?? []"
         :selected-indices="selection.noteIndices"
         :target-key="controllerTargetKey"
         :targets="controllerTargets"
         :offset-beats="clipStart"
-        :content-height="layout.laneHeight"
+        :content-height="layout.laneHeight - 6"
         :curve-points="controllerCurvePoints"
         @update:target-key="(k: string) => (controllerTargetKey = k)"
         @select="selection.setNoteSelection($event)"
@@ -1249,38 +1223,5 @@ onUnmounted(() => {
   border-color: rgb(var(--md-error));
   background-color: rgb(var(--md-error) / 0.16);
 }
-/* ---- 底部网格栏 ---- */
-/*
- * 一条很薄的条：卷帘之下、控制器泳道之上，**不依赖泳道是否打开**（泳道关掉时它照样在）。
- * 只放「网格」一项——它决定画音符时的吸附步长与画不画细分线，是卷帘最高频的一个开关。
- */
-.grid-bar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-  border-top: 1px solid var(--grid-line-row);
-  background-color: var(--app-inset);
-}
-.grid-bar-label {
-  font-size: 10.5px;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  color: rgb(var(--md-on-surface-variant));
-}
-/* 下拉本身是宽度 100% 的药丸，这里给它一个固定的窄宽度。 */
-.grid-select {
-  flex: 0 0 92px;
-  width: 92px;
-}
-.grid-bar-hint {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10.5px;
-  color: rgb(var(--md-on-surface-muted));
-}
+/* ---- 底部网格栏已并入控制器泳道表头（见 `ControllerLane`） ---- */
 </style>

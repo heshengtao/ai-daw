@@ -66,28 +66,27 @@ interface Persisted {
   tabs: PaneId[];
   activeTab: PaneId;
   tool: Tool;
-  /** 钢琴卷帘下方控制器泳道的高度（px）。 */
+  /** 底部窗格的高度（px）：编排的自动化车道与编辑的控制器泳道**共用**一份。 */
   laneHeight: number;
   /** 编排视图底部的自动化曲线编辑器是否打开。 */
   showAutomation: boolean;
-  /** 自动化曲线编辑器的高度（px）。 */
-  automationHeight: number;
   /** 钢琴卷帘下方的控制器（力度 / 音量）泳道是否打开。 */
   showControllerLane: boolean;
-  /** 钢琴卷帘的网格细分（吸附步长 + 是否画细分线）。 */
+  /** 网格细分：卷帘的吸附步长 + 编排视图的全局吸附，**同一份设置**。 */
   noteGrid: NoteGrid;
 }
 
 /**
- * 钢琴卷帘的网格细分。
+ * 网格细分：**两个视图共用**。
  *
- * 与编排视图的 `timeline.snap`（全局 1/16）**无关**：编排视图拖片段、标尺、自动化曲线照旧用
- * 全局吸附，这里是编辑视图自己的偏好，改它不会影响别处的吸附手感。
+ * 钢琴卷帘用它决定画 / 拖音符的吸附步长与细分线；编排视图用它决定拖片段、标尺定位、自动化点
+ * 的吸附步长。所以在一处换成 1/8，另一处的手感立刻跟着变——这正是「同一个网格」该有的行为。
  */
-export type NoteGrid = "1/4" | "1/8" | "1/16" | "1/12" | "1/24" | "1/32" | "free";
+export type NoteGrid = "1/4" | "1/8" | "1/12" | "1/16" | "1/24" | "1/32" | "free";
 
-/** 网格选项（顺序即下拉里的顺序：从粗到细，最后是自由）。 */
-export const NOTE_GRIDS: NoteGrid[] = ["1/4", "1/8", "1/16", "1/12", "1/24", "1/32", "free"];
+/** 网格选项（顺序即下拉里的顺序：从粗到细，最后是自由）。三连音紧跟在它替代的二分网格后面。 */
+export const NOTE_GRIDS: NoteGrid[] = ["1/4", "1/8", "1/12", "1/16", "1/24", "1/32", "free"];
+
 
 /**
  * 网格在一「拍」（拍号里的那一拍，4/4 即四分音符）里的等分数：`1/16` → 4 等分。
@@ -110,9 +109,12 @@ export function gridStepFor(grid: NoteGrid, meterBeat: number): number | null {
   return meterBeat / GRID_DIVISIONS[grid];
 }
 
-function load(): Partial<Persisted> {
+/** 旧版本把底部窗格的高度分成两份存，`automationHeight` 只用于一次性迁移。 */
+type Saved = Partial<Persisted> & { automationHeight?: number };
+
+function load(): Saved {
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? "{}") as Partial<Persisted>;
+    return JSON.parse(localStorage.getItem(KEY) ?? "{}") as Saved;
   } catch {
     return {};
   }
@@ -126,22 +128,15 @@ function sanitizeTabs(value: unknown): PaneId[] {
   return tabs.length > 0 ? tabs : ["inspector"];
 }
 
-/** 控制器泳道的高度范围（px）。 */
+/**
+ * 底部窗格的高度范围（px）：两个视图共用，所以范围取两者的并集（曲线编辑器要更高一些）。
+ */
 const MIN_LANE_HEIGHT = 56;
-const MAX_LANE_HEIGHT = 320;
+const MAX_LANE_HEIGHT = 360;
 
 function clampLaneHeight(value: number): number {
-  if (!Number.isFinite(value)) return 92;
+  if (!Number.isFinite(value)) return 120;
   return Math.min(MAX_LANE_HEIGHT, Math.max(MIN_LANE_HEIGHT, Math.round(value)));
-}
-
-/** 自动化曲线编辑器的高度范围（px）。 */
-const MIN_AUTOMATION_HEIGHT = 80;
-const MAX_AUTOMATION_HEIGHT = 360;
-
-function clampAutomationHeight(value: number): number {
-  if (!Number.isFinite(value)) return 150;
-  return Math.min(MAX_AUTOMATION_HEIGHT, Math.max(MIN_AUTOMATION_HEIGHT, Math.round(value)));
 }
 
 export const useLayoutStore = defineStore("layout", () => {
@@ -157,12 +152,13 @@ export const useLayoutStore = defineStore("layout", () => {
   );
   // 默认「绘制」：创建是最常用的动作，框选 / 切分随时可以切（顶栏按钮 / 快捷键 1 / 2 / 3）。
   const tool = ref<Tool>(TOOLS.includes(saved.tool as Tool) ? (saved.tool as Tool) : "draw");
-  const laneHeight = ref(clampLaneHeight(saved.laneHeight ?? 92));
+  // 两个视图的底部窗格共用一份高度：切页面时窗格（以及它上方的浮动工具岛）不会跳。
+  // 旧版本把两份高度分开存（`laneHeight` / `automationHeight`），这里兼容读一次旧值。
+  const laneHeight = ref(clampLaneHeight(saved.laneHeight ?? saved.automationHeight ?? 120));
   // 两个底部窗格默认都打开：它们是各自视图的常规工作区，不是可选的调试面板。
   const showAutomation = ref(saved.showAutomation ?? true);
-  const automationHeight = ref(clampAutomationHeight(saved.automationHeight ?? 150));
   const showControllerLane = ref(saved.showControllerLane ?? true);
-  // 默认 1/16：与编排视图的吸附一致，也是旋律/伴奏最常用的细分。
+  // 默认 1/16：与编排视图此前的吸附一致，也是旋律/伴奏最常用的细分。
   const noteGrid = ref<NoteGrid>(
     NOTE_GRIDS.includes(saved.noteGrid as NoteGrid) ? (saved.noteGrid as NoteGrid) : "1/16",
   );
@@ -183,7 +179,6 @@ export const useLayoutStore = defineStore("layout", () => {
       tool,
       laneHeight,
       showAutomation,
-      automationHeight,
       showControllerLane,
       noteGrid,
     ],
@@ -200,7 +195,6 @@ export const useLayoutStore = defineStore("layout", () => {
           tool: tool.value,
           laneHeight: laneHeight.value,
           showAutomation: showAutomation.value,
-          automationHeight: automationHeight.value,
           showControllerLane: showControllerLane.value,
           noteGrid: noteGrid.value,
         } satisfies Persisted),
@@ -214,14 +208,9 @@ export const useLayoutStore = defineStore("layout", () => {
     tool.value = next;
   }
 
-  /** 调整控制器泳道高度（拖拽分隔线时调用）。 */
+  /** 调整底部窗格高度（两个视图共用，拖拽分隔线时调用）。 */
   function resizeLane(delta: number): void {
     laneHeight.value = clampLaneHeight(laneHeight.value + delta);
-  }
-
-  /** 调整自动化编辑器高度（拖拽分隔线时调用）。 */
-  function resizeAutomation(delta: number): void {
-    automationHeight.value = clampAutomationHeight(automationHeight.value + delta);
   }
 
   // ---- 面板宽度：左右各有自己的上限 ----
@@ -318,12 +307,10 @@ export const useLayoutStore = defineStore("layout", () => {
     tool,
     laneHeight,
     showAutomation,
-    automationHeight,
     showControllerLane,
     noteGrid,
     setTool,
     resizeLane,
-    resizeAutomation,
     resizeTrack,
     resizeInspector,
     clampPanes,

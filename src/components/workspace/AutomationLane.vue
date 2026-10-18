@@ -4,8 +4,8 @@
  *
  * 编辑对象是**当前选中轨道**上的一条参数曲线，键取自共享的目标列表
  * （`gain_db` / `pan` / `inst:<id>` / `fx<i>:<id>`，见 `utils/automation.ts`）。曲线本身由
- * `AutomationCurve` 画（与钢琴卷帘下的参数车道共用）；这里只管表头：目标下拉、读数、清空、
- * 添加参数、收起，以及把曲线交回的编辑结果提交给工程（提交失败在这里提示）。
+ * `AutomationCurve` 画（与钢琴卷帘下的参数车道共用）；这里只管表头：目标下拉、网格、读数、
+ * 清空、添加参数、收起，以及把曲线交回的编辑结果提交给工程（提交失败在这里提示）。
  *
  * 横向与编排视图共用同一条时间轴：坐标原点从编排视图的 `TIMELINE_INSET_PX` 起算并按共享滚动
  * 位置平移（由 `insetPx` 传进曲线），所以曲线的小节线严格压在编排网格的小节线上。
@@ -13,13 +13,14 @@
 import { computed, ref, watch } from "vue";
 import { PlusIcon, XMarkIcon } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
+import GridSelect from "@/components/common/GridSelect.vue";
 import AutomationCurve from "./AutomationCurve.vue";
 import { useI18n } from "@/i18n";
 import { useProjectStore } from "@/stores/project";
 import { usePluginsStore } from "@/stores/plugins";
 import { useSelectionStore } from "@/stores/selection";
 import { useTransportStore } from "@/stores/transport";
-import { useLayoutStore } from "@/stores/layout";
+import { NOTE_GRIDS, useLayoutStore, type NoteGrid } from "@/stores/layout";
 import { useParamBindingsStore } from "@/stores/paramBindings";
 import { useParamBrowserStore } from "@/stores/paramBrowser";
 import {
@@ -118,6 +119,17 @@ function onChoose(id: string): void {
   param.value = id;
 }
 
+/** 网格的候选项：与钢琴卷帘**同一份设置**（`layout.noteGrid`），所以列表也完全一样。 */
+const gridOptions = computed(() =>
+  NOTE_GRIDS.map((g) => ({ id: g, label: g === "free" ? i18n.t("edit.gridFree") : g })),
+);
+
+/** 网格的双向绑定（`Md3Select` 交回字符串，这里收窄回 `NoteGrid`）。 */
+const grid = computed({
+  get: () => layout.noteGrid,
+  set: (g: NoteGrid) => (layout.noteGrid = g),
+});
+
 /** 表头的「＋ 添加参数…」：打开参数页，作用域是当前轨道（没有轨道就什么也不做）。 */
 function onBrowse(): void {
   const id = trackId.value;
@@ -146,8 +158,9 @@ watch(targets, (list) => {
 
 <template>
   <div class="auto-lane">
-    <!-- 表头：目标选择 + 读数 + 清空 / 添加参数 / 收起 -->
+    <!-- 表头：一行读完「自动化 + 参数 + 网格」，右侧只留读数与清空 / 添加参数 / 收起 -->
     <div class="auto-head">
+      <span class="auto-title">{{ i18n.t("auto.title") }}</span>
       <div class="auto-chooser">
         <Md3Select
           :model-value="param"
@@ -156,10 +169,13 @@ watch(targets, (list) => {
           @select="onChoose"
         />
       </div>
-      <span class="auto-name text-label-sm">{{ i18n.t("auto.title") }}</span>
 
-      <!-- 曲线模式：表头渲染当前目标的说明（`hint`），没有 `hint` 时回落显示名——与卷帘下方参数车道对齐 -->
-      <span v-if="current" class="auto-readout">{{ current.hint ?? current.label }}</span>
+      <!-- 网格：与钢琴卷帘同一份设置（自动化点、拖片段、标尺都用它吸附） -->
+      <GridSelect
+        v-model="grid"
+        :options="gridOptions"
+        :title="i18n.t('edit.gridHint')"
+      />
 
       <span v-if="!track" class="auto-readout muted">{{ i18n.t("auto.noTrack") }}</span>
       <span v-else-if="stored.length === 0" class="auto-readout muted">{{ i18n.t("auto.hint") }}</span>
@@ -227,7 +243,7 @@ watch(targets, (list) => {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 0 10px;
   border-bottom: 1px solid rgb(var(--md-outline-variant) / 0.35);
 }
@@ -248,11 +264,18 @@ watch(targets, (list) => {
   width: 13px;
   height: 13px;
 }
-.auto-name {
+/* 表头前缀文字（「自动化」）：与「网格」前缀同款，一眼看出后面那颗药丸是什么 */
+.auto-title {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.2px;
   color: rgb(var(--md-on-surface-variant));
   white-space: nowrap;
 }
 .auto-readout {
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 11px;
   color: rgb(var(--md-on-surface-variant));
   white-space: nowrap;
