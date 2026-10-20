@@ -4,6 +4,7 @@
  *
  * 一级条目，绝大多数**依赖本地模型**（`crates/local-ai` 的 ONNX 权重）：
  * - **MCP 服务器**：开关；开启后同一容器里多出一行接入地址 + 「复制」。
+ * - **命令行与 Skills**：入口——右侧按钮跳到「设置 → 命令行」。
  * - **音频转 MIDI** / **人声降噪**：各自**一个**「开始」按钮；处理中该条**下边缘变成
  *   进度条**、按钮变成「停止」，可随时中止。权重缺失时退回内置 DSP，条目上的标签会标明。
  * - **音源分离**：HTDemucs，可选 4 / 6 分轨；没有内置兜底，缺权重时先问再下载。
@@ -15,7 +16,8 @@
  * （那条降噪走内置 DSP——LocalVQE 是 16 kHz 的语音模型，直接拿来处理音乐会把乐器当噪声压掉）。
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { ClipboardDocumentIcon } from "@heroicons/vue/24/outline";
+import { useRouter } from "vue-router";
+import { BoltIcon, ClipboardDocumentIcon } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import { aiCancel, aiModels, aiStart, aiStatus, mcpStatus, onAiEvent, setMcpConfig } from "@/api/tauri";
@@ -36,6 +38,7 @@ const KIND_SEPARATE = "separate";
 /** 节拍检测：Beat This! 推出全局 BPM + 拍号，并把片段首重拍对齐到小节线。 */
 const KIND_TEMPO = "detect_tempo";
 
+const router = useRouter();
 const project = useProjectStore();
 const selection = useSelectionStore();
 const layout = useLayoutStore();
@@ -173,6 +176,11 @@ async function runSeparation(): Promise<void> {
 /** 打开右侧的「写歌智能体」面板。 */
 function openAgent(): void {
   layout.openTab("agent");
+}
+
+/** 跳到「设置 → 命令行」子页。 */
+function openCliSettings(): void {
+  void router.push({ name: "settings", query: { section: "cli" } });
 }
 
 /** 确认框点了「下载」：跳到「管理器 → 模型」并开始下载。 */
@@ -339,6 +347,20 @@ onUnmounted(() => {
           <button class="iface-btn" @click="copyEndpoint">
             <ClipboardDocumentIcon class="w-[13px] h-[13px]" />
             {{ i18n.t("ai.copy") }}
+          </button>
+        </div>
+      </li>
+
+      <!-- 命令行与 Skills：入口，跳到「设置 → 命令行」 -->
+      <li class="item">
+        <div class="item-row">
+          <div class="item-main">
+            <span class="item-name">{{ i18n.t("ai.cli") }}</span>
+            <span class="item-note">{{ i18n.t("ai.cliHint") }}</span>
+          </div>
+          <button class="iface-btn" @click="openCliSettings">
+            <BoltIcon class="w-[13px] h-[13px]" />
+            {{ i18n.t("ai.openCli") }}
           </button>
         </div>
       </li>

@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
     "build:aidaw": "bash tools/build-aidaw.sh",
+    "build:vst3-helper": "bash tools/build-vst3-helper.sh",
+    "build:sidecars": "npm run build:aidaw && npm run build:vst3-helper",
     "preview": "vite preview",
     "tauri": "tauri"
   },

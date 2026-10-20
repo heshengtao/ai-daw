@@ -238,6 +238,11 @@ impl PluginRegistry {
                 Box::new(ai_daw_synth::SynthPlugin::preset(p.id, p.name, p.patch))
             });
         }
+        // 采样内置乐器：钢琴 / 木吉他 / 电吉他 / 贝斯 / 原声鼓组。
+        // 资产编译期内嵌；同类乐器的 SoundFont 在 crate 内共享，按轨道实例化合成器。
+        for kind in ai_daw_instruments::Kind::ALL {
+            r.register(kind.id(), move |_track, _slot| ai_daw_instruments::SoundFontPlugin::create(kind));
+        }
         // 内置效果器：以前空间感只能靠外部 VST3，铺底/弦乐/管乐只能干着听。
         r.register(BUILTIN_DELAY, |_track, _slot| Box::new(ai_daw_effects::Delay::new()));
         r.register(BUILTIN_REVERB, |_track, _slot| Box::new(ai_daw_effects::Reverb::new()));
@@ -287,6 +292,19 @@ mod tests {
     fn builtins_include_synth() {
         let r = PluginRegistry::with_builtins();
         assert!(r.ids().contains(&"builtin.synth".to_string()));
+    }
+
+    #[test]
+    fn builtins_include_the_sampled_instruments() {
+        let r = PluginRegistry::with_builtins();
+        for kind in ai_daw_instruments::Kind::ALL {
+            let p = r
+                .create(kind.id(), TrackId(1), PluginSlot::Instrument)
+                .unwrap_or_else(|| panic!("{} 未注册", kind.id()));
+            assert_eq!(p.descriptor().kind, PluginKind::Instrument);
+            assert_eq!(p.descriptor().io.outputs, 2);
+            assert!(!p.params().is_empty());
+        }
     }
 
     /// 内置效果器必须在注册表里，而且是 `Effect` 类型（否则不会出现在效果器选择列表里）。

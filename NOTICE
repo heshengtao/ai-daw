@@ -33,6 +33,23 @@ logic in `crates/local-ai/src/models/demucs.rs` were adapted from that project
 than depending on the crate). Redistributed under the Apache License, Version 2.0.
 --------------------------------------------------------------------------------
 
+MuldjordKit (https://freepats.zenvoid.org/Percussion/acoustic-drum-kit.html)
+Copyright Lars Muldjord. Licensed under the Creative Commons Attribution 4.0
+International licence (CC BY 4.0).
+The built-in acoustic drum kit in `crates/instruments/assets/drums.sf2` is a
+modified subset of MuldjordKit (mono, 3 velocity layers, 22.05 kHz, trimmed tails,
+GM 35–59 remap). Attribution: Lars Muldjord / FreePats.
+--------------------------------------------------------------------------------
+
+vst3-host (https://github.com/HelgeSverre/rust-vst3-host)
+Copyright Helge Sverre. Licensed under the MIT License.
+
+The process-isolation helper in `crates/vst3-helper/src/main.rs` is copied
+verbatim from that crate's `src/bin/vst3-host-helper.rs` (version 0.9.0), so the
+application can ship the helper as a Tauri sidecar. Redistributed under the MIT
+License; the full licence text is available in the crate's source distribution.
+--------------------------------------------------------------------------------
+
 Third-party dependencies whose licences are not in the permissive default set:
 
 --------------------------------------------------------------------------------

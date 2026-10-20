@@ -1,6 +1,6 @@
 ---
 name: aidaw
-description: 通过内嵌 MCP 工具或 aidaw 命令行操作正在运行的 AI DAW——读写工程、轨道、片段、音符、批量编曲（转调/量化/摇摆/人性化/和弦分析）、混音（增益/声像/发送/自动化）、传输播放、音频导入与录音、响度与频谱分析、导出 WAV、扫描插件。凡用户要求编曲、建轨、写音符、改和弦、量化节奏、调混音、录音、分析或导出音频时使用。
+description: 通过内嵌 MCP 工具或 aidaw 命令行操作正在运行的 AI DAW——读写工程、轨道、片段、音符、批量编曲（转调/量化/摇摆/人性化/和弦分析）、乐理与曲风配方（音阶/调式/和弦进行/鼓谱/配器）、内置采样乐器（钢琴/木吉他/电吉他/贝斯/原声鼓组）、混音（增益/声像/发送/自动化）、传输播放、音频导入与录音、响度与频谱分析、导出 WAV、扫描插件。凡用户要求编曲、分析曲风、建轨、写音符、改和弦、量化节奏、调混音、录音、分析或导出音频时使用。
 license: Apache-2.0
 ---
 
@@ -79,19 +79,42 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 | 音频 | `references/audio.md` | 导入音频、波形、**录音** |
 | 传输 | `references/transport.md` | 播放 / 暂停 / 停止 / 定位 / 循环 |
 | 分析导出 | `references/analysis.md` | 渲染预览、响度 / 频谱分析、导出 WAV |
-| 插件 | `references/plugin.md` | **按分类与音色描述挑乐器/效果器**、参数表、效果链、用户预设 |
+| 插件 | `references/plugin.md` | **按分类与音色描述挑乐器/效果器**、**内置采样乐器（钢琴/木吉他/电吉他/贝斯/原声鼓组）**、参数表、效果链、用户预设 |
+| 乐理 | `references/theory.md` | MIDI 音高、音阶/调式、和弦与进行、声部连接、音域、旋律写作 |
+| 节奏 | `references/rhythm.md` | 拍/网格换算、GM 鼓映射、`builtin.drums` 原声鼓组、鼓型、力度/量化/swing/人性化 |
+| 曲风 | `references/genres.md` | 14 类曲风的 BPM/拍号/和声/鼓型/贝斯/配器/结构/混音配方 |
+| 编曲流程 | `references/workflow.md` | **需求 → 曲风卡 → 查知识（skills/联网）→ MIDI 设计 → AIDAW 落地 → 检查 → 导出** |
+
+## 接到编曲需求：先分析曲风，再动手
+
+**不要拿到「做一首 X」就直接写音符。** 标准流程在 `references/workflow.md`，核心是五步：
+
+1. **填风格卡**：曲风/情绪/BPM/拍号/调式/和声/鼓型/配器/结构。用户没给曲风就按
+   `genres.md` 的「快速索引」选最接近的一张；参考曲只提取**风格特征**，不抄旋律与整段和弦。
+2. **查知识**：`aidaw_help("genres")` 找配方 → `aidaw_help("theory")` 定音阶/和弦/音域 →
+   `aidaw_help("rhythm")` 定鼓型与网格。**skills 是工具语义的真相**；需要最新 BPM/风格趋势时，
+   再联网补 1–2 个来源，把来源与日期写进风格卡。
+3. **先纸面设计**：段落表（拍）、和弦表（`start`/`length`/`symbol`）、轨道表（role/音区/音色）、
+   音符表（第几格、什么音、多长、多响）。
+4. **再落地 AIDAW**：`get_project` → `set_tempo` / `set_time_signature` →
+   `set_project_harmony` / `set_project_sections` → `add_track` → `list_plugins` /
+   `set_track_instrument` → `set_track_meta` → `add_clip` → `add_notes`（批量）→
+   `quantize_notes` / `apply_swing` / `strum_notes` / `humanize_notes` →
+   `analyze_harmony` / `analyze_track_overlap` / `get_track_note_stats` → `analyze_project` → `export_wav`。
+5. **检查后再交付**：和声 `error`、轨道打架、音域越界、响度/峰值、鼓的路线是否混用（GM / 内置单件）。
 
 ## 典型闭环（建轨 → 编曲 → 导出 → 分析）
 
 1. `references/project.md`：`get_project` 看清现状（轨道 id、片段 id、速度、拍号）。
-2. `references/track.md`：`add_track` 建轨 → 先 `list_plugins`（读分类与音色描述）再
-   `set_track_instrument` 选音色。
-3. `references/clip.md`：`add_clip` 画片段（`move_clip` / `resize_clip` / `split_clip` / `duplicate_clip` 调结构）。
-4. `references/composition.md` + `references/note.md`：`add_notes` **一次写完一个乐句**
+2. `references/genres.md` + `theory.md` + `rhythm.md`：定风格卡、和弦谱、鼓型与 MIDI 设计。
+3. `references/track.md`：`add_track` 建轨 → 先 `list_plugins`（读分类与音色描述）再
+   `set_track_instrument` 选音色 → `set_track_meta` 写 role/音区。
+4. `references/clip.md`：`add_clip` 画片段（`move_clip` / `resize_clip` / `split_clip` / `duplicate_clip` 调结构）。
+5. `references/composition.md` + `references/note.md`：`add_notes` **一次写完一个乐句**
    → `quantize_notes` / `apply_swing` 定节奏 → `set_project_harmony` 写和弦 → `analyze_harmony` 查错音。
-5. `references/mix.md`：`set_gain` / `set_pan` 调平衡；要总线就再建一条轨 + `set_sends`。
-6. `references/analysis.md`：`analyze_project` 看响度 / 频谱 → 回头微调。
-7. `references/analysis.md`：`export_wav` 导出。
+6. `references/mix.md`：`set_gain` / `set_pan` 调平衡；要总线就再建一条轨 + `set_sends`。
+7. `references/analysis.md`：`analyze_project` 看响度 / 频谱 → 回头微调。
+8. `references/analysis.md`：`export_wav` 导出。
 
 ## 约定与坑
 

@@ -158,6 +158,17 @@ const rollEl = ref<HTMLElement | null>(null);
 /** 卷帘的纵向滚动（琴键列靠它同步）。 */
 const scrollTop = ref(0);
 let applyingScroll = false;
+let resizeObserver: ResizeObserver | null = null;
+
+/**
+ * 把卷帘可视区宽度回报给共享时间轴：缩得很小时刻度要按它补足，右侧才不会留白。
+ * 用 `offsetWidth` 而不是 `clientWidth`——标尺行比卷帘多出纵向滚动条那点宽度，
+ * 刻度得铺满标尺本身。
+ */
+function reportViewportWidth(): void {
+  const el = scroller.value;
+  if (el) timeline.setViewportWidth(el.offsetWidth);
+}
 
 /** 指针位置 → (绝对拍, 音高)；`rel` 是相对片段起点的拍。 */
 function pointAt(clientX: number, clientY: number): { beat: number; pitch: number; rel: number } {
@@ -879,17 +890,23 @@ onMounted(() => {
   window.addEventListener("keydown", onKey);
   window.addEventListener("pointerup", onPointerUp);
   window.addEventListener("pointercancel", onPointerUp);
+  // 可视区变宽 / 变窄（窗口缩放、面板拖动）都要重新补足刻度。
+  resizeObserver = new ResizeObserver(reportViewportWidth);
+  if (scroller.value) resizeObserver.observe(scroller.value);
   // 进视图时对齐共享时间轴的横向位置（从编排切过来时视角不变），纵向对准音符。
   requestAnimationFrame(() => {
     const el = scroller.value;
     if (el) el.scrollLeft = timeline.scrollLeft;
     revealNotes();
+    reportViewportWidth();
   });
 });
 onUnmounted(() => {
   window.removeEventListener("keydown", onKey);
   window.removeEventListener("pointerup", onPointerUp);
   window.removeEventListener("pointercancel", onPointerUp);
+  resizeObserver?.disconnect();
+  resizeObserver = null;
 });
 </script>
 

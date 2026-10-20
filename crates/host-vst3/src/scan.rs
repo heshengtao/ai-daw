@@ -70,11 +70,13 @@ impl ScannedPlugin {
     ///
     /// 会 dlopen 插件包，**不可**在音频线程的实时回调里调用（`Player` 的构造不在回调内，安全）。
     /// CLAP 走 [`crate::dispatch::on_main_thread`]：它的 `init` 与参数枚举只能在主线程调。
+    ///
+    /// VST3 始终在**进程内**加载；需要崩溃隔离的离线路径走
+    /// [`load_catalog_plugin_with_editor_mode`]。
     pub fn load(&self) -> Result<Box<dyn Plugin>, HostError> {
         match self.format {
             "vst3" => {
-                let plugin = vst3_host::simple::load_plugin(&self.path)
-                    .map_err(|e| HostError::Load(e.to_string()))?;
+                let plugin = load_vst3_plugin(&self.path, false)?;
                 Ok(Box::new(Vst3HostedPlugin::from_loaded(self.id.clone(), plugin)))
             }
             "clap" => {
@@ -173,10 +175,21 @@ pub fn load_catalog_plugin(entry: &CatalogPlugin) -> Result<Box<dyn Plugin>, Hos
 pub fn load_catalog_plugin_with_editor(
     entry: &CatalogPlugin,
 ) -> Result<(Box<dyn Plugin>, Option<EditorHandle>), HostError> {
+    load_catalog_plugin_with_editor_mode(entry, false)
+}
+
+/// 同 [`load_catalog_plugin_with_editor`]，但可以选择把 VST3 放进 helper 子进程。
+///
+/// `isolate_vst3` 只用于**离线渲染**（预览 / 导出 / 分析）：隔离路径每个音频块都要走一次
+/// JSON + base64 的管道往返，实时回调付不起这个开销，也不该在回调里等子进程。
+/// CLAP / AU 目前没有隔离实现，仍按原路径在进程内加载。
+pub fn load_catalog_plugin_with_editor_mode(
+    entry: &CatalogPlugin,
+    isolate_vst3: bool,
+) -> Result<(Box<dyn Plugin>, Option<EditorHandle>), HostError> {
     match entry.format.as_str() {
         "vst3" => {
-            let plugin = vst3_host::simple::load_plugin(&entry.path)
-                .map_err(|e| HostError::Load(e.to_string()))?;
+            let plugin = load_vst3_plugin(&entry.path, isolate_vst3)?;
             let hosted = Vst3HostedPlugin::from_loaded(entry.id.clone(), plugin);
             let handle = hosted.editor_handle();
             Ok((Box::new(hosted), Some(EditorHandle::Vst3(handle))))
@@ -194,6 +207,28 @@ pub fn load_catalog_plugin_with_editor(
 // ---------------------------------------------------------------------------
 // VST3
 // ---------------------------------------------------------------------------
+
+/// 加载一个 VST3 实例。
+///
+/// `isolate` 为 true 时用 `vst3-host` 的 helper 子进程托管：插件在 `dlopen` / 构造 /
+/// 处理音频时崩溃只会杀掉 helper，宿主拿到 `Error::PluginCrashed`（加载阶段则直接返回
+/// 错误），不会再带着整个应用一起退出。
+///
+/// helper 的查找由 `vst3-host` 负责：先看 `VST3_HOST_HELPER_PATH`，再看主程序旁边
+/// （Tauri 的 `externalBin` 会把 sidecar 放在那里），最后是 cargo target 目录。
+fn load_vst3_plugin(path: &Path, isolate: bool) -> Result<vst3_host::Plugin, HostError> {
+    let mut host = Vst3Host::builder()
+        // 与 `vst3_host::simple::load_plugin` 的默认配置保持一致；真实采样率/块大小由
+        // `Vst3HostedPlugin::prepare` 通过 `reconfigure` 再告诉插件。
+        .sample_rate(44_100.0)
+        .block_size(512)
+        .input_channels(2)
+        .output_channels(2)
+        .with_process_isolation(isolate)
+        .build()
+        .map_err(|e| HostError::Load(e.to_string()))?;
+    host.load_plugin(path).map_err(|e| HostError::Load(e.to_string()))
+}
 
 fn scan_vst3(extra: &[PathBuf]) -> Vec<ScannedPlugin> {
     let mut builder = Vst3Host::builder().scan_default_paths();

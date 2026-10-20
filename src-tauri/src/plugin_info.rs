@@ -78,10 +78,11 @@ struct Builtin {
     tags: &'static [&'static str],
 }
 
-/// 内置合成器 + 内置效果器 + 引擎里仍注册着的 5 条老预设音色。
+/// 内置合成器 + 5 条老预设 + 5 件采样乐器 + 5 个内置效果器。
 ///
-/// 这 5 条预设 id（`builtin.synth.lead` 等）留着是因为老工程和默认分轨模板直接挂在它们上面；
+/// 这 5 条预设 id（`builtin.synth.lead` 等）留着是因为老工程还直接挂在它们上面；
 /// 界面上的 32 条出厂音色不是独立插件，走 `set_param` / `apply_preset` 的 `params`。
+/// 采样乐器是真正独立的插件 id（`builtin.piano` 等），资产随包内嵌。
 const BUILTINS: &[Builtin] = &[
     Builtin {
         id: BUILTIN_SYNTH,
@@ -149,6 +150,61 @@ const BUILTINS: &[Builtin] = &[
         pitch_range: Some([36, 84]),
         mono: false,
         tags: &["pad", "铺底", "垫子", "预设"],
+    },
+    Builtin {
+        id: "builtin.piano",
+        name: "原声钢琴",
+        kind: PluginKind::Instrument,
+        category: "piano",
+        description: "内置采样原声钢琴（FreePats Upright Piano KW，SF3）：26 个键位采样、单层力度、mono，适合写和弦与旋律。",
+        roles: &["chords", "lead"],
+        pitch_range: Some([21, 108]),
+        mono: false,
+        tags: &["piano", "钢琴", "原声", "keys", "采样"],
+    },
+    Builtin {
+        id: "builtin.nylon_guitar",
+        name: "尼龙弦木吉他",
+        kind: PluginKind::Instrument,
+        category: "guitar",
+        description: "内置采样尼龙弦木吉他（FreePats Spanish classical guitar，SF3）：48 个半音采样，适合分解和弦、bossa、叙事。",
+        roles: &["chords", "lead"],
+        pitch_range: Some([40, 88]),
+        mono: false,
+        tags: &["guitar", "吉他", "木吉他", "尼龙", "classical", "采样"],
+    },
+    Builtin {
+        id: "builtin.electric_guitar",
+        name: "电吉他（清音）",
+        kind: PluginKind::Instrument,
+        category: "guitar",
+        description: "内置采样清音电吉他（FreePats FSBS clean，SF3）：13 个键位采样，适合 funk/city pop；要失真就再接 builtin.drive。",
+        roles: &["chords", "lead"],
+        pitch_range: Some([35, 86]),
+        mono: false,
+        tags: &["guitar", "吉他", "电吉他", "clean", "采样"],
+    },
+    Builtin {
+        id: "builtin.bass",
+        name: "指弹贝斯",
+        kind: PluginKind::Instrument,
+        category: "bass",
+        description: "内置采样指弹贝斯（FreePats Finger Bass YR，SF3）：12 个半音采样，写根音与八分音符 bass line。",
+        roles: &["bass"],
+        pitch_range: Some([28, 48]),
+        mono: false,
+        tags: &["bass", "贝斯", "低音", "finger", "采样"],
+    },
+    Builtin {
+        id: "builtin.drums",
+        name: "原声鼓组",
+        kind: PluginKind::Instrument,
+        category: "drums",
+        description: "内置采样原声鼓组（MuldjordKit lite，SF2）：GM 35–59 的 kick/snare/hat/tom/cymbal 等，3 层力度、22.05k、mono。",
+        roles: &["drums"],
+        pitch_range: Some([35, 59]),
+        mono: false,
+        tags: &["drums", "鼓", "原声鼓", "鼓组", "GM", "采样"],
     },
     Builtin {
         id: BUILTIN_DELAY,
@@ -487,7 +543,7 @@ fn roles_for(category: &str) -> Vec<&'static str> {
         "drums" => vec!["drums"],
         "pad" => vec!["pad", "chords"],
         "lead" => vec!["lead"],
-        "epiano" | "piano" | "organ" | "keys" => vec!["chords", "lead"],
+        "epiano" | "piano" | "organ" | "keys" | "guitar" => vec!["chords", "lead"],
         "strings" | "winds" | "brass" | "vocal" => vec!["chords", "pad", "lead"],
         "synth" | "sampler" => vec!["chords", "lead", "bass", "pad"],
         "fx" => vec!["fx"],
@@ -959,16 +1015,31 @@ mod tests {
     #[test]
     fn builtin_catalog_is_complete_and_resolvable() {
         let entries = entries(&[]);
-        // 内置合成器 + 5 条老预设 + 5 个内置效果器。
-        assert_eq!(entries.len(), 11, "{:?}", entries.iter().map(|e| &e.id).collect::<Vec<_>>());
+        // 内置合成器 + 5 条老预设 + 5 件采样乐器 + 5 个内置效果器。
+        assert_eq!(entries.len(), 16, "{:?}", entries.iter().map(|e| &e.id).collect::<Vec<_>>());
         assert_eq!(
             entries.iter().filter(|e| e.kind == PluginKind::Instrument).count(),
-            6
+            11
         );
         assert!(entries.iter().all(|e| brief(e).description.len() > 10));
     }
 
     /// 模型把名字当 id 传是常态——必须认出来，而不是报「未知插件」。
+    #[test]
+    fn sampled_instruments_are_resolvable_by_id_and_name() {
+        let entries = entries(&[]);
+        for (id, name) in [
+            ("builtin.piano", "原声钢琴"),
+            ("builtin.nylon_guitar", "尼龙弦木吉他"),
+            ("builtin.electric_guitar", "电吉他（清音）"),
+            ("builtin.bass", "指弹贝斯"),
+            ("builtin.drums", "原声鼓组"),
+        ] {
+            assert_eq!(resolve(&entries, id).unwrap().id, id);
+            assert_eq!(resolve(&entries, name).unwrap().id, id);
+        }
+    }
+
     #[test]
     fn resolve_accepts_names_ids_and_fragments() {
         let entries = vec![

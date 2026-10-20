@@ -61,6 +61,13 @@ export const useTimelineStore = defineStore("timeline", () => {
   const zoom = ref(clampZoom(load().zoom ?? DEFAULT_ZOOM));
   /** 横向滚动位置（px，从工程起点算起）。两个视图共用，所以切换视图时视角不变。 */
   const scrollLeft = ref(0);
+  /**
+   * 时间轴可视区宽度（px）：由当前视图的滚动容器回报。
+   *
+   * 缩到很小时 `contentWidth` 可能比视口还窄，右侧就会剩下一段「没有刻度也没有网格」的
+   * 空白；`totalBars` 用它补足小节数，保证任何缩放级别下标尺都铺满整屏。
+   */
+  const viewportWidth = ref(0);
 
   watch(zoom, () => {
     localStorage.setItem(KEY, JSON.stringify({ zoom: zoom.value }));
@@ -93,8 +100,17 @@ export const useTimelineStore = defineStore("timeline", () => {
     return Math.max(4, Math.ceil(contentBeats.value / bar) + 2);
   });
 
-  /** 标尺与网格多画一段，保证滚动 / 拉伸时右侧仍有刻度。 */
-  const totalBars = computed(() => contentBars.value + 24);
+  /**
+   * 标尺与网格多画一段，保证滚动 / 拉伸时右侧仍有刻度。
+   *
+   * 另外按**视口宽度**补足：缩得很小时内容比视口窄，光靠固定的 +24 小节会在右侧留下
+   * 一段没有刻度的空白。这里取两者较大值，刻度永远铺满整屏。
+   */
+  const totalBars = computed(() => {
+    const barPx = barBeats.value * zoom.value;
+    const viewportBars = barPx > 0 ? Math.ceil(viewportWidth.value / barPx) : 0;
+    return Math.max(contentBars.value + 24, viewportBars);
+  });
   /** 时间轴总长度（四分音符）。 */
   const totalBeats = computed(() => totalBars.value * barBeats.value);
 
@@ -258,6 +274,11 @@ export const useTimelineStore = defineStore("timeline", () => {
     return contentPx / zoom.value;
   }
 
+  /** 视图的滚动容器回报可视区宽度（挂载、窗口缩放、面板拖动后都会调用）。 */
+  function setViewportWidth(px: number): void {
+    viewportWidth.value = Number.isFinite(px) ? Math.max(0, px) : 0;
+  }
+
   /**
    * 以视口内某个 x 为锚点缩放（Ctrl/Cmd + 滚轮）：锚点下的那一拍保持不动。
    * 返回新的 `scrollLeft`，调用方写回滚动容器即可。
@@ -306,6 +327,7 @@ export const useTimelineStore = defineStore("timeline", () => {
     barAt,
     barRange,
     beatsAt,
+    setViewportWidth,
     zoomAt,
     centerOn,
   };

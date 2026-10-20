@@ -10,6 +10,7 @@ import { ref } from "vue";
 import { deletePreset, listPresets, savePreset, updatePreset } from "@/api/tauri";
 import type { Preset } from "@/api/types";
 import {
+  BUILTIN_PARAMS,
   EFFECT_FACTORY_PRESETS,
   SYNTH_FACTORY_PRESETS,
   SYNTH_ID,
@@ -69,15 +70,28 @@ export const usePresetsStore = defineStore("presets", () => {
         params: fullSynthParams(p.params),
         factory: true,
       }));
-    } else {
+    } else if (EFFECT_FACTORY_PRESETS[id]) {
       // 内置效果器的出厂预设：参数本就是完整的，直接照抄。
-      factory = (EFFECT_FACTORY_PRESETS[id] ?? []).map((p) => ({
+      factory = EFFECT_FACTORY_PRESETS[id].map((p) => ({
         id: p.id,
         name: t(p.name),
         note: t(p.note),
         params: p.params,
         factory: true,
       }));
+    } else if (BUILTIN_PARAMS[id]) {
+      // 没有专门出厂预设的内置乐器：给一条「默认」，参数表全量摊平。
+      factory = [
+        {
+          id: `${id}.default`,
+          name: t("preset.default"),
+          note: "",
+          params: Object.fromEntries(BUILTIN_PARAMS[id].map((p) => [p.id, p.default])),
+          factory: true,
+        },
+      ];
+    } else {
+      factory = [];
     }
     // 用户自存预设没有类别（`category` 留空），界面按「我的预设」分组。
     const mine: PresetOption[] = user.value

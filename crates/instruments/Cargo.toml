@@ -1,0 +1,11 @@
+[package]
+name = "ai-daw-instruments"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ai-daw-plugin-api = { path = "../plugin-api" }
+# SoundFont2 + SoundFont3 reader. `sf3` pulls in the pure-Rust `lewton` Vorbis
+# decoder; SF2 files still load through the same `SoundFont::new`.
+rustysynth-ext = { version = "1.4", features = ["sf3"] }

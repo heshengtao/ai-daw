@@ -39,6 +39,20 @@
   `describe_plugin` 看参数表，或挂上后 `analyze_project` 确认听感——**不要自己补一个音色描述**。
 - 内置合成器只有一个：`builtin.synth`。界面上的 32 条音色是它的参数补丁，用 `set_param` /
   `apply_preset(params)` 调出；`builtin.synth.lead/.bass/.drums/.strings/.pad` 是老 id，仍可直接挂。
+- **内置采样乐器**（随包内嵌，立即可用，不需要扫描/安装）：
+
+  | id | 名称 | 特点 | 建议音域 |
+  | --- | --- | --- | --- |
+  | `builtin.piano` | 原声钢琴 | FreePats Upright Piano KW · SF3 · mono | 21–108 |
+  | `builtin.nylon_guitar` | 尼龙弦木吉他 | Spanish classical guitar · SF3 · 48 半音采样 | 40–88 |
+  | `builtin.electric_guitar` | 电吉他（清音） | FSBS clean · SF3 · 13 键位采样 | 35–86 |
+  | `builtin.bass` | 指弹贝斯 | Finger Bass YR · SF3 · 12 半音采样 | 28–48 |
+  | `builtin.drums` | 原声鼓组 | MuldjordKit lite · SF2 · **GM 35–59** · 3 层力度 | 35–59 |
+
+  采样乐器的参数只有两个：`gain`（0..4，默认按乐器校准）与 `tone`（0..1 一阶低通，1 = 旁通）。
+  它们输出**单声道**（仍可复音演奏）；要宽度用 `builtin.chorus` / `builtin.reverb` / 声像。
+  `builtin.drums` 是完整的原声鼓组，**直接在一轨里按 GM 音高写 kick/snare/hat/tom/cymbal**；
+  `builtin.synth.drums` 只是旧的底鼓预设，不要拿它当鼓组。
 - 内置效果器：`builtin.delay` / `builtin.reverb` / `builtin.chorus` / `builtin.drive` / `builtin.eq`。
 - 效果链是**有序**的：`add_effect` 追加到末尾；`apply_preset` 的 `effects` 整体替换（想保留的现有效果器
   要一并写回，否则会被清掉）。

@@ -12,6 +12,7 @@ realtime = ["dep:cpal"]
 ai-daw-ipc = { path = "../ipc" }
 ai-daw-plugin-api = { path = "../plugin-api" }
 ai-daw-synth = { path = "../synth" }
+ai-daw-instruments = { path = "../instruments" }
 ai-daw-effects = { path = "../effects" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"

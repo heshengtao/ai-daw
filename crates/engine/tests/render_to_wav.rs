@@ -28,6 +28,43 @@ fn demo() -> ai_daw_engine::model::Project {
 }
 
 #[test]
+fn renders_a_builtin_sampled_instrument() {
+    let mut e = Engine::new("sampled");
+    let ev = e.execute(Command::AddTrack { name: "Piano".into() }, Actor::Human);
+    let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+    e.execute(
+        Command::SetTrackInstrument { track, plugin_id: "builtin.piano".into() },
+        Actor::Human,
+    );
+    let ev = e.execute(Command::AddClip { track, start: 0.0, length: 2.0 }, Actor::Human);
+    let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
+    e.execute(
+        Command::AddNote {
+            track,
+            clip,
+            note: Note {
+                id: 0,
+                pitch: 60,
+                start: 0.0,
+                duration: 1.0,
+                velocity: 100,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+            },
+        },
+        Actor::Human,
+    );
+
+    let opts = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.2, settle_seconds: 0.0 };
+    let buffer = render(e.project(), &PluginRegistry::with_builtins(), &opts);
+    assert!(
+        buffer.data().iter().any(|s| s.abs() > 1e-4),
+        "builtin.piano 必须能通过引擎渲染出非静音"
+    );
+}
+
+#[test]
 fn renders_project_to_readable_wav() {
     let project = demo();
     let opts = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5, settle_seconds: 0.0 };

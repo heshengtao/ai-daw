@@ -32,6 +32,12 @@ export interface PluginInfo {
 
 /** 内置合成器的插件 id（与引擎 `ai_daw_engine::BUILTIN_SYNTH` 一致）。 */
 export const SYNTH_ID = "builtin.synth";
+/** 采样内置乐器（与 `crates/instruments` 的 id 一一对应）。 */
+export const PIANO_ID = "builtin.piano";
+export const NYLON_GUITAR_ID = "builtin.nylon_guitar";
+export const ELECTRIC_GUITAR_ID = "builtin.electric_guitar";
+export const BASS_ID = "builtin.bass";
+export const DRUMS_ID = "builtin.drums";
 /** 内置延迟的插件 id（与引擎 `BUILTIN_DELAY` 一致）。 */
 export const DELAY_ID = "builtin.delay";
 /** 内置混响的插件 id（与引擎 `BUILTIN_REVERB` 一致）。 */
@@ -573,11 +579,14 @@ export function effectiveParams(
 ): Record<string, number> {
   if (!pluginId) return params;
   const factory = SYNTH_FACTORY_PRESETS.find((p) => p.id === pluginId);
-  if (!factory) return params;
-  return fullSynthParams(factory.params, params);
+  if (factory) return fullSynthParams(factory.params, params);
+  // 采样内置乐器（以及其它自带参数表的插件）：工程里空 params 时按参数表默认值显示/保存。
+  const specs = BUILTIN_PARAMS[canonicalPluginId(pluginId)];
+  if (!specs) return params;
+  return { ...Object.fromEntries(specs.map((p) => [p.id, p.default])), ...params };
 }
 
-/** 全部内置插件：内置合成器家族现在只剩它一个（其余是预设，不再是独立条目）。 */
+/** 全部内置插件：内置合成器 + 5 件采样乐器 + 5 个内置效果器。 */
 export const BUILTIN_PLUGINS: PluginInfo[] = [
   {
     id: SYNTH_ID,
@@ -589,6 +598,56 @@ export const BUILTIN_PLUGINS: PluginInfo[] = [
     loadable: true,
     tags: ["synth", "sine", "正弦", "基础", "默认", "合成器"],
     note: "synth.note",
+  },
+  {
+    id: PIANO_ID,
+    name: "inst.piano.name",
+    kind: "instrument",
+    category: "pluginCategory.piano",
+    builtin: true,
+    loadable: true,
+    tags: ["piano", "钢琴", "原声", "keys", "采样"],
+    note: "inst.piano.note",
+  },
+  {
+    id: NYLON_GUITAR_ID,
+    name: "inst.nylon.name",
+    kind: "instrument",
+    category: "pluginCategory.guitar",
+    builtin: true,
+    loadable: true,
+    tags: ["guitar", "吉他", "木吉他", "尼龙", "classical"],
+    note: "inst.nylon.note",
+  },
+  {
+    id: ELECTRIC_GUITAR_ID,
+    name: "inst.electric.name",
+    kind: "instrument",
+    category: "pluginCategory.guitar",
+    builtin: true,
+    loadable: true,
+    tags: ["guitar", "吉他", "电吉他", "clean"],
+    note: "inst.electric.note",
+  },
+  {
+    id: BASS_ID,
+    name: "inst.bass.name",
+    kind: "instrument",
+    category: "pluginCategory.bass",
+    builtin: true,
+    loadable: true,
+    tags: ["bass", "贝斯", "低音", "finger"],
+    note: "inst.bass.note",
+  },
+  {
+    id: DRUMS_ID,
+    name: "inst.drums.name",
+    kind: "instrument",
+    category: "pluginCategory.drums",
+    builtin: true,
+    loadable: true,
+    tags: ["drums", "鼓", "原声鼓", "鼓组", "GM"],
+    note: "inst.drums.note",
   },
   {
     id: DELAY_ID,
@@ -756,6 +815,11 @@ export const SYNTH_PARAM_HINTS: Record<string, string> = {
  */
 export const COMMON_INSTRUMENT_PARAMS: Record<string, string[]> = {
   [SYNTH_ID]: ["cutoff", "resonance", "attack", "decay", "sustain", "release", "detune", "lfoRate"],
+  [PIANO_ID]: ["gain", "tone"],
+  [NYLON_GUITAR_ID]: ["gain", "tone"],
+  [ELECTRIC_GUITAR_ID]: ["gain", "tone"],
+  [BASS_ID]: ["gain", "tone"],
+  [DRUMS_ID]: ["gain", "tone"],
 };
 
 /**
@@ -821,9 +885,31 @@ export const EQ_PARAMS: ParamSpec[] = [
   { id: "mix", name: "混合", min: 0, max: 1, step: 0.01, default: 1, digits: 2 },
 ];
 
+/**
+ * 采样内置乐器的参数表。`gain` 的默认值按试听峰值校准，与 Rust 侧
+ * `Kind::default_gain()` 必须一致；`tone` 是一阶低通，1 = 旁通。
+ */
+function sampledInstrumentParams(gain: number): ParamSpec[] {
+  return [
+    { id: "gain", name: "音量", min: 0, max: 4, step: 0.01, default: gain, digits: 2 },
+    { id: "tone", name: "音色", min: 0, max: 1, step: 0.01, default: 1, digits: 2 },
+  ];
+}
+
+export const PIANO_PARAMS = sampledInstrumentParams(2.5);
+export const NYLON_GUITAR_PARAMS = sampledInstrumentParams(3.0);
+export const ELECTRIC_GUITAR_PARAMS = sampledInstrumentParams(2.2);
+export const BASS_PARAMS = sampledInstrumentParams(3.0);
+export const DRUMS_PARAMS = sampledInstrumentParams(2.8);
+
 /** 内置插件的参数表（音源 + 效果器都要预填，界面的通用参数列表按 id 取）。 */
 export const BUILTIN_PARAMS: Record<string, ParamSpec[]> = {
   [SYNTH_ID]: SYNTH_PARAMS,
+  [PIANO_ID]: PIANO_PARAMS,
+  [NYLON_GUITAR_ID]: NYLON_GUITAR_PARAMS,
+  [ELECTRIC_GUITAR_ID]: ELECTRIC_GUITAR_PARAMS,
+  [BASS_ID]: BASS_PARAMS,
+  [DRUMS_ID]: DRUMS_PARAMS,
   [DELAY_ID]: DELAY_PARAMS,
   [REVERB_ID]: REVERB_PARAMS,
   [CHORUS_ID]: CHORUS_PARAMS,

@@ -7,29 +7,63 @@ use std::sync::{Arc, Mutex};
 
 use ai_daw_engine::model::Project;
 use ai_daw_engine::registry::{missing_plugin, PluginRegistry, PluginSlot};
-use ai_daw_host_vst3::{load_catalog_plugin_with_editor, CatalogPlugin};
+use ai_daw_host_vst3::{load_catalog_plugin_with_editor_mode, CatalogPlugin};
 
 use crate::audio::EditorSlot;
+
+/// 离线渲染期间收集到的问题（目前只有外部插件加载失败）。
+///
+/// 渲染不能因为一个坏插件就整首失败：工厂退回静音占位，把原因记在这里，调用方（MCP /
+/// 导出 / 预览）再决定怎么呈现。
+pub type LoadWarnings = Arc<Mutex<Vec<String>>>;
 
 /// 依据扫描目录构建注册表：内置合成器 + 外部插件工厂 + 缺失占位。
 ///
 /// 外部插件工厂在加载失败时退回静音占位，绝不让一条坏轨拖垮整首曲子；
 /// 创建实例时顺带把「(轨道, 槽位) → 编辑器句柄」登记进 `editor_handles`，供界面打开原生窗口。
+///
+/// 实时路径用这个版本：VST3 在进程内加载，处理器不承担跨进程 IPC。
 pub fn build_registry(
     catalog: &[CatalogPlugin],
     project: &Project,
     editor_handles: Arc<Mutex<HashMap<(u64, PluginSlot), EditorSlot>>>,
+) -> PluginRegistry {
+    build_registry_with(catalog, project, editor_handles, false, None)
+}
+
+/// 离线渲染用的注册表：VST3 走 helper 子进程加载，崩溃只杀掉 helper。
+///
+/// 为什么只对离线路径开启：隔离路径每个音频块都要一次 JSON + base64 的管道往返，实时回调
+/// 付不起这个开销。离线渲染（预览 / 导出 / 分析）没有硬实时预算，换来的是「插件崩了应用
+/// 还在」。
+pub fn build_registry_for_offline_render(
+    catalog: &[CatalogPlugin],
+    project: &Project,
+    editor_handles: Arc<Mutex<HashMap<(u64, PluginSlot), EditorSlot>>>,
+    warnings: LoadWarnings,
+) -> PluginRegistry {
+    build_registry_with(catalog, project, editor_handles, true, Some(warnings))
+}
+
+fn build_registry_with(
+    catalog: &[CatalogPlugin],
+    project: &Project,
+    editor_handles: Arc<Mutex<HashMap<(u64, PluginSlot), EditorSlot>>>,
+    isolate_vst3: bool,
+    warnings: Option<LoadWarnings>,
 ) -> PluginRegistry {
     let mut registry = PluginRegistry::with_builtins();
 
     for entry in catalog {
         let id = entry.id.clone();
         let fallback_id = id.clone();
+        let display_name = entry.name.clone();
         let entry = entry.clone();
         let plugin_id = id.clone();
         let handles = Arc::clone(&editor_handles);
+        let warnings = warnings.clone();
         registry.register(&id, move |track, slot| {
-            match load_catalog_plugin_with_editor(&entry) {
+            match load_catalog_plugin_with_editor_mode(&entry, isolate_vst3) {
                 Ok((plugin, Some(handle))) => {
                     handles.lock().unwrap().insert(
                         (track.0, slot),
@@ -38,7 +72,15 @@ pub fn build_registry(
                     plugin
                 }
                 Ok((plugin, None)) => plugin,
-                Err(_) => missing_plugin(&fallback_id),
+                Err(err) => {
+                    // 一个坏插件只让**这条轨道**静音；把原因留给调用方（MCP 会写进分析结果）。
+                    if let Some(warnings) = &warnings {
+                        warnings.lock().unwrap().push(format!(
+                            "插件「{display_name}」（{fallback_id}）加载失败，已按静音处理：{err}"
+                        ));
+                    }
+                    missing_plugin(&fallback_id)
+                }
             }
         });
     }
@@ -339,5 +381,113 @@ mod tests {
             "挂 AU 插件的轨道必须出声（峰值 {}）",
             buffer.peak()
         );
+    }
+
+    /// 离线渲染注册表：VST3 走隔离加载，坏插件退回静音占位并把原因记录下来。
+    ///
+    /// 2026-10-20 的闪退就是 RdPiano 在 `dlopen` 后的构造函数里 `SIGBUS`。隔离之后同样的
+    /// 崩溃只会杀掉 helper，工厂拿到错误、返回占位；这条测试钉住「错误不会向上冒成整个
+    /// 渲染失败，也不会被静默吞掉」。
+    #[test]
+    fn offline_registry_reports_a_broken_vst3_and_falls_back_to_silence() {
+        let id = "vst3:DEADBEEFDEADBEEFDEADBEEFDEADBEEF".to_string();
+        let catalog = vec![CatalogPlugin {
+            id: id.clone(),
+            name: "Broken".into(),
+            vendor: "test".into(),
+            kind: ai_daw_plugin_api::PluginKind::Instrument,
+            format: "vst3".into(),
+            accepts_midi: true,
+            has_editor: false,
+            path: std::path::PathBuf::from("/nonexistent/Broken.vst3"),
+        }];
+
+        let mut engine = Engine::new("offline-isolation");
+        let events = engine.execute(Command::AddTrack { name: "Broken".into() }, Actor::Human);
+        let track = match events[0] {
+            Event::TrackAdded { id, .. } => id,
+            _ => unreachable!("AddTrack 应当产出 TrackAdded"),
+        };
+        engine.execute(
+            Command::SetTrackInstrument { track, plugin_id: id.clone() },
+            Actor::Human,
+        );
+        let project = engine.project().clone();
+
+        let warnings: LoadWarnings = Arc::new(Mutex::new(Vec::new()));
+        let handles = Arc::new(Mutex::new(HashMap::new()));
+        let registry = build_registry_for_offline_render(
+            &catalog,
+            &project,
+            handles,
+            Arc::clone(&warnings),
+        );
+
+        let plugin = registry
+            .create(&id, track, PluginSlot::Instrument)
+            .expect("目录里的插件应当有工厂");
+        assert!(plugin.is_placeholder(), "加载失败必须退回静音占位");
+
+        let warnings = warnings.lock().unwrap();
+        assert!(
+            warnings.iter().any(|w| w.contains(&id)),
+            "必须记录加载失败（不是静默静音）：{warnings:?}"
+        );
+    }
+
+    /// 手动端到端：用**本机会话里的真实工程**跑一次隔离离线渲染。
+    ///
+    /// 走的正是 2026-10-20 闪退那条路径（`analyze_project` → `render_offline` →
+    /// `build_registry` → 加载 RdPiano）。默认 `#[ignore]`：它依赖本机的 session 与插件，
+    /// CI 上没有意义。本机专门跑：
+    ///
+    /// ```text
+    /// cd src-tauri
+    /// cargo test --lib manual_offline_render_of_local_session -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "依赖本机会话与已安装插件"]
+    fn manual_offline_render_of_local_session() {
+        let Some(home) = std::env::var_os("HOME") else { return };
+        let app_dir = std::path::PathBuf::from(home)
+            .join("Library/Application Support/com.aidaw.app");
+        let Some(session) = crate::session::read_session(&app_dir.join("session.json")) else {
+            eprintln!("没有本机会话，跳过。");
+            return;
+        };
+
+        // 测试进程旁边没有 Tauri 放好的 sidecar，显式指向构建脚本的产物。
+        let binaries = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries");
+        if let Ok(entries) = std::fs::read_dir(&binaries) {
+            if let Some(helper) = entries.flatten().map(|e| e.path()).find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("vst3-host-helper-"))
+            }) {
+                std::env::set_var("VST3_HOST_HELPER_PATH", helper);
+            }
+        }
+
+        let catalog = ai_daw_host_vst3::scan_catalog_with(
+            &[app_dir.join("plugins/vst3")],
+            &[app_dir.join("plugins/clap")],
+            &[],
+        );
+        let warnings: LoadWarnings = Arc::new(Mutex::new(Vec::new()));
+        let inputs = crate::commands::RenderInputs {
+            project: session.project,
+            catalog,
+            editor_handles: Arc::new(Mutex::new(HashMap::new())),
+            samples: HashMap::new(),
+            warnings: Arc::clone(&warnings),
+        };
+
+        let buffer = crate::commands::render_offline(inputs, 48_000, 0.0);
+        eprintln!(
+            "隔离渲染完成：{} 帧，峰值 {:.6}",
+            buffer.frames(),
+            buffer.peak()
+        );
+        eprintln!("warnings: {:?}", warnings.lock().unwrap());
     }
 }

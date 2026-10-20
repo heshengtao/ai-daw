@@ -1,0 +1,33 @@
+[package]
+name = "ai-daw-vst3-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vst3-host-helper"
+path = "src/main.rs"
+
+[dependencies]
+# 隔离协议本身（`HostCommand` / `HostResponse` / `ProtocolChannel`）由该 crate 提供；
+# 必须启用 `process-isolation`，否则 `process_isolation` 模块不导出。
+vst3-host = { version = "0.9", features = ["process-isolation"] }
+serde_json = "1"
+
+# helper 在 macOS 上要给插件编辑器一个原生事件泵（见上游文件的 `mod macos`）。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSWindow",
+    "NSView",
+    "NSResponder",
+    "NSGraphics",
+    "NSEvent",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "NSString",
+    "NSGeometry",
+    "NSDate",
+    "NSRunLoop",
+] }

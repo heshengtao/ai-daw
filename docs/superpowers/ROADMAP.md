@@ -32,7 +32,7 @@
   **E2 崩溃隔离仍搁置**。
 - **第六次修订（2026-10-10）**：**`skills/` 改成标准 Agent Skill 目录** ——
   `skills/aidaw/SKILL.md`（带 `name` / `description` / `license` frontmatter，入口 + 索引）
-  + `skills/aidaw/references/`（原 9 个能力域；旧路径 `skills/*.md` 与 `skills/README.md` 已随之下移）。
+  + `skills/aidaw/references/`（原 9 个能力域，后续扩到 14 个；旧路径 `skills/*.md` 与 `skills/README.md` 已随之下移）。
   MCP 的 `aidaw_help` 内嵌路径同步更新。
 - **第五次修订（2026-10-10）**：**完成 F4** —— `aidaw` 以 Tauri sidecar 随包分发，并在首次启动时
   被接进 PATH（macOS 软链 `/usr/local/bin/aidaw`，一次管理员授权；Windows 用户 PATH；Linux deb/rpm 天生在
@@ -227,12 +227,14 @@
 | 5 | 铺底 | 织体 / 氛围 | 铺底 Pad |
 
 选的是流行与电子编曲里最通用的五个**功能位**（节奏 → 低频 → 和声 → 主旋律 → 色彩），
-避免「节奏」与「鼓组」这类职责重叠的命名。鼓组专用采样器属 Stage C，接入后只需改 `plugin_id`。
+避免「节奏」与「鼓组」这类职责重叠的命名。鼓组专用采样器已接入为 `builtin.drums`（MuldjordKit lite），默认模板直接改 `plugin_id`。
 `Engine::new_project`（应用启动时的初始状态）不写历史，用户主动点「新建工程」走命令、可撤销。
 
-**内置音色**：`builtin.synth` 是合成器本体，另有 4 个**预设音色**（`builtin.synth.lead` /
-`.pluck` / `.bass` / `.pad`）——同一套 DSP 配不同默认包络，各自是独立插件 id
+**内置音色**：`builtin.synth` 是合成器本体，另有 5 个**预设音色**（`builtin.synth.lead` /
+`.bass` / `.drums` / `.strings` / `.pad`）——同一套 DSP 配不同默认包络，各自是独立插件 id
 （`crates/engine/src/registry.rs` 的 `BUILTIN_PRESETS`），所以音色选择器里就是一条条真音色。
+另有 5 件采样乐器（`builtin.piano` / `builtin.nylon_guitar` / `builtin.electric_guitar` /
+`builtin.bass` / `builtin.drums`），资产在 `crates/instruments/assets` 内嵌。
 
 **音符的两个「响度类」属性**：`velocity` **力度**（演奏强度，插件各自解释；内置合成器折算成振幅）
 与 `volume` **音量**（单音电平微调，不改音色，默认 127 = 不衰减）。插件 ABI 的 `NoteOn` 只有
@@ -384,7 +386,7 @@
   - **配置**：设置页「AI / MCP」一节可开关、改端口（0 = 临时端口），即时启停；配置落在应用配置目录的 `mcp.json`。
   - 安全：只绑回环；rmcp 默认只放行回环 `Host`（防 DNS rebinding）。**当前不鉴权**——同机任意进程都能连，后续可加 token。
 - **D3 · skills 文档包 + 本地 HTTP/WS**（设计文档 §9）：🟡 **skills 文档包已完成（= F3）**：
-  仓库根 `skills/aidaw/`（`SKILL.md` + `references/` 9 个能力域），并内嵌进 MCP 的 `aidaw_help(topic)` 工具（渐进式披露）。
+  仓库根 `skills/aidaw/`（`SKILL.md` + `references/` 14 个能力域，含乐理 / 节奏鼓谱 / 曲风 / 编曲流程），并内嵌进 MCP 的 `aidaw_help(topic)` 工具（渐进式披露）。
   **本地 HTTP/WS 未做**（MCP 已提供 HTTP 入口）。
 - **D4 · 前端 AI 可视化**：✅ 完成。`stores/engineEvents.ts` 解析事件里的 `Actor`，把**代理**发起的变更单独记账（代理名、事件类型、涉及轨道）；底栏胶囊只在代理动手时点亮并显示代理名（tooltip 给出最近改动处数与轨道），音轨栏对被代理改动的行短暂高亮（900ms 胶囊窗 / 1600ms 轨道窗）。人类自己的编辑不再误点亮 AI 指示。浏览器预览的 mock 会轮播代理事件，便于无后端演示。
 
@@ -445,8 +447,9 @@
 - **F3 · skills 文档包（渐进式披露）** ✅ **完成（2026-10-10）**
   - 仓库根 `skills/aidaw/`：**一个标准 Agent Skill 目录**——`SKILL.md`（入口：frontmatter
     `name: aidaw` / `description` / `license`，正文是索引 + 公共约定 + CLI 入口）+ `references/`
-    下 9 个能力域（`project` / `track` / `clip` / `note`
-    / `mix` / `audio` / `transport` / `analysis` / `plugin`），每个域只描述它那一小组工具与组合用法。
+    下 14 个能力域（`project` / `track` / `clip` / `note` / `composition` / `mix` / `audio` /
+    `transport` / `analysis` / `plugin` / `theory` / `rhythm` / `genres` / `workflow`），
+    每个域只描述它那一小组工具与组合用法。
   - **gateway 工具**：MCP 的 `aidaw_help(topic)` —— 留空给索引，按域取细则；文档用 `include_str!` 编译期内嵌。
   - **CLI 入口 ✅（随 F1 补齐）**：`skills/aidaw/SKILL.md` 已有「CLI 入口」一节——`aidaw status` → 没开
     `aidaw start` → `aidaw call …`；`aidaw_call(op, args)` 由 `aidaw call` 落地。
@@ -658,5 +661,5 @@ M3（Stage C：可录音、有音频片段）→ M4（Stage D：可被 AI 驱动
   - `plans/2026-10-10-plugin-manager.md`（E1：插件管理器 —— 安装 / 导入 / 更新 / 删除，✅ 完成）
 - 调研（research）：
   - `research/2026-10-10-open-source-survey.md`（录音 / 混音 / MIDI 输入 / 插件商店：可直接用的库与只能参考的项目，含许可结论）
-- skills 文档包（渐进式披露，AI harness 用）：`skills/aidaw/`（`SKILL.md` + `references/` 9 个能力域；由 MCP 的 `aidaw_help` 提供）
+- skills 文档包（渐进式披露，AI harness 用）：`skills/aidaw/`（`SKILL.md` + `references/` 14 个能力域，含乐理 / 节奏鼓谱 / 曲风 / 编曲流程；由 MCP 的 `aidaw_help` 提供）
 - 进度与后续计划的唯一索引：**本文件**。

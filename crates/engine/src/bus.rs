@@ -1712,7 +1712,7 @@ mod tests {
 
     /// 默认分轨的顺序是界面自上而下看到的顺序，改它要连测试一起改。
     #[test]
-    fn starter_tracks_run_lead_chords_bass_drums_pad() {
+    fn starter_tracks_run_piano_guitar_bass_drums_pad() {
         let e = Engine::new_project("demo");
         let ids: Vec<&str> = e
             .project()
@@ -1723,10 +1723,10 @@ mod tests {
         assert_eq!(
             ids,
             [
-                "builtin.synth.lead",
-                "builtin.synth.strings",
-                "builtin.synth.bass",
-                "builtin.synth.drums",
+                "builtin.piano",
+                "builtin.nylon_guitar",
+                "builtin.bass",
+                "builtin.drums",
                 "builtin.synth.pad",
             ],
             "默认分轨按 主旋律→和弦→低音→鼓组→铺底 排列"

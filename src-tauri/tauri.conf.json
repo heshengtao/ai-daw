@@ -4,9 +4,9 @@
   "version": "1.3.0",
   "identifier": "com.aidaw.app",
   "build": {
-    "beforeDevCommand": "npm run build:aidaw && npm run dev",
+    "beforeDevCommand": "npm run build:sidecars && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build && npm run build:aidaw",
+    "beforeBuildCommand": "npm run build && npm run build:sidecars",
     "frontendDist": "../dist"
   },
   "app": {
@@ -29,7 +29,7 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "externalBin": ["binaries/aidaw"],
+    "externalBin": ["binaries/aidaw", "binaries/vst3-host-helper"],
     "resources": {
       "resources/onnx/basic-pitch-nmp.onnx": "models/basic-pitch-nmp.onnx",
       "resources/onnx/localvqe-ns.onnx": "models/localvqe-ns.onnx",

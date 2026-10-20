@@ -273,8 +273,8 @@ pub(crate) struct SetAutomationArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct HelpArgs {
-    /// 能力域：`project` / `track` / `clip` / `note` / `composition` / `mix` / `audio` / `transport` / `analysis` / `plugin`；
-    /// 留空返回索引。
+    /// 能力域：`project` / `track` / `clip` / `note` / `composition` / `mix` / `audio` / `transport` /
+    /// `analysis` / `plugin` / `theory` / `rhythm` / `genres` / `workflow`；留空返回索引。
     #[serde(default)]
     topic: Option<String>,
 }
@@ -282,7 +282,7 @@ pub(crate) struct HelpArgs {
 /// 技能文档（编译期内嵌，无需资源打包）：`topic` → markdown。空 topic 是索引。
 ///
 /// 目录结构 = 一个标准 Agent Skill：`skills/aidaw/SKILL.md`（入口，带 frontmatter）
-/// + `skills/aidaw/references/*.md`（9 个能力域，按需加载）。
+/// + `skills/aidaw/references/*.md`（能力域，按需加载）。
 pub(crate) const SKILL_DOCS: &[(&str, &str)] = &[
     ("", include_str!("../../skills/aidaw/SKILL.md")),
     ("project", include_str!("../../skills/aidaw/references/project.md")),
@@ -295,6 +295,10 @@ pub(crate) const SKILL_DOCS: &[(&str, &str)] = &[
     ("transport", include_str!("../../skills/aidaw/references/transport.md")),
     ("analysis", include_str!("../../skills/aidaw/references/analysis.md")),
     ("plugin", include_str!("../../skills/aidaw/references/plugin.md")),
+    ("theory", include_str!("../../skills/aidaw/references/theory.md")),
+    ("rhythm", include_str!("../../skills/aidaw/references/rhythm.md")),
+    ("genres", include_str!("../../skills/aidaw/references/genres.md")),
+    ("workflow", include_str!("../../skills/aidaw/references/workflow.md")),
 ];
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -2072,20 +2076,41 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     pub(crate) fn analyze_project(app: &AppHandle, args: AnalyzeArgs) -> Result<String, String> {
         let sample_rate = check_sample_rate_s(args.sample_rate.unwrap_or(FALLBACK_SAMPLE_RATE))?;
         let inputs = commands::render_inputs(&app.state::<AppState>());
+        // 插件加载失败的记录由注册表工厂写进这里（离线渲染走隔离，崩了也不会杀主进程）。
+        let warnings = std::sync::Arc::clone(&inputs.warnings);
         // 只分析工程正文，不加尾音。
         let buffer = commands::render_offline(inputs, sample_rate, 0.0);
         let report = ai_daw_analysis::analyze(buffer.data(), buffer.channels(), sample_rate as f64)
             .map_err(|e| e.to_string())?;
-        json_s(&report)
+        let warnings: Vec<String> = warnings.lock().unwrap().clone();
+        if warnings.is_empty() {
+            return json_s(&report);
+        }
+        // 有插件加载失败时，分析结果只是「剩下的能响的部分」——必须让代理知道哪些插件缺了，
+        // 否则它会把一条静音轨当成「混音太轻」。
+        let mut value = serde_json::to_value(&report).map_err(|e| format!("序列化失败：{e}"))?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert("warnings".into(), serde_json::Value::from(warnings));
+        }
+        serde_json::to_string_pretty(&value).map_err(|e| format!("序列化失败：{e}"))
     }
 
     pub(crate) fn export_wav(app: &AppHandle, args: ExportArgs) -> Result<String, String> {
         let sample_rate = check_sample_rate_s(args.sample_rate.unwrap_or(FALLBACK_SAMPLE_RATE))?;
         let path = args.path.clone();
         let inputs = commands::render_inputs(&app.state::<AppState>());
+        let warnings = std::sync::Arc::clone(&inputs.warnings);
         let buffer = commands::render_offline(inputs, sample_rate, 0.5);
         ai_daw_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| e.to_string())?;
-        Ok(format!("已导出到 {path}"))
+        let warnings: Vec<String> = warnings.lock().unwrap().clone();
+        if warnings.is_empty() {
+            Ok(format!("已导出到 {path}"))
+        } else {
+            Ok(format!(
+                "已导出到 {path}\n\n警告（这些插件加载失败，对应轨道按静音导出）：\n- {}",
+                warnings.join("\n- ")
+            ))
+        }
     }
 
     pub(crate) fn master_project(app: &AppHandle, args: MasterExportArgs) -> Result<String, String> {
@@ -3181,7 +3206,7 @@ mod tests {
         let keys: Vec<&str> = SKILL_DOCS.iter().map(|(k, _)| *k).collect();
         for expected in [
             "", "project", "track", "clip", "note", "composition", "mix", "audio", "transport",
-            "analysis", "plugin",
+            "analysis", "plugin", "theory", "rhythm", "genres", "workflow",
         ] {
             assert!(keys.contains(&expected), "缺少技能域「{expected}」");
         }

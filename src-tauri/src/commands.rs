@@ -21,7 +21,7 @@ use ai_daw_host_vst3::{CatalogPlugin, EditorHandle};
 use ai_daw_plugin_api::ParamInfo;
 
 use crate::audio::{EditorSlot, TransportSnapshot};
-use crate::plugins::{build_registry, uses_external_plugins};
+use crate::plugins::{build_registry_for_offline_render, uses_external_plugins, LoadWarnings};
 use crate::presets::Preset;
 use crate::state::{with_editor_windows, AppState, EVENT_ENGINE, EVENT_EXPORT, EVENT_IMPORT};
 
@@ -194,6 +194,8 @@ pub(crate) struct RenderInputs {
     pub catalog: Vec<CatalogPlugin>,
     pub editor_handles: Arc<Mutex<HashMap<(u64, PluginSlot), EditorSlot>>>,
     pub samples: HashMap<String, Arc<DecodedAudio>>,
+    /// 外部插件加载失败 / 崩溃的记录（渲染继续，坏轨道按静音处理）。
+    pub warnings: LoadWarnings,
 }
 
 /// 取当前状态的可渲染快照（工程 + 插件目录 + 已解码素材）。
@@ -212,6 +214,7 @@ pub(crate) fn render_inputs(state: &AppState) -> RenderInputs {
         catalog: state.catalog_snapshot(),
         editor_handles: Arc::new(Mutex::new(HashMap::new())),
         samples,
+        warnings: Arc::new(Mutex::new(Vec::new())),
     }
 }
 
@@ -238,8 +241,15 @@ pub(crate) fn render_offline_with_progress(
     tail_seconds: f64,
     on_progress: impl FnMut(usize, usize),
 ) -> AudioBuffer {
-    let RenderInputs { project, catalog, editor_handles, samples } = inputs;
-    let registry = build_registry(&catalog, &project, editor_handles);
+    let RenderInputs { project, catalog, editor_handles, samples, warnings } = inputs;
+    // 离线渲染把 VST3 放进 helper 子进程：插件在加载 / 处理音频时崩溃只杀 helper，
+    // 宿主记一条警告后继续（该轨道静音），不会再把整个应用带走。
+    let registry = build_registry_for_offline_render(
+        &catalog,
+        &project,
+        editor_handles,
+        Arc::clone(&warnings),
+    );
     let options = RenderOptions {
         sample_rate: sample_rate as f64,
         tail_seconds,
@@ -250,7 +260,18 @@ pub(crate) fn render_offline_with_progress(
             0.0
         },
     };
-    render_with_assets_progress(&project, &registry, &options, &samples, on_progress)
+    let buffer = render_with_assets_progress(&project, &registry, &options, &samples, on_progress);
+
+    // 预览 / 导出没有把警告回传界面的通道，至少写到 stderr（MCP 会把它们写进分析结果）。
+    let warnings = warnings.lock().unwrap();
+    let mut logged: Vec<&String> = Vec::new();
+    for warning in warnings.iter() {
+        if !logged.contains(&warning) {
+            logged.push(warning);
+            eprintln!("[离线渲染] {warning}");
+        }
+    }
+    buffer
 }
 
 /// 该事件是否会导致播放器重建（混音与实时参数不会）。

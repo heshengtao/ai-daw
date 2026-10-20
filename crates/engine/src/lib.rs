@@ -49,17 +49,16 @@ pub struct StarterTrack {
 /// 新建工程的默认分轨（数组顺序即自上而下的轨道顺序）。
 ///
 /// 素材从上往下、由主到次：**主旋律 → 和弦 → 低音 → 鼓组 → 铺底**。
-/// 每条轨道挂一个内置合成器预设：鼓组用拨弦（最短促的包络）、低音用 Bass、
-/// 和弦与铺底用 Pad、主旋律用 Lead。鼓组专用音源（采样器）属于 Stage C，
-/// 接入后这里只需改 `plugin_id`。
+/// 主旋律用钢琴、和弦用木吉他、低音用指弹贝斯、鼓组用原声鼓组；铺底仍用内置合成器
+/// （目前没有采样铺底乐器）。
 ///
 /// `name` 只是**兜底默认名**：界面会按当前语言把一批名字随新建命令传进来
 /// （见 `Command::NewProject::track_names`），落进工程后就不再随语言变化。
 pub const STARTER_TRACKS: [StarterTrack; 5] = [
-    StarterTrack { name: "主旋律", plugin_id: "builtin.synth.lead" },
-    StarterTrack { name: "和弦", plugin_id: "builtin.synth.strings" },
-    StarterTrack { name: "低音", plugin_id: "builtin.synth.bass" },
-    StarterTrack { name: "鼓组", plugin_id: "builtin.synth.drums" },
+    StarterTrack { name: "主旋律", plugin_id: "builtin.piano" },
+    StarterTrack { name: "和弦", plugin_id: "builtin.nylon_guitar" },
+    StarterTrack { name: "低音", plugin_id: "builtin.bass" },
+    StarterTrack { name: "鼓组", plugin_id: "builtin.drums" },
     StarterTrack { name: "铺底", plugin_id: "builtin.synth.pad" },
 ];
 

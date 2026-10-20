@@ -316,13 +316,13 @@ function empty(): Project {
 
 /**
  * 新建工程的默认分轨，必须与引擎 `ai_daw_engine::STARTER_TRACKS` 保持一致
- * （顺序即自上而下的轨道顺序；`plugin_id` 是内置合成器的预设音色）。
+ * （顺序即自上而下的轨道顺序；`plugin_id` 是内置乐器 id）。
  */
 const STARTER_TRACKS: { name: string; plugin_id: string }[] = [
-  { name: "主旋律", plugin_id: "builtin.synth.lead" },
-  { name: "和弦", plugin_id: "builtin.synth.strings" },
-  { name: "低音", plugin_id: "builtin.synth.bass" },
-  { name: "鼓组", plugin_id: "builtin.synth.drums" },
+  { name: "主旋律", plugin_id: "builtin.piano" },
+  { name: "和弦", plugin_id: "builtin.nylon_guitar" },
+  { name: "低音", plugin_id: "builtin.bass" },
+  { name: "鼓组", plugin_id: "builtin.drums" },
   { name: "铺底", plugin_id: "builtin.synth.pad" },
 ];
 

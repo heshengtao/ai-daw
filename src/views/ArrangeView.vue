@@ -54,6 +54,7 @@ const MIN_CREATE_BEATS = 1 / 32;
 const scroller = ref<HTMLElement | null>(null);
 const lanesEl = ref<HTMLElement | null>(null);
 let applyingScroll = false;
+let resizeObserver: ResizeObserver | null = null;
 
 const tracks = computed(() => store.project?.tracks ?? []);
 
@@ -65,6 +66,12 @@ const tracks = computed(() => store.project?.tracks ?? []);
  * 内容元素的左边缘为原点，所以只有「指针 → 拍」和缩放锚点两处换算需要减掉它。
  */
 const TIMELINE_INSET_PX = 26;
+
+/** 把滚动容器的可用宽度回报给共享时间轴：缩得很小时刻度要按它补足，右侧才不会留白。 */
+function reportViewportWidth(): void {
+  const el = scroller.value;
+  if (el) timeline.setViewportWidth(el.clientWidth - TIMELINE_INSET_PX);
+}
 
 /** 指针 x → 拍（已含横向滚动；落在预留空白里算第 0 拍）。 */
 function beatAt(clientX: number): number {
@@ -832,16 +839,22 @@ onMounted(() => {
   window.addEventListener("pointerup", onPointerUp);
   window.addEventListener("pointercancel", onPointerUp);
   window.addEventListener("keydown", onKey);
+  // 可视区变宽 / 变窄（窗口缩放、面板拖动）都要重新补足刻度。
+  resizeObserver = new ResizeObserver(reportViewportWidth);
+  if (scroller.value) resizeObserver.observe(scroller.value);
   // 进视图时对齐共享时间轴的横向位置（从编辑切过来时视角不变）。
   requestAnimationFrame(() => {
     const el = scroller.value;
     if (el) el.scrollLeft = timeline.scrollLeft;
+    reportViewportWidth();
   });
 });
 onUnmounted(() => {
   window.removeEventListener("pointerup", onPointerUp);
   window.removeEventListener("pointercancel", onPointerUp);
   window.removeEventListener("keydown", onKey);
+  resizeObserver?.disconnect();
+  resizeObserver = null;
   cancelOpenInspector();
 });
 </script>

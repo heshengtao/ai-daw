@@ -46,7 +46,9 @@ Being small is a feature, not a compromise.
 
 ## Drive it from any AI harness
 
-AI DAW ships a **Skill** (`skills/aidaw`) that teaches an AI agent how to operate the running app — reading and writing the project, tracks, clips and notes; mixing (gain, pan, sends, automation); transport and recording; loudness and spectrum analysis; WAV export; plugin scanning. It works over the built-in **MCP** server, so any harness that supports Agent Skills can pick it up.
+AI DAW ships a **Skill** (`skills/aidaw`) that teaches an AI agent how to operate the running app — reading and writing the project, tracks, clips and notes; analysing a style, looking up music theory and drum patterns, and turning a genre recipe into MIDI; mixing (gain, pan, sends, automation); transport and recording; loudness and spectrum analysis; WAV export; plugin scanning. It works over the built-in **MCP** server, so any harness that supports Agent Skills can pick it up.
+
+The app also ships five sampled instruments — **acoustic piano, nylon-string guitar, clean electric guitar, finger bass, and an acoustic drum kit** (SF3/SF2, about 7 MB total) — ready to play out of the box.
 
 **Option 1 · Install from the command line**
 

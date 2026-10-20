@@ -50,6 +50,8 @@ pub struct Vst3HostedPlugin {
     started: bool,
     buffers: AudioBuffers,
     pending_param_changes: Vec<(ParamId, f32)>,
+    /// 处理音频失败只记一次日志：隔离模式下插件崩了会**每块**都返回错误，不能刷屏。
+    process_error_logged: bool,
 }
 
 impl Vst3HostedPlugin {
@@ -99,6 +101,7 @@ impl Vst3HostedPlugin {
             started: false,
             buffers: AudioBuffers::new(inputs, ENGINE_CHANNELS, loaded_block, loaded_rate),
             pending_param_changes: Vec::new(),
+            process_error_logged: false,
         }
     }
 
@@ -257,7 +260,12 @@ impl Plugin for Vst3HostedPlugin {
             ch.fill(0.0);
         }
 
-        if plugin.process_audio(&mut self.buffers).is_err() {
+        if let Err(err) = plugin.process_audio(&mut self.buffers) {
+            // 隔离模式下这是插件子进程崩溃后的固定结果；记一次就够，别每个块刷一行。
+            if !self.process_error_logged {
+                self.process_error_logged = true;
+                eprintln!("VST3 插件「{}」处理音频失败，该轨道后续输出静音：{err}", self.id);
+            }
             for ch in audio.iter_mut() {
                 ch[..frames].fill(0.0);
             }
