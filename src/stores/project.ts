@@ -10,7 +10,7 @@ import * as api from "@/api/tauri";
 import { useI18n } from "@/i18n";
 import { useParamBindingsStore } from "@/stores/paramBindings";
 import { useSettingsStore } from "@/stores/settings";
-import type { AutomationPoint, ClipPlacement, ClipRef, HistoryState, Keyframe, MixerState, Note, NoteEdit, NotePatch, Project, Send } from "@/api/types";
+import type { AutomationPoint, ClipPlacement, ClipRef, HistoryState, Keyframe, MixerState, Note, NoteEdit, NotePatch, Project, ProjectHistoryEntry, Send } from "@/api/types";
 import { meterAt, meterBeatAt, tempoAt } from "@/utils/tempo";
 
 /**
@@ -450,6 +450,23 @@ export const useProjectStore = defineStore("project", () => {
     project.value = await api.localizeStarterTracks(starterTrackNames());
   }
 
+  /** 历史工程列表（每次打开模态框时现取，保证看到的是最新的一份）。 */
+  function listHistory(): Promise<ProjectHistoryEntry[]> {
+    return api.projectHistory();
+  }
+
+  /**
+   * 回到一份历史工程。
+   *
+   * 后端会先把当前工程收进历史（来回切换不丢东西），所以这里恢复成功后顺手刷新会话缓存。
+   */
+  async function restoreHistory(id: string): Promise<void> {
+    project.value = await api.restoreProjectHistory(id);
+    await loadPath();
+    await refreshDepths();
+    void cacheSession();
+  }
+
   /** 从文件导入工程（会清空历史），并记下它的路径。 */
   async function openFrom(path: string): Promise<void> {
     project.value = await api.openProject(path);
@@ -560,6 +577,8 @@ export const useProjectStore = defineStore("project", () => {
     newProject,
     renameProject,
     localizeStarterTracks,
+    listHistory,
+    restoreHistory,
     openFrom,
     saveTo,
     loadPath,

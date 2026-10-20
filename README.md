@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.3.0-1A6CFF?style=flat-square" alt="Version 1.3.0">
+  <img src="https://img.shields.io/badge/version-1.4.0-1A6CFF?style=flat-square" alt="Version 1.4.0">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-1A6CFF?style=flat-square" alt="License: Apache-2.0"></a>
   <img src="https://img.shields.io/badge/platforms-Windows%20/%20macOS%20/%20Linux-1A6CFF?style=flat-square" alt="Platforms: Windows, macOS, Linux">
 </p>
@@ -48,7 +48,7 @@ Being small is a feature, not a compromise.
 
 AI DAW ships a **Skill** (`skills/aidaw`) that teaches an AI agent how to operate the running app — reading and writing the project, tracks, clips and notes; analysing a style, looking up music theory and drum patterns, and turning a genre recipe into MIDI; mixing (gain, pan, sends, automation); transport and recording; loudness and spectrum analysis; WAV export; plugin scanning. It works over the built-in **MCP** server, so any harness that supports Agent Skills can pick it up.
 
-The app also ships five sampled instruments — **acoustic piano, nylon-string guitar, clean electric guitar, finger bass, and an acoustic drum kit** (SF3/SF2, about 7 MB total) — ready to play out of the box.
+The app also ships 18 sampled instruments — **acoustic piano, nylon-string and clean electric guitars, finger bass, an acoustic drum kit, a string ensemble, slow strings, solo violin/viola/cello/contrabass, pizzicato strings, trumpet, French horns, and synth strings/brass 1 & 2** (SF3/SF2, about 13.5 MB total) — ready to play out of the box.
 
 **Option 1 · Install from the command line**
 

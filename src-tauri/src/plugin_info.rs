@@ -78,7 +78,7 @@ struct Builtin {
     tags: &'static [&'static str],
 }
 
-/// 内置合成器 + 5 条老预设 + 5 件采样乐器 + 5 个内置效果器。
+/// 内置合成器 + 5 条老预设 + 18 件采样乐器 + 5 个内置效果器。
 ///
 /// 这 5 条预设 id（`builtin.synth.lead` 等）留着是因为老工程还直接挂在它们上面；
 /// 界面上的 32 条出厂音色不是独立插件，走 `set_param` / `apply_preset` 的 `params`。
@@ -205,6 +205,149 @@ const BUILTINS: &[Builtin] = &[
         pitch_range: Some([35, 59]),
         mono: false,
         tags: &["drums", "鼓", "原声鼓", "鼓组", "GM", "采样"],
+    },
+    Builtin {
+        id: "builtin.strings",
+        name: "弦乐群奏",
+        kind: PluginKind::Instrument,
+        category: "strings",
+        description: "内置采样弦乐群奏（Florestan Strings，SF3）：真实录音的弦乐合奏，适合铺和弦与长音；长音采样偏短，需要无限长音时用 builtin.slow_strings 或合成弦乐。",
+        roles: &["chords", "pad", "lead"],
+        pitch_range: Some([28, 100]),
+        mono: false,
+        tags: &["strings", "弦乐", "群奏", "ensemble", "采样"],
+    },
+    Builtin {
+        id: "builtin.slow_strings",
+        name: "慢弦乐",
+        kind: PluginKind::Instrument,
+        category: "strings",
+        description: "内置采样慢弦乐（Florestan Strings 的 Slow 预设，SF3）：起音更慢、更柔和，适合铺底与长音和声。",
+        roles: &["pad", "chords"],
+        pitch_range: Some([28, 100]),
+        mono: false,
+        tags: &["strings", "弦乐", "慢弦乐", "pad", "铺底", "采样"],
+    },
+    Builtin {
+        id: "builtin.violin",
+        name: "小提琴",
+        kind: PluginKind::Instrument,
+        category: "strings",
+        description: "内置采样小提琴（Florestan String Quartet，SF3）：独奏小提琴，写单声部旋律或高音和声；真实演奏是单音的，别叠和弦。",
+        roles: &["lead", "chords"],
+        pitch_range: Some([55, 100]),
+        mono: true,
+        tags: &["violin", "小提琴", "独奏", "strings", "采样"],
+    },
+    Builtin {
+        id: "builtin.viola",
+        name: "中提琴",
+        kind: PluginKind::Instrument,
+        category: "strings",
+        description: "内置采样中提琴（Florestan String Quartet，SF3）：比小提琴低、比大提琴亮，适合中声部旋律与和声填充。",
+        roles: &["lead", "chords"],
+        pitch_range: Some([48, 88]),
+        mono: true,
+        tags: &["viola", "中提琴", "独奏", "strings", "采样"],
+    },
+    Builtin {
+        id: "builtin.cello",
+        name: "大提琴",
+        kind: PluginKind::Instrument,
+        category: "strings",
+        description: "内置采样大提琴（Florestan String Quartet，SF3）：温暖的低中音弦乐，写副旋律、低音线或和弦根音。",
+        roles: &["lead", "bass", "chords"],
+        pitch_range: Some([36, 81]),
+        mono: true,
+        tags: &["cello", "大提琴", "独奏", "strings", "采样"],
+    },
+    Builtin {
+        id: "builtin.contrabass",
+        name: "低音提琴",
+        kind: PluginKind::Instrument,
+        category: "strings",
+        description: "内置采样低音提琴（Florestan String Quartet，SF3）：弓弦低音，适合替代贝斯写根音与长音。",
+        roles: &["bass"],
+        pitch_range: Some([28, 67]),
+        mono: true,
+        tags: &["contrabass", "低音提琴", "double bass", "strings", "采样"],
+    },
+    Builtin {
+        id: "builtin.pizzicato",
+        name: "弦乐拨奏",
+        kind: PluginKind::Instrument,
+        category: "strings",
+        description: "内置采样弦乐拨奏（Florestan Pizzicato，SF3）：短促的拨弦，适合分解和弦、bossa、圆舞曲伴奏与点缀。",
+        roles: &["chords", "lead"],
+        pitch_range: Some([28, 100]),
+        mono: false,
+        tags: &["pizzicato", "拨奏", "弦乐", "strings", "采样"],
+    },
+    Builtin {
+        id: "builtin.trumpet",
+        name: "小号",
+        kind: PluginKind::Instrument,
+        category: "brass",
+        description: "内置采样小号（Florestan Trumpet Metallic，SF3）：金属感较强，适合号角式旋律与铜管和声；需要更柔的铜管用 builtin.french_horns。",
+        roles: &["lead", "chords"],
+        pitch_range: Some([55, 82]),
+        mono: true,
+        tags: &["trumpet", "小号", "brass", "铜管", "采样"],
+    },
+    Builtin {
+        id: "builtin.french_horns",
+        name: "圆号齐奏",
+        kind: PluginKind::Instrument,
+        category: "brass",
+        description: "内置采样圆号齐奏（Florestan French Horns，SF3）：多支圆号齐奏，适合号角、副旋律与中低音铜管和声。",
+        roles: &["chords", "pad", "lead"],
+        pitch_range: Some([41, 77]),
+        mono: false,
+        tags: &["french horn", "圆号", "号乐", "brass", "铜管", "采样"],
+    },
+    Builtin {
+        id: "builtin.synth_strings_1",
+        name: "合成弦乐 1",
+        kind: PluginKind::Instrument,
+        category: "strings",
+        description: "内置采样合成弦乐 1（FreePats Synth Strings 1，SF3）：合成器弦乐，长音稳定、音色偏复古，适合铺底。",
+        roles: &["pad", "chords", "lead"],
+        pitch_range: Some([36, 96]),
+        mono: false,
+        tags: &["synth strings", "合成弦乐", "strings", "pad", "采样"],
+    },
+    Builtin {
+        id: "builtin.synth_strings_2",
+        name: "合成弦乐 2",
+        kind: PluginKind::Instrument,
+        category: "strings",
+        description: "内置采样合成弦乐 2（FreePats Synth Strings 2，SF3）：比 1 更厚更亮，推荐用于铺底与长音和声。",
+        roles: &["pad", "chords", "lead"],
+        pitch_range: Some([36, 96]),
+        mono: false,
+        tags: &["synth strings", "合成弦乐", "strings", "pad", "采样"],
+    },
+    Builtin {
+        id: "builtin.synth_brass_1",
+        name: "合成铜管 1",
+        kind: PluginKind::Instrument,
+        category: "brass",
+        description: "内置采样合成铜管 1（FreePats Synth Brass 1，SF3）：ZynAddSubFX 风格的合成铜管，适合 80 年代 / 放克的和弦与主音。",
+        roles: &["chords", "lead"],
+        pitch_range: Some([36, 84]),
+        mono: false,
+        tags: &["synth brass", "合成铜管", "brass", "铜管", "采样"],
+    },
+    Builtin {
+        id: "builtin.synth_brass_2",
+        name: "合成铜管 2（DX7）",
+        kind: PluginKind::Instrument,
+        category: "brass",
+        description: "内置采样合成铜管 2（FreePats Synth Brass 2，SF3）：DX7 “BRASS 7” 风格，亮而宽，适合副歌和弦与号角式主音。",
+        roles: &["chords", "lead"],
+        pitch_range: Some([36, 84]),
+        mono: false,
+        tags: &["synth brass", "合成铜管", "dx7", "brass", "铜管", "采样"],
     },
     Builtin {
         id: BUILTIN_DELAY,
@@ -1015,11 +1158,11 @@ mod tests {
     #[test]
     fn builtin_catalog_is_complete_and_resolvable() {
         let entries = entries(&[]);
-        // 内置合成器 + 5 条老预设 + 5 件采样乐器 + 5 个内置效果器。
-        assert_eq!(entries.len(), 16, "{:?}", entries.iter().map(|e| &e.id).collect::<Vec<_>>());
+        // 内置合成器 + 5 条老预设 + 18 件采样乐器 + 5 个内置效果器。
+        assert_eq!(entries.len(), 29, "{:?}", entries.iter().map(|e| &e.id).collect::<Vec<_>>());
         assert_eq!(
             entries.iter().filter(|e| e.kind == PluginKind::Instrument).count(),
-            11
+            24
         );
         assert!(entries.iter().all(|e| brief(e).description.len() > 10));
     }
@@ -1034,6 +1177,19 @@ mod tests {
             ("builtin.electric_guitar", "电吉他（清音）"),
             ("builtin.bass", "指弹贝斯"),
             ("builtin.drums", "原声鼓组"),
+            ("builtin.strings", "弦乐群奏"),
+            ("builtin.slow_strings", "慢弦乐"),
+            ("builtin.violin", "小提琴"),
+            ("builtin.viola", "中提琴"),
+            ("builtin.cello", "大提琴"),
+            ("builtin.contrabass", "低音提琴"),
+            ("builtin.pizzicato", "弦乐拨奏"),
+            ("builtin.trumpet", "小号"),
+            ("builtin.french_horns", "圆号齐奏"),
+            ("builtin.synth_strings_1", "合成弦乐 1"),
+            ("builtin.synth_strings_2", "合成弦乐 2"),
+            ("builtin.synth_brass_1", "合成铜管 1"),
+            ("builtin.synth_brass_2", "合成铜管 2（DX7）"),
         ] {
             assert_eq!(resolve(&entries, id).unwrap().id, id);
             assert_eq!(resolve(&entries, name).unwrap().id, id);

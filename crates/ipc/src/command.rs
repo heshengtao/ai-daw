@@ -1,6 +1,7 @@
 use crate::model::{
-    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, FitMode, HarmonyBar, Note,
-    NoteEdit, NotePatch, NoteRange, PitchRange, Section, Send, StrumDirection, TrackId, VelocityShape,
+    AudioSource, AutomationPoint, BeatFilter, ClipId, ClipPlacement, ClipRef, FitMode, HarmonyBar,
+    Note, NoteEdit, NotePatch, NoteRange, NoteTag, PitchRange, Section, Send, StrumDirection,
+    TrackId, VelocityShape,
 };
 
 /// 命令：期望的状态变更请求。
@@ -134,15 +135,25 @@ pub enum Command {
     RemoveNotesById { track: TrackId, clip: ClipId, ids: Vec<u64> },
     /// 批量移调（半音）；可选范围限定。
     TransposeNotes { track: TrackId, clip: ClipId, semitones: i32, range: Option<NoteRange> },
-    /// 批量设置力度（固定值 / 渐变 / 缩放）。
+    /// 批量设置力度（固定值 / 渐变 / 缩放），可按拍位过滤。
     SetNoteVelocity {
         track: TrackId,
         clip: ClipId,
         shape: VelocityShape,
         range: Option<NoteRange>,
+        /// 只作用于落在目标拍位上的音符（`None` = 不按拍位过滤）。
+        beat_filter: Option<BeatFilter>,
     },
-    /// 量化：把起点吸到 `grid`（拍）的整数倍，`strength` 决定吸多少（0 = 不动，1 = 完全对齐）。
-    QuantizeNotes { track: TrackId, clip: ClipId, grid: f64, strength: f64, range: Option<NoteRange> },
+    /// 量化：把起点（以及可选的时值）吸到 `grid`（拍）的整数倍，`strength` 决定吸多少。
+    QuantizeNotes {
+        track: TrackId,
+        clip: ClipId,
+        grid: f64,
+        strength: f64,
+        range: Option<NoteRange>,
+        /// 是否同时量化时值（缺省 false，只动起点）。
+        quantize_duration: bool,
+    },
     /// 扫弦：把**起点相同**的音符按音高依次错开。
     ///
     /// `step_ms` 是相邻两音的毫秒差（0 = 清掉扫弦、回到同时发声），`direction` 决定谁先响。
@@ -176,7 +187,13 @@ pub enum Command {
         velocity: f64,
         range: Option<NoteRange>,
         seed: Option<u64>,
+        /// 跳过短于这个时值（拍）的音符；0 = 不跳过。用来保护倚音/装饰音。
+        min_duration: f64,
+        /// 起点相同的音符共用同一个位置抖动（保护和弦 / 扫弦的同步）。
+        group_by_start: bool,
     },
+    /// 写入 / 清除一个音符的标签（装饰音 / 奏法）；`None` = 移除。
+    SetNoteTag { track: TrackId, clip: ClipId, id: u64, tag: Option<NoteTag> },
     /// 把音符收进指定音域：`Fold` 做八度折返（不改音级），`Report` 只统计不改动。
     FitNotesToRange {
         track: TrackId,

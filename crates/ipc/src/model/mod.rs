@@ -4,10 +4,10 @@ pub mod track;
 pub mod transport;
 
 pub use clip::{
-    clamp_beats, clamp_range, AudioSource, Clip, ClipId, ClipPlacement, ClipRef, FitMode, Note,
-    NoteEdit, NotePatch, NoteRange, StrumDirection, VelocityShape,
+    clamp_beats, clamp_range, AudioSource, BeatFilter, Clip, ClipId, ClipPlacement, ClipRef, FitMode,
+    Note, NoteEdit, NotePatch, NoteRange, StrumDirection, VelocityShape,
 };
-pub use project::{HarmonyBar, Project, Section};
+pub use project::{note_tag_key, parse_note_tag_key, HarmonyBar, NoteTag, Project, Section};
 pub use track::{
     lane_value_at, AutomationLane, AutomationPoint, MixerChannel, PitchRange, PluginInstance, Send,
     Track, TrackId, TrackMeta,

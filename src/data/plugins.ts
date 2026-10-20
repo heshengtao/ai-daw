@@ -38,6 +38,19 @@ export const NYLON_GUITAR_ID = "builtin.nylon_guitar";
 export const ELECTRIC_GUITAR_ID = "builtin.electric_guitar";
 export const BASS_ID = "builtin.bass";
 export const DRUMS_ID = "builtin.drums";
+export const STRINGS_ID = "builtin.strings";
+export const SLOW_STRINGS_ID = "builtin.slow_strings";
+export const VIOLIN_ID = "builtin.violin";
+export const VIOLA_ID = "builtin.viola";
+export const CELLO_ID = "builtin.cello";
+export const CONTRABASS_ID = "builtin.contrabass";
+export const PIZZICATO_ID = "builtin.pizzicato";
+export const TRUMPET_ID = "builtin.trumpet";
+export const FRENCH_HORNS_ID = "builtin.french_horns";
+export const SYNTH_BRASS_1_ID = "builtin.synth_brass_1";
+export const SYNTH_BRASS_2_ID = "builtin.synth_brass_2";
+export const SYNTH_STRINGS_1_ID = "builtin.synth_strings_1";
+export const SYNTH_STRINGS_2_ID = "builtin.synth_strings_2";
 /** 内置延迟的插件 id（与引擎 `BUILTIN_DELAY` 一致）。 */
 export const DELAY_ID = "builtin.delay";
 /** 内置混响的插件 id（与引擎 `BUILTIN_REVERB` 一致）。 */
@@ -586,7 +599,7 @@ export function effectiveParams(
   return { ...Object.fromEntries(specs.map((p) => [p.id, p.default])), ...params };
 }
 
-/** 全部内置插件：内置合成器 + 5 件采样乐器 + 5 个内置效果器。 */
+/** 全部内置插件：内置合成器 + 18 件采样乐器 + 5 个内置效果器。 */
 export const BUILTIN_PLUGINS: PluginInfo[] = [
   {
     id: SYNTH_ID,
@@ -648,6 +661,136 @@ export const BUILTIN_PLUGINS: PluginInfo[] = [
     loadable: true,
     tags: ["drums", "鼓", "原声鼓", "鼓组", "GM"],
     note: "inst.drums.note",
+  },
+  {
+    id: STRINGS_ID,
+    name: "inst.strings.name",
+    kind: "instrument",
+    category: "pluginCategory.strings",
+    builtin: true,
+    loadable: true,
+    tags: ["strings", "弦乐", "群奏", "ensemble", "采样"],
+    note: "inst.strings.note",
+  },
+  {
+    id: SLOW_STRINGS_ID,
+    name: "inst.slow_strings.name",
+    kind: "instrument",
+    category: "pluginCategory.strings",
+    builtin: true,
+    loadable: true,
+    tags: ["strings", "弦乐", "慢弦乐", "pad", "铺底", "采样"],
+    note: "inst.slow_strings.note",
+  },
+  {
+    id: VIOLIN_ID,
+    name: "inst.violin.name",
+    kind: "instrument",
+    category: "pluginCategory.strings",
+    builtin: true,
+    loadable: true,
+    tags: ["violin", "小提琴", "独奏", "strings", "采样"],
+    note: "inst.violin.note",
+  },
+  {
+    id: VIOLA_ID,
+    name: "inst.viola.name",
+    kind: "instrument",
+    category: "pluginCategory.strings",
+    builtin: true,
+    loadable: true,
+    tags: ["viola", "中提琴", "独奏", "strings", "采样"],
+    note: "inst.viola.note",
+  },
+  {
+    id: CELLO_ID,
+    name: "inst.cello.name",
+    kind: "instrument",
+    category: "pluginCategory.strings",
+    builtin: true,
+    loadable: true,
+    tags: ["cello", "大提琴", "独奏", "strings", "采样"],
+    note: "inst.cello.note",
+  },
+  {
+    id: CONTRABASS_ID,
+    name: "inst.contrabass.name",
+    kind: "instrument",
+    category: "pluginCategory.strings",
+    builtin: true,
+    loadable: true,
+    tags: ["contrabass", "低音提琴", "double bass", "strings", "采样"],
+    note: "inst.contrabass.note",
+  },
+  {
+    id: PIZZICATO_ID,
+    name: "inst.pizzicato.name",
+    kind: "instrument",
+    category: "pluginCategory.strings",
+    builtin: true,
+    loadable: true,
+    tags: ["pizzicato", "拨奏", "弦乐", "strings", "采样"],
+    note: "inst.pizzicato.note",
+  },
+  {
+    id: TRUMPET_ID,
+    name: "inst.trumpet.name",
+    kind: "instrument",
+    category: "pluginCategory.brass",
+    builtin: true,
+    loadable: true,
+    tags: ["trumpet", "小号", "brass", "铜管", "采样"],
+    note: "inst.trumpet.note",
+  },
+  {
+    id: FRENCH_HORNS_ID,
+    name: "inst.french_horns.name",
+    kind: "instrument",
+    category: "pluginCategory.brass",
+    builtin: true,
+    loadable: true,
+    tags: ["french horn", "圆号", "号乐", "brass", "铜管", "采样"],
+    note: "inst.french_horns.note",
+  },
+  {
+    id: SYNTH_STRINGS_1_ID,
+    name: "inst.synth_strings_1.name",
+    kind: "instrument",
+    category: "pluginCategory.strings",
+    builtin: true,
+    loadable: true,
+    tags: ["synth strings", "合成弦乐", "strings", "pad", "采样"],
+    note: "inst.synth_strings_1.note",
+  },
+  {
+    id: SYNTH_STRINGS_2_ID,
+    name: "inst.synth_strings_2.name",
+    kind: "instrument",
+    category: "pluginCategory.strings",
+    builtin: true,
+    loadable: true,
+    tags: ["synth strings", "合成弦乐", "strings", "pad", "采样"],
+    note: "inst.synth_strings_2.note",
+  },
+  {
+    id: SYNTH_BRASS_1_ID,
+    name: "inst.synth_brass_1.name",
+    kind: "instrument",
+    category: "pluginCategory.brass",
+    builtin: true,
+    loadable: true,
+    tags: ["synth brass", "合成铜管", "brass", "铜管", "采样"],
+    note: "inst.synth_brass_1.note",
+  },
+  {
+    id: SYNTH_BRASS_2_ID,
+    name: "inst.synth_brass_2.name",
+    kind: "instrument",
+    category: "pluginCategory.brass",
+    builtin: true,
+    loadable: true,
+    tags: ["synth brass", "合成铜管", "dx7", "brass", "铜管", "采样"],
+    note: "inst.synth_brass_2.note",
   },
   {
     id: DELAY_ID,
@@ -820,12 +963,25 @@ export const COMMON_INSTRUMENT_PARAMS: Record<string, string[]> = {
   [ELECTRIC_GUITAR_ID]: ["gain", "tone"],
   [BASS_ID]: ["gain", "tone"],
   [DRUMS_ID]: ["gain", "tone"],
+  [STRINGS_ID]: ["gain", "tone"],
+  [SLOW_STRINGS_ID]: ["gain", "tone"],
+  [VIOLIN_ID]: ["gain", "tone"],
+  [VIOLA_ID]: ["gain", "tone"],
+  [CELLO_ID]: ["gain", "tone"],
+  [CONTRABASS_ID]: ["gain", "tone"],
+  [PIZZICATO_ID]: ["gain", "tone"],
+  [TRUMPET_ID]: ["gain", "tone"],
+  [FRENCH_HORNS_ID]: ["gain", "tone"],
+  [SYNTH_STRINGS_1_ID]: ["gain", "tone"],
+  [SYNTH_STRINGS_2_ID]: ["gain", "tone"],
+  [SYNTH_BRASS_1_ID]: ["gain", "tone"],
+  [SYNTH_BRASS_2_ID]: ["gain", "tone"],
 };
 
 /**
  * 某插件**默认绑定**的目标键（**只给参数 id**，`inst:` / `fx<i>:` 前缀由调用方拼）。
  *
- * 这就是「精选集」（`COMMON_INSTRUMENT_PARAMS`）——内置合成器 8 个，其他插件空。
+ * 这就是「精选集」（`COMMON_INSTRUMENT_PARAMS`）——内置合成器 8 个，采样乐器各 2 个，其他插件空。
  * 走 `canonicalPluginId`，所以老工程的预设音色 id（`builtin.synth.lead` 等）也算内置合成器。
  */
 export function defaultBoundParamIds(pluginId: string): string[] {
@@ -901,6 +1057,19 @@ export const NYLON_GUITAR_PARAMS = sampledInstrumentParams(3.0);
 export const ELECTRIC_GUITAR_PARAMS = sampledInstrumentParams(2.2);
 export const BASS_PARAMS = sampledInstrumentParams(3.0);
 export const DRUMS_PARAMS = sampledInstrumentParams(2.8);
+export const STRINGS_PARAMS = sampledInstrumentParams(3.0);
+export const SLOW_STRINGS_PARAMS = sampledInstrumentParams(3.0);
+export const VIOLIN_PARAMS = sampledInstrumentParams(2.2);
+export const VIOLA_PARAMS = sampledInstrumentParams(2.1);
+export const CELLO_PARAMS = sampledInstrumentParams(2.1);
+export const CONTRABASS_PARAMS = sampledInstrumentParams(2.5);
+export const PIZZICATO_PARAMS = sampledInstrumentParams(1.2);
+export const TRUMPET_PARAMS = sampledInstrumentParams(2.2);
+export const FRENCH_HORNS_PARAMS = sampledInstrumentParams(2.1);
+export const SYNTH_STRINGS_1_PARAMS = sampledInstrumentParams(2.1);
+export const SYNTH_STRINGS_2_PARAMS = sampledInstrumentParams(2.3);
+export const SYNTH_BRASS_1_PARAMS = sampledInstrumentParams(1.4);
+export const SYNTH_BRASS_2_PARAMS = sampledInstrumentParams(1.0);
 
 /** 内置插件的参数表（音源 + 效果器都要预填，界面的通用参数列表按 id 取）。 */
 export const BUILTIN_PARAMS: Record<string, ParamSpec[]> = {
@@ -910,6 +1079,19 @@ export const BUILTIN_PARAMS: Record<string, ParamSpec[]> = {
   [ELECTRIC_GUITAR_ID]: ELECTRIC_GUITAR_PARAMS,
   [BASS_ID]: BASS_PARAMS,
   [DRUMS_ID]: DRUMS_PARAMS,
+  [STRINGS_ID]: STRINGS_PARAMS,
+  [SLOW_STRINGS_ID]: SLOW_STRINGS_PARAMS,
+  [VIOLIN_ID]: VIOLIN_PARAMS,
+  [VIOLA_ID]: VIOLA_PARAMS,
+  [CELLO_ID]: CELLO_PARAMS,
+  [CONTRABASS_ID]: CONTRABASS_PARAMS,
+  [PIZZICATO_ID]: PIZZICATO_PARAMS,
+  [TRUMPET_ID]: TRUMPET_PARAMS,
+  [FRENCH_HORNS_ID]: FRENCH_HORNS_PARAMS,
+  [SYNTH_STRINGS_1_ID]: SYNTH_STRINGS_1_PARAMS,
+  [SYNTH_STRINGS_2_ID]: SYNTH_STRINGS_2_PARAMS,
+  [SYNTH_BRASS_1_ID]: SYNTH_BRASS_1_PARAMS,
+  [SYNTH_BRASS_2_ID]: SYNTH_BRASS_2_PARAMS,
   [DELAY_ID]: DELAY_PARAMS,
   [REVERB_ID]: REVERB_PARAMS,
   [CHORUS_ID]: CHORUS_PARAMS,

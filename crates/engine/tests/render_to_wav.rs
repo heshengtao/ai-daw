@@ -28,40 +28,53 @@ fn demo() -> ai_daw_engine::model::Project {
 }
 
 #[test]
-fn renders_a_builtin_sampled_instrument() {
-    let mut e = Engine::new("sampled");
-    let ev = e.execute(Command::AddTrack { name: "Piano".into() }, Actor::Human);
-    let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
-    e.execute(
-        Command::SetTrackInstrument { track, plugin_id: "builtin.piano".into() },
-        Actor::Human,
-    );
-    let ev = e.execute(Command::AddClip { track, start: 0.0, length: 2.0 }, Actor::Human);
-    let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
-    e.execute(
-        Command::AddNote {
-            track,
-            clip,
-            note: Note {
-                id: 0,
-                pitch: 60,
-                start: 0.0,
-                duration: 1.0,
-                velocity: 100,
-                volume: 127,
-                offset: 0.0,
-                legato: false,
+fn renders_builtin_sampled_instruments() {
+    for (plugin_id, pitch) in [
+        ("builtin.piano", 60u8),
+        ("builtin.strings", 60),
+        ("builtin.slow_strings", 60),
+        ("builtin.violin", 72),
+        ("builtin.cello", 48),
+        ("builtin.pizzicato", 60),
+        ("builtin.trumpet", 67),
+        ("builtin.french_horns", 60),
+        ("builtin.synth_strings_2", 60),
+        ("builtin.synth_brass_2", 60),
+    ] {
+        let mut e = Engine::new(plugin_id);
+        let ev = e.execute(Command::AddTrack { name: plugin_id.into() }, Actor::Human);
+        let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        e.execute(
+            Command::SetTrackInstrument { track, plugin_id: plugin_id.into() },
+            Actor::Human,
+        );
+        let ev = e.execute(Command::AddClip { track, start: 0.0, length: 2.0 }, Actor::Human);
+        let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
+        e.execute(
+            Command::AddNote {
+                track,
+                clip,
+                note: Note {
+                    id: 0,
+                    pitch,
+                    start: 0.0,
+                    duration: 1.0,
+                    velocity: 100,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                },
             },
-        },
-        Actor::Human,
-    );
+            Actor::Human,
+        );
 
-    let opts = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.2, settle_seconds: 0.0 };
-    let buffer = render(e.project(), &PluginRegistry::with_builtins(), &opts);
-    assert!(
-        buffer.data().iter().any(|s| s.abs() > 1e-4),
-        "builtin.piano 必须能通过引擎渲染出非静音"
-    );
+        let opts = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.2, settle_seconds: 0.0 };
+        let buffer = render(e.project(), &PluginRegistry::with_builtins(), &opts);
+        assert!(
+            buffer.data().iter().any(|s| s.abs() > 1e-4),
+            "{plugin_id} 必须能通过引擎渲染出非静音"
+        );
+    }
 }
 
 #[test]

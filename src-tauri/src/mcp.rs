@@ -27,11 +27,12 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use tokio_util::sync::CancellationToken;
 
+use ai_daw_engine::audio::AudioBuffer;
 use ai_daw_engine::command::Command;
 use ai_daw_engine::event::{Actor, Event};
 use ai_daw_engine::model::{
-    AudioSource, Clip, ClipId, FitMode, Note, NotePatch, NoteRange, Project, StrumDirection,
-    TrackId, VelocityShape,
+    AudioSource, BeatFilter, Clip, ClipId, FitMode, Note, NotePatch, NoteRange, NoteTag, Project,
+    StrumDirection, TrackId, Transport, VelocityShape,
 };
 use ai_daw_engine::tempo::TempoMap;
 use ai_daw_engine::transport::TransportCommand;
@@ -333,6 +334,15 @@ pub(crate) struct SeekArgs {
 pub(crate) struct AnalyzeArgs {
     /// 采样率（Hz）；省略则用 44100。
     sample_rate: Option<u32>,
+    /// 局部渲染的起始拍（工程绝对拍）；省略 = 0。给 `start_beat` 或 `end_beat` 即局部渲染。
+    #[serde(default)]
+    start_beat: Option<f64>,
+    /// 局部渲染的结束拍（不含）；省略 = 工程结尾。
+    #[serde(default)]
+    end_beat: Option<f64>,
+    /// 只渲染这些轨道（其他轨道静音）；省略 = 全部。
+    #[serde(default)]
+    tracks: Option<Vec<u64>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -341,6 +351,15 @@ pub(crate) struct ExportArgs {
     path: String,
     /// 采样率（Hz）；省略则用 44100。
     sample_rate: Option<u32>,
+    /// 局部导出的起始拍（工程绝对拍）；省略 = 0。给 `start_beat` 或 `end_beat` 即局部导出。
+    #[serde(default)]
+    start_beat: Option<f64>,
+    /// 局部导出的结束拍（不含）；省略 = 工程结尾。
+    #[serde(default)]
+    end_beat: Option<f64>,
+    /// 只导出这些轨道（其他轨道静音）；省略 = 全部。
+    #[serde(default)]
+    tracks: Option<Vec<u64>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -442,6 +461,24 @@ impl NoteInput {
     }
 }
 
+/// 按页读取一个片段的音符（只读）。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct GetNotesArgs {
+    /// 轨道 id。
+    track: u64,
+    /// 片段 id。
+    clip: u64,
+    /// 跳过前多少个匹配的音符；缺省 0。
+    #[serde(default)]
+    offset: Option<usize>,
+    /// 本次最多返回多少个；缺省 200，上限 1000。
+    #[serde(default)]
+    limit: Option<usize>,
+    /// 只返回起点落在这个范围内的音符（片段内拍）。
+    #[serde(default)]
+    range: Option<RangeArg>,
+}
+
 /// 片段内拍范围（左闭右开），批量变换只作用于起点落在其中的音符。
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RangeArg {
@@ -525,6 +562,22 @@ impl NotePatchInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SetNoteTagArgs {
+    /// 轨道 id。
+    track: u64,
+    /// 片段 id。
+    clip: u64,
+    /// 音符 id（`get_project` / `get_clip_notes` 返回的稳定 id）。
+    id: u64,
+    /// 装饰音类型：`grace` / `acciaccatura` / `mordent` …；留空 = 清除该字段。
+    #[serde(default)]
+    ornament: Option<String>,
+    /// 奏法：`staccato` / `accent` / `legato` …；留空 = 清除该字段。
+    #[serde(default)]
+    articulation: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct UpdateNotesArgs {
     /// 轨道 id。
     track: u64,
@@ -568,6 +621,12 @@ pub(crate) struct VelocityArgs {
     /// 只处理这个范围内的音符。
     #[serde(default)]
     range: Option<RangeArg>,
+    /// 拍位过滤网格（拍）；与 `beat` 一起给。例如 `grid: 1.0, beat: 0.5` 只改每拍反拍。
+    #[serde(default)]
+    grid: Option<f64>,
+    /// 网格内目标位置（拍）；与 `grid` 一起给。
+    #[serde(default)]
+    beat: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -576,7 +635,7 @@ pub(crate) struct QuantizeArgs {
     track: u64,
     /// 片段 id。
     clip: u64,
-    /// 网格（拍）：1/4 = 0.25，8 分 = 0.5，16 分 = 0.25…（最小值 1/64）。
+    /// 网格（拍）：四分音符 = 1.0，八分 = 0.5，十六分 = 0.25；三连音 = 1/3。（最小值 1/64）
     grid: f64,
     /// 吸附强度 0..=1（0 = 不动，1 = 完全对齐）；缺省 1。
     #[serde(default)]
@@ -584,6 +643,9 @@ pub(crate) struct QuantizeArgs {
     /// 只处理这个范围内的音符。
     #[serde(default)]
     range: Option<RangeArg>,
+    /// 是否同时量化时值（缺省 false，只动起点）。
+    #[serde(default)]
+    duration: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -595,7 +657,7 @@ pub(crate) struct SwingArgs {
     /// 子拍长度（拍）：8 分 swing = 0.5，16 分 = 0.25；缺省 0.5。
     #[serde(default)]
     subdivision: Option<f64>,
-    /// 第二个子拍在一对子拍里的位置比例（0.5 = 平直，0.66 ≈ 三连音感，0.75 = 硬 shuffle）；缺省 0.66。
+    /// 第二个子拍在一对子拍里的位置比例（0.5 = 平直，< 0.5 = 抢拍 / push，0.66 ≈ 三连音感，0.75 = 硬 shuffle）；缺省 0.66。
     #[serde(default)]
     ratio: Option<f64>,
     /// 应用程度 0..=1；缺省 1。
@@ -640,6 +702,12 @@ pub(crate) struct HumanizeArgs {
     /// 随机种子（同一个种子结果完全一致）；缺省固定值。
     #[serde(default)]
     seed: Option<u64>,
+    /// 跳过短于这个时值（拍）的音符；缺省 0（不跳过）。用来保护倚音/装饰音。
+    #[serde(default)]
+    min_duration: Option<f64>,
+    /// 起点相同的音符共用同一个位置抖动；缺省 false。用来保护和弦/扫弦的同步。
+    #[serde(default)]
+    group_by_start: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -755,6 +823,17 @@ impl HarmonyBarArg {
     }
 }
 
+/// 显式装饰音引用：`track` + `clip` + 音符 `id`。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct OrnamentRefArg {
+    /// 轨道 id。
+    track: u64,
+    /// 片段 id。
+    clip: u64,
+    /// 音符 id（`get_project` / `get_clip_notes` 返回的稳定 id）。
+    id: u64,
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct HarmonyArgs {
     /// 小节和弦表；缺省时用工程里存的（`set_project_harmony` 写入的那份）。
@@ -772,6 +851,21 @@ pub(crate) struct HarmonyArgs {
     /// 短经过音的时值上限（拍）；缺省 0.5。
     #[serde(default)]
     allow_non_chord_tone_duration: Option<f64>,
+    /// 小节边界的时间容差（拍）；缺省 1/16（0.0625）。humanize/swing 后贴着小节线的音
+    /// 不再被判成 suspension。它不改变按 `start` 分小节的口径。
+    #[serde(default)]
+    time_tolerance: Option<f64>,
+    /// 调性根音（`F` / `Bb` / `F#`）；与 `scale` 一起给。
+    #[serde(default)]
+    key: Option<String>,
+    /// 调式：major / minor / dorian / phrygian / lydian / mixolydian / locrian /
+    /// harmonic_minor / melodic_minor / major_pentatonic / minor_pentatonic / blues；
+    /// 缺省 major。给 `scale` 时必须同时给 `key`。
+    #[serde(default)]
+    scale: Option<String>,
+    /// 显式装饰音 `[{track, clip, id}]`：命中时无论时值长短都记成 `ornament` / `info`。
+    #[serde(default)]
+    ornaments: Option<Vec<OrnamentRefArg>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -846,6 +940,79 @@ pub(crate) mod tools {
         }
     }
 
+    /// 解析局部渲染范围：两个参数都没给 = 整曲（`None`）。
+    fn resolve_beat_range(
+        project: &Project,
+        start_beat: Option<f64>,
+        end_beat: Option<f64>,
+    ) -> Result<Option<(f64, f64)>, String> {
+        if start_beat.is_none() && end_beat.is_none() {
+            return Ok(None);
+        }
+        let total = project.length_beats();
+        if total <= 0.0 {
+            return Err("工程没有内容（length_beats = 0）".into());
+        }
+        let start = start_beat.unwrap_or(0.0);
+        if !start.is_finite() || start < 0.0 {
+            return Err(format!("start_beat 必须是非负数（拍），收到 {start}"));
+        }
+        if start >= total {
+            return Err(format!("start_beat {start} 超出工程长度 {total} 拍"));
+        }
+        let end = end_beat.unwrap_or(total);
+        if !end.is_finite() || end <= start {
+            return Err(format!("end_beat 必须大于 start_beat（收到 {start}..{end}）"));
+        }
+        Ok(Some((start, end.min(total))))
+    }
+
+    /// 只保留 `tracks` 里的轨道：其他轨道静音（工程快照会被改，不影响正在运行的工程）。
+    fn mute_other_tracks(project: &mut Project, tracks: &[u64]) -> Result<(), String> {
+        if tracks.is_empty() {
+            return Err("tracks 不能为空（不传 = 全部轨道）".into());
+        }
+        for id in tracks {
+            if project.track(TrackId(*id)).is_none() {
+                return Err(format!("没有轨道 {id}"));
+            }
+        }
+        for track in &mut project.tracks {
+            // 局部渲染的语义是「只要这些轨道」：先把 solo 清掉，再静音其余轨道。
+            track.mixer.solo = false;
+            if !tracks.contains(&track.id.0) {
+                track.mixer.mute = true;
+            }
+        }
+        Ok(())
+    }
+
+    /// 把整曲渲染结果按**拍**裁出一段（`tail` 是段尾额外保留的秒数）。
+    pub(crate) fn slice_render_by_beats(
+        buffer: &AudioBuffer,
+        transport: &Transport,
+        sample_rate: u32,
+        start_beat: f64,
+        end_beat: f64,
+        tail_seconds: f64,
+    ) -> AudioBuffer {
+        let map = TempoMap::from_transport(transport);
+        let sr = sample_rate as f64;
+        let start_frame =
+            ((map.beats_to_seconds(start_beat) * sr).round() as usize).min(buffer.frames());
+        let end_frame = (((map.beats_to_seconds(end_beat) + tail_seconds) * sr).round() as usize)
+            .min(buffer.frames());
+        let frames = end_frame.saturating_sub(start_frame);
+        let channels = buffer.channels();
+        let mut out = AudioBuffer::silence(channels, frames);
+        if frames > 0 {
+            let from = start_frame * channels;
+            let to = end_frame * channels;
+            out.data_mut().copy_from_slice(&buffer.data()[from..to]);
+        }
+        out
+    }
+
     // ---- 只读 ----
 
     pub(crate) fn get_project(app: &AppHandle) -> Result<String, String> {
@@ -855,6 +1022,49 @@ pub(crate) mod tools {
 
     pub(crate) fn get_transport(app: &AppHandle) -> Result<String, String> {
         json_s(&app.state::<AppState>().audio.snapshot())
+    }
+
+    /// 按页读取一个片段的音符：大工程里核对每个音符时用它，避免整份工程快照撑爆上下文。
+    pub(crate) fn get_clip_notes(app: &AppHandle, args: GetNotesArgs) -> Result<String, String> {
+        let project = snapshot(app);
+        let clip = clip_of(&project, args.track, args.clip)?;
+        let range = args.range.map(|r| r.to_range());
+        let selected: Vec<&Note> = clip
+            .notes
+            .iter()
+            .filter(|n| range.map_or(true, |r| r.contains(n)))
+            .collect();
+        let total = selected.len();
+        let offset = args.offset.unwrap_or(0).min(total);
+        let limit = args.limit.unwrap_or(200).clamp(1, 1000);
+        let end = (offset + limit).min(total);
+        let tags: serde_json::Map<String, serde_json::Value> = selected[offset..end]
+            .iter()
+            .filter_map(|note| {
+                project
+                    .note_tag(TrackId(args.track), ClipId(args.clip), note.id)
+                    .map(|tag| {
+                        (
+                            note.id.to_string(),
+                            serde_json::to_value(tag).unwrap_or(serde_json::Value::Null),
+                        )
+                    })
+            })
+            .collect();
+        json_s(&serde_json::json!({
+            "track": args.track,
+            "clip": args.clip,
+            "start": clip.start,
+            "length": clip.length,
+            "note_count": clip.notes.len(),
+            "selected": total,
+            "offset": offset,
+            "limit": limit,
+            "notes": &selected[offset..end],
+            "tags": tags,
+            "truncated": end < total,
+            "next_offset": if end < total { Some(end) } else { None },
+        }))
     }
 
     /// 当前可用插件：内置 + 本机扫描到的外部插件（每次调用现取，重扫后立刻生效）。
@@ -1496,6 +1706,53 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         batch_result(app, args.track, args.clip, &events, serde_json::json!({}))
     }
 
+    /// 给单个音符写 / 清除装饰音与奏法标签（不改播放，只给分析器提供意图）。
+    pub(crate) fn set_note_tag(
+        app: &AppHandle,
+        actor: &Actor,
+        args: SetNoteTagArgs,
+    ) -> Result<String, String> {
+        let project = snapshot(app);
+        let clip = clip_of(&project, args.track, args.clip)?;
+        if !clip.notes.iter().any(|n| n.id == args.id) {
+            return Err(format!(
+                "轨道 {} 的片段 {} 上没有音符 {}",
+                args.track, args.clip, args.id
+            ));
+        }
+        let tag = NoteTag { ornament: args.ornament.clone(), articulation: args.articulation.clone() }
+            .normalized();
+        let clear = tag.is_empty();
+        commands::run_agent_as(
+            app,
+            actor.clone(),
+            Command::SetNoteTag {
+                track: TrackId(args.track),
+                clip: ClipId(args.clip),
+                id: args.id,
+                tag: if clear { None } else { Some(tag.clone()) },
+            },
+        );
+        Ok(if clear {
+            format!("已清除音符 {}/{}:{} 的标签", args.track, args.clip, args.id)
+        } else {
+            let mut parts = Vec::new();
+            if let Some(v) = &tag.ornament {
+                parts.push(format!("装饰音 {v}"));
+            }
+            if let Some(v) = &tag.articulation {
+                parts.push(format!("奏法 {v}"));
+            }
+            format!(
+                "已标记音符 {}/{}:{}：{}",
+                args.track,
+                args.clip,
+                args.id,
+                parts.join("，")
+            )
+        })
+    }
+
     pub(crate) fn remove_notes(
         app: &AppHandle,
         actor: &Actor,
@@ -1554,6 +1811,15 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
                 )
             }
         };
+        let beat_filter = match (args.grid, args.beat) {
+            (None, None) => None,
+            (Some(grid), Some(beat))
+                if grid.is_finite() && grid > 0.0 && beat.is_finite() =>
+            {
+                Some(BeatFilter { grid, beat })
+            }
+            _ => return Err("grid 与 beat 要同时给，且 grid 必须是正数（拍）".into()),
+        };
         let (_, events) = commands::run_agent_as(
             app,
             actor.clone(),
@@ -1562,6 +1828,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
                 clip: ClipId(args.clip),
                 shape,
                 range: args.range.map(|r| r.to_range()),
+                beat_filter,
             },
         );
         batch_result(app, args.track, args.clip, &events, serde_json::json!({}))
@@ -1584,6 +1851,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
                 grid: args.grid,
                 strength: args.strength.unwrap_or(1.0),
                 range: args.range.map(|r| r.to_range()),
+                quantize_duration: args.duration.unwrap_or(false),
             },
         );
         batch_result(app, args.track, args.clip, &events, serde_json::json!({}))
@@ -1595,8 +1863,10 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         args: SwingArgs,
     ) -> Result<String, String> {
         let ratio = args.ratio.unwrap_or(0.66);
-        if !(ratio.is_finite() && (0.5..=0.8).contains(&ratio)) {
-            return Err(format!("ratio 应在 0.5..=0.8（0.66 ≈ 8 分 swing），收到 {ratio}"));
+        if !(ratio.is_finite() && (0.2..=0.8).contains(&ratio)) {
+            return Err(format!(
+                "ratio 应在 0.2..=0.8（< 0.5 = 抢拍，0.66 ≈ 8 分 swing），收到 {ratio}"
+            ));
         }
         let (_, events) = commands::run_agent_as(
             app,
@@ -1656,6 +1926,8 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
                 velocity: args.velocity.unwrap_or(8.0),
                 range: args.range.map(|r| r.to_range()),
                 seed: args.seed,
+                min_duration: args.min_duration.unwrap_or(0.0),
+                group_by_start: args.group_by_start.unwrap_or(false),
             },
         );
         batch_result(app, args.track, args.clip, &events, serde_json::json!({}))
@@ -1917,7 +2189,42 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             allow_approach_notes: args.allow_approach_notes.unwrap_or(true),
             allow_non_chord_tone_duration: args.allow_non_chord_tone_duration.unwrap_or(0.5),
         };
-        let report = ai_daw_engine::harmony::analyze(&bars, &picked, policy, bar_beats)?;
+        let scale = match (&args.key, &args.scale) {
+            (Some(key), mode) => Some(ai_daw_engine::harmony::parse_scale(
+                key,
+                mode.as_deref().unwrap_or("major"),
+            )?),
+            (None, Some(_)) => {
+                return Err("给了 scale 就必须同时给 key（例如 key=\"F\", scale=\"major\"）".into())
+            }
+            (None, None) => None,
+        };
+        let mut ornament_ids: Vec<(u64, u64, u64)> = args
+            .ornaments
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(|o| (o.track, o.clip, o.id))
+            .collect();
+        // 工程里持久化的装饰音标签也自动算进来。
+        for (key, tag) in &project.note_tags {
+            if tag.ornament.as_deref().map_or(false, |v| !v.trim().is_empty()) {
+                if let Some(ids) = ai_daw_engine::model::parse_note_tag_key(key) {
+                    ornament_ids.push(ids);
+                }
+            }
+        }
+        ornament_ids.sort_unstable();
+        ornament_ids.dedup();
+        let report = ai_daw_engine::harmony::analyze_with_options(
+            &bars,
+            &picked,
+            policy,
+            bar_beats,
+            args.time_tolerance.unwrap_or(1.0 / 16.0),
+            scale.as_deref(),
+            if ornament_ids.is_empty() { None } else { Some(ornament_ids.as_slice()) },
+        )?;
         json_s(&report)
     }
 
@@ -2075,22 +2382,44 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
 
     pub(crate) fn analyze_project(app: &AppHandle, args: AnalyzeArgs) -> Result<String, String> {
         let sample_rate = check_sample_rate_s(args.sample_rate.unwrap_or(FALLBACK_SAMPLE_RATE))?;
-        let inputs = commands::render_inputs(&app.state::<AppState>());
+        let mut inputs = commands::render_inputs(&app.state::<AppState>());
+        let range = resolve_beat_range(&inputs.project, args.start_beat, args.end_beat)?;
+        if let Some(tracks) = &args.tracks {
+            mute_other_tracks(&mut inputs.project, tracks)?;
+        }
+        let transport = inputs.project.transport.clone();
         // 插件加载失败的记录由注册表工厂写进这里（离线渲染走隔离，崩了也不会杀主进程）。
         let warnings = std::sync::Arc::clone(&inputs.warnings);
         // 只分析工程正文，不加尾音。
         let buffer = commands::render_offline(inputs, sample_rate, 0.0);
+        let buffer = match range {
+            Some((start, end)) => {
+                slice_render_by_beats(&buffer, &transport, sample_rate, start, end, 0.0)
+            }
+            None => buffer,
+        };
+        if buffer.frames() == 0 {
+            return Err("渲染范围为空（检查 start_beat / end_beat）".into());
+        }
         let report = ai_daw_analysis::analyze(buffer.data(), buffer.channels(), sample_rate as f64)
             .map_err(|e| e.to_string())?;
-        let warnings: Vec<String> = warnings.lock().unwrap().clone();
-        if warnings.is_empty() {
-            return json_s(&report);
-        }
         // 有插件加载失败时，分析结果只是「剩下的能响的部分」——必须让代理知道哪些插件缺了，
         // 否则它会把一条静音轨当成「混音太轻」。
         let mut value = serde_json::to_value(&report).map_err(|e| format!("序列化失败：{e}"))?;
         if let Some(object) = value.as_object_mut() {
-            object.insert("warnings".into(), serde_json::Value::from(warnings));
+            if let Some((start, end)) = range {
+                object.insert(
+                    "range".into(),
+                    serde_json::json!({ "start_beat": start, "end_beat": end }),
+                );
+            }
+            if let Some(tracks) = &args.tracks {
+                object.insert("tracks".into(), serde_json::json!(tracks));
+            }
+            let warnings: Vec<String> = warnings.lock().unwrap().clone();
+            if !warnings.is_empty() {
+                object.insert("warnings".into(), serde_json::Value::from(warnings));
+            }
         }
         serde_json::to_string_pretty(&value).map_err(|e| format!("序列化失败：{e}"))
     }
@@ -2098,16 +2427,32 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     pub(crate) fn export_wav(app: &AppHandle, args: ExportArgs) -> Result<String, String> {
         let sample_rate = check_sample_rate_s(args.sample_rate.unwrap_or(FALLBACK_SAMPLE_RATE))?;
         let path = args.path.clone();
-        let inputs = commands::render_inputs(&app.state::<AppState>());
+        let mut inputs = commands::render_inputs(&app.state::<AppState>());
+        let range = resolve_beat_range(&inputs.project, args.start_beat, args.end_beat)?;
+        if let Some(tracks) = &args.tracks {
+            mute_other_tracks(&mut inputs.project, tracks)?;
+        }
+        let transport = inputs.project.transport.clone();
         let warnings = std::sync::Arc::clone(&inputs.warnings);
         let buffer = commands::render_offline(inputs, sample_rate, 0.5);
+        let buffer = match range {
+            Some((start, end)) => {
+                slice_render_by_beats(&buffer, &transport, sample_rate, start, end, 0.5)
+            }
+            None => buffer,
+        };
+        if buffer.frames() == 0 {
+            return Err("导出范围为空（检查 start_beat / end_beat）".into());
+        }
         ai_daw_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| e.to_string())?;
+        let range_note =
+            range.map(|(start, end)| format!("（{start}..{end} 拍）")).unwrap_or_default();
         let warnings: Vec<String> = warnings.lock().unwrap().clone();
         if warnings.is_empty() {
-            Ok(format!("已导出到 {path}"))
+            Ok(format!("已导出到 {path}{range_note}"))
         } else {
             Ok(format!(
-                "已导出到 {path}\n\n警告（这些插件加载失败，对应轨道按静音导出）：\n- {}",
+                "已导出到 {path}{range_note}\n\n警告（这些插件加载失败，对应轨道按静音导出）：\n- {}",
                 warnings.join("\n- ")
             ))
         }
@@ -2240,6 +2585,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     pub(crate) fn definitions() -> Vec<ToolDef> {
         vec![
             tool_def!("get_project", "读取当前工程的完整快照：轨道、片段、音符、速度/拍号（含关键点）、混音。"),
+            tool_def!("get_clip_notes", "按页读取一个片段的音符（只读）：可按片段内拍范围过滤；返回 notes / note_count / truncated / next_offset。大工程核对音符时用它，别依赖批量工具的前 32 个摘要。", GetNotesArgs),
             tool_def!("get_transport", "读取传输状态：是否可用、是否播放、播放头位置（帧）、采样率、是否循环。"),
             tool_def!("list_plugins", "列出**当前可用的全部乐器与效果器**（内置 + 本机扫描到的 VST3/CLAP），每条带分类（bass / drums / reverb / dynamics…）、一句话音色描述、推荐分工与建议音域。挑音色、挑效果器、或不确定某个插件是什么时先调它；`kind` 只看乐器/效果器，`query` 按关键词过滤。", ListPluginsArgs),
             tool_def!("describe_plugin", "看**单个**插件的详情：分类与音色描述，加上它的**全部音色参数**（id / 名称 / 范围 / 默认值）与**用户预设**（名字 + 参数快照），以及用法提示。渐进披露的第二层——`list_plugins` 只给描述，这里才展开参数与预设。", DescribePluginArgs),
@@ -2264,13 +2610,14 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("add_notes", "一次写入一组音符（**一次事务 = 一条撤销记录**，最多 5000 个）。返回新增的 id 与片段摘要；编曲请优先用它而不是循环 add_note。", NotesArgs),
             tool_def!("replace_notes", "**原子替换**片段内的全部音符（空数组 = 清空片段）。返回片段摘要。", NotesArgs),
             tool_def!("update_notes", "按**稳定 id** 批量改写音符（只改给出的字段）；删过音符之后 id 仍然指得准。", UpdateNotesArgs),
+            tool_def!("set_note_tag", "给单个音符写 / 清除装饰音与奏法标签（工程级 `note_tags`，**不改变播放**）。装饰音标签会被 `analyze_harmony` 自动读取并标成 `ornament`。", SetNoteTagArgs),
             tool_def!("remove_notes", "按**稳定 id** 批量删除音符。", NoteIdsArgs),
             tool_def!("transpose_notes", "批量移调（半音），可限定拍范围。", TransposeArgs),
-            tool_def!("set_note_velocity", "批量设置力度：`value` 固定值 / `from`+`to` 渐变 / `scale` 相对缩放（三选一），可限定拍范围。", VelocityArgs),
-            tool_def!("quantize_notes", "量化：把音符起点吸到 `grid`（拍）的整数倍，`strength` 0..1 控制吸附程度。三连音用 `grid = 1/3`。", QuantizeArgs),
+            tool_def!("set_note_velocity", "批量设置力度：`value` 固定值 / `from`+`to` 渐变 / `scale` 相对缩放（三选一），可限定拍范围；`grid`+`beat` 可按拍位过滤（例：grid=1.0、beat=0.5 只改反拍）。", VelocityArgs),
+            tool_def!("quantize_notes", "量化：把音符起点吸到 `grid`（拍）的整数倍，`strength` 0..1 控制吸附程度。三连音用 `grid = 1/3`；`duration: true` 时时值也一起量化（缺省只动起点）。", QuantizeArgs),
             tool_def!("strum_notes", "扫弦：把**起点相同**的一组音按音高依次错开（下扫 = 低音先响），写出每个音符的起始偏移。`step_ms` 是相邻两音的毫秒差（0 = 回到同时发声）；间隔按当前速度换算，改速度不会毁掉扫弦。", StrumArgs),
-            tool_def!("apply_swing", "Swing：把每对子拍里的第二个往后推。8 分 swing = subdivision 0.5 + ratio 0.66；ratio 0.5 是平直。", SwingArgs),
-            tool_def!("humanize_notes", "人性化：给位置与力度加确定性抖动（同一 seed 结果一致，撤销重做不漂移）。", HumanizeArgs),
+            tool_def!("apply_swing", "Swing / 抢拍：移动每对子拍里的第二个。8 分 swing = subdivision 0.5 + ratio 0.66；ratio 0.5 平直，< 0.5 抢拍（push）。", SwingArgs),
+            tool_def!("humanize_notes", "人性化：给位置与力度加确定性抖动（同一 seed 结果一致，撤销重做不漂移）。`min_duration` 可跳过倚音/装饰音，`group_by_start` 可让和弦/扫弦共用同一抖动。", HumanizeArgs),
             tool_def!("fit_notes_to_range", "把音符收进目标音域：`fold` 做八度折返（不改音级），`report` 只统计不改动。音域缺省取轨道的 pitch_range 元数据。", FitArgs),
             // ---- 片段编辑 ----
             tool_def!("move_clip", "把片段移动到新的起始拍。", MoveClipArgs),
@@ -2279,9 +2626,9 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("duplicate_clip", "复制片段：缺省贴在原片段之后，可换轨道。返回新片段摘要。", DuplicateClipArgs),
             tool_def!("merge_clips", "把同一轨道上的多个 **MIDI** 片段合并成一个（保留第一个的 id，跨度取并集）。音频片段不支持合并。", MergeClipsArgs),
             // ---- 编曲分析（只读） ----
-            tool_def!("get_track_note_stats", "只读：轨道的音域（最低/最高/平均音高）、每小节密度、平均力度、同音重叠数、片段外音符数。", TrackStatsArgs),
-            tool_def!("analyze_track_overlap", "只读：多条轨道之间的同时发声时长、同音重叠、音区差与分工冲突建议。", OverlapArgs),
-            tool_def!("analyze_harmony", "只读：按小节和弦表检查和声——和弦外音（含小节/拍位/音高/时值）、不推荐的延伸音、未解决导音、悬挂音、跨轨重叠。和弦表缺省用工程里存的那份。", HarmonyArgs),
+            tool_def!("get_track_note_stats", "只读：轨道的音域（最低/最高/平均音高）、每小节密度、平均力度、同音重叠数、小二度/小九度冲突数、片段外音符数。", TrackStatsArgs),
+            tool_def!("analyze_track_overlap", "只读：多条轨道之间的同时发声时长、同音重叠、小二度/小九度冲突、音区差与分工冲突建议。", OverlapArgs),
+            tool_def!("analyze_harmony", "只读：按小节和弦表检查和声——和弦外音、装饰音、调内音、不推荐的延伸音、未解决导音、悬挂音、跨轨重叠。`key`+`scale` 提供调式上下文（调内非和弦音记成 scale_tone）；`ornaments` 用 `{track,clip,id}` 显式标记装饰音；`time_tolerance` 容忍 humanize/swing 的小节线漂移（缺省 1/16 拍）。和弦表缺省用工程里存的那份。", HarmonyArgs),
             // ---- 编曲元数据 ----
             tool_def!("set_project_harmony", "写入工程的小节和弦表（整体替换；空数组 = 清除）。符号写错会直接报错，不会存进工程。", SetHarmonyArgs),
             tool_def!("set_project_sections", "写入工程的段落表（前奏/主歌/副歌…，整体替换）。", SetSectionsArgs),
@@ -2296,8 +2643,8 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("aidaw_help", "取回某个能力域的用法文档（渐进式披露）：留空给索引，按域取细则。", HelpArgs),
             tool_def!("undo", "撤销最后一次编辑。"),
             tool_def!("redo", "重做上一次被撤销的编辑。"),
-            tool_def!("analyze_project", "离线渲染当前工程并分析：积分响度 LUFS、响度范围 LRA、采样/真峰值、RMS 与平均幅度谱。这是「听感」入口。", AnalyzeArgs),
-            tool_def!("export_wav", "把当前工程离线渲染并导出为 WAV 文件；返回写入路径。", ExportArgs),
+            tool_def!("analyze_project", "离线渲染并分析：积分响度 LUFS、响度范围 LRA、采样/真峰值、RMS 与平均幅度谱。可用 `start_beat` / `end_beat` 只分析一段，用 `tracks` 只分析指定轨道。", AnalyzeArgs),
+            tool_def!("export_wav", "把工程离线渲染并导出为 WAV；返回写入路径。可用 `start_beat` / `end_beat` 只导出一段，用 `tracks` 只导出指定轨道。", ExportArgs),
             tool_def!("master_project", "对整个工程做一次母带处理（响度归一 + 真峰值限幅 + 立体声宽度），把结果写成 WAV 文件；返回处理前后的响度与真峰值，以及写入路径。", MasterExportArgs),
             tool_def!("separate_stems", "音源分离：把指定轨道的第一段音频拆成多条分轨，插到源轨道下面（一次事务，可整体撤销）。`model` 缺省为 4 分轨的 `htdemucs-ort-v1`；`htdemucs-6s` 出 6 分轨（+吉他/钢琴）。需要已安装对应模型（在「管理器 → 可下载」下载）。", SeparateArgs),
             tool_def!("detect_tempo", "节拍检测：对指定轨道的第一段音频跑 Beat This!，推出单一全局 BPM + 拍号写入工程，并把该片段对齐到小节线。需要已安装 Beat This! 模型。", DetectTempoArgs),
@@ -2322,6 +2669,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     ) -> Result<String, String> {
         match name {
             "get_project" => get_project(app),
+            "get_clip_notes" => get_clip_notes(app, parse_args(args)?),
             "get_transport" => get_transport(app),
             "list_plugins" => list_plugins(app, parse_args(args)?),
             "describe_plugin" => describe_plugin(app, parse_args(args)?),
@@ -2345,6 +2693,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             "add_notes" => add_notes(app, actor, parse_args(args)?),
             "replace_notes" => replace_notes(app, actor, parse_args(args)?),
             "update_notes" => update_notes(app, actor, parse_args(args)?),
+            "set_note_tag" => set_note_tag(app, actor, parse_args(args)?),
             "remove_notes" => remove_notes(app, actor, parse_args(args)?),
             "transpose_notes" => transpose_notes(app, actor, parse_args(args)?),
             "set_note_velocity" => set_note_velocity(app, actor, parse_args(args)?),
@@ -2416,6 +2765,11 @@ impl DawMcpServer {
     #[tool(description = "读取当前工程的完整快照：轨道、片段、音符、速度/拍号（含关键点）、混音。")]
     fn get_project(&self) -> Result<String, ErrorData> {
         tools::get_project(&self.app).map_err(fail)
+    }
+
+    #[tool(description = "按页读取一个片段的音符（只读）：可按片段内拍范围过滤；返回 notes / note_count / truncated / next_offset。大工程核对音符时用它，别依赖批量工具的前 32 个摘要。")]
+    fn get_clip_notes(&self, Parameters(args): Parameters<GetNotesArgs>) -> Result<String, ErrorData> {
+        tools::get_clip_notes(&self.app, args).map_err(fail)
     }
 
     #[tool(description = "读取传输状态：是否可用、是否播放、播放头位置（帧）、采样率、是否循环。")]
@@ -2545,6 +2899,11 @@ impl DawMcpServer {
         tools::update_notes(&self.app, &self.actor(), args).map_err(fail)
     }
 
+    #[tool(description = "给单个音符写 / 清除装饰音与奏法标签（工程级 `note_tags`，不改变播放）。装饰音标签会被 `analyze_harmony` 自动读取并标成 `ornament`。")]
+    fn set_note_tag(&self, Parameters(args): Parameters<SetNoteTagArgs>) -> Result<String, ErrorData> {
+        tools::set_note_tag(&self.app, &self.actor(), args).map_err(fail)
+    }
+
     #[tool(description = "按稳定 id 批量删除音符。")]
     fn remove_notes(&self, Parameters(args): Parameters<NoteIdsArgs>) -> Result<String, ErrorData> {
         tools::remove_notes(&self.app, &self.actor(), args).map_err(fail)
@@ -2555,12 +2914,12 @@ impl DawMcpServer {
         tools::transpose_notes(&self.app, &self.actor(), args).map_err(fail)
     }
 
-    #[tool(description = "批量设置力度：`value` 固定值 / `from`+`to` 渐变 / `scale` 相对缩放（三选一），可限定拍范围。")]
+    #[tool(description = "批量设置力度：`value` 固定值 / `from`+`to` 渐变 / `scale` 相对缩放（三选一），可限定拍范围；`grid`+`beat` 可按拍位过滤（例：grid=1.0、beat=0.5 只改反拍）。")]
     fn set_note_velocity(&self, Parameters(args): Parameters<VelocityArgs>) -> Result<String, ErrorData> {
         tools::set_note_velocity(&self.app, &self.actor(), args).map_err(fail)
     }
 
-    #[tool(description = "量化：把音符起点吸到 `grid`（拍）的整数倍，`strength` 0..1 控制吸附程度。")]
+    #[tool(description = "量化：把音符起点吸到 `grid`（拍）的整数倍，`strength` 0..1 控制吸附程度。三连音用 `grid = 1/3`；`duration: true` 时时值也一起量化。")]
     fn quantize_notes(&self, Parameters(args): Parameters<QuantizeArgs>) -> Result<String, ErrorData> {
         tools::quantize_notes(&self.app, &self.actor(), args).map_err(fail)
     }
@@ -2570,12 +2929,12 @@ impl DawMcpServer {
         tools::strum_notes(&self.app, &self.actor(), args).map_err(fail)
     }
 
-    #[tool(description = "Swing：把每对子拍里的第二个往后推。8 分 swing = subdivision 0.5 + ratio 0.66；ratio 0.5 是平直。")]
+    #[tool(description = "Swing / 抢拍：移动每对子拍里的第二个。8 分 swing = subdivision 0.5 + ratio 0.66；ratio 0.5 平直，< 0.5 抢拍（push）。")]
     fn apply_swing(&self, Parameters(args): Parameters<SwingArgs>) -> Result<String, ErrorData> {
         tools::apply_swing(&self.app, &self.actor(), args).map_err(fail)
     }
 
-    #[tool(description = "人性化：给位置与力度加确定性抖动（同一 seed 结果一致，撤销重做不漂移）。")]
+    #[tool(description = "人性化：给位置与力度加确定性抖动（同一 seed 结果一致，撤销重做不漂移）。`min_duration` 可跳过倚音/装饰音，`group_by_start` 可让和弦/扫弦共用同一抖动。")]
     fn humanize_notes(&self, Parameters(args): Parameters<HumanizeArgs>) -> Result<String, ErrorData> {
         tools::humanize_notes(&self.app, &self.actor(), args).map_err(fail)
     }
@@ -2614,12 +2973,12 @@ impl DawMcpServer {
 
     // ---- 编曲分析（只读） ----
 
-    #[tool(description = "只读：轨道的音域（最低/最高/平均音高）、每小节密度、平均力度、同音重叠数、片段外音符数。")]
+    #[tool(description = "只读：轨道的音域（最低/最高/平均音高）、每小节密度、平均力度、同音重叠数、小二度/小九度冲突数、片段外音符数。")]
     fn get_track_note_stats(&self, Parameters(args): Parameters<TrackStatsArgs>) -> Result<String, ErrorData> {
         tools::track_note_stats(&self.app, args).map_err(fail)
     }
 
-    #[tool(description = "只读：多条轨道之间的同时发声时长、同音重叠、音区差与分工冲突建议。")]
+    #[tool(description = "只读：多条轨道之间的同时发声时长、同音重叠、小二度/小九度冲突、音区差与分工冲突建议。")]
     async fn analyze_track_overlap(&self, Parameters(args): Parameters<OverlapArgs>) -> Result<String, ErrorData> {
         let app = self.app.clone();
         tauri::async_runtime::spawn_blocking(move || tools::analyze_track_overlap(&app, args))
@@ -2628,7 +2987,7 @@ impl DawMcpServer {
             .map_err(fail)
     }
 
-    #[tool(description = "只读：按小节和弦表检查和声——和弦外音（含小节/拍位/音高/时值）、不推荐的延伸音、未解决导音、悬挂音、跨轨重叠。和弦表缺省用工程里存的那份。")]
+    #[tool(description = "只读：按小节和弦表检查和声——和弦外音、装饰音、调内音、不推荐的延伸音、未解决导音、悬挂音、跨轨重叠。`key`+`scale` 提供调式上下文（调内非和弦音记成 scale_tone）；`ornaments` 用 `{track,clip,id}` 显式标记装饰音；`time_tolerance` 容忍 humanize/swing 的小节线漂移（缺省 1/16 拍）。和弦表缺省用工程里存的那份。")]
     async fn analyze_harmony(&self, Parameters(args): Parameters<HarmonyArgs>) -> Result<String, ErrorData> {
         let app = self.app.clone();
         tauri::async_runtime::spawn_blocking(move || tools::analyze_harmony(&app, args))
@@ -2710,7 +3069,7 @@ impl DawMcpServer {
 
     // ---- 渲染与分析（重活，放到阻塞线程池） ----
 
-    #[tool(description = "离线渲染当前工程并分析：积分响度 LUFS、响度范围 LRA、采样/真峰值、RMS 与平均幅度谱。这是「听感」入口。")]
+    #[tool(description = "离线渲染并分析：积分响度 LUFS、响度范围 LRA、采样/真峰值、RMS 与平均幅度谱。可用 `start_beat` / `end_beat` 只分析一段，用 `tracks` 只分析指定轨道。")]
     async fn analyze_project(&self, Parameters(args): Parameters<AnalyzeArgs>) -> Result<String, ErrorData> {
         let app = self.app.clone();
         tauri::async_runtime::spawn_blocking(move || tools::analyze_project(&app, args))
@@ -2719,7 +3078,7 @@ impl DawMcpServer {
             .map_err(fail)
     }
 
-    #[tool(description = "把当前工程离线渲染并导出为 WAV 文件；返回写入路径。")]
+    #[tool(description = "把工程离线渲染并导出为 WAV；返回写入路径。可用 `start_beat` / `end_beat` 只导出一段，用 `tracks` 只导出指定轨道。")]
     async fn export_wav(&self, Parameters(args): Parameters<ExportArgs>) -> Result<String, ErrorData> {
         let app = self.app.clone();
         tauri::async_runtime::spawn_blocking(move || tools::export_wav(&app, args))
@@ -3044,6 +3403,7 @@ mod tests {
         let names: Vec<String> = router.list_all().into_iter().map(|t| t.name.to_string()).collect();
         let expected = [
             "get_project",
+            "get_clip_notes",
             "get_transport",
             "list_plugins",
             "describe_plugin",
@@ -3067,6 +3427,7 @@ mod tests {
             "add_notes",
             "replace_notes",
             "update_notes",
+            "set_note_tag",
             "remove_notes",
             "transpose_notes",
             "set_note_velocity",
@@ -3116,6 +3477,18 @@ mod tests {
             assert!(defs.contains(&name), "tools::definitions 缺少 {name}");
         }
         assert_eq!(defs.len(), expected.len(), "tools::definitions 数量对不上：{defs:?}");
+    }
+
+    #[test]
+    fn slicing_by_beats_respects_tempo_and_offsets_the_output() {
+        let mut transport = Transport::default();
+        transport.tempo = 60.0; // 1 拍 = 1 秒
+        let mut buffer = AudioBuffer::silence(2, 48_000);
+        buffer.set_sample(0, 20_000, 1.0);
+
+        let out = tools::slice_render_by_beats(&buffer, &transport, 48_000, 0.25, 0.5, 0.0);
+        assert_eq!(out.frames(), 12_000, "0.25..0.5 秒 = 12000 帧");
+        assert_eq!(out.sample(0, 8_000), 1.0, "原始第 20000 帧应当落到 8000 帧");
     }
 
     /// `snap` 字面量 → 步长（拍）：口径必须与卷帘里的网格一致（「一拍」= 拍号里那一拍）。

@@ -220,6 +220,14 @@ export interface Project {
   harmony?: HarmonyBar[];
   /** 段落表；空时后端不写这个键。 */
   sections?: Section[];
+  /** 音符级标签；键是 `"track:clip:id"`，空时后端不写这个键。 */
+  note_tags?: Record<string, NoteTag>;
+}
+
+/** 音符级标签：装饰音 / 奏法。不改变播放。 */
+export interface NoteTag {
+  ornament?: string;
+  articulation?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +258,10 @@ export interface NoteStats {
   mean_notes_per_bar: number;
   bars: BarDensity[];
   overlapping_notes: number;
+  /** 同轨内小二度 / 小九度重叠的音符对数。 */
+  semitone_clashes: number;
+  /** 这些半音冲突总共持续的拍数。 */
+  semitone_clash_beats: number;
   notes_outside_clip: number;
 }
 
@@ -259,6 +271,10 @@ export interface TrackOverlap {
   b: number;
   overlap_beats: number;
   unison_notes: number;
+  /** 小二度 / 小九度、且时间重叠的音符对数。 */
+  semitone_clashes: number;
+  /** 这些半音冲突总共持续的拍数。 */
+  semitone_clash_beats: number;
   shared_pitch_classes: number[];
   pitch_gap_semitones?: number;
   conflict: boolean;
@@ -275,6 +291,8 @@ export interface OverlapReport {
 /** 和声问题类别。 */
 export type HarmonyIssueKind =
   | "non_chord_tone"
+  | "ornament"
+  | "scale_tone"
   | "unresolved_leading_tone"
   | "suspension"
   | "extension"
@@ -334,6 +352,41 @@ export interface HistoryDepths {
   undo: number;
   redo: number;
   dirty: boolean;
+}
+
+/** 历史缩略图里的一段片段。 */
+export interface HistoryClip {
+  start: number;
+  length: number;
+  /** 音频片段（画成条纹 / 低透明度）。 */
+  audio: boolean;
+}
+
+/** 历史缩略图里的一条轨道。 */
+export interface HistoryTrack {
+  name: string;
+  clips: HistoryClip[];
+}
+
+/** 一份历史工程的展示信息（与后端 `history::HistoryEntry` 一一对应）。 */
+export interface ProjectHistoryEntry {
+  id: string;
+  name: string;
+  /** 记录时间（Unix 毫秒）。 */
+  saved_at: number;
+  /** 当时的工程文件路径；未保存过为 `null`。 */
+  path: string | null;
+  /** 当时是否有未保存改动。 */
+  dirty: boolean;
+  tempo: number;
+  /** 最后一个片段的结束位置（拍）。 */
+  end_beat: number;
+  track_count: number;
+  clip_count: number;
+  note_count: number;
+  tracks: HistoryTrack[];
+  /** 内容指纹（后端用于连续重复记录去重；界面不展示）。 */
+  fingerprint?: string;
 }
 
 /** 实时传输状态快照（与后端 `audio::TransportSnapshot` 一一对应）。 */

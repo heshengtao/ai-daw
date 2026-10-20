@@ -8,9 +8,9 @@ use ai_daw_engine::bus::Engine;
 use ai_daw_engine::command::Command;
 use ai_daw_engine::event::{Actor, Event};
 use ai_daw_engine::model::{
-    AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, FitMode, HarmonyBar, Keyframe,
-    Note, NoteEdit, NotePatch, NoteRange, PitchRange, Project, Section, Send, StrumDirection,
-    TrackId, Transport, VelocityShape,
+    AudioSource, AutomationPoint, BeatFilter, ClipId, ClipPlacement, ClipRef, FitMode, HarmonyBar,
+    Keyframe, Note, NoteEdit, NotePatch, NoteRange, PitchRange, Project, Section, Send,
+    StrumDirection, TrackId, Transport, VelocityShape,
 };
 use ai_daw_engine::registry::{PluginRegistry, PluginSlot};
 use ai_daw_engine::render::{render_with_assets_progress, RenderOptions};
@@ -151,6 +151,24 @@ fn capture_plugin_states(state: &AppState) {
                 }
             }
         }
+    }
+}
+
+/// 把当前工程收进历史（工程即将被替换时调用）。
+///
+/// 历史是「尽力而为」：拿不到配置目录、写盘失败都只打一行日志，绝不阻断新建 / 打开。
+/// 外部插件的内部状态也要先抢救进工程，否则历史里的那份会丢掉插件补丁。
+fn remember_current(app: &tauri::AppHandle, state: &AppState) {
+    let Some(dir) = crate::history_dir(app) else {
+        return;
+    };
+    capture_plugin_states(state);
+    let (project, saved) = {
+        let engine = state.engine.lock().unwrap();
+        (engine.project().clone(), engine.saved().clone())
+    };
+    if let Err(err) = crate::history::record(&dir, &project, &saved, state.session_path()) {
+        eprintln!("记录历史工程失败：{err}");
     }
 }
 
@@ -819,6 +837,8 @@ pub fn new_project(
     track_names: Option<Vec<String>>,
     tempo: Option<f64>,
 ) -> Project {
+    // 新建会清空当前工程：先把它收进历史，用户随时能回去。
+    remember_current(&app, &state);
     let mut commands = vec![Command::NewProject { name: "untitled".into(), track_names }];
     // 设置里可配的「新工程默认速度」：与模板默认 120 不同才补一条命令（同一个撤销步骤）。
     if let Some(bpm) = tempo {
@@ -1094,11 +1114,18 @@ pub fn set_note_velocity(
     clip: u64,
     shape: VelocityShape,
     range: Option<NoteRange>,
+    beat_filter: Option<BeatFilter>,
 ) -> Project {
     run(
         &app,
         &state,
-        Command::SetNoteVelocity { track: TrackId(track), clip: ClipId(clip), shape, range },
+        Command::SetNoteVelocity {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            shape,
+            range,
+            beat_filter,
+        },
     )
 }
 
@@ -1112,11 +1139,19 @@ pub fn quantize_notes(
     grid: f64,
     strength: f64,
     range: Option<NoteRange>,
+    quantize_duration: Option<bool>,
 ) -> Project {
     run(
         &app,
         &state,
-        Command::QuantizeNotes { track: TrackId(track), clip: ClipId(clip), grid, strength, range },
+        Command::QuantizeNotes {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            grid,
+            strength,
+            range,
+            quantize_duration: quantize_duration.unwrap_or(false),
+        },
     )
 }
 
@@ -1181,6 +1216,8 @@ pub fn humanize_notes(
     velocity: f64,
     range: Option<NoteRange>,
     seed: Option<u64>,
+    min_duration: Option<f64>,
+    group_by_start: Option<bool>,
 ) -> Project {
     run(
         &app,
@@ -1192,6 +1229,8 @@ pub fn humanize_notes(
             velocity,
             range,
             seed,
+            min_duration: min_duration.unwrap_or(0.0),
+            group_by_start: group_by_start.unwrap_or(false),
         },
     )
 }
@@ -1314,7 +1353,12 @@ pub fn analyze_harmony(
     state: State<'_, AppState>,
     bars: Option<Vec<HarmonyBar>>,
     tracks: Option<Vec<u64>>,
-    policy: Option<ai_daw_engine::report::HarmonyPolicy>,
+    allow_extensions: Option<bool>,
+    allow_approach_notes: Option<bool>,
+    allow_non_chord_tone_duration: Option<f64>,
+    time_tolerance: Option<f64>,
+    key: Option<String>,
+    scale: Option<String>,
 ) -> Result<ai_daw_engine::report::HarmonyReport, String> {
     let project = state.engine.lock().unwrap().project().clone();
     let bars = match bars {
@@ -1337,11 +1381,39 @@ pub fn analyze_harmony(
     if picked.is_empty() {
         return Err("没有可检查的音符：指定的轨道上没有任何音符".into());
     }
-    ai_daw_engine::harmony::analyze(
+    let policy = ai_daw_engine::report::HarmonyPolicy {
+        allow_extensions: allow_extensions.unwrap_or(true),
+        allow_approach_notes: allow_approach_notes.unwrap_or(true),
+        allow_non_chord_tone_duration: allow_non_chord_tone_duration.unwrap_or(0.5),
+    };
+    let scale = match (&key, &scale) {
+        (Some(root), mode) => Some(ai_daw_engine::harmony::parse_scale(
+            root,
+            mode.as_deref().unwrap_or("major"),
+        )?),
+        (None, Some(_)) => {
+            return Err("给了 scale 就必须同时给 key（例如 key=\"F\", scale=\"major\"）".into())
+        }
+        (None, None) => None,
+    };
+    let ornament_ids: Vec<(u64, u64, u64)> = project
+        .note_tags
+        .iter()
+        .filter_map(|(key, tag)| {
+            tag.ornament
+                .as_deref()
+                .filter(|v| !v.trim().is_empty())
+                .and_then(|_| ai_daw_engine::model::parse_note_tag_key(key))
+        })
+        .collect();
+    ai_daw_engine::harmony::analyze_with_options(
         &bars,
         &picked,
-        policy.unwrap_or_default(),
+        policy,
         project.transport.bar_beats(),
+        time_tolerance.unwrap_or(1.0 / 16.0),
+        scale.as_deref(),
+        if ornament_ids.is_empty() { None } else { Some(&ornament_ids) },
     )
 }
 
@@ -1668,6 +1740,41 @@ pub fn cache_session(
     write_session(&app)
 }
 
+/// 历史工程列表（展示用元信息；完整快照留在配置目录里，按 id 恢复）。
+#[tauri::command]
+pub fn project_history(app: tauri::AppHandle) -> Vec<crate::history::HistoryEntry> {
+    crate::history_dir(&app)
+        .map(|dir| crate::history::load_index(&dir))
+        .unwrap_or_default()
+}
+
+/// 回到一份历史工程。
+///
+/// 恢复前先把**当前**工程收进历史，所以来回切换不会丢东西；被恢复的那份则从列表里取出
+/// （它已经是当前工程了，再留在列表里只会制造重复项）。
+#[tauri::command]
+pub fn restore_project_history(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Project, String> {
+    let dir = crate::history_dir(&app).ok_or_else(|| "拿不到应用配置目录".to_string())?;
+    let (snapshot, entry) = crate::history::take(&dir, &id)?;
+    remember_current(&app, &state);
+
+    let restored = snapshot.project;
+    {
+        let mut engine = state.engine.lock().unwrap();
+        // 保存基线一并还原：当时有未保存改动，恢复后也照旧显示「未保存」。
+        *engine = Engine::restore(restored.clone(), snapshot.saved);
+    }
+    state.audio.load(&restored);
+    // 整个工程被替换：已开的插件窗口一律作废。
+    close_all_plugin_windows(&app, &state);
+    state.set_session_path(entry.path);
+    Ok(restored)
+}
+
 /// 从 JSON 文件导入工程：替换当前工程并清空历史（导入是一个新的起点）。
 #[tauri::command]
 pub async fn open_project(
@@ -1709,6 +1816,8 @@ pub async fn open_project(
         }
     }
 
+    // 打开另一个工程同样会丢弃当前工程：先记进历史。
+    remember_current(&app, &state);
     let snapshot = {
         let mut engine = state.engine.lock().unwrap();
         *engine = Engine::from_project(project);

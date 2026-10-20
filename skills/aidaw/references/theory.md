@@ -135,6 +135,10 @@ AIDAW 的 `analyze_harmony` 能识别 `composition.md` 里列出的符号；写�
 `set_project_harmony` 的和弦符号**必须能解析**，否则会直接报错（带小节号）。
 不认识的符号不要硬写，换一个等价写法（例如 `Cmaj9` 写成 `Cmaj7` + 旋律里的 D）。
 
+> `analyze_harmony` 只按**符号**比对，不看实际 voicing。传 `key` + `scale` 后，调内非和弦音会
+> 记成 `scale_tone`；不传时调内的 9/11/13 和经过音仍可能被点名。它也不是半音冲突检测器——
+> 那类问题看 `analyze_track_overlap`。
+
 ### 4.2 调内和弦
 
 大调（以 C 为例）：

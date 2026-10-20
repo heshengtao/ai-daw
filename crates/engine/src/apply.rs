@@ -43,7 +43,10 @@ pub fn apply(project: &mut Project, event: &Event) {
                 None => project.tracks.push(track),
             }
         }
-        Event::TrackRemoved { id, .. } => project.tracks.retain(|t| t.id != *id),
+        Event::TrackRemoved { id, .. } => {
+            project.tracks.retain(|t| t.id != *id);
+            project.remove_track_note_tags(*id);
+        }
         Event::TrackRenamed { track, name, .. } => {
             if let Some(t) = project.track_mut(*track) {
                 t.name = name.clone();
@@ -86,12 +89,17 @@ pub fn apply(project: &mut Project, event: &Event) {
             }
         }
         Event::ClipAudioChanged { track, clip, audio, .. } => {
+            let mut cleared_notes = false;
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 c.audio = audio.clone();
                 // 变成音频片段时音符必须清空（两者不能共存）；变回 MIDI 片段时音符本来就是空的。
                 if c.audio.is_some() {
                     c.notes.clear();
+                    cleared_notes = true;
                 }
+            }
+            if cleared_notes {
+                project.remove_clip_note_tags(*track, *clip);
             }
         }
         Event::ClipRateChanged { track, clip, rate, pitch_semitones, .. } => {
@@ -107,6 +115,7 @@ pub fn apply(project: &mut Project, event: &Event) {
             if let Some(t) = project.track_mut(*track) {
                 t.clips.retain(|c| c.id != *clip);
             }
+            project.remove_clip_note_tags(*track, *clip);
         }
         Event::ClipMoved { track, clip, start, .. } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
@@ -132,6 +141,7 @@ pub fn apply(project: &mut Project, event: &Event) {
                 // 按起点有序插入，保证轨道内片段顺序稳定（渲染不依赖顺序，但可读性与 diff 依赖）。
                 let pos = dest.clips.partition_point(|c| c.start <= clip.start);
                 dest.clips.insert(pos, clip);
+                project.move_clip_note_tags(item.track, item.to_track, item.clip);
             }
         }
         Event::ClipResized { track, clip, length, .. } => {
@@ -140,6 +150,8 @@ pub fn apply(project: &mut Project, event: &Event) {
             }
         }
         Event::ClipSplit { track, clip, new_clip, at_beat, left_notes, right_notes, left_audio, right_audio, .. } => {
+            let right_ids: Vec<u64> = right_notes.iter().map(|n| n.id).collect();
+            let left_ids: Vec<u64> = left_notes.iter().map(|n| n.id).collect();
             if let Some(t) = project.track_mut(*track) {
                 let Some(pos) = t.clips.iter().position(|c| c.id == *clip) else { return };
                 let end = t.clips[pos].start + t.clips[pos].length;
@@ -160,6 +172,7 @@ pub fn apply(project: &mut Project, event: &Event) {
                 let at = t.clips.partition_point(|c| c.start <= right.start);
                 t.clips.insert(at, right);
             }
+            project.move_note_tags_to_clip(*track, *clip, *new_clip, &right_ids, &left_ids);
         }
         Event::NoteAdded { track, clip, note, .. } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
@@ -213,6 +226,8 @@ pub fn apply(project: &mut Project, event: &Event) {
                     }
                 }
             }
+            // 整体替换会从 1 重新发 id；旧标签必须清掉，否则会套到新音符上。
+            project.remove_clip_note_tags(*track, *clip);
         }
         Event::NoteChanged { track, clip, index, note, .. } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
@@ -231,13 +246,21 @@ pub fn apply(project: &mut Project, event: &Event) {
             }
         }
         Event::NoteRemoved { track, clip, index, .. } => {
-            if let Some(c) = find_clip_mut(project, *track, *clip) {
+            let removed = if let Some(c) = find_clip_mut(project, *track, *clip) {
                 if *index < c.notes.len() {
-                    c.notes.remove(*index);
+                    Some(c.notes.remove(*index).id)
+                } else {
+                    None
                 }
+            } else {
+                None
+            };
+            if let Some(id) = removed {
+                project.remove_note_tag(*track, *clip, id);
             }
         }
         Event::NotesRemoved { track, clip, indices, .. } => {
+            let mut removed = Vec::new();
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 // 倒序删除：正序删除会让后面的序号整体前移，删错对象。
                 let mut targets: Vec<usize> =
@@ -245,8 +268,11 @@ pub fn apply(project: &mut Project, event: &Event) {
                 targets.sort_unstable();
                 targets.dedup();
                 for index in targets.into_iter().rev() {
-                    c.notes.remove(index);
+                    removed.push(c.notes.remove(index).id);
                 }
+            }
+            for id in removed {
+                project.remove_note_tag(*track, *clip, id);
             }
         }
         Event::ClipsRemoved { items, .. } => {
@@ -254,6 +280,7 @@ pub fn apply(project: &mut Project, event: &Event) {
                 if let Some(t) = project.track_mut(item.track) {
                     t.clips.retain(|c| c.id != item.clip);
                 }
+                project.remove_clip_note_tags(item.track, item.clip);
             }
         }
         Event::GainChanged { track, gain_db, .. } => {
@@ -366,6 +393,9 @@ pub fn apply(project: &mut Project, event: &Event) {
                 };
                 t.meta = if meta.is_empty() { None } else { Some(meta) };
             }
+        }
+        Event::NoteTagChanged { track, clip, id, tag, .. } => {
+            project.set_note_tag(*track, *clip, *id, tag.clone());
         }
         Event::ProjectHarmonyChanged { bars, .. } => {
             let mut bars: Vec<crate::model::HarmonyBar> = bars

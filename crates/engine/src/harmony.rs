@@ -259,6 +259,81 @@ fn layout(bars: &[HarmonyBar], bar_beats: f64) -> Result<Vec<BarChord>, String> 
     Ok(out)
 }
 
+/// 相对根音的音程是否属于「延伸音」：b9 / 9 / 11 / #11 / b13 / 13 / b7 / maj7。
+///
+/// 三度（3/4）与五度（6/7/8 中已用过的）不算：它们不在和弦里就通常是真错音，而不是延伸。
+fn is_extension_degree(degree: u8) -> bool {
+    matches!(degree, 1 | 2 | 5 | 6 | 8 | 9 | 10 | 11)
+}
+
+/// 和声检查内部使用的音符（带 clip / note id，便于显式装饰音标记）。
+#[derive(Debug, Clone, Copy)]
+struct ScannedNote {
+    start: f64,
+    end: f64,
+    pitch: u8,
+    clip: u64,
+    id: u64,
+}
+
+/// 装饰音启发式：极短（≤ 1/16 拍），且后接一个相邻（1–2 半音）的和弦音。
+///
+/// 不是乐谱级识别——工程里没有 `ornament` 字段；这个判据只是把「倚音/短倚音」从
+/// `non_chord_tone` 里分出来，避免把故意的装饰音当成错音。显式 `ornaments` 参数可以覆盖它。
+fn looks_like_ornament(
+    notes: &[ScannedNote],
+    index: usize,
+    chord: &Chord,
+    duration: f64,
+) -> bool {
+    if duration > 1.0 / 16.0 + 1e-9 {
+        return false;
+    }
+    let note = notes[index];
+    let Some(next) = notes.get(index + 1) else { return false };
+    if next.start <= note.start + 1e-9 || next.start - note.start > 0.5 {
+        return false;
+    }
+    let interval = (next.pitch as i32 - note.pitch as i32).abs();
+    (1..=2).contains(&interval) && chord.contains(next.pitch % 12)
+}
+
+/// 调式音阶 → 音级集合（0..=11）。`root` 只接受音名（`F` / `Bb` / `F#`）。
+///
+/// 支持：major/ionian、minor/aeolian、dorian、phrygian、lydian、mixolydian、locrian、
+/// harmonic_minor、melodic_minor、major_pentatonic、minor_pentatonic、blues。
+pub fn parse_scale(root: &str, mode: &str) -> Result<Vec<u8>, String> {
+    let (root_pc, _) = parse_root(root.trim())
+        .ok_or_else(|| format!("无法识别的调性根音：`{root}`（应以 A–G 开头，可带 # / b）"))?;
+    let mode = mode.trim().to_ascii_lowercase().replace('-', "_");
+    let intervals: &[i32] = match mode.as_str() {
+        "" | "major" | "ionian" => &[0, 2, 4, 5, 7, 9, 11],
+        "minor" | "aeolian" => &[0, 2, 3, 5, 7, 8, 10],
+        "dorian" => &[0, 2, 3, 5, 7, 9, 10],
+        "phrygian" => &[0, 1, 3, 5, 7, 8, 10],
+        "lydian" => &[0, 2, 4, 6, 7, 9, 11],
+        "mixolydian" => &[0, 2, 4, 5, 7, 9, 10],
+        "locrian" => &[0, 1, 3, 5, 6, 8, 10],
+        "harmonic_minor" => &[0, 2, 3, 5, 7, 8, 11],
+        "melodic_minor" => &[0, 2, 3, 5, 7, 9, 11],
+        "major_pentatonic" | "pentatonic_major" => &[0, 2, 4, 7, 9],
+        "minor_pentatonic" | "pentatonic_minor" => &[0, 3, 5, 7, 10],
+        "blues" | "blues_scale" => &[0, 3, 5, 6, 7, 10],
+        other => {
+            return Err(format!(
+                "未知调式「{other}」：可用 major / minor / dorian / phrygian / lydian / \
+                 mixolydian / locrian / harmonic_minor / melodic_minor / \
+                 major_pentatonic / minor_pentatonic / blues"
+            ))
+        }
+    };
+    let mut pcs: Vec<u8> =
+        intervals.iter().map(|i| ((root_pc as i32 + i).rem_euclid(12)) as u8).collect();
+    pcs.sort_unstable();
+    pcs.dedup();
+    Ok(pcs)
+}
+
 /// 不推荐的延伸音：返回解释（`None` = 没有额外意见）。
 fn unrecommended_extension(chord: &Chord, pc: u8) -> Option<&'static str> {
     let degree = chord.degree(pc);
@@ -272,7 +347,7 @@ fn unrecommended_extension(chord: &Chord, pc: u8) -> Option<&'static str> {
     }
 }
 
-/// 做一次和声检查。
+/// 做一次和声检查（小节边界零容差）。
 ///
 /// `bar_beats` 是每小节拍数（4/4 = 4），用于给「没写长度」的和弦段兜底。
 pub fn analyze(
@@ -281,11 +356,46 @@ pub fn analyze(
     policy: HarmonyPolicy,
     bar_beats: f64,
 ) -> Result<HarmonyReport, String> {
+    analyze_with_options(bars, tracks, policy, bar_beats, 0.0, None, None)
+}
+
+/// 同 [`analyze`]，但给小节边界一个**时间容差**（拍）。
+///
+/// humanize / swing 会把音符推过或抢在小节线前几毫秒；容差内的「跨界音」不再判成
+/// suspension，导音解决也允许落在小节线后一点点。它不改变按 `start` 分小节的口径。
+pub fn analyze_with_tolerance(
+    bars: &[HarmonyBar],
+    tracks: &[&Track],
+    policy: HarmonyPolicy,
+    bar_beats: f64,
+    time_tolerance: f64,
+) -> Result<HarmonyReport, String> {
+    analyze_with_options(bars, tracks, policy, bar_beats, time_tolerance, None, None)
+}
+
+/// 同 [`analyze`]，另外带小节容差与**调式/音阶上下文**。
+///
+/// `scale` 是 [`parse_scale`] 返回的音级集合；给了它以后，不属于和弦但在调内的音会记成
+/// `scale_tone`（短音/经过音 `info`，长音 `warning`），而不是普通 `non_chord_tone`。
+///
+/// `ornament_ids` 是显式装饰音标记 `(track, clip, note id)`：命中时无论时值长短都记成
+/// `ornament` / `info`，优先于导音、延伸音和普通外音判断。
+pub fn analyze_with_options(
+    bars: &[HarmonyBar],
+    tracks: &[&Track],
+    policy: HarmonyPolicy,
+    bar_beats: f64,
+    time_tolerance: f64,
+    scale: Option<&[u8]>,
+    ornament_ids: Option<&[(u64, u64, u64)]>,
+) -> Result<HarmonyReport, String> {
     if bars.is_empty() {
         return Err("没有和弦信息：请传入 bars，或先设置工程和弦表".into());
     }
     let policy = policy.normalize();
     let bar_beats = if bar_beats.is_finite() && bar_beats > 0.0 { bar_beats } else { 4.0 };
+    let time_tolerance =
+        if time_tolerance.is_finite() { time_tolerance.clamp(0.0, 8.0) } else { 0.0 };
     let layout = layout(bars, bar_beats)?;
     let first_start = layout.first().map(|b| b.start).unwrap_or(0.0);
     let last_end = layout.last().map(|b| b.end).unwrap_or(0.0);
@@ -300,20 +410,29 @@ pub fn analyze(
         let mut total = 0usize;
         let mut outside = 0usize;
         // 每条轨道按绝对起点排序，导音解决判断要看「下一个音」。
-        let mut notes: Vec<(f64, f64, u8)> = Vec::new();
+        let mut notes: Vec<ScannedNote> = Vec::new();
         for clip in &track.clips {
             for n in &clip.notes {
                 if n.start < 0.0 {
                     continue;
                 }
                 let start = clip.start + n.start;
-                notes.push((start, start + n.duration, n.pitch));
+                notes.push(ScannedNote {
+                    start,
+                    end: start + n.duration,
+                    pitch: n.pitch,
+                    clip: clip.id.0,
+                    id: n.id,
+                });
             }
         }
-        notes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        notes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
 
-        for (index, (start, end, pitch)) in notes.iter().enumerate() {
+        for (index, note) in notes.iter().enumerate() {
             total += 1;
+            let start = &note.start;
+            let end = &note.end;
+            let pitch = &note.pitch;
             let Some(bar) = layout.iter().position(|b| *start >= b.start && *start < b.end) else {
                 outside += 1;
                 continue;
@@ -327,20 +446,177 @@ pub fn analyze(
                 continue;
             }
 
-            // 1) 导音未解决：音级比根音低半音（= 根音上方大七度），且后面没有解决到根音。
-            let is_leading = chord.degree(pc) == 11;
-            if is_leading {
-                let resolved = notes[index + 1..].iter().any(|(s, _, p)| {
-                    *s < layout[bar].end && (p % 12) == chord.root
+            // 0) 显式装饰音：由调用方用 (track, clip, note id) 指定，优先于其他判断。
+            if ornament_ids
+                .map_or(false, |ids| ids.contains(&(track.id.0, note.clip, note.id)))
+            {
+                push_issue(
+                    &mut issues,
+                    &mut bar_issue_counts,
+                    &mut bar_tension,
+                    HarmonyIssue {
+                        kind: HarmonyIssueKind::Ornament,
+                        severity: Severity::Info,
+                        bar,
+                        bar_start: layout[bar].start,
+                        beat: beat_in_bar,
+                        track: track.id.0,
+                        pitch: *pitch,
+                        pitch_name: pitch_name(*pitch),
+                        duration: round3(duration),
+                        message: format!(
+                            "{} 被显式标记为装饰音（时值 {:.2} 拍）",
+                            pitch_name(*pitch),
+                            duration
+                        ),
+                    },
+                );
+                continue;
+            }
+
+            // 1) 导音：比根音低半音（= 根音上方大七度）。
+            //    已解决到根音 → 放行；只有没解决时才报 warning。
+            if chord.degree(pc) == 11 {
+                let resolved = notes[index + 1..].iter().any(|n| {
+                    n.start < layout[bar].end + time_tolerance && (n.pitch % 12) == chord.root
                 });
-                if !resolved {
+                if resolved {
+                    continue;
+                }
+                push_issue(
+                    &mut issues,
+                    &mut bar_issue_counts,
+                    &mut bar_tension,
+                    HarmonyIssue {
+                        kind: HarmonyIssueKind::UnresolvedLeadingTone,
+                        severity: Severity::Warning,
+                        bar,
+                        bar_start: layout[bar].start,
+                        beat: beat_in_bar,
+                        track: track.id.0,
+                        pitch: *pitch,
+                        pitch_name: pitch_name(*pitch),
+                        duration: round3(duration),
+                        message: format!(
+                            "{} 是 {} 的导音，但小节内没有解决到 {}",
+                            pitch_name(*pitch),
+                            chord.symbol,
+                            pitch_class_name(chord.root)
+                        ),
+                    },
+                );
+                continue;
+            }
+
+            // 2) 短经过音 / 辅助音优先放行：倚音、短倚音都走这里，
+            //    不会被误判成「延伸音」或「长音外音」。
+            let short = duration <= policy.allow_non_chord_tone_duration + 1e-9;
+            if short && policy.allow_approach_notes {
+                let ornament = looks_like_ornament(&notes, index, chord, duration);
+                let in_scale = scale.map_or(false, |s| s.contains(&pc));
+                let kind = if ornament {
+                    HarmonyIssueKind::Ornament
+                } else if in_scale {
+                    HarmonyIssueKind::ScaleTone
+                } else {
+                    HarmonyIssueKind::NonChordTone
+                };
+                let message = if ornament {
+                    format!(
+                        "{} 是 {} 前的装饰音（时值 {:.2} 拍，后接相邻和弦音）",
+                        pitch_name(*pitch),
+                        chord.symbol,
+                        duration
+                    )
+                } else if in_scale {
+                    format!(
+                        "{} 不属于 {}，但在调内（时值 {:.2} 拍，按经过音放行）",
+                        pitch_name(*pitch),
+                        chord.symbol,
+                        duration
+                    )
+                } else {
+                    format!(
+                        "{} 不属于 {}（时值 {:.2} 拍，按经过音放行）",
+                        pitch_name(*pitch),
+                        chord.symbol,
+                        duration
+                    )
+                };
+                push_issue(
+                    &mut issues,
+                    &mut bar_issue_counts,
+                    &mut bar_tension,
+                    HarmonyIssue {
+                        kind,
+                        severity: Severity::Info,
+                        bar,
+                        bar_start: layout[bar].start,
+                        beat: beat_in_bar,
+                        track: track.id.0,
+                        pitch: *pitch,
+                        pitch_name: pitch_name(*pitch),
+                        duration: round3(duration),
+                        message,
+                    },
+                );
+                continue;
+            }
+
+            // 3) 延伸音：9 / 11 / 13 以及变化延伸。`allow_extensions` 真正决定是否放行；
+            //    其中 `unrecommended_extension` 命中的仍然给 warning，其余给 info。
+            if is_extension_degree(chord.degree(pc)) {
+                let reason = unrecommended_extension(chord, pc);
+                let severity = if reason.is_some() { Severity::Warning } else { Severity::Info };
+                let message = match reason {
+                    Some(reason) => format!(
+                        "{} 是 {} 的延伸音，但：{reason}",
+                        pitch_name(*pitch),
+                        chord.symbol
+                    ),
+                    None => format!(
+                        "{} 是 {} 的延伸音（9 / 11 / 13 类）",
+                        pitch_name(*pitch),
+                        chord.symbol
+                    ),
+                };
+                push_issue(
+                    &mut issues,
+                    &mut bar_issue_counts,
+                    &mut bar_tension,
+                    HarmonyIssue {
+                        kind: HarmonyIssueKind::Extension,
+                        severity: if policy.allow_extensions {
+                            severity
+                        } else {
+                            Severity::Warning
+                        },
+                        bar,
+                        bar_start: layout[bar].start,
+                        beat: beat_in_bar,
+                        track: track.id.0,
+                        pitch: *pitch,
+                        pitch_name: pitch_name(*pitch),
+                        duration: round3(duration),
+                        message,
+                    },
+                );
+                continue;
+            }
+
+            // 4) 调内音：不属于和弦，但在给定的调式/音阶里。
+            //    短音给 info，长音给 warning——它仍然是色彩/张力，不是「错音」。
+            if let Some(scale) = scale {
+                if scale.contains(&pc) {
+                    let severity =
+                        if duration >= 2.0 { Severity::Warning } else { Severity::Info };
                     push_issue(
                         &mut issues,
                         &mut bar_issue_counts,
                         &mut bar_tension,
                         HarmonyIssue {
-                            kind: HarmonyIssueKind::UnresolvedLeadingTone,
-                            severity: Severity::Warning,
+                            kind: HarmonyIssueKind::ScaleTone,
+                            severity,
                             bar,
                             bar_start: layout[bar].start,
                             beat: beat_in_bar,
@@ -349,10 +625,10 @@ pub fn analyze(
                             pitch_name: pitch_name(*pitch),
                             duration: round3(duration),
                             message: format!(
-                                "{} 是 {} 的导音，但小节内没有解决到 {}",
+                                "{} 不属于 {}，但在调内（非和弦音，持续 {:.2} 拍）",
                                 pitch_name(*pitch),
                                 chord.symbol,
-                                pitch_class_name(chord.root)
+                                duration
                             ),
                         },
                     );
@@ -360,54 +636,8 @@ pub fn analyze(
                 }
             }
 
-            // 2) 不推荐的延伸音。
-            if let Some(reason) = unrecommended_extension(chord, pc) {
-                if !policy.allow_extensions {
-                    push_issue(
-                        &mut issues,
-                        &mut bar_issue_counts,
-                        &mut bar_tension,
-                        HarmonyIssue {
-                            kind: HarmonyIssueKind::Extension,
-                            severity: Severity::Warning,
-                            bar,
-                            bar_start: layout[bar].start,
-                            beat: beat_in_bar,
-                            track: track.id.0,
-                            pitch: *pitch,
-                            pitch_name: pitch_name(*pitch),
-                            duration: round3(duration),
-                            message: format!("{} 在 {} 上：{reason}", pitch_name(*pitch), chord.symbol),
-                        },
-                    );
-                    continue;
-                }
-            }
-
-            // 3) 和弦外音：短经过音只提示，长音才算冲突。
-            let short = duration <= policy.allow_non_chord_tone_duration + 1e-9;
-            let severity = if short && policy.allow_approach_notes {
-                Severity::Info
-            } else if duration >= 2.0 {
-                Severity::Error
-            } else {
-                Severity::Warning
-            };
-            let message = if short && policy.allow_approach_notes {
-                format!(
-                    "{} 不属于 {}（时值 {:.2} 拍，按经过音放行）",
-                    pitch_name(*pitch),
-                    chord.symbol,
-                    duration
-                )
-            } else {
-                format!(
-                    "{} 不属于 {}（持续 {:.2} 拍）",
-                    pitch_name(*pitch),
-                    chord.symbol,
-                    duration
-                )
-            };
+            // 5) 真正不属和弦、也不是延伸音/调内音：长音才算冲突。
+            let severity = if duration >= 2.0 { Severity::Error } else { Severity::Warning };
             push_issue(
                 &mut issues,
                 &mut bar_issue_counts,
@@ -422,18 +652,29 @@ pub fn analyze(
                     pitch: *pitch,
                     pitch_name: pitch_name(*pitch),
                     duration: round3(duration),
-                    message,
+                    message: format!(
+                        "{} 不属于 {}（持续 {:.2} 拍）",
+                        pitch_name(*pitch),
+                        chord.symbol,
+                        duration
+                    ),
                 },
             );
         }
 
         // 4) 悬挂音：跨小节延续、且不属于新小节和弦的音。
-        for (start, end, pitch) in &notes {
+        for note in &notes {
+            let start = &note.start;
+            let end = &note.end;
+            let pitch = &note.pitch;
             if *start >= *end {
                 continue;
             }
             for (bar, seg) in layout.iter().enumerate() {
-                if *start < seg.start && *end > seg.start {
+                if *start < seg.start
+                    && seg.start - *start > time_tolerance
+                    && *end > seg.start
+                {
                     let pc = pitch % 12;
                     if !seg.chord.contains(pc) {
                         push_issue(
@@ -656,10 +897,10 @@ mod tests {
     fn chord_tones_are_clean_and_outsiders_are_reported() {
         let t = track_with(vec![(60, 0.0, 1.0), (61, 1.0, 1.0)]);
         let report = analyze(&bars(), &[&t], HarmonyPolicy::default(), 4.0).unwrap();
-        // C4 是 Cmaj7 的根音；C#4 是长音外音。
+        // C4 是 Cmaj7 的根音；C#4 是大三和弦上的 b9（延伸音，但属于不推荐的一类）。
         assert_eq!(report.issues.len(), 1, "{:?}", report.issues);
         let issue = &report.issues[0];
-        assert_eq!(issue.kind, HarmonyIssueKind::NonChordTone);
+        assert_eq!(issue.kind, HarmonyIssueKind::Extension);
         assert_eq!(issue.bar, 0);
         assert_eq!(issue.beat, 1.0);
         assert_eq!(issue.pitch, 61);
@@ -680,6 +921,157 @@ mod tests {
         assert_eq!(passing.len(), 1);
         assert_eq!(passing[0].severity, Severity::Info, "短经过音只提示");
         assert_eq!(report.conflict_level, Severity::Info);
+    }
+
+    #[test]
+    fn allow_extensions_controls_common_extensions() {
+        let bars = vec![HarmonyBar {
+            start: 0.0,
+            length: 4.0,
+            symbol: "Gm9".into(),
+            source: None,
+        }];
+        // C5 是 Gm9 的 11 音（不在符号里，但属于常见延伸音）。
+        let t = track_with(vec![(72, 0.0, 1.0)]);
+        let allowed = analyze(
+            &bars,
+            &[&t],
+            HarmonyPolicy { allow_extensions: true, ..Default::default() },
+            4.0,
+        )
+        .unwrap();
+        assert_eq!(allowed.issues.len(), 1, "{:?}", allowed.issues);
+        assert_eq!(allowed.issues[0].kind, HarmonyIssueKind::Extension);
+        assert_eq!(allowed.issues[0].severity, Severity::Info);
+
+        let denied = analyze(
+            &bars,
+            &[&t],
+            HarmonyPolicy { allow_extensions: false, ..Default::default() },
+            4.0,
+        )
+        .unwrap();
+        assert_eq!(denied.issues[0].kind, HarmonyIssueKind::Extension);
+        assert_eq!(denied.issues[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn short_grace_note_is_tagged_as_ornament() {
+        // Cmaj7 上 D#4 -> E4：D# 是短倚音，E 是和弦音。
+        let t = track_with(vec![(63, 0.0, 0.05), (64, 0.05, 1.0)]);
+        let report = analyze(&bars(), &[&t], HarmonyPolicy::default(), 4.0).unwrap();
+        let grace = report.issues.iter().find(|i| i.pitch == 63).expect("装饰音应当被报告");
+        assert_eq!(grace.kind, HarmonyIssueKind::Ornament);
+        assert_eq!(grace.severity, Severity::Info);
+    }
+
+    #[test]
+    fn parse_scale_knows_common_modes() {
+        assert_eq!(parse_scale("F", "major").unwrap(), vec![0, 2, 4, 5, 7, 9, 10]);
+        assert_eq!(parse_scale("A", "minor").unwrap(), vec![0, 2, 4, 5, 7, 9, 11]);
+        assert_eq!(parse_scale("D", "dorian").unwrap(), vec![0, 2, 4, 5, 7, 9, 11]);
+        assert!(parse_scale("F", "no_such_mode").unwrap_err().contains("未知调式"));
+    }
+
+    #[test]
+    fn scale_context_marks_in_key_notes_instead_of_plain_outsiders() {
+        let scale = parse_scale("F", "major").unwrap();
+        let bars = vec![HarmonyBar {
+            start: 0.0,
+            length: 4.0,
+            symbol: "Cmaj7".into(),
+            source: None,
+        }];
+        // D4 短经过音：不在 Cmaj7 里，但在 F 大调里。
+        let passing = track_with(vec![(62, 0.0, 0.25)]);
+        let report = analyze_with_options(
+            &bars,
+            &[&passing],
+            HarmonyPolicy::default(),
+            4.0,
+            0.0,
+            Some(&scale),
+            None,
+        )
+        .unwrap();
+        let issue = report.issues.iter().find(|i| i.pitch == 62).expect("应当报告调内经过音");
+        assert_eq!(issue.kind, HarmonyIssueKind::ScaleTone);
+        assert_eq!(issue.severity, Severity::Info);
+
+        // D#4 不在 F 大调里，也不是 Cmaj7 的延伸音：保持普通外音判断。
+        let outside = track_with(vec![(63, 0.0, 1.0)]);
+        let report = analyze_with_options(
+            &bars,
+            &[&outside],
+            HarmonyPolicy::default(),
+            4.0,
+            0.0,
+            Some(&scale),
+            None,
+        )
+        .unwrap();
+        let issue = report.issues.iter().find(|i| i.pitch == 63).expect("应当报告外音");
+        assert_eq!(issue.kind, HarmonyIssueKind::NonChordTone);
+    }
+
+    #[test]
+    fn explicit_ornament_overrides_the_duration_heuristic() {
+        let bars = vec![HarmonyBar {
+            start: 0.0,
+            length: 4.0,
+            symbol: "Cmaj7".into(),
+            source: None,
+        }];
+        // D#4 持续 0.5 拍：启发式不会判成装饰音，但显式 id 会覆盖它。
+        let t = track_with(vec![(63, 0.0, 0.5)]);
+        let ornaments = [(1, 1, 1)];
+        let report = analyze_with_options(
+            &bars,
+            &[&t],
+            HarmonyPolicy::default(),
+            4.0,
+            0.0,
+            None,
+            Some(&ornaments),
+        )
+        .unwrap();
+        let issue = report.issues.iter().find(|i| i.pitch == 63).expect("应当报告装饰音");
+        assert_eq!(issue.kind, HarmonyIssueKind::Ornament);
+        assert_eq!(issue.severity, Severity::Info);
+    }
+
+    #[test]
+    fn tolerance_ignores_a_note_that_starts_just_before_the_bar_line() {
+        // C4 从 3.99 拍延续进 G7 小节；严格模式下是 suspension，容差内应当放行。
+        let t = track_with(vec![(60, 3.99, 1.0)]);
+        let strict = analyze(&bars(), &[&t], HarmonyPolicy::default(), 4.0).unwrap();
+        assert!(
+            strict.issues.iter().any(|i| i.kind == HarmonyIssueKind::Suspension),
+            "{:?}",
+            strict.issues
+        );
+        let tolerant =
+            analyze_with_tolerance(&bars(), &[&t], HarmonyPolicy::default(), 4.0, 0.0625).unwrap();
+        assert!(
+            !tolerant.issues.iter().any(|i| i.kind == HarmonyIssueKind::Suspension),
+            "{:?}",
+            tolerant.issues
+        );
+    }
+
+    #[test]
+    fn resolved_leading_tone_is_not_reported() {
+        // 第二小节是 G7；F#4 是 G 的导音，后面解决到 G4。
+        let t = track_with(vec![(66, 4.0, 0.5), (67, 4.5, 0.5)]);
+        let report = analyze(&bars(), &[&t], HarmonyPolicy::default(), 4.0).unwrap();
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|i| i.kind == HarmonyIssueKind::UnresolvedLeadingTone),
+            "{:?}",
+            report.issues
+        );
     }
 
     #[test]

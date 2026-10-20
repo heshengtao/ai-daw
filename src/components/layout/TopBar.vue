@@ -8,6 +8,7 @@ import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  ClockIcon,
   FolderOpenIcon,
   ArrowUpTrayIcon,
   PlusIcon,
@@ -34,6 +35,7 @@ const emit = defineEmits<{
   (e: "import"): void;
   (e: "importAudio"): void;
   (e: "new"): void;
+  (e: "history"): void;
   (e: "save"): void;
   (e: "export"): void;
   (e: "rename"): void;
@@ -114,6 +116,11 @@ function onMouseDown(e: MouseEvent): void {
       <div class="flex-1" />
 
       <div class="bar-actions">
+        <Tooltip :text="i18n.t('topbar.history')" align="end">
+          <button class="bar-btn" :aria-label="i18n.t('topbar.historyLabel')" @click="emit('history')">
+            <ClockIcon class="bar-icon" />
+          </button>
+        </Tooltip>
         <Tooltip :text="i18n.t('topbar.import')" align="end">
           <button class="bar-btn" :aria-label="i18n.t('topbar.importLabel')" @click="emit('import')">
             <FolderOpenIcon class="bar-icon" />

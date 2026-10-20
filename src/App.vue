@@ -10,6 +10,7 @@ import RightPanel from "@/components/workspace/RightPanel.vue";
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import ToastHost from "@/components/common/ToastHost.vue";
 import ProjectDialog from "@/components/common/ProjectDialog.vue";
+import ProjectHistoryDialog from "@/components/common/ProjectHistoryDialog.vue";
 import ShortcutsDialog from "@/components/common/ShortcutsDialog.vue";
 import UnsavedChangesDialog from "@/components/common/UnsavedChangesDialog.vue";
 import ExportDialog, { type ExportChoice } from "@/components/common/ExportDialog.vue";
@@ -116,6 +117,9 @@ const projectDialogMode = ref<"rename" | "save">("rename");
 
 /** 快捷键速查表模态框。 */
 const shortcutsOpen = ref(false);
+
+/** 历史工程模态框。 */
+const historyOpen = ref(false);
 
 /** 退出确认模态框：关闭守卫等待用户三选一（保存 / 不保存 / 取消）。 */
 const unsavedOpen = ref(false);
@@ -514,6 +518,7 @@ onUnmounted(() => {
     @import="onImport"
     @import-audio="onImportAudio"
     @new="onNew"
+    @history="historyOpen = true"
     @save="onSave"
     @export="onExport"
     @rename="openRenameDialog"
@@ -578,6 +583,9 @@ onUnmounted(() => {
     :initial-name="projectBaseName"
     @submit="onProjectDialogSubmit"
   />
+
+  <!-- 历史工程：新建 / 打开另一个工程时，当前工程会自动收进这里 -->
+  <ProjectHistoryDialog v-model:open="historyOpen" />
 
   <!-- 快捷键速查表：⌘ 按钮 / `?` / Ctrl+Cmd+/ 打开 -->
   <ShortcutsDialog v-model:open="shortcutsOpen" />

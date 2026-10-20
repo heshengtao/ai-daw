@@ -1,5 +1,8 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
+use super::clip::ClipId;
 use super::track::{MixerChannel, Track, TrackId};
 use super::transport::Transport;
 
@@ -33,6 +36,57 @@ pub struct Section {
     pub role: Option<String>,
 }
 
+/// 音符级标签：装饰音 / 奏法。**不改变播放**，只给分析器提供意图。
+///
+/// 放在工程级 `note_tags` 里而不是 `Note` 字段上，是为了避免给每个音符都加一个通常为空的
+/// 可选字段——老工程与现有音符字面量形状完全不变。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct NoteTag {
+    /// 装饰音类型：`grace` / `acciaccatura` / `mordent` / `trill`…（自由文本）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ornament: Option<String>,
+    /// 奏法：`staccato` / `accent` / `legato` / `marcato`…（自由文本）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub articulation: Option<String>,
+}
+
+impl NoteTag {
+    /// 两个字段都为空。
+    pub fn is_empty(&self) -> bool {
+        self.ornament.is_none() && self.articulation.is_none()
+    }
+
+    /// 去掉空白字段；空字符串视为未设置。
+    pub fn normalized(mut self) -> Self {
+        self.ornament = self
+            .ornament
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        self.articulation = self
+            .articulation
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        self
+    }
+}
+
+/// `note_tags` 的键：`"track:clip:id"`。
+pub fn note_tag_key(track: u64, clip: u64, id: u64) -> String {
+    format!("{track}:{clip}:{id}")
+}
+
+/// 解析 `"track:clip:id"`；格式不对返回 `None`。
+pub fn parse_note_tag_key(key: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = key.split(':');
+    let track = parts.next()?.parse().ok()?;
+    let clip = parts.next()?.parse().ok()?;
+    let id = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((track, clip, id))
+}
+
 /// 工程：领域聚合根。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -46,6 +100,9 @@ pub struct Project {
     /// 段落表。空时不写进 JSON。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<Section>,
+    /// 音符级标签（键 = `"track:clip:id"`）。空时不写进 JSON。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub note_tags: BTreeMap<String, NoteTag>,
 }
 
 impl Project {
@@ -58,6 +115,97 @@ impl Project {
             master: MixerChannel::default(),
             harmony: vec![],
             sections: vec![],
+            note_tags: BTreeMap::new(),
+        }
+    }
+
+    /// 读取一个音符的标签。
+    pub fn note_tag(&self, track: TrackId, clip: ClipId, id: u64) -> Option<&NoteTag> {
+        self.note_tags.get(&note_tag_key(track.0, clip.0, id))
+    }
+
+    /// 写入 / 清除一个音符的标签（空标签 = 移除）。
+    pub fn set_note_tag(&mut self, track: TrackId, clip: ClipId, id: u64, tag: Option<NoteTag>) {
+        let key = note_tag_key(track.0, clip.0, id);
+        match tag.map(NoteTag::normalized).filter(|t| !t.is_empty()) {
+            Some(tag) => {
+                self.note_tags.insert(key, tag);
+            }
+            None => {
+                self.note_tags.remove(&key);
+            }
+        }
+    }
+
+    /// 删除一个音符的标签。
+    pub fn remove_note_tag(&mut self, track: TrackId, clip: ClipId, id: u64) {
+        self.note_tags.remove(&note_tag_key(track.0, clip.0, id));
+    }
+
+    /// 删除一个片段下所有音符的标签（整体替换 / 变成音频 / 片段被删时用）。
+    pub fn remove_clip_note_tags(&mut self, track: TrackId, clip: ClipId) {
+        let prefix = format!("{}:{}:", track.0, clip.0);
+        self.note_tags.retain(|key, _| !key.starts_with(&prefix));
+    }
+
+    /// 删除一条轨道下所有音符的标签。
+    pub fn remove_track_note_tags(&mut self, track: TrackId) {
+        let prefix = format!("{}:", track.0);
+        self.note_tags.retain(|key, _| !key.starts_with(&prefix));
+    }
+
+    /// 片段跨轨道移动时，把它的音符标签一起搬到新轨道。
+    pub fn move_clip_note_tags(&mut self, from: TrackId, to: TrackId, clip: ClipId) {
+        if from == to {
+            return;
+        }
+        let from_prefix = format!("{}:{}:", from.0, clip.0);
+        let to_prefix = format!("{}:{}:", to.0, clip.0);
+        let moved: Vec<(String, NoteTag)> = self
+            .note_tags
+            .iter()
+            .filter(|(key, _)| key.starts_with(&from_prefix))
+            .map(|(key, tag)| {
+                (format!("{to_prefix}{}", &key[from_prefix.len()..]), tag.clone())
+            })
+            .collect();
+        let old_keys: Vec<String> = self
+            .note_tags
+            .keys()
+            .filter(|key| key.starts_with(&from_prefix))
+            .cloned()
+            .collect();
+        for key in old_keys {
+            self.note_tags.remove(&key);
+        }
+        for (key, tag) in moved {
+            self.note_tags.insert(key, tag);
+        }
+    }
+
+    /// 切分片段时，把右半段音符的标签迁到新片段。
+    ///
+    /// 跨过切点的音符会在左右两半**共用同一个 id**；这种 id 要复制标签而不是移走，
+    /// 否则左半段的标签会丢。
+    pub fn move_note_tags_to_clip(
+        &mut self,
+        track: TrackId,
+        from: ClipId,
+        to: ClipId,
+        right_ids: &[u64],
+        left_ids: &[u64],
+    ) {
+        if from == to {
+            return;
+        }
+        for id in right_ids {
+            let from_key = note_tag_key(track.0, from.0, *id);
+            if let Some(tag) = self.note_tags.get(&from_key).cloned() {
+                self.note_tags.insert(note_tag_key(track.0, to.0, *id), tag);
+                if !left_ids.contains(id) {
+                    self.note_tags.remove(&from_key);
+                }
+            }
         }
     }
 
@@ -140,6 +288,38 @@ mod tests {
         let back: Project = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);
         assert_eq!(back.tracks[0].name, "Lead");
+    }
+
+    #[test]
+    fn note_tags_are_optional_and_roundtrip() {
+        let mut p = Project::new("t");
+        p.set_note_tag(
+            TrackId(1),
+            ClipId(2),
+            3,
+            Some(NoteTag { ornament: Some("grace".into()), articulation: None }),
+        );
+        assert_eq!(
+            p.note_tag(TrackId(1), ClipId(2), 3).and_then(|t| t.ornament.as_deref()),
+            Some("grace")
+        );
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("note_tags"), "{json}");
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, p);
+
+        p.set_note_tag(TrackId(1), ClipId(2), 3, None);
+        assert!(p.note_tags.is_empty());
+        let empty = serde_json::to_string(&Project::new("t")).unwrap();
+        assert!(!empty.contains("note_tags"), "{empty}");
+    }
+
+    #[test]
+    fn note_tag_keys_parse_and_reject_garbage() {
+        assert_eq!(parse_note_tag_key("1:2:3"), Some((1, 2, 3)));
+        assert_eq!(parse_note_tag_key("1:2"), None);
+        assert_eq!(parse_note_tag_key("1:2:3:4"), None);
+        assert_eq!(parse_note_tag_key("x:2:3"), None);
     }
 
     #[test]

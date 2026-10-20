@@ -5,7 +5,10 @@
 
 use ai_daw_engine::command::Command;
 use ai_daw_engine::event::{Actor, Event};
-use ai_daw_engine::model::{ClipId, FitMode, HarmonyBar, Note, NotePatch, NoteRange, Section, TrackId, VelocityShape};
+use ai_daw_engine::model::{
+    ClipId, FitMode, HarmonyBar, Note, NotePatch, NoteRange, NoteTag, Section, TrackId,
+    VelocityShape,
+};
 use ai_daw_engine::Engine;
 
 fn agent() -> Actor {
@@ -175,6 +178,7 @@ fn transpose_velocity_quantize_swing_are_all_undoable() {
             clip,
             shape: VelocityShape::Fixed(40),
             range: Some(NoteRange { start: 0.0, end: 0.5 }),
+            beat_filter: None,
         },
         agent(),
     );
@@ -182,7 +186,14 @@ fn transpose_velocity_quantize_swing_are_all_undoable() {
     assert_eq!(vel, vec![40, 100, 100], "范围只覆盖第一个音");
 
     e.execute(
-        Command::QuantizeNotes { track, clip, grid: 1.0, strength: 1.0, range: None },
+        Command::QuantizeNotes {
+            track,
+            clip,
+            grid: 1.0,
+            strength: 1.0,
+            range: None,
+            quantize_duration: false,
+        },
         agent(),
     );
     let starts: Vec<f64> = notes_of(&e, track, clip).iter().map(|n| n.start).collect();
@@ -223,7 +234,16 @@ fn humanize_with_the_same_seed_is_reproducible_across_undo() {
         agent(),
     );
     e.execute(
-        Command::HumanizeNotes { track, clip, timing: 0.02, velocity: 8.0, range: None, seed: Some(42) },
+        Command::HumanizeNotes {
+            track,
+            clip,
+            timing: 0.02,
+            velocity: 8.0,
+            range: None,
+            seed: Some(42),
+            min_duration: 0.0,
+            group_by_start: false,
+        },
         agent(),
     );
     let once = notes_of(&e, track, clip);
@@ -471,4 +491,188 @@ fn loading_an_old_project_assigns_note_ids_in_clip_order() {
     // 补号后再存一次，id 就落进文件了（仍是合法 JSON，旧版本读它只是忽略 id）。
     let round = serde_json::to_string(engine.project()).unwrap();
     assert!(round.contains("\"id\":1"));
+}
+
+#[test]
+fn note_tags_are_undoable_and_clearable() {
+    let (mut e, track, clip) = setup();
+    e.execute(
+        Command::AddNotes { track, clip, notes: vec![note(60, 0.0, 1.0, 100)] },
+        agent(),
+    );
+    let id = notes_of(&e, track, clip)[0].id;
+
+    e.execute(
+        Command::SetNoteTag {
+            track,
+            clip,
+            id,
+            tag: Some(NoteTag {
+                ornament: Some("grace".into()),
+                articulation: Some("staccato".into()),
+            }),
+        },
+        agent(),
+    );
+    let tag = e.project().note_tag(track, clip, id).expect("标签应当写入");
+    assert_eq!(tag.ornament.as_deref(), Some("grace"));
+    assert_eq!(tag.articulation.as_deref(), Some("staccato"));
+
+    e.undo();
+    assert!(e.project().note_tag(track, clip, id).is_none(), "撤销应当移除标签");
+    e.redo();
+    assert!(e.project().note_tag(track, clip, id).is_some(), "重做应当恢复标签");
+
+    e.execute(Command::SetNoteTag { track, clip, id, tag: None }, agent());
+    assert!(e.project().note_tag(track, clip, id).is_none(), "None 应当清除标签");
+}
+
+#[test]
+fn note_tags_are_pruned_on_remove_and_replace_but_come_back_on_undo() {
+    let (mut e, track, clip) = setup();
+    e.execute(
+        Command::AddNotes { track, clip, notes: vec![note(60, 0.0, 1.0, 100)] },
+        agent(),
+    );
+    let id = notes_of(&e, track, clip)[0].id;
+    e.execute(
+        Command::SetNoteTag {
+            track,
+            clip,
+            id,
+            tag: Some(NoteTag { ornament: Some("grace".into()), articulation: None }),
+        },
+        agent(),
+    );
+    assert!(e.project().note_tag(track, clip, id).is_some());
+
+    // 删除音符 → 标签必须一起清掉，避免 id 复用时误标。
+    e.execute(Command::RemoveNotesById { track, clip, ids: vec![id] }, agent());
+    assert!(e.project().note_tags.is_empty(), "删除音符后不应留下标签");
+    e.undo();
+    assert!(e.project().note_tag(track, clip, id).is_some(), "撤销删除应当恢复标签");
+
+    // 整体替换会从 1 重新发 id：旧标签绝不能套到新音符上。
+    e.execute(
+        Command::ReplaceNotes { track, clip, notes: vec![note(64, 0.0, 1.0, 100)] },
+        agent(),
+    );
+    assert!(e.project().note_tags.is_empty(), "整体替换后不应保留旧标签");
+    e.undo();
+    assert!(e.project().note_tag(track, clip, id).is_some(), "撤销替换应当恢复标签");
+}
+
+#[test]
+fn note_tags_follow_a_split_clip() {
+    let (mut e, track, clip) = setup();
+    e.execute(
+        Command::AddNotes {
+            track,
+            clip,
+            notes: vec![
+                note(60, 0.0, 1.0, 100),
+                note(64, 8.0, 1.0, 100),
+                note(67, 3.0, 2.0, 100), // 跨过切点
+            ],
+        },
+        agent(),
+    );
+    let ids: Vec<u64> = notes_of(&e, track, clip).iter().map(|n| n.id).collect();
+    for id in &ids {
+        e.execute(
+            Command::SetNoteTag {
+                track,
+                clip,
+                id: *id,
+                tag: Some(NoteTag { ornament: Some("grace".into()), articulation: None }),
+            },
+            agent(),
+        );
+    }
+
+    e.execute(Command::SplitClip { track, clip, beat: 4.0 }, agent());
+    let new_clip = e
+        .project()
+        .track(track)
+        .unwrap()
+        .clips
+        .iter()
+        .find(|c| c.id != clip)
+        .expect("切分后应当有新片段")
+        .id;
+    assert!(e.project().note_tag(track, clip, ids[0]).is_some(), "左半段标签应留在原片段");
+    assert!(
+        e.project().note_tag(track, new_clip, ids[1]).is_some(),
+        "右半段标签应迁到新片段"
+    );
+    assert!(e.project().note_tag(track, clip, ids[1]).is_none(), "旧片段不应残留右半段标签");
+    // 跨切点的音符在左右两半共用 id：标签应当两边都保留。
+    assert!(e.project().note_tag(track, clip, ids[2]).is_some(), "跨切点音符的左半应保留标签");
+    assert!(
+        e.project().note_tag(track, new_clip, ids[2]).is_some(),
+        "跨切点音符的右半也应保留标签"
+    );
+}
+
+#[test]
+fn note_tags_follow_duplicate_and_merge() {
+    let (mut e, track, clip) = setup();
+    e.execute(
+        Command::AddNotes { track, clip, notes: vec![note(60, 0.0, 1.0, 100)] },
+        agent(),
+    );
+    let id = notes_of(&e, track, clip)[0].id;
+    e.execute(
+        Command::SetNoteTag {
+            track,
+            clip,
+            id,
+            tag: Some(NoteTag { ornament: Some("grace".into()), articulation: None }),
+        },
+        agent(),
+    );
+
+    e.execute(
+        Command::DuplicateClip { track, clip, to_track: None, start: Some(4.0) },
+        agent(),
+    );
+    let duplicated = e
+        .project()
+        .track(track)
+        .unwrap()
+        .clips
+        .iter()
+        .find(|c| c.id != clip)
+        .expect("复制后应当有新片段")
+        .id;
+    assert!(
+        e.project().note_tag(track, duplicated, id).is_some(),
+        "复制片段应当带上音符标签"
+    );
+
+    // 再来一段带标签的片段，合并后标签应落到目标片段。
+    e.execute(Command::AddClip { track, start: 16.0, length: 4.0 }, agent());
+    let second = e.project().track(track).unwrap().clips.iter().max_by(|a, b| {
+        a.start.partial_cmp(&b.start).unwrap()
+    }).unwrap().id;
+    e.execute(
+        Command::AddNotes { track, clip: second, notes: vec![note(67, 0.0, 1.0, 100)] },
+        agent(),
+    );
+    let second_id = notes_of(&e, track, second)[0].id;
+    e.execute(
+        Command::SetNoteTag {
+            track,
+            clip: second,
+            id: second_id,
+            tag: Some(NoteTag { ornament: Some("mordent".into()), articulation: None }),
+        },
+        agent(),
+    );
+    e.execute(Command::MergeClips { track, clips: vec![clip, second] }, agent());
+    let merged_ids: Vec<u64> = notes_of(&e, track, clip).iter().map(|n| n.id).collect();
+    assert!(
+        merged_ids.iter().any(|id| e.project().note_tag(track, clip, *id).is_some()),
+        "合并后目标片段应当保留标签"
+    );
 }

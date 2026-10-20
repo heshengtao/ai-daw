@@ -268,11 +268,20 @@ Cym    X . . . . . . . . . . . . . . .
   `set_note_velocity(track, clip, value=90)`；
   `set_note_velocity(track, clip, from=70, to=110, range={"start":0,"end":16})`；
   `set_note_velocity(track, clip, scale=1.15, range=…)`。
+- **只改正拍 / 反拍**：`set_note_velocity(track, clip, value=92, grid=1.0, beat=0.5)` 只改每拍
+  反拍（`and`）；`beat=0.0` 只改正拍。做 R&B / funk 的「反拍重音」用它。
 - **量化**：`quantize_notes(grid=0.25, strength=0.8)`。电子鼓用 1.0；真人演奏 0.7–0.9。
+  需要时加 `duration=true` 让时值也吸网格；**先量化主音，再加倚音**。
 - **Swing**：`apply_swing(subdivision=0.5, ratio=0.66, strength=0.7)`（8 分 swing）；
   Boom bap/Lo-fi 用 `subdivision=0.25, ratio=0.58`。
+  **Swing 不是「反拍重音」**：它只移动每对子拍的第二个（`ratio > 0.5` 推后、`< 0.5` 抢拍），
+  不会把力度压到反拍上。要反拍重音用 `beat=0.5` 改力度/位置，不要用 swing 代替。
 - **人性化**：`humanize_notes(timing=0.02, velocity=8, seed=7)`；同一个 seed 结果一致。
   Trap/House 的 kick 不要 humanize，军鼓/hat 可以。
+  - 含倚音/装饰音的旋律**不要直接 humanize**。同 `start` + 负 `offset` 的倚音传
+    `group_by_start=true`；再配 `min_duration` 时，同组有短音则整组不动。
+    不同 `start` 的倚音用 `range` 排除或 `min_duration=0.1` 跳过（主音仍会动，间距会变）。
+  - 和弦/扫弦传 `group_by_start=true`，让同起点的音共用同一个抖动，别把和弦拆散。
 - **扫弦**：`strum_notes(step_ms=30, direction="down")`；写的是 `offset`，不破坏 `start`。
 
 ### 6.3 什么该对齐、什么该留活
@@ -323,6 +332,10 @@ snare 60、hat 60、tom 45），并且**一条轨只写一种鼓**。
 - **所有力度都是 100**：没有律动，像打字机。至少让 hat 强弱交替、snare 有 ghost。
 - **Trap 的 808 和 kick 同时响**：低频打架；让 808 稍晚或让 kick 短。
 - **把 swing 应用到已经硬对齐的电子鼓**：四拍底鼓会变瘸；swing 只给需要摇摆的声部。
+- **用 swing 冒充 R&B 的反拍重音**：swing 只改位置、不改力度，也不会把重音放到 `and` 上；
+  R&B 的反拍重音是「音符写在 `and` 上 + 力度更高」。
+- **对含倚音的旋律跑 humanize**：倚音和主音会被独立抖动，间距每次都不一样；
+  用 `min_duration` 或 `range` 排除，或先 humanize 再加倚音。
 - **量化 100% 还想要「真人感」**：两者矛盾；先量化到 70–85%，再 humanize。
 
 ## 参考

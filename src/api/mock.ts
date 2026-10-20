@@ -54,6 +54,7 @@ import type {
   PitchRange,
   Preset,
   Project,
+  ProjectHistoryEntry,
   Section,
   Send,
   StoreNetwork,
@@ -532,6 +533,96 @@ let sessionPath: string | null = null;
 /** 快照式撤销栈：浏览器预览里的撤销/重做与真实引擎行为一致。 */
 const undoStack: Project[] = [];
 const redoStack: Project[] = [];
+
+/**
+ * 历史工程：浏览器预览用 localStorage 模拟后端的 `history/` 目录。
+ *
+ * 只保留展示用的元信息 + 完整工程快照；最多 30 份，与后端一致。
+ */
+const HISTORY_KEY = "ai-daw-project-history";
+const HISTORY_MAX = 30;
+
+interface MockHistoryRecord {
+  entry: ProjectHistoryEntry;
+  project: Project;
+}
+
+function readHistory(): MockHistoryRecord[] {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]") as MockHistoryRecord[];
+  } catch {
+    return [];
+  }
+}
+
+function writeHistory(records: MockHistoryRecord[]): void {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(records));
+  } catch {
+    // 存不下（配额满）就只保留本次会话可见的部分。
+  }
+}
+
+function historyEntry(
+  id: string,
+  project: Project,
+  path: string | null,
+  wasDirty: boolean,
+  savedAt: number,
+): ProjectHistoryEntry {
+  const tracks = project.tracks.map((track) => ({
+    name: track.name,
+    clips: track.clips.map((clip) => ({
+      start: clip.start,
+      length: clip.length,
+      audio: clip.audio !== undefined,
+    })),
+  }));
+  return {
+    id,
+    name: project.name,
+    saved_at: savedAt,
+    path,
+    dirty: wasDirty,
+    tempo: project.transport.tempo,
+    end_beat: project.tracks
+      .flatMap((track) => track.clips)
+      .reduce((max, clip) => Math.max(max, clip.start + clip.length), 0),
+    track_count: tracks.length,
+    clip_count: tracks.reduce((sum, track) => sum + track.clips.length, 0),
+    note_count: project.tracks
+      .flatMap((track) => track.clips)
+      .reduce((sum, clip) => sum + clip.notes.length, 0),
+    tracks,
+    fingerprint: JSON.stringify(project),
+  };
+}
+
+/** 把当前工程记进历史（新建 / 打开 / 恢复前调用；空白模板不记）。 */
+function recordHistory(): void {
+  if (sessionPath === null && !dirty && state.tracks.every((track) => track.clips.length === 0)) return;
+  const records = readHistory();
+  const fp = JSON.stringify(state);
+  const existing = records.findIndex(
+    (record) => record.entry.fingerprint === fp && record.entry.path === sessionPath,
+  );
+  if (existing >= 0) {
+    if (existing > 0) {
+      const [record] = records.splice(existing, 1);
+      if (record) records.unshift(record);
+      writeHistory(records);
+    }
+    return;
+  }
+
+  const savedAt = Date.now();
+  const id = `${savedAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  records.unshift({
+    entry: historyEntry(id, state, sessionPath, dirty, savedAt),
+    project: clone(state),
+  });
+  writeHistory(records.slice(0, HISTORY_MAX));
+}
 
 function clone(p: Project): Project {
   return structuredClone(p);
@@ -1118,6 +1209,8 @@ export const mockApi = {
     }),
 
   newProject: (trackNames?: string[], tempo?: number): Project => {
+    // 新建会清空当前工程：先记进历史（与后端 `new_project` 同一行为）。
+    recordHistory();
     transport.position_frames = 0;
     transport.playing = false;
     const next = commit(() => {
@@ -1517,6 +1610,17 @@ export const mockApi = {
     }
     const lo = pitches.length ? Math.min(...pitches) : undefined;
     const hi = pitches.length ? Math.max(...pitches) : undefined;
+    let semitoneClashes = 0;
+    let semitoneClashBeats = 0;
+    for (let i = 0; i < spans.length; i += 1) {
+      for (let j = i + 1; j < spans.length; j += 1) {
+        const overlap = Math.min(spans[i].end, spans[j].end) - Math.max(spans[i].start, spans[j].start);
+        if (overlap > 0 && Math.abs(spans[i].pitch - spans[j].pitch) % 12 === 1) {
+          semitoneClashes += 1;
+          semitoneClashBeats += overlap;
+        }
+      }
+    }
     return {
       track: trackId,
       clip: clipId,
@@ -1530,6 +1634,8 @@ export const mockApi = {
       mean_notes_per_bar: bars.length ? spans.length / bars.length : 0,
       bars,
       overlapping_notes: overlapping,
+      semitone_clashes: semitoneClashes,
+      semitone_clash_beats: Math.round(semitoneClashBeats * 1000) / 1000,
       notes_outside_clip: spans.filter((s) => s.outside).length,
     };
   },
@@ -1556,32 +1662,44 @@ export const mockApi = {
         const b = spansOf(picked[j].id);
         let overlap = 0;
         let unison = 0;
+        let semitoneClashes = 0;
+        let semitoneClashBeats = 0;
         for (const x of a) {
           for (const y of b) {
             const span = Math.min(x.end, y.end) - Math.max(x.start, y.start);
             if (span > 0) {
               overlap += span;
               if (x.pitch === y.pitch) unison += 1;
+              if (Math.abs(x.pitch - y.pitch) % 12 === 1) {
+                semitoneClashes += 1;
+                semitoneClashBeats += span;
+              }
             }
           }
         }
         const meanOf = (v: typeof a) => (v.length ? v.reduce((s, n) => s + n.pitch, 0) / v.length : undefined);
         const [ma, mb] = [meanOf(a), meanOf(b)];
         const gap = ma != null && mb != null ? Math.round(ma - mb) : undefined;
-        const conflict = overlap >= 4 && gap != null && Math.abs(gap) < 12;
+        const conflict = (overlap >= 4 && gap != null && Math.abs(gap) < 12) || semitoneClashBeats >= 0.25;
+        const clashText =
+          semitoneClashes > 0
+            ? `检测到 ${semitoneClashes} 处小二度 / 小九度重叠（共 ${semitoneClashBeats.toFixed(2)} 拍）。`
+            : "";
         pairs.push({
           a: picked[i].id,
           b: picked[j].id,
           overlap_beats: Math.round(overlap * 1000) / 1000,
           unison_notes: unison,
+          semitone_clashes: semitoneClashes,
+          semitone_clash_beats: Math.round(semitoneClashBeats * 1000) / 1000,
           shared_pitch_classes: [...new Set(a.map((n) => n.pitch % 12))].filter((pc) =>
             b.some((n) => n.pitch % 12 === pc),
           ),
           pitch_gap_semitones: gap,
           conflict,
           suggestion: conflict
-            ? `轨道 ${picked[i].id} 与 ${picked[j].id} 在相近音区同时发声，建议拉开一个八度或收窄音域。`
-            : "",
+            ? `轨道 ${picked[i].id} 与 ${picked[j].id} 在相近音区同时发声，建议拉开一个八度或收窄音域。${clashText}`
+            : clashText,
         });
       }
     }
@@ -1708,11 +1826,39 @@ export const mockApi = {
 
   currentProjectPath: (): string | null => sessionPath,
 
+  projectHistory: (): ProjectHistoryEntry[] => readHistory().map((record) => record.entry),
+
+  restoreProjectHistory: (id: string): Project => {
+    // 当前工程先入历史；被恢复的那份从列表取出（它马上就是当前工程了）。
+    recordHistory();
+    const records = readHistory();
+    const index = records.findIndex((record) => record.entry.id === id);
+    if (index < 0) throw new Error("历史工程不存在");
+    const [record] = records.splice(index, 1);
+    writeHistory(records);
+    if (!record) throw new Error("历史工程不存在");
+
+    state = clone(record.project);
+    dirty = record.entry.dirty;
+    sessionPath = record.entry.path;
+    nextTrackId = state.tracks.reduce((max, track) => Math.max(max, track.id), 0) + 1;
+    nextClipId = state.tracks
+      .flatMap((track) => track.clips)
+      .reduce((max, clip) => Math.max(max, clip.id), 0) + 1;
+    undoStack.length = 0;
+    redoStack.length = 0;
+    transport.position_frames = 0;
+    transport.playing = false;
+    emitTransport();
+    return clone(state);
+  },
+
   cacheSession: (path: string | null): void => {
     sessionPath = path;
   },
 
   openProject: (): Project => {
+    recordHistory();
     state = sample();
     nextTrackId = 4;
     nextClipId = 4;

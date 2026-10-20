@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! 采样内置乐器：钢琴 / 木吉他 / 电吉他 / 贝斯 / 原声鼓组。
+//! 采样内置乐器：钢琴 / 吉他 / 贝斯 / 鼓组 / 弦乐 / 铜管。
 //!
 //! 资产是**编译期内嵌**的 SF2/SF3：不依赖资源目录、不依赖安装路径，构造时只解一次
 //! `SoundFont`（同类乐器共享 `Arc`），每个轨道实例再建一个 `Synthesizer`。
@@ -22,6 +22,19 @@ pub const NYLON_GUITAR_ID: &str = "builtin.nylon_guitar";
 pub const ELECTRIC_GUITAR_ID: &str = "builtin.electric_guitar";
 pub const BASS_ID: &str = "builtin.bass";
 pub const DRUMS_ID: &str = "builtin.drums";
+pub const STRING_ENSEMBLE_ID: &str = "builtin.strings";
+pub const SLOW_STRINGS_ID: &str = "builtin.slow_strings";
+pub const VIOLIN_ID: &str = "builtin.violin";
+pub const VIOLA_ID: &str = "builtin.viola";
+pub const CELLO_ID: &str = "builtin.cello";
+pub const CONTRABASS_ID: &str = "builtin.contrabass";
+pub const PIZZICATO_ID: &str = "builtin.pizzicato";
+pub const TRUMPET_ID: &str = "builtin.trumpet";
+pub const FRENCH_HORNS_ID: &str = "builtin.french_horns";
+pub const SYNTH_BRASS_1_ID: &str = "builtin.synth_brass_1";
+pub const SYNTH_BRASS_2_ID: &str = "builtin.synth_brass_2";
+pub const SYNTH_STRINGS_1_ID: &str = "builtin.synth_strings_1";
+pub const SYNTH_STRINGS_2_ID: &str = "builtin.synth_strings_2";
 
 /// 一件内置采样乐器。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,15 +44,41 @@ pub enum Kind {
     ElectricGuitar,
     Bass,
     Drums,
+    StringEnsemble,
+    SlowStrings,
+    Violin,
+    Viola,
+    Cello,
+    Contrabass,
+    Pizzicato,
+    Trumpet,
+    FrenchHorns,
+    SynthBrass1,
+    SynthBrass2,
+    SynthStrings1,
+    SynthStrings2,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 5] = [
+    pub const ALL: [Kind; 18] = [
         Kind::Piano,
         Kind::NylonGuitar,
         Kind::ElectricGuitar,
         Kind::Bass,
         Kind::Drums,
+        Kind::StringEnsemble,
+        Kind::SlowStrings,
+        Kind::Violin,
+        Kind::Viola,
+        Kind::Cello,
+        Kind::Contrabass,
+        Kind::Pizzicato,
+        Kind::Trumpet,
+        Kind::FrenchHorns,
+        Kind::SynthBrass1,
+        Kind::SynthBrass2,
+        Kind::SynthStrings1,
+        Kind::SynthStrings2,
     ];
 
     pub fn id(self) -> &'static str {
@@ -49,6 +88,19 @@ impl Kind {
             Kind::ElectricGuitar => ELECTRIC_GUITAR_ID,
             Kind::Bass => BASS_ID,
             Kind::Drums => DRUMS_ID,
+            Kind::StringEnsemble => STRING_ENSEMBLE_ID,
+            Kind::SlowStrings => SLOW_STRINGS_ID,
+            Kind::Violin => VIOLIN_ID,
+            Kind::Viola => VIOLA_ID,
+            Kind::Cello => CELLO_ID,
+            Kind::Contrabass => CONTRABASS_ID,
+            Kind::Pizzicato => PIZZICATO_ID,
+            Kind::Trumpet => TRUMPET_ID,
+            Kind::FrenchHorns => FRENCH_HORNS_ID,
+            Kind::SynthBrass1 => SYNTH_BRASS_1_ID,
+            Kind::SynthBrass2 => SYNTH_BRASS_2_ID,
+            Kind::SynthStrings1 => SYNTH_STRINGS_1_ID,
+            Kind::SynthStrings2 => SYNTH_STRINGS_2_ID,
         }
     }
 
@@ -59,6 +111,19 @@ impl Kind {
             Kind::ElectricGuitar => "Electric Guitar",
             Kind::Bass => "Bass",
             Kind::Drums => "Drum Kit",
+            Kind::StringEnsemble => "String Ensemble",
+            Kind::SlowStrings => "Slow Strings",
+            Kind::Violin => "Violin",
+            Kind::Viola => "Viola",
+            Kind::Cello => "Cello",
+            Kind::Contrabass => "Contrabass",
+            Kind::Pizzicato => "Pizzicato",
+            Kind::Trumpet => "Trumpet",
+            Kind::FrenchHorns => "French Horns",
+            Kind::SynthBrass1 => "Synth Brass 1",
+            Kind::SynthBrass2 => "Synth Brass 2",
+            Kind::SynthStrings1 => "Synth Strings 1",
+            Kind::SynthStrings2 => "Synth Strings 2",
         }
     }
 
@@ -70,26 +135,122 @@ impl Kind {
             Kind::ElectricGuitar => 2.2,
             Kind::Bass => 3.0,
             Kind::Drums => 2.8,
+            Kind::StringEnsemble => 3.0,
+            Kind::SlowStrings => 3.0,
+            Kind::Violin => 2.2,
+            Kind::Viola => 2.1,
+            Kind::Cello => 2.1,
+            Kind::Contrabass => 2.5,
+            Kind::Pizzicato => 1.2,
+            Kind::Trumpet => 2.2,
+            Kind::FrenchHorns => 2.1,
+            Kind::SynthBrass1 => 1.4,
+            Kind::SynthBrass2 => 1.0,
+            Kind::SynthStrings1 => 2.1,
+            Kind::SynthStrings2 => 2.3,
         }
     }
 
+    /// 这件乐器用哪个内嵌资产；四件独奏弦乐共享同一个 SoundFont。
+    fn asset(self) -> Asset {
+        match self {
+            Kind::Piano => Asset::Piano,
+            Kind::NylonGuitar => Asset::NylonGuitar,
+            Kind::ElectricGuitar => Asset::ElectricGuitar,
+            Kind::Bass => Asset::Bass,
+            Kind::Drums => Asset::Drums,
+            Kind::StringEnsemble | Kind::SlowStrings => Asset::Strings,
+            Kind::Violin | Kind::Viola | Kind::Cello | Kind::Contrabass => Asset::StringQuartet,
+            Kind::Pizzicato => Asset::Pizzicato,
+            Kind::Trumpet => Asset::Trumpet,
+            Kind::FrenchHorns => Asset::FrenchHorns,
+            Kind::SynthBrass1 => Asset::SynthBrass1,
+            Kind::SynthBrass2 => Asset::SynthBrass2,
+            Kind::SynthStrings1 => Asset::SynthStrings1,
+            Kind::SynthStrings2 => Asset::SynthStrings2,
+        }
+    }
+
+    /// 资产里的 (bank, program)。同一个 SoundFont 可以有多个预设。
+    fn preset(self) -> (i32, i32) {
+        match self {
+            Kind::Piano
+            | Kind::NylonGuitar
+            | Kind::ElectricGuitar
+            | Kind::Bass
+            | Kind::Drums
+            | Kind::SynthBrass1
+            | Kind::SynthBrass2
+            | Kind::SynthStrings1
+            | Kind::SynthStrings2 => (0, 0),
+            Kind::StringEnsemble => (0, 48),
+            Kind::SlowStrings => (0, 49),
+            Kind::Violin => (0, 40),
+            Kind::Viola => (0, 41),
+            Kind::Cello => (0, 42),
+            Kind::Contrabass => (0, 43),
+            Kind::Pizzicato => (0, 45),
+            Kind::Trumpet => (0, 56),
+            Kind::FrenchHorns => (0, 60),
+        }
+    }
+}
+
+/// 内嵌的 SoundFont 资产。缓存按资产共享，四件独奏弦乐只解一次。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Asset {
+    Piano,
+    NylonGuitar,
+    ElectricGuitar,
+    Bass,
+    Drums,
+    StringQuartet,
+    Strings,
+    Pizzicato,
+    Trumpet,
+    FrenchHorns,
+    SynthBrass1,
+    SynthBrass2,
+    SynthStrings1,
+    SynthStrings2,
+}
+
+impl Asset {
     fn bytes(self) -> &'static [u8] {
         match self {
-            Kind::Piano => PIANO_BYTES,
-            Kind::NylonGuitar => NYLON_BYTES,
-            Kind::ElectricGuitar => ELECTRIC_BYTES,
-            Kind::Bass => BASS_BYTES,
-            Kind::Drums => DRUMS_BYTES,
+            Asset::Piano => PIANO_BYTES,
+            Asset::NylonGuitar => NYLON_BYTES,
+            Asset::ElectricGuitar => ELECTRIC_BYTES,
+            Asset::Bass => BASS_BYTES,
+            Asset::Drums => DRUMS_BYTES,
+            Asset::StringQuartet => STRING_QUARTET_BYTES,
+            Asset::Strings => STRINGS_BYTES,
+            Asset::Pizzicato => PIZZICATO_BYTES,
+            Asset::Trumpet => TRUMPET_BYTES,
+            Asset::FrenchHorns => FRENCH_HORNS_BYTES,
+            Asset::SynthBrass1 => SYNTH_BRASS_1_BYTES,
+            Asset::SynthBrass2 => SYNTH_BRASS_2_BYTES,
+            Asset::SynthStrings1 => SYNTH_STRINGS_1_BYTES,
+            Asset::SynthStrings2 => SYNTH_STRINGS_2_BYTES,
         }
     }
 
     fn cache(self) -> &'static OnceLock<Option<Arc<SoundFont>>> {
         match self {
-            Kind::Piano => &PIANO_FONT,
-            Kind::NylonGuitar => &NYLON_FONT,
-            Kind::ElectricGuitar => &ELECTRIC_FONT,
-            Kind::Bass => &BASS_FONT,
-            Kind::Drums => &DRUMS_FONT,
+            Asset::Piano => &PIANO_FONT,
+            Asset::NylonGuitar => &NYLON_FONT,
+            Asset::ElectricGuitar => &ELECTRIC_FONT,
+            Asset::Bass => &BASS_FONT,
+            Asset::Drums => &DRUMS_FONT,
+            Asset::StringQuartet => &STRING_QUARTET_FONT,
+            Asset::Strings => &STRINGS_FONT,
+            Asset::Pizzicato => &PIZZICATO_FONT,
+            Asset::Trumpet => &TRUMPET_FONT,
+            Asset::FrenchHorns => &FRENCH_HORNS_FONT,
+            Asset::SynthBrass1 => &SYNTH_BRASS_1_FONT,
+            Asset::SynthBrass2 => &SYNTH_BRASS_2_FONT,
+            Asset::SynthStrings1 => &SYNTH_STRINGS_1_FONT,
+            Asset::SynthStrings2 => &SYNTH_STRINGS_2_FONT,
         }
     }
 }
@@ -99,15 +260,34 @@ static NYLON_BYTES: &[u8] = include_bytes!("../assets/nylon_guitar.sf3");
 static ELECTRIC_BYTES: &[u8] = include_bytes!("../assets/electric_guitar.sf3");
 static BASS_BYTES: &[u8] = include_bytes!("../assets/bass.sf3");
 static DRUMS_BYTES: &[u8] = include_bytes!("../assets/drums.sf2");
+static STRING_QUARTET_BYTES: &[u8] = include_bytes!("../assets/string_quartet.sf3");
+static STRINGS_BYTES: &[u8] = include_bytes!("../assets/strings.sf3");
+static PIZZICATO_BYTES: &[u8] = include_bytes!("../assets/pizzicato.sf3");
+static TRUMPET_BYTES: &[u8] = include_bytes!("../assets/trumpet.sf3");
+static FRENCH_HORNS_BYTES: &[u8] = include_bytes!("../assets/french_horns.sf3");
+static SYNTH_BRASS_1_BYTES: &[u8] = include_bytes!("../assets/synth_brass_1.sf3");
+static SYNTH_BRASS_2_BYTES: &[u8] = include_bytes!("../assets/synth_brass_2.sf3");
+static SYNTH_STRINGS_1_BYTES: &[u8] = include_bytes!("../assets/synth_strings_1.sf3");
+static SYNTH_STRINGS_2_BYTES: &[u8] = include_bytes!("../assets/synth_strings_2.sf3");
 
 static PIANO_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
 static NYLON_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
 static ELECTRIC_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
 static BASS_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
 static DRUMS_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
+static STRING_QUARTET_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
+static STRINGS_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
+static PIZZICATO_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
+static TRUMPET_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
+static FRENCH_HORNS_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
+static SYNTH_BRASS_1_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
+static SYNTH_BRASS_2_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
+static SYNTH_STRINGS_1_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
+static SYNTH_STRINGS_2_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
 
 fn load_font(kind: Kind) -> Option<Arc<SoundFont>> {
-    let mut cursor = Cursor::new(kind.bytes());
+    let asset = kind.asset();
+    let mut cursor = Cursor::new(asset.bytes());
     match SoundFont::new(&mut cursor) {
         Ok(font) => Some(Arc::new(font)),
         Err(err) => {
@@ -120,7 +300,7 @@ fn load_font(kind: Kind) -> Option<Arc<SoundFont>> {
 }
 
 fn font(kind: Kind) -> Option<Arc<SoundFont>> {
-    kind.cache().get_or_init(|| load_font(kind)).clone()
+    kind.asset().cache().get_or_init(|| load_font(kind)).clone()
 }
 
 /// 一个采样乐器实例。
@@ -283,6 +463,13 @@ impl Plugin for SoundFontPlugin {
         // 空间感交给轨道效果链；采样器自己的 reverb/chorus 会重复染色。
         settings.enable_reverb_and_chorus = false;
         self.synth = Synthesizer::new(&font, &settings).ok();
+        if let Some(synth) = self.synth.as_mut() {
+            let (bank, patch) = self.kind.preset();
+            if bank != 0 {
+                synth.process_midi_message(0, 0xB0, 0x00, bank);
+            }
+            synth.process_midi_message(0, 0xC0, patch, 0);
+        }
     }
 
     fn reset(&mut self) {
@@ -392,11 +579,49 @@ mod tests {
             (Kind::ElectricGuitar, 60),
             (Kind::Bass, 40),
             (Kind::Drums, 36),
+            (Kind::StringEnsemble, 60),
+            (Kind::SlowStrings, 60),
+            (Kind::Violin, 72),
+            (Kind::Viola, 60),
+            (Kind::Cello, 48),
+            (Kind::Contrabass, 36),
+            (Kind::Pizzicato, 60),
+            (Kind::Trumpet, 67),
+            (Kind::FrenchHorns, 60),
+            (Kind::SynthBrass1, 60),
+            (Kind::SynthBrass2, 60),
+            (Kind::SynthStrings1, 60),
+            (Kind::SynthStrings2, 60),
         ] {
             let out = render(kind, note, 100);
             let peak = out.iter().fold(0.0f32, |a, b| a.max(b.abs()));
             assert!(peak > 1e-4, "{} 应当发声（peak={peak}）", kind.id());
         }
+    }
+
+    /// 多预设资产必须挂对 program：四件独奏弦乐共享一个 SoundFont，只靠 preset 区分。
+    #[test]
+    fn multi_preset_fonts_select_the_right_program() {
+        assert_eq!(Kind::StringEnsemble.preset(), (0, 48));
+        assert_eq!(Kind::SlowStrings.preset(), (0, 49));
+        assert_eq!(Kind::Violin.preset(), (0, 40));
+        assert_eq!(Kind::Viola.preset(), (0, 41));
+        assert_eq!(Kind::Cello.preset(), (0, 42));
+        assert_eq!(Kind::Contrabass.preset(), (0, 43));
+        assert_eq!(Kind::Pizzicato.preset(), (0, 45));
+        assert_eq!(Kind::Trumpet.preset(), (0, 56));
+        assert_eq!(Kind::FrenchHorns.preset(), (0, 60));
+        // 四件独奏弦乐共享资产；弦乐群奏与慢弦乐也共享资产。
+        assert_eq!(Kind::Violin.asset(), Kind::Contrabass.asset());
+        assert_eq!(Kind::StringEnsemble.asset(), Kind::SlowStrings.asset());
+    }
+
+    #[test]
+    fn every_kind_has_a_unique_id() {
+        let mut ids: Vec<&str> = Kind::ALL.iter().map(|k| k.id()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), Kind::ALL.len(), "Kind::ALL 里有重复 id");
     }
 
     #[test]

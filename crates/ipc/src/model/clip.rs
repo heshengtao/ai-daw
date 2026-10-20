@@ -54,7 +54,10 @@ fn is_false(v: &bool) -> bool {
 }
 
 impl Note {
-    /// 最短时长（拍）＝一个 32 分音符，避免出现零长度音符（会让 NoteOn/NoteOff 同帧）。
+    /// 最短时长：**1/32 拍**（= 0.03125 拍，4/4 下相当于 1/128 音符；76 BPM 时约 25 ms）。
+    ///
+    /// 注意别和「32 分音符」混淆：32 分音符是 **1/8 拍**（= 0.125 拍）。
+    /// 这个下限只是为了避免零长度音符（会让 NoteOn/NoteOff 同帧），远低于真实倚音的 30–60 ms。
     pub const MIN_DURATION_BEATS: f64 = 1.0 / 32.0;
     /// 最长时长（拍）：64 小节 4/4，足够容纳任何合法输入，同时挡住天文数字。
     pub const MAX_DURATION_BEATS: f64 = 256.0;
@@ -285,6 +288,32 @@ impl NoteRange {
         } else {
             NoteRange { start: end, end: start }
         }
+    }
+}
+
+/// 拍位过滤（`set_note_velocity`）：只作用于落在 `beat + k * grid` 附近的音符。
+///
+/// 例：`grid = 1.0, beat = 0.5` 只改每拍反拍（`and`）上的音；
+/// `grid = 1.0, beat = 0.0` 只改正拍。按**起点**判定，容差 1e-6 拍。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BeatFilter {
+    /// 网格长度（拍），必须 > 0。
+    pub grid: f64,
+    /// 网格内的目标位置（拍），按 `grid` 取模。
+    pub beat: f64,
+}
+
+impl BeatFilter {
+    /// 该音符是否落在目标拍位上。
+    pub fn contains(&self, note: &Note) -> bool {
+        if !(self.grid.is_finite() && self.grid > 0.0 && self.beat.is_finite()) {
+            return true;
+        }
+        let phase = note.start.rem_euclid(self.grid);
+        let target = self.beat.rem_euclid(self.grid);
+        let diff = (phase - target).abs();
+        let diff = diff.min(self.grid - diff);
+        diff <= 1e-6
     }
 }
 

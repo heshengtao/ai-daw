@@ -179,7 +179,7 @@ aidaw call aidaw_help --json '{"topic":"genres"}'
 
 ```
 1. aidaw status                         # 软件在不在
-2. get_project                          # 拿轨道/片段 id、速度、拍号、现有和弦
+2. get_project                          # 拿轨道/片段 id、速度、拍号、现有和弦（音符是全量）
 3. set_tempo / set_time_signature       # 先定全局
 4. set_project_harmony                  # 和弦表（整体替换）
 5. set_project_sections                 # 段落表（整体替换）
@@ -189,12 +189,13 @@ aidaw call aidaw_help --json '{"topic":"genres"}'
 9. add_clip                             # 每条轨一个 MIDI 片段
 10. add_notes                           # 批量写（一次事务）
 11. quantize_notes / apply_swing        # 定节奏感
-12. strum_notes / humanize_notes        # 演奏姿态
-13. set_note_velocity                   # 力度曲线
-14. add_effect / set_gain / set_pan     # 混音
-15. analyze_harmony / analyze_track_overlap / get_track_note_stats
-16. analyze_project                     # 响度/频谱
-17. export_wav                          # 导出
+12. strum_notes / humanize_notes        # 演奏姿态（humanize 要避开倚音）
+13. set_note_velocity                   # 力度曲线；可用 grid/beat 只改反拍
+14. add 倚音（短 duration + 负 offset） # 最后做，之后不要再量化/humanize
+15. add_effect / set_gain / set_pan     # 混音
+16. analyze_harmony / analyze_track_overlap / get_track_note_stats
+17. analyze_project                     # 响度/频谱
+18. export_wav                          # 导出
 ```
 
 ### 4.1 关键约束（不遵守会白写）
@@ -205,7 +206,8 @@ aidaw call aidaw_help --json '{"topic":"genres"}'
 - `set_project_harmony` / `set_project_sections` / `set_sends` / `set_automation` /
   `replace_notes` 是**整体替换**；空数组 = 清空。
 - 单音乐器（`list_plugins` 里 `mono: true`，例如 `JC303`）**不要叠和弦**。
-- 改动越界会被夹住（起点 ≥ 0、时长 ≥ 1/32 拍、不超出片段）；返回里的 `clamped` 要看。
+- 改动越界会被夹住（起点 ≥ 0、时长 ≥ **0.03125 拍**、不超出片段）；返回里的 `clamped` 要看。
+  注意 0.03125 拍是 **1/32 拍 = 1/128 音符**，不是 32 分音符（32 分音符 = 0.125 拍）。
 - **一次事务 = 一个撤销步骤**：写 1000 个音是一步；连着调 5 次变换是 5 步。先算好再一次调。
 
 ### 4.2 写音符的两种模式
@@ -289,7 +291,7 @@ set_time_signature {"num": 4, "den": 4}
 然后：`add_track` × 5 → `list_plugins` 选音色 → `set_track_meta` 写 role/音区 →
 `add_clip(track=<keys>, start=0, length=128)`（每条轨）→ `add_notes` 写和弦/贝斯/鼓/旋律 →
 `apply_swing(subdivision=0.25, ratio=0.58, strength=0.7)` 给鼓 →
-`humanize_notes(timing=0.015, velocity=6, seed=7)` 给 keys/lead →
+`humanize_notes(timing=0.015, velocity=6, seed=7, group_by_start=true)` 给 keys/lead →
 `strum_notes(step_ms=25)` 给 keys → `set_gain` 做平衡 →
 `analyze_harmony` 检查 → `analyze_project` → `export_wav(path="/绝对路径/lo-fi.wav")`。
 
@@ -302,21 +304,30 @@ bass 可轻加 `builtin.drive`。具体以 `analyze_project` 的 LUFS/频谱为�
 ### 5.1 音符层
 
 ```
-get_track_note_stats(track)           # 音域、平均力度、每小节密度、同音重叠
-analyze_track_overlap(tracks=[...])   # 两条轨是否抢同一音区/同发
+get_clip_notes(track, clip)           # 逐音核对（分页；get_project 是全量，批量摘要是前 32 个）
+get_track_note_stats(track)           # 音域、平均力度、每小节密度、同音重叠、同轨半音冲突
+analyze_track_overlap(tracks=[...])   # 两条轨是否抢同一音区/同发/小二度·小九度冲突
 analyze_harmony(bars=..., tracks=[...], allow_extensions=true,
                 allow_approach_notes=true, allow_non_chord_tone_duration=0.5)
 ```
 
-- `analyze_harmony` 的 `kind`：`non_chord_tone` / `extension` / `unresolved_leading_tone` /
-  `suspension` / `track_overlap`；`severity` 是 `info` / `warning` / `error`。
-- **短经过音**（≤ `allow_non_chord_tone_duration`）只给 `info`，不算错。
+- `analyze_harmony` 的 `kind`：`non_chord_tone` / `ornament` / `scale_tone` / `extension` /
+  `unresolved_leading_tone` / `suspension` / `track_overlap`；`severity` 是 `info` / `warning` /
+  `error`。
+- **短经过音**（≤ `allow_non_chord_tone_duration`）只给 `info`，不算错；倚音通常走这条，
+  后接相邻和弦音的极短音会标成 `ornament`。
+- `key` + `scale` 给了调式上下文：调内非和弦音记成 `scale_tone`（短音 info、长音 warning）。
+- `ornaments: [{track, clip, id}]` 可以显式把某个音符标成装饰音（覆盖时长启发式）。
+- `time_tolerance`（缺省 1/16 拍）容忍 humanize/swing 造成的小节线漂移，避免假 suspension。
+- `allow_extensions: true` 会真正放行普通 9/11/13（`extension` / `info`）；不推荐的延伸仍给 warning。
+- 半音/小九度冲突看 `analyze_track_overlap` 的 `semitone_clashes`，不要只看 `unison_notes`。
 - 国风/爵士/蓝调会有大量「理论上的外音」——先判断是不是风格需要，不要机械地改。
 
 ### 5.2 声音层
 
 ```
-analyze_project(sample_rate=44100)    # LUFS / LRA / true peak / RMS / 频谱
+analyze_project(sample_rate=44100)    # LUFS / LRA / true peak / RMS / 频谱（整曲）
+analyze_project(start_beat=8, end_beat=12, tracks=[74])  # 只听这一段/这条轨
 ```
 
 - 流媒体常见目标：约 -14 LUFS，true peak ≤ -1 dBTP；按发布平台调整。
@@ -330,7 +341,8 @@ analyze_project(sample_rate=44100)    # LUFS / LRA / true peak / RMS / 频谱
 - [ ] 每条轨都有 role/音区，没有越界；
 - [ ] 鼓的 kick/snare/hat 路线一致（`builtin.drums` 的 GM 鼓组，或旧合成器单件，没混用）；
 - [ ] 没有单音乐器叠和弦；
-- [ ] 力度不是全 100；需要 swing 的声部真的 swing 了；
+- [ ] 力度不是全 100；需要 swing 的声部真的 swing 了；反拍重音不是用 swing 冒充的；
+- [ ] 含倚音的旋律没有被 humanize 拆散；倚音 duration 在 0.04–0.08 拍、主音仍在网格上；
 - [ ] `analyze_harmony` 没有未处理的 `error`；
 - [ ] `analyze_project` 的响度/峰值在目标范围；
 - [ ] 导出 WAV 成功，路径可打开。
@@ -355,7 +367,7 @@ analyze_project(sample_rate=44100)    # LUFS / LRA / true peak / RMS / 频谱
 | 没有外部音源 | 用内置合成器预设（`genres.md` 第 16 节）；不要假装有 |
 | 和弦符号报错 | 换等价写法（`Cmaj9` → `Cmaj7` + 旋律 D），或先查支持列表 |
 | 单音乐器吃掉和弦 | 换复音乐器，或把和弦拆成琶音/分轨 |
-| 音符被 `clamped` | 检查 `start` 是否超出片段、`duration` 是否 < 1/32 拍 |
+| 音符被 `clamped` | 检查 `start` 是否超出片段、`duration` 是否 < 0.03125 拍（1/32 拍，不是 32 分音符） |
 | 听起来太满 | 减轨/减音符/换音区；先删再补，不要一直加 |
 | 听起来太机械 | 量化 70–85% + swing + humanize；鼓的 kick 保持对齐 |
 | 导出失败 | 检查路径权限/磁盘；`analyze_project` 先确认能渲染 |

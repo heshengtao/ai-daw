@@ -41,6 +41,23 @@ modified subset of MuldjordKit (mono, 3 velocity layers, 22.05 kHz, trimmed tail
 GM 35–59 remap). Attribution: Lars Muldjord / FreePats.
 --------------------------------------------------------------------------------
 
+Nando Florestan SoundFonts (https://dev.nando.audio/pages/soundfonts.html)
+The built-in string and brass assets in `crates/instruments/assets`
+(`string_quartet.sf3`, `strings.sf3`, `pizzicato.sf3`, `trumpet.sf3`,
+`french_horns.sf3`) are derived from Nando Florestan's 040 String Quartet,
+048 Strings, 045 Pizzicato, 056 Trumpet Metallic and 060 French Horns.
+These are Public Domain, except **056 Trumpet Metallic**, which requires
+attribution to Nando Florestan. Converted from SF2 to SF3 (Ogg Vorbis q0.8).
+--------------------------------------------------------------------------------
+
+FreePats (https://freepats.zenvoid.org/)
+The built-in sampled instruments in `crates/instruments/assets` use FreePats
+sound banks: Upright Piano KW, Spanish classical guitar, FSBS clean electric
+guitar, Finger Bass YR, Synth Strings 1/2 and Synth Brass 1/2. Published under
+the Creative Commons CC0 1.0 Universal public domain dedication. Converted from
+SF2 to SF3 (Ogg Vorbis q0.8) where noted in `assets/LICENSES.md`.
+--------------------------------------------------------------------------------
+
 vst3-host (https://github.com/HelgeSverre/rust-vst3-host)
 Copyright Helge Sverre. Licensed under the MIT License.
 

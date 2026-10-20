@@ -10,8 +10,11 @@
 //! 约束（全部在 [`clamp_into_clip`] 里实现）：起点不得早于片段起点、时值必须为正、
 //! 变换后不得越出片段范围。被夹住的音符数量会返回给调用方（`clamped`）。
 
+use std::collections::{HashMap, HashSet};
+
 use crate::model::{
-    Clip, ClipId, Note, NoteEdit, NotePatch, NoteRange, StrumDirection, Track, VelocityShape,
+    BeatFilter, Clip, ClipId, Note, NoteEdit, NotePatch, NoteRange, StrumDirection, Track,
+    VelocityShape,
 };
 
 /// 一次变换的结果。
@@ -111,9 +114,21 @@ pub fn update_by_id(clip: &Clip, updates: &[NotePatch]) -> Transform {
 /// - `Fixed(v)`：全部设为 `v`；
 /// - `Ramp { from, to }`：在**范围内**按拍位线性变化（没有范围时按音符首尾跨度）；
 /// - `Scale(f)`：相对缩放。
-pub fn set_velocity(clip: &Clip, shape: VelocityShape, range: Option<NoteRange>) -> Transform {
-    let selected: Vec<usize> =
-        clip.notes.iter().enumerate().filter(|(_, n)| in_range(n, range)).map(|(i, _)| i).collect();
+///
+/// `beat_filter` 再按拍位筛一层（例如只改正拍或只改反拍），与 `range` 是「且」的关系。
+pub fn set_velocity(
+    clip: &Clip,
+    shape: VelocityShape,
+    range: Option<NoteRange>,
+    beat_filter: Option<BeatFilter>,
+) -> Transform {
+    let selected: Vec<usize> = clip
+        .notes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| in_range(n, range) && beat_filter.map_or(true, |f| f.contains(n)))
+        .map(|(i, _)| i)
+        .collect();
     if selected.is_empty() {
         return Transform::default();
     }
@@ -153,8 +168,17 @@ fn clamp_velocity(value: f64) -> u8 {
     value.round().clamp(0.0, 127.0) as u8
 }
 
-/// 量化：把起点吸到 `grid` 的整数倍。`strength` 是「吸多少」（0 = 不动，1 = 完全对齐）。
-pub fn quantize(clip: &Clip, grid: f64, strength: f64, range: Option<NoteRange>) -> Transform {
+/// 量化：把起点（以及可选的时值）吸到 `grid` 的整数倍。
+///
+/// `strength` 是「吸多少」（0 = 不动，1 = 完全对齐）；`quantize_duration` 为 true 时时值也按同一
+/// 网格与强度吸附，并保证不短于 [`Note::MIN_DURATION_BEATS`]。
+pub fn quantize(
+    clip: &Clip,
+    grid: f64,
+    strength: f64,
+    range: Option<NoteRange>,
+    quantize_duration: bool,
+) -> Transform {
     let grid = if grid.is_finite() { grid.clamp(MIN_GRID, MAX_GRID) } else { MIN_GRID };
     let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { 0.0 };
     if strength <= 0.0 {
@@ -165,7 +189,13 @@ pub fn quantize(clip: &Clip, grid: f64, strength: f64, range: Option<NoteRange>)
         clip.notes.iter().enumerate().filter(|(_, n)| in_range(n, range)).map(|(i, n)| {
             let target = (n.start / grid).round() * grid;
             let start = n.start + (target - n.start) * strength;
-            (i, Note { start, ..*n })
+            let duration = if quantize_duration {
+                let target = (n.duration / grid).round() * grid;
+                (n.duration + (target - n.duration) * strength).max(Note::MIN_DURATION_BEATS)
+            } else {
+                n.duration
+            };
+            (i, Note { start, duration, ..*n })
         }),
     )
 }
@@ -222,13 +252,15 @@ pub fn strum(
     collect(clip, updates)
 }
 
-/// Swing：把每对子拍里的**第二个**往后推。
+/// Swing / 抢拍：移动每对子拍里的**第二个**（ratio > 0.5 推后，< 0.5 抢前）。
 ///
 /// `subdivision` 是子拍长度（8 分 swing = 0.5 拍），`ratio` 是第二个子拍落在一对子拍里的
-/// 位置比例（0.5 = 平直，0.66 ≈ 三连音感，0.75 = 硬 shuffle）。`strength` 是应用程度。
+/// 位置比例（0.5 = 平直，**< 0.5 = 抢拍 / push**，0.66 ≈ 三连音感，0.75 = 硬 shuffle）。
+/// `strength` 是应用程度。
 ///
 /// 位置公式：一对子拍占 `2 * subdivision`，第二个子拍的目标位置是
-/// `pair_start + ratio * 2 * subdivision`——8 分 swing 在 ratio=0.66 时正好落到约 2/3 拍。
+/// `pair_start + ratio * 2 * subdivision`——8 分 swing 在 ratio=0.66 时正好落到约 2/3 拍；
+/// ratio=0.4 时落到 2/5 拍，也就是抢在正拍前面。
 pub fn swing(
     clip: &Clip,
     subdivision: f64,
@@ -238,7 +270,7 @@ pub fn swing(
 ) -> Transform {
     let subdivision =
         if subdivision.is_finite() { subdivision.clamp(MIN_GRID, MAX_GRID) } else { 0.5 };
-    let ratio = if ratio.is_finite() { ratio.clamp(0.5, 0.8) } else { 0.5 };
+    let ratio = if ratio.is_finite() { ratio.clamp(0.2, 0.8) } else { 0.5 };
     let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { 0.0 };
     if strength <= 0.0 || (ratio - 0.5).abs() < 1e-9 {
         return Transform::default();
@@ -286,25 +318,55 @@ impl Rng {
 ///
 /// `timing` 是位置抖动的最大绝对值（拍），`velocity` 是力度抖动的最大绝对值。
 /// 音符按片段内顺序取随机数，`seed` 相同则结果逐字相同——因此重做不会漂。
+///
+/// - `min_duration`：时值短于它的音符不抖动（0 = 不跳过）。用来保护倚音/装饰音。
+/// - `group_by_start`：起点相同的音符共用同一个位置抖动，避免把和弦/扫弦拆散。
+///   注意它按**精确起点**分组；如果倚音和主音用了不同 `start`，请用 `min_duration` 或 `range` 保护。
+///   两者同时使用时，只要同起点组里有一个短于 `min_duration` 的音，**整组都不动**——
+///   这样「同 start + 负 offset」的倚音/主音不会被拆开。
 pub fn humanize(
     clip: &Clip,
     timing: f64,
     velocity: f64,
     range: Option<NoteRange>,
     seed: Option<u64>,
+    min_duration: f64,
+    group_by_start: bool,
 ) -> Transform {
     let timing = if timing.is_finite() { timing.clamp(0.0, 0.5) } else { 0.0 };
     let velocity = if velocity.is_finite() { velocity.clamp(0.0, 127.0) } else { 0.0 };
+    let min_duration = if min_duration.is_finite() { min_duration.max(0.0) } else { 0.0 };
     if timing <= 0.0 && velocity <= 0.0 {
         return Transform::default();
     }
     let mut rng = Rng(seed.unwrap_or(0x5EED_1234_ABCD_0001));
+    // 同起点组里只要有一个短音，整组都不动，避免把倚音和主音拆开。
+    let protected: HashSet<i64> = if group_by_start && min_duration > 0.0 {
+        clip.notes
+            .iter()
+            .filter(|n| n.duration < min_duration)
+            .map(|n| (n.start * 1e6).round() as i64)
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    let mut grouped: HashMap<i64, f64> = HashMap::new();
     let mut updates = Vec::new();
     for (i, n) in clip.notes.iter().enumerate() {
         // 每个音符都取两个随机数（即使不在范围内），这样「范围」不会改变其他音符的抖动。
-        let dt = rng.bipolar() * timing;
+        let mut dt = rng.bipolar() * timing;
         let dv = rng.bipolar() * velocity;
-        if !in_range(n, range) || n.start < 0.0 {
+        let mut group_protected = false;
+        if group_by_start {
+            let key = (n.start * 1e6).round() as i64;
+            group_protected = protected.contains(&key);
+            dt = *grouped.entry(key).or_insert(dt);
+        }
+        if group_protected
+            || !in_range(n, range)
+            || n.start < 0.0
+            || n.duration < min_duration
+        {
             continue;
         }
         let start = n.start + dt;
@@ -423,13 +485,16 @@ pub fn note_stats(track: &Track, clip: Option<ClipId>, bar_beats: f64) -> crate:
     let mut intervals: Vec<(f64, f64)> = Vec::new();
     let mut pitches: Vec<u8> = Vec::new();
     let mut velocities: Vec<u8> = Vec::new();
+    let mut spans: Vec<(f64, f64, u8)> = Vec::new();
     let mut outside = 0usize;
 
     for c in clips_of(track, clip) {
         for n in &c.notes {
-            intervals.push(absolute(n, c.start));
+            let span = absolute(n, c.start);
+            intervals.push(span);
             pitches.push(n.pitch);
             velocities.push(n.velocity);
+            spans.push((span.0, span.1, n.pitch));
             // 起点在片段之外（负的、或超过片段长度）→ 播放时听不见。
             if n.start < 0.0 || n.start >= c.length {
                 outside += 1;
@@ -470,6 +535,7 @@ pub fn note_stats(track: &Track, clip: Option<ClipId>, bar_beats: f64) -> crate:
     } else {
         Some(velocities.iter().map(|v| *v as f64).sum::<f64>() / count as f64)
     };
+    let (semitone_clashes, semitone_clash_beats) = semitone_clash_summary(&spans);
     let (bars, mean_notes_per_bar) = bar_density(&intervals, bar_beats);
     let span_beats = intervals
         .iter()
@@ -494,6 +560,8 @@ pub fn note_stats(track: &Track, clip: Option<ClipId>, bar_beats: f64) -> crate:
         mean_notes_per_bar: (mean_notes_per_bar * 100.0).round() / 100.0,
         bars,
         overlapping_notes: overlapping,
+        semitone_clashes,
+        semitone_clash_beats,
         notes_outside_clip: outside,
     }
 }
@@ -531,6 +599,32 @@ fn intersection_len(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
     total
 }
 
+/// 小二度 / 小九度冲突：`(音符对数, 合并后的冲突拍数)`。
+///
+/// 用起点扫描 + 活跃集：每个音符只和「已经响着」的音符比，所以每对只计一次。
+/// 判据是 `abs(p1 - p2) % 12 == 1`，同时覆盖小二度（1）与小九度（13）。
+fn semitone_clash_summary(spans: &[(f64, f64, u8)]) -> (usize, f64) {
+    let mut sorted: Vec<(f64, f64, u8)> =
+        spans.iter().copied().filter(|(s, e, _)| e > s).collect();
+    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut active: Vec<(f64, u8)> = Vec::new();
+    let mut pairs = 0usize;
+    let mut clash_intervals: Vec<(f64, f64)> = Vec::new();
+    for (start, end, pitch) in sorted {
+        active.retain(|(active_end, _)| *active_end > start + 1e-9);
+        for (active_end, active_pitch) in &active {
+            if ((pitch as i32 - *active_pitch as i32).abs() % 12) == 1 {
+                pairs += 1;
+                clash_intervals.push((start, end.min(*active_end)));
+            }
+        }
+        active.push((end, pitch));
+    }
+    let beats: f64 = merge(&clash_intervals).iter().map(|(s, e)| (e - s).max(0.0)).sum();
+    (pairs, (beats * 1000.0).round() / 1000.0)
+}
+
 /// 两条轨道之间的音区重叠与分工冲突判断。
 pub fn track_overlap(a: &Track, b: &Track, clip: Option<ClipId>) -> crate::report::TrackOverlap {
     let spans = |track: &Track| -> Vec<(f64, f64, u8)> {
@@ -552,14 +646,27 @@ pub fn track_overlap(a: &Track, b: &Track, clip: Option<ClipId>) -> crate::repor
     let overlap_beats = intersection_len(&intervals(&sa), &intervals(&sb));
 
     // 完全同音、且同时发声：最容易糊在一起的那种重叠。
+    // 顺带收集小二度 / 小九度冲突（比同音更刺耳，但以前完全没报）。
     let mut unison = 0usize;
+    let mut semitone_clashes = 0usize;
+    let mut clash_intervals: Vec<(f64, f64)> = Vec::new();
     for (s1, e1, p1) in &sa {
         for (s2, e2, p2) in &sb {
-            if p1 == p2 && s1 < e2 && s2 < e1 {
+            if !(s1 < e2 && s2 < e1) {
+                continue;
+            }
+            if p1 == p2 {
                 unison += 1;
+            }
+            if ((*p1 as i32 - *p2 as i32).abs() % 12) == 1 {
+                semitone_clashes += 1;
+                clash_intervals.push(((*s1).max(*s2), (*e1).min(*e2)));
             }
         }
     }
+    let semitone_clash_beats: f64 =
+        merge(&clash_intervals).iter().map(|(s, e)| (e - s).max(0.0)).sum();
+    let semitone_clash_beats = (semitone_clash_beats * 1000.0).round() / 1000.0;
 
     let pcs = |v: &[(f64, f64, u8)]| -> Vec<u8> {
         let mut out: Vec<u8> = v.iter().map(|(_, _, p)| p % 12).collect();
@@ -583,10 +690,11 @@ pub fn track_overlap(a: &Track, b: &Track, clip: Option<ClipId>) -> crate::repor
     };
 
     // 同音区 + 大量同时发声就是分工冲突：即使音高不同，两条线挤在一个八度里也会互相盖住。
+    // 半音/小九度冲突即使很短也值得报，所以单独抬成 conflict。
     let same_register = gap.map_or(false, |g| g.abs() < 12);
-    let conflict = overlap_beats >= 4.0 && same_register;
+    let conflict = (overlap_beats >= 4.0 && same_register) || semitone_clash_beats >= 0.25;
 
-    let suggestion = if conflict {
+    let mut suggestion = if conflict && overlap_beats >= 4.0 && same_register {
         let role_a = a.role().unwrap_or("未标注分工");
         let role_b = b.role().unwrap_or("未标注分工");
         format!(
@@ -602,12 +710,22 @@ pub fn track_overlap(a: &Track, b: &Track, clip: Option<ClipId>) -> crate::repor
     } else {
         String::new()
     };
+    if semitone_clashes > 0 {
+        let extra = format!(
+            "检测到 {} 处小二度 / 小九度重叠（共 {:.2} 拍）——这是最刺耳的一类冲突，\
+             优先让其中一个声部换音、先解决或错开。",
+            semitone_clashes, semitone_clash_beats
+        );
+        suggestion = if suggestion.is_empty() { extra } else { format!("{suggestion} {extra}") };
+    }
 
     crate::report::TrackOverlap {
         a: a.id.0,
         b: b.id.0,
         overlap_beats: (overlap_beats * 1000.0).round() / 1000.0,
         unison_notes: unison,
+        semitone_clashes,
+        semitone_clash_beats,
         shared_pitch_classes: shared,
         pitch_gap_semitones: gap,
         conflict,
@@ -645,12 +763,12 @@ mod tests {
     #[test]
     fn quantize_strength_zero_is_a_no_op_and_one_snaps() {
         let c = clip(vec![note(1, 60, 0.1), note(2, 62, 1.4)], 4.0);
-        assert!(quantize(&c, 0.5, 0.0, None).is_empty());
-        let t = quantize(&c, 0.5, 1.0, None);
+        assert!(quantize(&c, 0.5, 0.0, None, false).is_empty());
+        let t = quantize(&c, 0.5, 1.0, None, false);
         assert_eq!(t.edits[0].note.start, 0.0);
         assert_eq!(t.edits[1].note.start, 1.5);
         // 一半强度：落在原值与目标之间。
-        let half = quantize(&c, 0.5, 0.5, None);
+        let half = quantize(&c, 0.5, 0.5, None, false);
         assert!((half.edits[0].note.start - 0.05).abs() < 1e-9);
     }
 
@@ -662,6 +780,13 @@ mod tests {
         assert!(t.edits.iter().all(|e| e.index != 0 && e.index != 2), "{:?}", t.edits);
         // 第二个子拍落到约 2/3 拍。
         assert!((t.edits[0].note.start - 0.66).abs() < 1e-9, "{:?}", t.edits[0].note.start);
+    }
+
+    #[test]
+    fn swing_can_also_push_the_second_subdivision_earlier() {
+        let c = clip(vec![note(1, 60, 0.5)], 4.0);
+        let t = swing(&c, 0.5, 0.4, 1.0, None);
+        assert!((t.edits[0].note.start - 0.4).abs() < 1e-9, "ratio < 0.5 应当是抢拍");
     }
 
     #[test]
@@ -726,13 +851,13 @@ mod tests {
     #[test]
     fn humanize_is_deterministic_and_bounded() {
         let c = clip(vec![note(1, 60, 1.0), note(2, 62, 2.0)], 8.0);
-        let a = humanize(&c, 0.05, 10.0, None, Some(7));
-        let b = humanize(&c, 0.05, 10.0, None, Some(7));
+        let a = humanize(&c, 0.05, 10.0, None, Some(7), 0.0, false);
+        let b = humanize(&c, 0.05, 10.0, None, Some(7), 0.0, false);
         assert_eq!(a, b, "同一个 seed 必须逐字一致");
         for e in &a.edits {
             assert!((e.note.start - c.notes[e.index].start).abs() <= 0.05 + 1e-9);
         }
-        assert_ne!(humanize(&c, 0.05, 10.0, None, Some(8)), a, "换 seed 应该不一样");
+        assert_ne!(humanize(&c, 0.05, 10.0, None, Some(8), 0.0, false), a, "换 seed 应该不一样");
     }
 
     #[test]
@@ -758,7 +883,7 @@ mod tests {
     fn transforms_clamp_into_the_clip() {
         // 起点 3.9 的 1 拍音符在 4 拍的片段里放不下：时值会被夹到 0.1。
         let c = clip(vec![Note { id: 1, pitch: 60, start: 3.9, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }], 4.0);
-        let t = quantize(&c, 1.0, 1.0, None);
+        let t = quantize(&c, 1.0, 1.0, None, false);
         assert_eq!(t.clamped, 1);
         let n = t.edits[0].note;
         assert!((n.start + n.duration - 4.0).abs() < 1e-9, "{n:?}");
@@ -784,20 +909,112 @@ mod tests {
     #[test]
     fn velocity_shapes() {
         let c = clip(vec![note(1, 60, 0.0), note(2, 62, 1.0)], 4.0);
-        let fixed = set_velocity(&c, VelocityShape::Fixed(64), None);
+        let fixed = set_velocity(&c, VelocityShape::Fixed(64), None, None);
         assert!(fixed.edits.iter().all(|e| e.note.velocity == 64));
 
-        let scaled = set_velocity(&c, VelocityShape::Scale(0.5), None);
+        let scaled = set_velocity(&c, VelocityShape::Scale(0.5), None, None);
         assert_eq!(scaled.edits[0].note.velocity, 50);
 
         let ramp = set_velocity(
             &c,
             VelocityShape::Ramp { from: 20, to: 100 },
             Some(NoteRange { start: 0.0, end: 2.0 }),
+            None,
         );
         // 范围 0..2 拍：0 拍处 = from，1 拍处 = 中点 60。
         assert_eq!(ramp.edits[0].note.velocity, 20);
         assert_eq!(ramp.edits[1].note.velocity, 60);
+    }
+
+    #[test]
+    fn quantize_can_also_snap_durations() {
+        let c = clip(
+            vec![Note {
+                id: 1,
+                pitch: 60,
+                start: 0.1,
+                duration: 0.3,
+                velocity: 100,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+            }],
+            4.0,
+        );
+        let snapped = quantize(&c, 0.5, 1.0, None, true);
+        assert_eq!(snapped.edits[0].note.start, 0.0);
+        assert!((snapped.edits[0].note.duration - 0.5).abs() < 1e-9);
+
+        let starts_only = quantize(&c, 0.5, 1.0, None, false);
+        assert!((starts_only.edits[0].note.duration - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn velocity_filter_targets_offbeats() {
+        let c = clip(
+            vec![note(1, 60, 0.0), note(2, 62, 0.5), note(3, 64, 1.0), note(4, 65, 1.5)],
+            4.0,
+        );
+        let t = set_velocity(
+            &c,
+            VelocityShape::Fixed(99),
+            None,
+            Some(BeatFilter { grid: 1.0, beat: 0.5 }),
+        );
+        let indices: Vec<usize> = t.edits.iter().map(|e| e.index).collect();
+        assert_eq!(indices, vec![1, 3], "只改每拍反拍");
+        assert!(t.edits.iter().all(|e| e.note.velocity == 99));
+    }
+
+    #[test]
+    fn humanize_can_skip_short_notes_and_group_same_starts() {
+        let c = clip(
+            vec![
+                Note {
+                    id: 1,
+                    pitch: 60,
+                    start: 1.0,
+                    duration: 0.04,
+                    velocity: 100,
+                    volume: 127,
+                    offset: -0.04,
+                    legato: false,
+                },
+                note(2, 64, 1.0),
+            ],
+            4.0,
+        );
+        let t = humanize(&c, 0.1, 0.0, None, Some(7), 0.1, false);
+        assert!(t.edits.iter().all(|e| e.index != 0), "短倚音应被 min_duration 跳过");
+
+        // 同起点组里只要有短音，整组都不动：倚音 + 主音的相对位置不能被拆开。
+        let protected = humanize(&c, 0.1, 0.0, None, Some(7), 0.1, true);
+        assert!(protected.is_empty(), "同组有短音时整组都不该抖动");
+
+        let chord = clip(vec![note(1, 60, 1.0), note(2, 64, 1.0), note(3, 67, 1.0)], 4.0);
+        let grouped = humanize(&chord, 0.1, 0.0, None, Some(7), 0.0, true);
+        let starts: Vec<f64> = grouped.edits.iter().map(|e| e.note.start).collect();
+        assert_eq!(starts.len(), 3);
+        assert!(starts.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-12), "同起点必须共用抖动");
+    }
+
+    #[test]
+    fn semitone_clashes_are_counted_in_stats_and_overlap() {
+        let t = track(vec![
+            Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
+            Note { id: 2, pitch: 61, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
+        ]);
+        let stats = note_stats(&t, None, 4.0);
+        assert_eq!(stats.semitone_clashes, 1);
+        assert!((stats.semitone_clash_beats - 1.0).abs() < 1e-9);
+
+        let a = track(vec![Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }]);
+        let mut b = track(vec![Note { id: 1, pitch: 61, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }]);
+        b.id = TrackId(2);
+        let overlap = track_overlap(&a, &b, None);
+        assert_eq!(overlap.semitone_clashes, 1);
+        assert!((overlap.semitone_clash_beats - 1.0).abs() < 1e-9);
+        assert!(overlap.suggestion.contains("小二度"), "{}", overlap.suggestion);
     }
 
     #[test]

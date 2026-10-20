@@ -238,7 +238,7 @@ impl PluginRegistry {
                 Box::new(ai_daw_synth::SynthPlugin::preset(p.id, p.name, p.patch))
             });
         }
-        // 采样内置乐器：钢琴 / 木吉他 / 电吉他 / 贝斯 / 原声鼓组。
+        // 采样内置乐器：钢琴 / 吉他 / 贝斯 / 鼓组 / 弦乐 / 铜管。
         // 资产编译期内嵌；同类乐器的 SoundFont 在 crate 内共享，按轨道实例化合成器。
         for kind in ai_daw_instruments::Kind::ALL {
             r.register(kind.id(), move |_track, _slot| ai_daw_instruments::SoundFontPlugin::create(kind));

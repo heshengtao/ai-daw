@@ -53,6 +53,7 @@ import type {
   PitchRange,
   Preset,
   Project,
+  ProjectHistoryEntry,
   ProxyMode,
   ProxyProbe,
   ProxyStatus,
@@ -167,6 +168,18 @@ export function currentProjectPath(): Promise<string | null> {
 export function cacheSession(path: string | null): Promise<void> {
   if (mockEnabled()) return Promise.resolve(mockApi.cacheSession(path));
   return invoke<void>("cache_session", { path });
+}
+
+/** 历史工程列表（展示用元信息）。 */
+export function projectHistory(): Promise<ProjectHistoryEntry[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.projectHistory());
+  return invoke<ProjectHistoryEntry[]>("project_history");
+}
+
+/** 回到一份历史工程（当前工程会先被收进历史）。 */
+export function restoreProjectHistory(id: string): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.restoreProjectHistory(id));
+  return invoke<Project>("restore_project_history", { id });
 }
 
 /** 把启动时铺的默认分轨名改成当前语言的名字（仅当工程仍是默认模板）。 */
@@ -312,9 +325,16 @@ export function setNoteVelocity(
   clip: number,
   shape: VelocityShape,
   range?: NoteRange,
+  beatFilter?: { grid: number; beat: number },
 ): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.setNoteVelocity(track, clip, shape, range));
-  return invoke<Project>("set_note_velocity", { track, clip, shape, range: range ?? null });
+  return invoke<Project>("set_note_velocity", {
+    track,
+    clip,
+    shape,
+    range: range ?? null,
+    beatFilter: beatFilter ?? null,
+  });
 }
 
 /** 量化：把起点吸到 grid 的整数倍。 */
@@ -324,9 +344,17 @@ export function quantizeNotes(
   grid: number,
   strength = 1,
   range?: NoteRange,
+  quantizeDuration?: boolean,
 ): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.quantizeNotes(track, clip, grid, strength, range));
-  return invoke<Project>("quantize_notes", { track, clip, grid, strength, range: range ?? null });
+  return invoke<Project>("quantize_notes", {
+    track,
+    clip,
+    grid,
+    strength,
+    range: range ?? null,
+    quantizeDuration: quantizeDuration ?? null,
+  });
 }
 
 /** 扫弦：把**起点相同**的音符按音高依次错开（`stepMs = 0` = 回到同时发声）。 */
@@ -370,6 +398,8 @@ export function humanizeNotes(
   velocity = 8,
   range?: NoteRange,
   seed?: number,
+  minDuration?: number,
+  groupByStart?: boolean,
 ): Promise<Project> {
   if (mockEnabled())
     return Promise.resolve(mockApi.humanizeNotes(track, clip, timing, velocity, range, seed));
@@ -380,6 +410,8 @@ export function humanizeNotes(
     velocity,
     range: range ?? null,
     seed: seed ?? null,
+    minDuration: minDuration ?? null,
+    groupByStart: groupByStart ?? null,
   });
 }
 
@@ -443,6 +475,8 @@ export function analyzeHarmony(
   bars?: HarmonyBar[],
   tracks?: number[],
   policy?: Partial<HarmonyPolicy>,
+  key?: string,
+  scale?: string,
 ): Promise<HarmonyReport> {
   if (mockEnabled()) return Promise.resolve(mockApi.analyzeHarmony(bars, tracks));
   return invoke<HarmonyReport>("analyze_harmony", {
@@ -451,6 +485,9 @@ export function analyzeHarmony(
     allowExtensions: policy?.allow_extensions ?? null,
     allowApproachNotes: policy?.allow_approach_notes ?? null,
     allowNonChordToneDuration: policy?.allow_non_chord_tone_duration ?? null,
+    timeTolerance: null,
+    key: key ?? null,
+    scale: scale ?? null,
   });
 }
 

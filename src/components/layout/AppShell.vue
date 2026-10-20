@@ -21,6 +21,7 @@ const emit = defineEmits<{
   (e: "import"): void;
   (e: "importAudio"): void;
   (e: "new"): void;
+  (e: "history"): void;
   (e: "save"): void;
   (e: "export"): void;
   (e: "rename"): void;
@@ -46,6 +47,7 @@ const showWindowControls = isTauri() && (isWindows() || isLinux());
           @import="emit('import')"
           @import-audio="emit('importAudio')"
           @new="emit('new')"
+          @history="emit('history')"
           @save="emit('save')"
           @export="emit('export')"
           @rename="emit('rename')"

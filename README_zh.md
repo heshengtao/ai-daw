@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.3.0-1A6CFF?style=flat-square" alt="版本 1.3.0">
+  <img src="https://img.shields.io/badge/version-1.4.0-1A6CFF?style=flat-square" alt="版本 1.4.0">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-1A6CFF?style=flat-square" alt="许可：Apache-2.0"></a>
   <img src="https://img.shields.io/badge/platforms-Windows%20/%20macOS%20/%20Linux-1A6CFF?style=flat-square" alt="平台：Windows、macOS、Linux">
 </p>
@@ -48,7 +48,7 @@ https://github.com/user-attachments/assets/e0da890d-854d-4727-9cfb-3eb82c2a9bd1
 
 AI DAW 附带一个 **Skill**（`skills/aidaw`），它教会 AI 代理如何操作正在运行的软件——读写工程、轨道、片段与音符；**分析曲风、查乐理/鼓谱、把曲风配方落成 MIDI**；混音（增益、声像、发送、自动化）；传输与录音；响度与频谱分析；导出 WAV；扫描插件。它通过内置的 **MCP** 服务器工作，因此任何支持 Agent Skill 的 Harness 都能直接用。
 
-App 还随包内置了 5 件采样乐器：**原声钢琴、尼龙弦木吉他、清音电吉他、指弹贝斯、原声鼓组**（SF3/SF2，总计约 7 MB），开箱即用。
+App 还随包内置了 18 件采样乐器：**原声钢琴、尼龙弦木吉他、清音电吉他、指弹贝斯、原声鼓组、弦乐群奏、慢弦乐、小提琴、中提琴、大提琴、低音提琴、弦乐拨奏、小号、圆号齐奏、合成弦乐 1/2、合成铜管 1/2**（SF3/SF2，总计约 13.5 MB），开箱即用。
 
 **方式一 · 命令行安装**
 

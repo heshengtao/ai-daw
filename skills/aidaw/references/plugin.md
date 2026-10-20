@@ -48,11 +48,26 @@
   | `builtin.electric_guitar` | 电吉他（清音） | FSBS clean · SF3 · 13 键位采样 | 35–86 |
   | `builtin.bass` | 指弹贝斯 | Finger Bass YR · SF3 · 12 半音采样 | 28–48 |
   | `builtin.drums` | 原声鼓组 | MuldjordKit lite · SF2 · **GM 35–59** · 3 层力度 | 35–59 |
+  | `builtin.strings` | 弦乐群奏 | Florestan Strings · SF3 · 真实录音合奏 | 28–100 |
+  | `builtin.slow_strings` | 慢弦乐 | Florestan Strings 的 Slow 预设 · SF3 | 28–100 |
+  | `builtin.violin` | 小提琴 | Florestan String Quartet · SF3 · program 40 | 55–100 |
+  | `builtin.viola` | 中提琴 | Florestan String Quartet · SF3 · program 41 | 48–88 |
+  | `builtin.cello` | 大提琴 | Florestan String Quartet · SF3 · program 42 | 36–81 |
+  | `builtin.contrabass` | 低音提琴 | Florestan String Quartet · SF3 · program 43 | 28–67 |
+  | `builtin.pizzicato` | 弦乐拨奏 | Florestan Pizzicato · SF3 | 28–100 |
+  | `builtin.trumpet` | 小号 | Florestan Trumpet Metallic · SF3 | 55–82 |
+  | `builtin.french_horns` | 圆号齐奏 | Florestan French Horns · SF3 | 41–77 |
+  | `builtin.synth_strings_1` | 合成弦乐 1 | FreePats Synth Strings 1 · SF3 | 36–96 |
+  | `builtin.synth_strings_2` | 合成弦乐 2 | FreePats Synth Strings 2 · SF3 · 更厚 | 36–96 |
+  | `builtin.synth_brass_1` | 合成铜管 1 | FreePats Synth Brass 1 · SF3 | 36–84 |
+  | `builtin.synth_brass_2` | 合成铜管 2（DX7） | FreePats Synth Brass 2 · SF3 | 36–84 |
 
   采样乐器的参数只有两个：`gain`（0..4，默认按乐器校准）与 `tone`（0..1 一阶低通，1 = 旁通）。
   它们输出**单声道**（仍可复音演奏）；要宽度用 `builtin.chorus` / `builtin.reverb` / 声像。
   `builtin.drums` 是完整的原声鼓组，**直接在一轨里按 GM 音高写 kick/snare/hat/tom/cymbal**；
   `builtin.synth.drums` 只是旧的底鼓预设，不要拿它当鼓组。
+  独奏弦乐（violin / viola / cello / contrabass）与小号按**单声部**写；圆号齐奏、弦乐群奏可以叠和弦。
+  `builtin.strings` 的长音采样偏短，需要持续长音时用 `builtin.slow_strings` 或 `builtin.synth_strings_2`。
 - 内置效果器：`builtin.delay` / `builtin.reverb` / `builtin.chorus` / `builtin.drive` / `builtin.eq`。
 - 效果链是**有序**的：`add_effect` 追加到末尾；`apply_preset` 的 `effects` 整体替换（想保留的现有效果器
   要一并写回，否则会被清掉）。

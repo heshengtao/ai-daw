@@ -233,8 +233,9 @@
 **内置音色**：`builtin.synth` 是合成器本体，另有 5 个**预设音色**（`builtin.synth.lead` /
 `.bass` / `.drums` / `.strings` / `.pad`）——同一套 DSP 配不同默认包络，各自是独立插件 id
 （`crates/engine/src/registry.rs` 的 `BUILTIN_PRESETS`），所以音色选择器里就是一条条真音色。
-另有 5 件采样乐器（`builtin.piano` / `builtin.nylon_guitar` / `builtin.electric_guitar` /
-`builtin.bass` / `builtin.drums`），资产在 `crates/instruments/assets` 内嵌。
+另有 18 件采样乐器：钢琴 / 尼龙吉他 / 清音电吉他 / 指弹贝斯 / 原声鼓组，以及
+弦乐群奏、慢弦乐、小提琴、中提琴、大提琴、低音提琴、弦乐拨奏、小号、圆号齐奏、
+合成弦乐 1/2、合成铜管 1/2（`builtin.*`），资产在 `crates/instruments/assets` 内嵌（SF3/SF2，约 13.5 MB）。
 
 **音符的两个「响度类」属性**：`velocity` **力度**（演奏强度，插件各自解释；内置合成器折算成振幅）
 与 `volume` **音量**（单音电平微调，不改音色，默认 127 = 不衰减）。插件 ABI 的 `NoteOn` 只有

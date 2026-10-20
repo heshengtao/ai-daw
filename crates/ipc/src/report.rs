@@ -56,6 +56,10 @@ pub struct NoteStats {
     pub bars: Vec<BarDensity>,
     /// 同音高、时间上互相重叠的音符对数（同轨自我掩蔽）。
     pub overlapping_notes: usize,
+    /// 同轨内小二度 / 小九度重叠的音符对数（比同音更刺耳的一类冲突）。
+    pub semitone_clashes: usize,
+    /// 这些半音冲突总共持续的拍数（区间合并后，不重复计数）。
+    pub semitone_clash_beats: f64,
     /// 起点落在片段之外的音符数（会被裁掉、听不见）。
     pub notes_outside_clip: usize,
 }
@@ -69,6 +73,10 @@ pub struct TrackOverlap {
     pub overlap_beats: f64,
     /// 音高完全相同、且时间重叠的音符对数（最容易糊在一起）。
     pub unison_notes: usize,
+    /// 小二度 / 小九度、且时间重叠的音符对数（比同音更刺耳；`abs(p1-p2) % 12 == 1`）。
+    pub semitone_clashes: usize,
+    /// 这些半音冲突总共持续的拍数（区间合并后，不重复计数）。
+    pub semitone_clash_beats: f64,
     /// 同时发声时共用的音级（0..=11，C=0）。
     pub shared_pitch_classes: Vec<u8>,
     /// 两条轨道平均音高之差（半音，`a - b`）。
@@ -132,6 +140,10 @@ impl HarmonyPolicy {
 pub enum HarmonyIssueKind {
     /// 和弦外音（既不属和弦，也不在允许的延伸音里）。
     NonChordTone,
+    /// 装饰音：极短、且后接相邻和弦音（倚音/短倚音的启发式识别）。
+    Ornament,
+    /// 调内音：不属于当前和弦，但在给定的调/音阶里。
+    ScaleTone,
     /// 导音没有解决到主音。
     UnresolvedLeadingTone,
     /// 悬挂音：从小节前延续进来、且不属于当前和弦。

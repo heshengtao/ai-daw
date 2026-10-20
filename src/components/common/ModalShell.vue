@@ -13,11 +13,16 @@
 import { XMarkIcon } from "@heroicons/vue/24/outline";
 import { useI18n } from "@/i18n";
 
-defineProps<{
-  open: boolean;
-  /** 标题：既是标题栏的可见文案，也是对话框的 `aria-label`。 */
-  title: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    open: boolean;
+    /** 标题：既是标题栏的可见文案，也是对话框的 `aria-label`。 */
+    title: string;
+    /** 自定义宽度（默认 620px）；宽内容（例如历史工程卡片墙）用它。 */
+    width?: string;
+  }>(),
+  { width: "" },
+);
 
 const emit = defineEmits<{ (e: "update:open", value: boolean): void }>();
 
@@ -45,6 +50,7 @@ function onKey(e: KeyboardEvent): void {
           role="dialog"
           aria-modal="true"
           :aria-label="title"
+          :style="props.width ? { width: props.width } : undefined"
           tabindex="-1"
           @keydown="onKey"
         >

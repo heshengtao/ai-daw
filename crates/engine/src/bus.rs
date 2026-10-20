@@ -785,14 +785,23 @@ impl Engine {
                 let transform = crate::compose::transpose(existing, *semitones, *range);
                 changed_notes(actor, *track, *clip, transform)
             }
-            Command::SetNoteVelocity { track, clip, shape, range } => {
+            Command::SetNoteVelocity { track, clip, shape, range, beat_filter } => {
                 let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
-                let transform = crate::compose::set_velocity(existing, *shape, *range);
+                let transform =
+                    crate::compose::set_velocity(existing, *shape, *range, *beat_filter);
                 changed_notes(actor, *track, *clip, transform)
             }
-            Command::QuantizeNotes { track, clip, grid, strength, range } => {
+            Command::QuantizeNotes {
+                track,
+                clip,
+                grid,
+                strength,
+                range,
+                quantize_duration,
+            } => {
                 let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
-                let transform = crate::compose::quantize(existing, *grid, *strength, *range);
+                let transform =
+                    crate::compose::quantize(existing, *grid, *strength, *range, *quantize_duration);
                 changed_notes(actor, *track, *clip, transform)
             }
             Command::StrumNotes { track, clip, step_ms, direction, range } => {
@@ -807,10 +816,26 @@ impl Engine {
                     crate::compose::swing(existing, *subdivision, *ratio, *strength, *range);
                 changed_notes(actor, *track, *clip, transform)
             }
-            Command::HumanizeNotes { track, clip, timing, velocity, range, seed } => {
+            Command::HumanizeNotes {
+                track,
+                clip,
+                timing,
+                velocity,
+                range,
+                seed,
+                min_duration,
+                group_by_start,
+            } => {
                 let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
-                let transform =
-                    crate::compose::humanize(existing, *timing, *velocity, *range, *seed);
+                let transform = crate::compose::humanize(
+                    existing,
+                    *timing,
+                    *velocity,
+                    *range,
+                    *seed,
+                    *min_duration,
+                    *group_by_start,
+                );
                 changed_notes(actor, *track, *clip, transform)
             }
             Command::FitNotesToRange { track, clip, min_pitch, max_pitch, mode, range } => {
@@ -852,12 +877,25 @@ impl Engine {
                             length,
                         }];
                         if !notes.is_empty() {
+                            let assigned = assign_ids(&[], &notes);
                             events.push(Event::NotesAdded {
                                 actor: actor.clone(),
                                 track: dest,
                                 clip: new_clip,
-                                notes: assign_ids(&[], &notes),
+                                notes: assigned.clone(),
                             });
+                            // 标签跟着复制到新片段；按 assigned 的新 id 对齐。
+                            for (note, source) in assigned.iter().zip(notes.iter()) {
+                                if let Some(tag) = self.project.note_tag(*track, *clip, source.id) {
+                                    events.push(Event::NoteTagChanged {
+                                        actor: actor.clone(),
+                                        track: dest,
+                                        clip: new_clip,
+                                        id: note.id,
+                                        tag: Some(tag.clone()),
+                                    });
+                                }
+                            }
                         }
                         events
                     }
@@ -884,14 +922,17 @@ impl Engine {
                     .iter()
                     .map(|c| c.start + c.length)
                     .fold(f64::NEG_INFINITY, f64::max);
-                // 音符改成相对**合并后**片段起点的坐标。
+                // 音符改成相对**合并后**片段起点的坐标；标签按同一顺序对齐。
                 let mut merged: Vec<crate::model::Note> = Vec::new();
+                let mut tags: Vec<Option<crate::model::NoteTag>> = Vec::new();
                 for c in &picked {
                     let offset = c.start - start;
                     for n in &c.notes {
                         merged.push(crate::model::Note { start: n.start + offset, ..*n });
+                        tags.push(self.project.note_tag(*track, c.id, n.id).cloned());
                     }
                 }
+                let assigned = assign_ids(&[], &merged);
                 let target = picked[0].id;
                 let mut events = vec![
                     Event::ClipMoved { actor: actor.clone(), track: *track, clip: target, start },
@@ -901,11 +942,12 @@ impl Engine {
                         clip: target,
                         length: end - start,
                     },
+                    // NotesReplaced 会清掉目标片段的旧标签；下面按 assigned 的新 id 重新写回。
                     Event::NotesReplaced {
                         actor: actor.clone(),
                         track: *track,
                         clip: target,
-                        notes: assign_ids(&[], &merged),
+                        notes: assigned.clone(),
                     },
                 ];
                 events.push(Event::ClipsRemoved {
@@ -915,6 +957,17 @@ impl Engine {
                         .map(|c| crate::model::ClipRef { track: *track, clip: c.id })
                         .collect(),
                 });
+                for (note, tag) in assigned.iter().zip(tags) {
+                    if let Some(tag) = tag {
+                        events.push(Event::NoteTagChanged {
+                            actor: actor.clone(),
+                            track: *track,
+                            clip: target,
+                            id: note.id,
+                            tag: Some(tag),
+                        });
+                    }
+                }
                 events
             }
 
@@ -933,6 +986,13 @@ impl Engine {
                 track: *track,
                 role: role.clone(),
                 pitch_range: *pitch_range,
+            }],
+            Command::SetNoteTag { track, clip, id, tag } => vec![Event::NoteTagChanged {
+                actor: actor.clone(),
+                track: *track,
+                clip: *clip,
+                id: *id,
+                tag: tag.clone(),
             }],
 
             Command::NewProject { name, track_names } => {

@@ -173,18 +173,23 @@ Techno 尽量少换和弦，靠音色/滤波/节奏推进。
 | 项目 | 默认配方 |
 | --- | --- |
 | BPM | 60–100（neo-soul 70–90） |
-| 拍号/律动 | 4/4，laid-back；鼓的 16 分有 swing/ghost |
+| 拍号/律动 | 4/4，laid-back；16 分可带轻微 swing/ghost，但**核心是反拍重音** |
 | 调/音阶 | 小调/Dorian；大七、小九、十一、十三和弦 |
 | 和声 | `ii7–V7–Imaj7`、`Imaj7–vi7–ii7–V7`、`i9–iv9–bVIImaj7–bIIImaj7` |
-| 鼓 | 轻 kick、snare 2/4、ghost 多；hat 低力度 |
+| 鼓 | 轻 kick、snare 2/4、ghost 多；hat 低力度；**重音落在 `and` 上** |
 | 贝斯 | 根音 + 经过音，切分；可以跟 kick 但更圆 |
 | 配器 | Rhodes/电钢、finger bass、drums、pad/strings、lead（人声/长笛） |
 | 结构 | Intro 4 / Verse 8 / Pre 4 / Chorus 8 / Verse 8 / Chorus 8 / Bridge 4 / Outro |
 | 混音 | 电钢 chorus；人声/lead 居中；低频温暖但不糊 |
 
-写音符顺序：先写 4–8 小节延伸和弦（maj7/m9/11）→ 鼓（swing + ghost）→ 贝斯 →
-电钢 comping（用 `offset` 做「提前/延后」）→ 旋律。`analyze_harmony` 开
-`allow_extensions: true`，否则 9/11/13 会被误报。
+写音符顺序：先写 4–8 小节延伸和弦（maj7/m9/11）→ 鼓（ghost；swing 只给需要摇摆的声部）→
+贝斯 → 电钢 comping（用 `offset` 做「提前/延后」）→ 旋律。
+
+R&B 的「反拍重音」不要用 `apply_swing` 做：把音写在 `and`（0.5 / 1.5 / 2.5 / 3.5）上，
+再用 `set_note_velocity(grid=1.0, beat=0.5, value=92)` 把反拍抬起来，正拍降到 76–84。
+
+`analyze_harmony` 开 `allow_extensions: true`：普通 9/11/13 会记成 `extension` / `info`，
+但大三和弦上的 11、b9 这类仍会给 warning（那是风格判断，不是 bug）。
 
 ## 10. Jazz
 
@@ -220,6 +225,11 @@ Techno 尽量少换和弦，靠音色/滤波/节奏推进。
 
 写音符顺序：先写 12 小节和弦（全部属七）→ shuffle 鼓 → bass → 吉他 riff/旋律。
 蓝音 b5 只作经过音，时值短；`apply_swing(subdivision=0.5, ratio=0.66)`。
+
+**推弦 / 滑音的限制**：AIDAW v1 没有 pitch bend / portamento（见第 14 节）。蓝调里
+「♭3 滑到 3」只能用**两个相邻半音的音符**近似：第一个音短、力度低，第二个音落在目标音高；
+或者用短倚音（`duration 0.04–0.08` 拍 + 负 `offset`）。听感上是两个音，不是一次推弦——
+这是结构性限制，不要在文档里把它说成真正的 pitch bend。
 
 ## 12. Bossa / Latin
 
@@ -295,8 +305,11 @@ AIDAW v1 没有真正的 pitch bend。
 ## 16. 内置音色速查
 
 **采样内置乐器**（`builtin.piano` / `builtin.nylon_guitar` / `builtin.electric_guitar` /
-`builtin.bass` / `builtin.drums`）见 `plugin.md`：它们是独立插件 id，挂上即用，参数只有
-`gain` / `tone`，不需要 `apply_preset`。
+`builtin.bass` / `builtin.drums` / `builtin.strings` / `builtin.slow_strings` /
+`builtin.violin` / `builtin.viola` / `builtin.cello` / `builtin.contrabass` /
+`builtin.pizzicato` / `builtin.trumpet` / `builtin.french_horns` /
+`builtin.synth_strings_1/2` / `builtin.synth_brass_1/2`）见 `plugin.md`：它们是独立插件 id，
+挂上即用，参数只有 `gain` / `tone`，不需要 `apply_preset`。
 
 下面这张表是**内置合成器** `builtin.synth` 的 32 条出厂音色参数补丁；用
 `apply_preset(track, params=…)` 把参数写进去；**新轨**上应用最干净，换音色时关键参数要写全。

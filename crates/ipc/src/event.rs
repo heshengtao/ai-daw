@@ -128,6 +128,14 @@ pub enum Event {
         role: Option<String>,
         pitch_range: Option<PitchRange>,
     },
+    /// 一个音符的标签被改写（`None` = 清除）。
+    NoteTagChanged {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        id: u64,
+        tag: Option<crate::model::NoteTag>,
+    },
     /// 工程的小节和弦表被整体替换（空 = 清除）。
     ProjectHarmonyChanged { actor: Actor, bars: Vec<HarmonyBar> },
     /// 工程的段落表被整体替换（空 = 清除）。
@@ -179,6 +187,7 @@ impl Event {
             | Event::ProjectRenamed { actor, .. }
             | Event::ProjectCleared { actor, .. }
             | Event::TrackMetaChanged { actor, .. }
+            | Event::NoteTagChanged { actor, .. }
             | Event::ProjectHarmonyChanged { actor, .. }
             | Event::ProjectSectionsChanged { actor, .. } => actor,
         }

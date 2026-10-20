@@ -7,6 +7,7 @@ mod assets;
 mod backends;
 mod cli;
 mod commands;
+mod history;
 mod main_thread;
 mod manager;
 mod mcp;
@@ -241,6 +242,13 @@ pub(crate) fn session_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf>
     app.path().app_config_dir().ok().map(|dir| dir.join("session.json"))
 }
 
+/// 历史工程目录：应用配置目录下的 `history/`。
+///
+/// 拿不到配置目录时返回 `None`（历史功能不可用，但不影响编辑）。
+pub(crate) fn history_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("history"))
+}
+
 /// 写歌智能体配置文件的位置：应用配置目录下的 `ai.json`。
 fn agent_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("ai.json"))
@@ -337,6 +345,8 @@ pub fn run() {
             commands::localize_starter_tracks,
             commands::current_project_path,
             commands::cache_session,
+            commands::project_history,
+            commands::restore_project_history,
             commands::add_clip,
             commands::remove_clip,
             commands::move_clip,
