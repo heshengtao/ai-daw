@@ -81,7 +81,8 @@ struct Builtin {
 /// 内置合成器 + 5 条老预设 + 18 件采样乐器 + 5 个内置效果器。
 ///
 /// 这 5 条预设 id（`builtin.synth.lead` 等）留着是因为老工程还直接挂在它们上面；
-/// 界面上的 32 条出厂音色不是独立插件，走 `set_param` / `apply_preset` 的 `params`。
+/// 界面上的 36 条出厂音色里，只有 5 条在注册表里有独立 id；其余 31 条是参数补丁，
+/// 走 `set_params` / `apply_preset` 的 `params`。
 /// 采样乐器是真正独立的插件 id（`builtin.piano` 等），资产随包内嵌。
 const BUILTINS: &[Builtin] = &[
     Builtin {
@@ -89,8 +90,8 @@ const BUILTINS: &[Builtin] = &[
         name: "内置合成器",
         kind: PluginKind::Instrument,
         category: "synth",
-        description: "内置复音减法合成器（16 复音）：4 种波形 + 低八度副振 + ADSR + 低通/共振/包络量 + LFO + FM + 噪声 + 位深压碎。\
-出厂 32 条音色（8-bit / 电钢 / 吉他 / 贝斯 / 鼓 / 弦乐 / 管乐 / 铺底 / 音效）都跑在它上面，靠 set_param 或 apply_preset 的 params 调出——挂它就等于挂一台通用合成器。",
+        description: "内置复音减法合成器（16 复音）：4 种波形 + 1..4 振荡器 unison + 低八度副振 + ADSR + 独立滤波包络 + LFO（全局/每声部）+ FM + 噪声 + 位深压碎 + 声部分布 + 2x 过采样。\
+出厂 36 条音色（8-bit / 电钢 / 吉他 / 贝斯 / 鼓 / 弦乐 / 管乐 / 铺底 / 音效）都跑在它上面，靠 set_params 调出；MCP 侧用 list_synth_presets 取完整参数，再用 set_params(reset=true) 落地——挂它就等于挂一台通用合成器。",
         roles: &["lead", "chords", "bass", "pad", "drums"],
         pitch_range: None,
         mono: false,

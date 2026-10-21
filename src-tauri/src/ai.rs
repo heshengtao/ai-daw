@@ -302,12 +302,6 @@ fn run_job(
     if frames == 0 || sample_rate <= 0.0 {
         return Err("素材是空的".into());
     }
-    let track_name = input.track_name.as_str();
-    let track_index = input.track_index;
-    let clip_start = input.clip_start;
-    let clip_length = input.clip_length;
-    let source = &input.source;
-
     // 进度回调：更新原子量 + 广播 + 检查取消。
     let rt = runtime.clone();
     let app_cb = app.clone();
@@ -318,40 +312,9 @@ fn run_job(
     };
 
     if kind == KIND_TO_MIDI {
-        let (detected, backend) = detect_notes(&samples, channels, sample_rate, &progress);
-        if detected.is_empty() {
-            return Ok("没有检测到音符（这段素材可能是静音或复音）".into());
-        }
-        // 素材秒 → 片段内的拍：素材铺满片段跨度，因此按比例换算。
-        let source_seconds = frames as f64 / sample_rate;
-        let beats_per_second = clip_length / source_seconds;
-        let notes: Vec<Note> = detected
-            .iter()
-            .map(|n| Note {
-                id: 0,
-                pitch: n.pitch,
-                start: n.start_sec * beats_per_second,
-                duration: (n.duration_sec * beats_per_second).max(Note::MIN_DURATION_BEATS),
-                velocity: n.velocity,
-                volume: Note::MAX_VOLUME,
-                offset: 0.0,
-                legato: false, expr: ai_daw_engine::model::PitchExpression::NONE,
-            })
-            .collect();
-        let count = notes.len();
-        let name = format!("{track_name} · MIDI");
-        // 插到**源轨道的下一行**（而不是最末尾）：转 MIDI 的直觉是「结果就贴在原轨下面」。
-        let _ = commands_run(
-            app,
-            Command::AddNoteTrack {
-                name,
-                start: clip_start,
-                length: clip_length,
-                notes,
-                at: Some(track_index + 1),
-            },
+        return transcribe_input(
+            app, input, &samples, channels, sample_rate, frames, &progress,
         );
-        return Ok(format!("已生成 {count} 个音符（{backend}）"));
     }
 
     // 节拍检测：推出全局 BPM + 拍号，并把片段对齐到小节线（一次事务 = 一条撤销记录）。
@@ -371,14 +334,86 @@ fn run_job(
     }
 
     // 降噪：产出新素材，再把它作为**下面一条新轨道**放进去（原轨不动，便于对比）。
-    let (processed, backend) = enhance_audio(
+    enhance_input(
+        app,
+        input,
         &samples,
         channels,
         sample_rate,
+        frames,
         kind == KIND_ENHANCE_DSP,
         &progress,
-    );
-    if runtime.cancel.load(Ordering::Relaxed) {
+        || runtime.cancel.load(Ordering::Relaxed),
+    )
+}
+
+/// 音频 → MIDI 的共用实现（界面任务与 MCP 工具走同一条落地路径）。
+///
+/// 结果插到**源轨道的下一行**（而不是最末尾）：转 MIDI 的直觉是「结果就贴在原轨下面」。
+fn transcribe_input(
+    app: &tauri::AppHandle,
+    input: &TrackInput,
+    samples: &[f32],
+    channels: usize,
+    sample_rate: f64,
+    frames: usize,
+    progress: ai_daw_local_ai::Progress<'_>,
+) -> Result<String, String> {
+    let (detected, backend) = detect_notes(samples, channels, sample_rate, progress);
+    if detected.is_empty() {
+        return Ok("没有检测到音符（这段素材可能是静音或复音）".into());
+    }
+    // 素材秒 → 片段内的拍：素材铺满片段跨度，因此按比例换算。
+    let source_seconds = frames as f64 / sample_rate;
+    let beats_per_second = input.clip_length / source_seconds;
+    let notes: Vec<Note> = detected
+        .iter()
+        .map(|n| Note {
+            id: 0,
+            pitch: n.pitch,
+            start: n.start_sec * beats_per_second,
+            duration: (n.duration_sec * beats_per_second).max(Note::MIN_DURATION_BEATS),
+            velocity: n.velocity,
+            volume: Note::MAX_VOLUME,
+            offset: 0.0,
+            legato: false,
+            expr: ai_daw_engine::model::PitchExpression::NONE,
+        })
+        .collect();
+    let count = notes.len();
+    commands_run(
+        app,
+        Command::AddNoteTrack {
+            name: format!("{} · MIDI", input.track_name),
+            start: input.clip_start,
+            length: input.clip_length,
+            notes,
+            at: Some(input.track_index + 1),
+        },
+    )?;
+    Ok(format!("已生成 {count} 个音符（{backend}）"))
+}
+
+/// 降噪的共用实现（界面任务与 MCP 工具走同一条落地路径）。
+///
+/// 处理结果放在**源轨道下面**的一条新轨道上（与转 MIDI 同一套做法），原轨保持不动，
+/// 方便两条轨道对比试听。素材窗口原样沿用源片段（`offset_frames` / `frames`）：处理的是
+/// 整个文件，新文件与旧文件逐帧等长，所以同样的窗口 = 同样的时间跨度与速度。
+fn enhance_input(
+    app: &tauri::AppHandle,
+    input: &TrackInput,
+    samples: &[f32],
+    channels: usize,
+    sample_rate: f64,
+    frames: usize,
+    force_dsp: bool,
+    progress: ai_daw_local_ai::Progress<'_>,
+    cancelled: impl Fn() -> bool,
+) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let (processed, backend) = enhance_audio(samples, channels, sample_rate, force_dsp, progress);
+    // 取消发生在降噪过程中：还没写盘 / 建轨，直接收尾，别留下半成品轨道。
+    if cancelled() {
         return Ok("已取消".into());
     }
     let path = ai_output_path(app, "denoise")?;
@@ -393,28 +428,23 @@ fn run_job(
         &path,
         Arc::new(DecodedAudio { samples: processed.into(), channels, sample_rate }),
     );
-    // 降噪：把处理结果放在**源轨道下面**的一条新轨道上（与转 MIDI 同一套做法），
-    // 原轨保持不动，方便两条轨道对比试听。
-    //
-    // 素材窗口原样沿用源片段（`offset_frames` / `frames`）：处理的是整个文件，新文件的
-    // 长度与采样率与旧文件逐帧一致，所以同样的窗口 = 同样的时间跨度与速度。
-    let suffix = if kind == KIND_ENHANCE_DSP { "底噪降噪" } else { "人声降噪" };
-    let _ = commands_run(
+    let suffix = if force_dsp { "底噪降噪" } else { "人声降噪" };
+    commands_run(
         app,
         Command::AddAudioTrack {
-            name: format!("{track_name} · {suffix}"),
-            start: clip_start,
-            length: clip_length,
+            name: format!("{} · {suffix}", input.track_name),
+            start: input.clip_start,
+            length: input.clip_length,
             source: AudioSource {
                 path,
-                offset_frames: source.offset_frames,
-                frames: source.frames,
+                offset_frames: input.source.offset_frames,
+                frames: input.source.frames,
                 rate: 1.0,
                 pitch_semitones: 0.0,
             },
-            at: Some(track_index + 1),
+            at: Some(input.track_index + 1),
         },
-    );
+    )?;
     Ok(format!("已生成{suffix}轨道（{backend}）"))
 }
 
@@ -653,6 +683,40 @@ pub(crate) fn detect_tempo_track(app: &tauri::AppHandle, track: u64) -> Result<S
         return Err("素材是空的".into());
     }
     apply_tempo_detection(app, &input, &samples, channels, sample_rate, &|_| true)
+}
+
+/// 同步跑一遍音频转 MIDI（供 MCP 工具用；无进度回调，整体阻塞在调用线程）。
+pub(crate) fn transcribe_track(app: &tauri::AppHandle, track: u64) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let input = track_input(&state, track)?;
+    let audio = state.assets.load(&input.source.path)?;
+    let channels = audio.channels;
+    let sample_rate = audio.sample_rate;
+    let frames = audio.frames();
+    let samples: Vec<f32> = audio.samples.to_vec();
+    if frames == 0 || sample_rate <= 0.0 {
+        return Err("素材是空的".into());
+    }
+    transcribe_input(app, &input, &samples, channels, sample_rate, frames, &|_| true)
+}
+
+/// 同步跑一遍降噪（供 MCP 工具用；`dsp = true` 走内置 DSP，即「乐器底噪降噪」）。
+pub(crate) fn enhance_track(
+    app: &tauri::AppHandle,
+    track: u64,
+    dsp: bool,
+) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let input = track_input(&state, track)?;
+    let audio = state.assets.load(&input.source.path)?;
+    let channels = audio.channels;
+    let sample_rate = audio.sample_rate;
+    let frames = audio.frames();
+    let samples: Vec<f32> = audio.samples.to_vec();
+    if frames == 0 || sample_rate <= 0.0 {
+        return Err("素材是空的".into());
+    }
+    enhance_input(app, &input, &samples, channels, sample_rate, frames, dsp, &|_| true, || false)
 }
 
 /// 走与界面/代理同一条命令管线（会广播事件、进撤销历史）。

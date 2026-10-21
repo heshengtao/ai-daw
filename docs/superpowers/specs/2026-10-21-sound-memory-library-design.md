@@ -1,7 +1,7 @@
 # 音色记忆库（整轨音色快照）— 设计
 
 - 日期：2026-10-21
-- 状态：📝 设计已确认，待实现
+- 状态：✅ 已实现
 - 相关：`src-tauri/src/sound_memories.rs`（新增）、`src-tauri/src/state.rs`、`src-tauri/src/lib.rs`、
   `src-tauri/src/commands.rs`、`src-tauri/src/mcp.rs`、`src-tauri/src/agent/mod.rs`、
   `src/api/types.ts`、`src/api/tauri.ts`、`src/api/mock.ts`、`src/stores/soundMemories.ts`（新增）、
@@ -248,13 +248,13 @@ Tauri 命令与 MCP 工具共用：
 ### 7.1 数据层
 
 - `src/api/types.ts`：`SoundMemory` / `SoundMemorySummary` / `PluginSnapshot` / `SoundMixer`。
-- `src/api/tauri.ts`：5 个封装（列表 / 保存 / 元数据更新 / 删除 / 应用），命名与 Tauri 命令一致
-  （camelCase 参数）。
-- `src/api/mock.ts`：内存数组 + 与后端一致的增删改查语义，保证浏览器开发模式可用。
+- `src/api/tauri.ts`：4 个封装（列表 / 元数据更新 / 删除 / 应用），命名与 Tauri 命令一致
+  （camelCase 参数）。**保存只由 AI 触发**，前端不提供保存入口。
+- `src/api/mock.ts`：内存数组 + 与后端一致的列表/更新/删除/应用语义，保证浏览器开发模式可用。
 - `src/stores/soundMemories.ts`：
   - `refresh()`、`items`、`loading`、`query`、`activeTag`
   - `filtered`（按名称/描述/标签/乐器 id 过滤）
-  - `save(track, name, description, tags, id?)`、`updateMetadata(...)`、`remove(id)`、`apply(id, track)`
+  - `updateMetadata(...)`、`remove(id)`、`apply(id, track)`
   - 订阅 `engine://sound-memories` 自动 `refresh()`，面板卸载时取消订阅。
 
 ### 7.2 界面

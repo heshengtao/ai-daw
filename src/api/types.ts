@@ -476,6 +476,49 @@ export interface Preset {
   created_at: number;
 }
 
+/** 音色记忆的混音部分（不含发送）。 */
+export interface SoundMixer {
+  gain_db: number;
+  pan: number;
+}
+
+/** 音色记忆里的一个插件快照。`state` 是 base64；空字符串 = 无二进制状态。 */
+export interface PluginSnapshot {
+  plugin_id: string;
+  params: Record<string, number>;
+  state: string;
+}
+
+/** 列表用的摘要（不含 params / state）。 */
+export interface SoundMemorySummary {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  role: string | null;
+  instrument_plugin_id: string | null;
+  effect_plugin_ids: string[];
+  mixer: SoundMixer;
+  source_project: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** 一条完整的音色记忆。 */
+export interface SoundMemory {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  role: string | null;
+  instrument: PluginSnapshot | null;
+  effects: PluginSnapshot[];
+  mixer: SoundMixer;
+  source_project: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 /**
  * 响度与峰值（EBU R128 / ITU-R BS.1770）。
  *

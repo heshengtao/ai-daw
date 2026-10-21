@@ -24,6 +24,8 @@ const props = withDefaults(
     sensitivity?: number;
     /** 双击复位用的默认值。 */
     default?: number;
+    /** 量化步长（缺省 = 连续）。枚举参数必须给，免得旋钮停在 0.37。 */
+    step?: number;
     label: string;
     /** 旋钮下方显示的当前值（已格式化）。 */
     display?: string;
@@ -84,8 +86,16 @@ function clamp(value: number): number {
   return Math.min(props.max, Math.max(props.min, value));
 }
 
+function quantize(value: number): number {
+  const step = props.step;
+  if (!step || step <= 0) return value;
+  // 去掉 0.30000000000000004 这类浮点尾巴：否则草稿与工程里的 f32 永远对不上。
+  const snapped = props.min + Math.round((value - props.min) / step) * step;
+  return clamp(Number(snapped.toFixed(6)));
+}
+
 function set(value: number, commit = false): void {
-  const next = clamp(value);
+  const next = quantize(clamp(value));
   if (next !== props.modelValue) emit("update:modelValue", next);
   if (commit) emit("commit", next);
 }
@@ -136,13 +146,14 @@ function onWheel(e: WheelEvent): void {
   if (props.disabled) return;
   e.preventDefault();
   const span = props.max - props.min;
-  set(props.modelValue - Math.sign(e.deltaY) * span * (e.shiftKey ? 0.005 : 0.03), true);
+  const amount = props.step ?? span * (e.shiftKey ? 0.005 : 0.03);
+  set(props.modelValue - Math.sign(e.deltaY) * amount, true);
 }
 
 function onKey(e: KeyboardEvent): void {
   if (props.disabled) return;
   const span = props.max - props.min;
-  const step = span * (e.shiftKey ? 0.001 : 0.02);
+  const step = props.step ?? span * (e.shiftKey ? 0.001 : 0.02);
   if (e.key === "ArrowUp" || e.key === "ArrowRight") set(props.modelValue + step, true);
   else if (e.key === "ArrowDown" || e.key === "ArrowLeft") set(props.modelValue - step, true);
   else if (e.key === "Home") set(props.min, true);

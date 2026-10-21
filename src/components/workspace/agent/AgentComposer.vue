@@ -11,6 +11,8 @@ import { useI18n } from "@/i18n";
 
 const props = defineProps<{
   running: boolean;
+  /** 已按过停止、正在等后端收尾。 */
+  stopping?: boolean;
   disabled?: boolean;
 }>();
 
@@ -69,8 +71,10 @@ onMounted(resize);
       <button
         v-if="running"
         class="action stop"
+        :class="{ stopping: props.stopping }"
         type="button"
-        :aria-label="i18n.t('agent.stop')"
+        :disabled="props.stopping"
+        :aria-label="props.stopping ? i18n.t('agent.stopping') : i18n.t('agent.stop')"
         @click="emit('stop')"
       >
         <StopIcon class="w-[15px] h-[15px]" />
@@ -154,5 +158,18 @@ onMounted(resize);
 .action.stop {
   background-color: rgb(var(--md-error));
   color: rgb(var(--md-on-error));
+}
+/* 「正在停止」：按钮立刻给出反馈，不然后端卡在大块渲染里时看起来像没点中。 */
+.action.stop.stopping {
+  animation: stop-pulse 0.9s ease-in-out infinite;
+}
+@keyframes stop-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 </style>

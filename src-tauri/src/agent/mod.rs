@@ -54,6 +54,9 @@ fn system_prompt() -> String {
 挑乐器或效果器前先调 list_plugins 读它的分类与音色描述（别凭插件名猜——`JC303` 其实是\
 单音酸性贝斯），单个插件的参数表用 describe_plugin 查。\
 所有改动都会进入撤销历史（署名 chat），用户可随时撤销，所以放手去做、必要时也可撤销/重做。\
+音色记忆：默认绝不自动保存。只有用户明确要求（「记住这个音色」），或用户表达满意后\
+你询问并得到确认，才调用 save_sound_memory；不要每次调参后都存。删除记忆必须用户明确\
+要求。用户要某类音色时，先 list_sound_memories 查他存过的。\
 回复用简洁的中文，不要复述工具的原始 JSON。\n\n--- 能力域索引 ---\n{index}"
     )
 }
@@ -164,12 +167,20 @@ pub fn agent_set_head(runtime: State<'_, AgentRuntime>, id: String, node_id: Str
     Ok(session)
 }
 
-/// 停止当前一轮。
+/// 停止当前一轮。返回「停下之前是否真的有一轮在跑」，供前端判断要不要本地收尾。
 #[tauri::command]
-pub fn agent_cancel(runtime: State<'_, AgentRuntime>) {
+pub fn agent_cancel(runtime: State<'_, AgentRuntime>) -> bool {
+    let was_running = runtime.running.load(Ordering::SeqCst);
     if let Some(token) = runtime.cancel.lock().unwrap().as_ref() {
         token.cancel();
     }
+    was_running
+}
+
+/// 当前是否有轮次在跑（面板重新挂载后用它跟后端对齐状态）。
+#[tauri::command]
+pub fn agent_running(runtime: State<'_, AgentRuntime>) -> bool {
+    runtime.running.load(Ordering::SeqCst)
 }
 
 /// 发起一轮对话：在 `parent_id` 下挂一条用户输入并开始回答。
@@ -473,6 +484,9 @@ async fn run_turn(
 
         // 3. 执行工具。
         for call in calls {
+            if token.is_cancelled() {
+                break;
+            }
             let args = parse_call_args(&call);
             let _ = app.emit(
                 EVENT_AGENT,
@@ -483,7 +497,12 @@ async fn run_turn(
                     args: args.clone(),
                 },
             );
-            let (ok, output) = dispatch_tool(&app, &actor, &call, args).await;
+            // 工具跑在阻塞线程池里（渲染 / 分析可能几十秒且无法打断）。这里**不等**它跑完：
+            // 用户一按停止就立刻收尾，交给 blocker 自己在后台跑完、结果丢弃。
+            let (ok, output) = tokio::select! {
+                _ = token.cancelled() => break,
+                out = dispatch_tool(&app, &actor, &call, args) => out,
+            };
             let _ = app.emit(
                 EVENT_AGENT,
                 AgentEvent::ToolResult {
@@ -515,11 +534,14 @@ async fn run_turn(
     }
 
     // 4. 收尾。
-    // 先记下是否被用户停止：下面会无条件取消运行时令牌。
     let stopped = token.is_cancelled();
     session.updated_at = now_millis();
     let _ = rt.sessions.save(&session);
     let head = session.head.clone().unwrap_or_default();
+    // 先把「不在跑」落地，再通知前端：否则用户看到 `turn_finished` 立刻发下一条时，
+    // `agent_send` 可能还撞上 `running == true`。取消令牌留在运行时里不清掉——它属于
+    // **这一轮**，`take()` 会误拿走下一轮刚装上的新令牌并把它取消。
+    rt.running.store(false, Ordering::SeqCst);
     let _ = app.emit(
         EVENT_AGENT,
         AgentEvent::TurnFinished {
@@ -529,11 +551,6 @@ async fn run_turn(
             stopped,
         },
     );
-
-    if let Some(token) = rt.cancel.lock().unwrap().take() {
-        token.cancel();
-    }
-    rt.running.store(false, Ordering::SeqCst);
 }
 
 /// 解析工具调用参数（失败当作空对象，交给工具自己报参数错误）。

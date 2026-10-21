@@ -12,6 +12,7 @@ use crate::ai::AiRuntime;
 use crate::audio::{AudioEngine, EditorSlot};
 use crate::assets::AssetCache;
 use crate::presets::PresetStore;
+use crate::sound_memories::SoundMemoryStore;
 
 thread_local! {
     /// 已打开的插件原生窗口。
@@ -56,6 +57,8 @@ pub struct AppState {
     pub host_windows: Arc<Mutex<HashSet<(u64, PluginSlot)>>>,
     /// 用户预设（跨工程；文件位置由 `init_presets` 装上）。
     pub presets: Mutex<PresetStore>,
+    /// 音色记忆库（跨工程；文件位置由 `init_sound_memories` 装上）。
+    pub sound_memories: Mutex<SoundMemoryStore>,
     /// 音频素材缓存（路径 → 已解码 PCM）。音频线程与离线渲染共用。
     pub assets: Arc<AssetCache>,
     /// 当前工程最后保存/打开的**文件路径**（尚未落盘时为 `None`）。
@@ -92,6 +95,7 @@ impl AppState {
             editor_plugins: Arc::new(Mutex::new(HashMap::new())),
             host_windows: Arc::new(Mutex::new(HashSet::new())),
             presets: Mutex::new(PresetStore::load(None)),
+            sound_memories: Mutex::new(SoundMemoryStore::load(None)),
             assets,
             session_path: Mutex::new(None),
             recording: Mutex::new(None),
@@ -122,6 +126,11 @@ impl AppState {
     /// 装上预设文件（启动时由 `setup` 调用；拿不到配置目录时只活在内存里）。
     pub fn init_presets(&self, path: Option<PathBuf>) {
         *self.presets.lock().unwrap() = PresetStore::load(path);
+    }
+
+    /// 装上音色记忆文件（启动时由 `setup` 调用；拿不到配置目录时只活在内存里）。
+    pub fn init_sound_memories(&self, path: Option<PathBuf>) {
+        *self.sound_memories.lock().unwrap() = SoundMemoryStore::load(path);
     }
 
     /// 安装（或更新）插件目录：写入共享状态并让音频线程重建注册表。
@@ -163,6 +172,9 @@ pub const EVENT_TRANSPORT: &str = "engine://transport";
 
 /// 插件扫描完成的前端事件名。
 pub const EVENT_PLUGINS: &str = "engine://plugins";
+
+/// 音色记忆库变更的前端事件名。
+pub const EVENT_SOUND_MEMORIES: &str = "engine://sound-memories";
 
 /// 音频导入解码进度的前端事件名。
 pub const EVENT_IMPORT: &str = "engine://import";

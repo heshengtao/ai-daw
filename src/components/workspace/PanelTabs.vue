@@ -9,6 +9,7 @@ import {
   XMarkIcon,
   AdjustmentsHorizontalIcon,
   AdjustmentsVerticalIcon,
+  BookmarkSquareIcon,
   CircleStackIcon,
   MusicalNoteIcon,
   PuzzlePieceIcon,
@@ -33,6 +34,7 @@ const ICONS: Record<PaneId, unknown> = {
   editor: MusicalNoteIcon,
   plugins: CircleStackIcon,
   manager: PuzzlePieceIcon,
+  sounds: BookmarkSquareIcon,
   agent: ChatBubbleLeftRightIcon,
   ai: SparklesIcon,
 };

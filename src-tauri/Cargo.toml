@@ -1,5 +1,5 @@
 [package]
-name = "ai-daw-app"
+name = "ai-daw"
 version = "1.5.0"
 description = "A Tauri App"
 authors = ["you"]
@@ -67,6 +67,9 @@ sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tar = "0.4"
 flate2 = "1"
+
+# 音色记忆库：插件二进制状态以 base64 存进 JSON，避免 Vec<u8> 变成数字数组。
+base64 = "0.22"
 
 # Windows：把安装目录写进**用户** PATH（`HKCU\Environment`），让 `aidaw` 随处可敲。
 # 该 crate 已在锁文件里（tauri 构建链的传递依赖），加为直接依赖不引入新包。

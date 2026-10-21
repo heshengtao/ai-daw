@@ -104,6 +104,7 @@ onMounted(async () => {
   await store.loadConfig();
   await store.loadSessions();
   await store.start();
+  await store.syncFromBackend();
   scrollToBottom();
 });
 
@@ -166,7 +167,12 @@ onUnmounted(() => {
         />
       </div>
 
-      <AgentComposer :running="store.running" @send="store.send" @stop="store.stop" />
+      <AgentComposer
+        :running="store.running"
+        :stopping="store.stopping"
+        @send="store.send"
+        @stop="store.stop"
+      />
     </template>
 
     <!-- 历史 -->

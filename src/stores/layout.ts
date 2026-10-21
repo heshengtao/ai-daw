@@ -12,6 +12,7 @@ export type PaneId =
   | "mixer"
   | "plugins"
   | "manager"
+  | "sounds"
   | "editor"
   | "agent"
   | "ai";
@@ -36,6 +37,7 @@ export const PANES: { id: PaneId; labelKey: string; hintKey: string }[] = [
   { id: "editor", labelKey: "panes.editor", hintKey: "panes.editorHint" },
   { id: "plugins", labelKey: "panes.plugins", hintKey: "panes.pluginsHint" },
   { id: "manager", labelKey: "panes.manager", hintKey: "panes.managerHint" },
+  { id: "sounds", labelKey: "panes.sounds", hintKey: "panes.soundsHint" },
   { id: "agent", labelKey: "panes.agent", hintKey: "panes.agentHint" },
   { id: "ai", labelKey: "panes.ai", hintKey: "panes.aiHint" },
 ];

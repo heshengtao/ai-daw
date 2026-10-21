@@ -6,6 +6,7 @@
 import {
   AdjustmentsHorizontalIcon,
   AdjustmentsVerticalIcon,
+  BookmarkSquareIcon,
   CircleStackIcon,
   MusicalNoteIcon,
   PuzzlePieceIcon,
@@ -17,6 +18,7 @@ import MixerPanel from "./panes/MixerPanel.vue";
 import PluginEditorPane from "./panes/PluginEditorPane.vue";
 import PluginsPane from "./panes/PluginsPane.vue";
 import ManagerPane from "./panes/ManagerPane.vue";
+import SoundLibraryPane from "./panes/SoundLibraryPane.vue";
 import AiPanel from "./panes/AiPanel.vue";
 import { defineAsyncComponent } from "vue";
 import { PICKABLE_PANES, useLayoutStore, type PaneId } from "@/stores/layout";
@@ -34,6 +36,7 @@ const ICONS: Record<PaneId, unknown> = {
   editor: MusicalNoteIcon,
   plugins: CircleStackIcon,
   manager: PuzzlePieceIcon,
+  sounds: BookmarkSquareIcon,
   agent: ChatBubbleLeftRightIcon,
   ai: SparklesIcon,
 };
@@ -64,6 +67,7 @@ const ICONS: Record<PaneId, unknown> = {
       <PluginEditorPane v-else-if="layout.activeTab === 'editor'" />
       <PluginsPane v-else-if="layout.activeTab === 'plugins'" />
       <ManagerPane v-else-if="layout.activeTab === 'manager'" />
+      <SoundLibraryPane v-else-if="layout.activeTab === 'sounds'" />
       <SongAgentPanel v-else-if="layout.activeTab === 'agent'" />
       <AiPanel v-else-if="layout.activeTab === 'ai'" />
     </div>

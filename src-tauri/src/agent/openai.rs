@@ -334,13 +334,17 @@ where
         body["tool_choice"] = serde_json::Value::String("auto".into());
     }
 
-    let resp = client(Duration::from_secs(300))?
+    // 模型排队 / 网关慢的时候响应头可能几十秒才回来；这一段也必须能被停止，
+    // 否则界面会在「思考中」卡到超时（300 秒）才响应。
+    let send = client(Duration::from_secs(300))?
         .post(&url)
         .bearer_auth(&cfg.api_key)
         .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("请求失败：{e}"))?;
+        .send();
+    let resp = tokio::select! {
+        _ = cancel.cancelled() => return Ok(Vec::new()),
+        resp = send => resp.map_err(|e| format!("请求失败：{e}"))?,
+    };
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();

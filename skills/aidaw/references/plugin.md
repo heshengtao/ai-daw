@@ -12,16 +12,27 @@
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
 | `list_plugins` | `kind?`,`query?` | 全部可用乐器/效果器（内置 + 本机 VST3/CLAP），**只给描述**。`kind` = `instrument` / `effect` / `all`；`query` 按名字/厂商/分类/描述/标签过滤。 |
+| `rescan_plugins` | — | 重新扫描本机插件目录（装完新插件后调用）。较慢。 |
 | `describe_plugin` | `plugin_id`,`query?`,`max_params?` | 单件的全部音色参数 + 用户预设 + 用法提示。`query` 只在**这一件**内部缩小范围；MIDI CC 映射这类管道参数不返回（用 `param_hidden` 报个数）。 |
+| `list_synth_presets` | `category?`,`query?` | **内置合成器的 36 条出厂音色**：id / 中文名 / 分类 / 描述 / 完整参数补丁。捏音色从它开始，不用猜。 |
 | `set_track_instrument` | `track`,`plugin_id` | 挂/换乐器；`plugin_id` 可以是 id 或名字（`JC303`）。回执里会说明这件乐器是什么、建议怎么用。 |
-| `set_param` | `track`,`param`,`value` | 调乐器参数（`param` 用 `describe_plugin` 查）。 |
+| `set_param` | `track`,`param`,`value` | 调**一个**乐器参数（`param` 用 `describe_plugin` 查）。 |
+| `set_params` | `track`,`params`,`reset?` | **一次写入整组**乐器参数（一个撤销步）；`reset: true` 先复位到默认再写。捏音色/切音色用它，不要循环 `set_param`。 |
+| `preview_synth` | `params`,`reset?`,`track?`,`note?`,`duration_ms?` | 离线试听**内置乐器**：渲染一个音，返回响度 + 音色指纹（频谱重心 / 平坦度 / 波峰因数 / 分段能量）与生效后的完整参数。不写工程。 |
 | `add_effect` | `track`,`plugin_id` | 效果器追加到链尾（id 或名字）。 |
 | `remove_effect` | `track`,`index` | 移除效果链上第 `index` 个（0 起，链头是 0）。 |
+| `move_effect` | `track`,`from`,`to` | 调整效果器在链中的顺序（0 起）。 |
+| `set_effect_param` | `track`,`index`,`param`,`value` | 调**一个**效果器参数（`param` 用 `describe_plugin` 查）。 |
+| `set_effect_params` | `track`,`index`,`params` | **一次写入**一个效果器的整组参数（一个撤销步）——调混响/延迟/压缩的主入口。 |
 | `apply_preset` | `track`,`params`,`effects` | 一次写整组乐器参数 + 整条效果链（`effects` 是**替换**，不是追加）。 |
+| `list_presets` | — | 全部**用户预设**（跨工程）：id / 名字 / 归属插件 / 参数快照。 |
+| `save_preset` | `name`,`plugin_id`,`params` | 把一组参数快照存成新的用户预设。 |
+| `update_preset` | `id`,`name`,`params` | 覆盖一条用户预设（参数快照整体替换）。 |
+| `delete_preset` | `id` | 删除一条用户预设。 |
 
 **预设怎么用**：`describe_plugin` 返回的 `presets.items[].params` 就是「这条音色怎么调」，
-可以原样喂给 `apply_preset(track, params=…)` 复用；`id` 只用于引用，不能直接当 `preset_id` 传
-（`apply_preset` 收的是参数表本身）。
+可以原样喂给 `set_params(track, params, reset=true)` 复用；`id` 只用于引用，不能直接当 `preset_id` 传。
+只有确实要**连效果链一起换**时才用 `apply_preset`——它的 `effects` 是整体替换，不传会清空现有链。
 
 **目录里每条的含义**
 
@@ -37,8 +48,12 @@
   Juno-106 克隆（复音，pad / 贝斯 / 主音）；`RdPiano` 是 Rhodes 电钢。这类判断交给 `list_plugins`。
 - 「未收录」不是错误：外部插件没被收录时，描述会明说「未收录具体型号」并给出类别兜底。这时用
   `describe_plugin` 看参数表，或挂上后 `analyze_project` 确认听感——**不要自己补一个音色描述**。
-- 内置合成器只有一个：`builtin.synth`。界面上的 32 条音色是它的参数补丁，用 `set_param` /
-  `apply_preset(params)` 调出；`builtin.synth.lead/.bass/.drums/.strings/.pad` 是老 id，仍可直接挂。
+- 内置合成器只有一个：`builtin.synth`。界面上的 36 条音色是它的参数补丁，用 `set_params(track, params, reset=true)` 调出；
+  MCP 侧先 `list_synth_presets` 取完整参数，或直接读界面选中后的 `track.instrument.params`；
+  `builtin.synth.lead/.bass/.drums/.strings/.pad` 是老 id，仍可直接挂。
+- **捏音色的完整知识在 `sound-design.md`**：参数的实际映射（cutoff 是归一值不是 Hz）、预听指标怎么读、
+  各风格配方、以及这台合成器做不到的事（没有调制矩阵 / 波表 / 真正的每副本立体声 unison）。
+  调音色前先 `aidaw_help("sound-design")`，不要靠猜。
 - **内置采样乐器**（随包内嵌，立即可用，不需要扫描/安装）：
 
   | id | 名称 | 特点 | 建议音域 |

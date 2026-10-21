@@ -312,8 +312,9 @@ R&B 的「反拍重音」不要用 `apply_swing` 做：把音写在 `and`（0.5 
 `builtin.synth_strings_1/2` / `builtin.synth_brass_1/2`）见 `plugin.md`：它们是独立插件 id，
 挂上即用，参数只有 `gain` / `tone`，不需要 `apply_preset`。
 
-下面这张表是**内置合成器** `builtin.synth` 的 32 条出厂音色参数补丁；用
-`apply_preset(track, params=…)` 把参数写进去；**新轨**上应用最干净，换音色时关键参数要写全。
+**内置合成器** `builtin.synth` 有 36 条出厂音色（9 类各 4 条）。MCP 侧用
+`list_synth_presets()` 取完整参数，再用 `set_params(track, params, reset=true)` 落地；
+换音色一定带 `reset=true`，否则上一条音色独有的参数会残留。下面是常用风格的速查。
 
 | 想要 | 关键参数（其余取默认） |
 | --- | --- |

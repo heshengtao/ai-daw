@@ -49,6 +49,14 @@ const { t } = useI18n();
 
 const SPECS: Record<string, ParamSpec> = Object.fromEntries(SYNTH_PARAMS.map((p) => [p.id, p]));
 
+/** 0/1 枚举参数在旋钮上的显示文字（旋钮仍然按 0/1 存）。 */
+const ENUM_TEXT: Record<string, Record<number, string>> = {
+  filterEnvMode: { 0: "synth.filterEnvMode.follow", 1: "synth.filterEnvMode.independent" },
+  lfoMode: { 0: "synth.lfoMode.global", 1: "synth.lfoMode.voice" },
+  pitchEnvDir: { 0: "synth.pitchEnvDir.down", 1: "synth.pitchEnvDir.up" },
+  oversample: { 0: "synth.oversample.off", 1: "synth.oversample.on" },
+};
+
 /** 拖动中的草稿：面板是受控的，没有草稿旋钮不会跟手。 */
 const drafts = ref<Record<string, number>>({});
 
@@ -81,6 +89,8 @@ watch(
 
 /** 旋钮的显示文本：按参数表的小数位与单位格式化。 */
 function display(id: string, value: number): string {
+  const enumKey = ENUM_TEXT[id]?.[Math.round(value)];
+  if (enumKey) return t(enumKey);
   const spec = SPECS[id];
   if (!spec) return value.toFixed(2);
   const digits = spec.digits ?? 2;
@@ -94,6 +104,7 @@ interface KnobDef {
   min: number;
   max: number;
   default: number;
+  step?: number;
   size?: number;
 }
 
@@ -105,6 +116,7 @@ function knob(id: string, size?: number): KnobDef {
     min: spec?.min ?? 0,
     max: spec?.max ?? 1,
     default: spec?.default ?? 0,
+    step: spec?.step,
     size,
   };
 }
@@ -127,13 +139,19 @@ const BASIC_IDS = [
 
 /** 高级区：按合成器信号链的顺序分区（振荡器 → FM → 噪声/位深 → 音高包络 → 滤波 → LFO）。 */
 const ADVANCED_GROUPS: { title: string; ids: string[] }[] = [
-  { title: "synth.osc", ids: ["sub", "pwm", "glide", "detune"] },
+  {
+    title: "synth.osc",
+    ids: ["sub", "pwm", "glide", "detune", "unison", "spread", "oversample"],
+  },
   { title: "synth.fm", ids: ["fm", "fmRatio"] },
   { title: "synth.noise", ids: ["noise", "crush"] },
-  { title: "synth.pitchEnv", ids: ["pitchEnv", "pitchDecay"] },
+  { title: "synth.pitchEnv", ids: ["pitchEnv", "pitchDecay", "pitchEnvDir"] },
   { title: "synth.hpf", ids: ["hpf"] },
-  { title: "synth.filter", ids: ["filterEnv", "keyFollow"] },
-  { title: "synth.lfo", ids: ["lfoRate", "lfoDelay", "lfoPitch", "lfoFilter"] },
+  {
+    title: "synth.filter",
+    ids: ["filterEnv", "keyFollow", "filterEnvMode", "fAttack", "fDecay", "fSustain", "fRelease"],
+  },
+  { title: "synth.lfo", ids: ["lfoRate", "lfoDelay", "lfoPitch", "lfoFilter", "lfoMode"] },
 ];
 
 /**
@@ -507,6 +525,7 @@ function pickPad(option: PresetOption): void {
                 :min="k.min"
                 :max="k.max"
                 :default="k.default"
+                :step="k.step"
                 :size="k.size"
                 :label="k.label"
                 :display="display(k.id, shown(k.id))"
@@ -542,6 +561,7 @@ function pickPad(option: PresetOption): void {
                       :min="k.min"
                       :max="k.max"
                       :default="k.default"
+                      :step="k.step"
                       :size="k.size"
                       :label="k.label"
                       :display="display(k.id, shown(k.id))"

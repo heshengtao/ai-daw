@@ -123,6 +123,11 @@ export const useProjectStore = defineStore("project", () => {
     return edit(() => api.setParams(track, finite));
   }
 
+  /** 应用一条音色记忆（一次事务：乐器 + 效果链 + 增益/声像）。 */
+  function applySoundMemory(id: string, track: number): Promise<void> {
+    return edit(() => api.applySoundMemory(id, track));
+  }
+
   // ---- 效果链 ----
 
   /** 在轨道效果链末尾追加一个效果器。 */
@@ -544,6 +549,7 @@ export const useProjectStore = defineStore("project", () => {
     moveEffect,
     setEffectParam,
     setEffectParams,
+    applySoundMemory,
     addClip,
     importAudio,
     addAudioClip,

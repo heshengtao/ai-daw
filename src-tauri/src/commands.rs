@@ -23,6 +23,7 @@ use ai_daw_plugin_api::ParamInfo;
 use crate::audio::{EditorSlot, TransportSnapshot};
 use crate::plugins::{build_registry_for_offline_render, uses_external_plugins, LoadWarnings};
 use crate::presets::Preset;
+use crate::sound_memories::{MemoryMeta, PluginSnapshot, SoundMemory, SoundMixer, SoundSnapshot};
 use crate::state::{with_editor_windows, AppState, EVENT_ENGINE, EVENT_EXPORT, EVENT_IMPORT};
 
 /// 撤销/重做之后返回的历史状态（让界面能立刻更新按钮可用性）。
@@ -106,7 +107,7 @@ fn run_all(
 /// **效果器按 plugin id 回写、而不是按链内下标**：结构性变更（增删 / 移动效果器）会在写回
 /// 之前就把下标挪了位，按键里的下标写回会串味。同一条轨道上出现多个同名效果器时，按出现
 /// 次序一一对应。
-fn capture_plugin_states(state: &AppState) {
+pub(crate) fn capture_plugin_states(state: &AppState) {
     let entries: Vec<((u64, PluginSlot), EditorHandle, String)> = {
         let handles = state.editor_handles.lock().unwrap();
         handles
@@ -233,8 +234,17 @@ pub(crate) fn run_agent_as(
 /// 以代理身份执行**一批**命令（**合成一个撤销步骤**）：用于一次产出多条轨道的 AI 动作
 /// （如音源分离一次生成鼓/贝斯/其他/人声四条分轨），一次撤销即可整体回退。
 pub(crate) fn run_agent_all(app: &tauri::AppHandle, commands: Vec<Command>) -> (Project, Vec<Event>) {
+    run_agent_all_as(app, Actor::Agent("mcp".into()), commands)
+}
+
+/// 同 [`run_agent_all`]，但由调用方决定署名（MCP 与内置写歌智能体都能用）。
+pub(crate) fn run_agent_all_as(
+    app: &tauri::AppHandle,
+    actor: Actor,
+    commands: Vec<Command>,
+) -> (Project, Vec<Event>) {
     let state = app.state::<AppState>();
-    run_all(app, &state, Actor::Agent("mcp".into()), commands)
+    run_all(app, &state, actor, commands)
 }
 
 /// 渲染一份快照所需的全部输入。
@@ -526,6 +536,7 @@ pub(crate) fn resize_audio_clips_for_transport(
 fn run_tempo(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
+    actor: Actor,
     command: Command,
     new_transport: Transport,
 ) -> Project {
@@ -533,16 +544,24 @@ fn run_tempo(
     let old = project.transport.clone();
     let mut commands = vec![command];
     commands.extend(resize_audio_clips_for_transport(&project, &old, &new_transport));
-    run_all(app, state, Actor::Human, commands).0
+    run_all(app, state, actor, commands).0
 }
 
 /// 设置速度（BPM）。
 #[tauri::command]
-pub fn set_tempo(app: tauri::AppHandle, state: State<'_, AppState>, bpm: f64) -> Project {
+pub fn set_tempo(app: tauri::AppHandle, bpm: f64) -> Project {
+    set_tempo_as(&app, Actor::Human, bpm)
+}
+
+/// 设置速度的共用实现（界面命令与 MCP 工具共用）。
+///
+/// 音频片段的「拍长」会跟着重算——与界面改 BPM 的行为完全一致，否则导出会与工程对不上。
+pub(crate) fn set_tempo_as(app: &tauri::AppHandle, actor: Actor, bpm: f64) -> Project {
+    let state = app.state::<AppState>();
     let bpm = if bpm.is_finite() { bpm.clamp(1.0, 1000.0) } else { 120.0 };
     let mut t = state.engine.lock().unwrap().project().transport.clone();
     t.tempo = bpm;
-    run_tempo(&app, &state, Command::SetTempo(bpm), t)
+    run_tempo(app, &state, actor, Command::SetTempo(bpm), t)
 }
 
 /// 一次性设置一条轨道上的多个参数——切换预设走的就是这条路。
@@ -649,6 +668,150 @@ pub(crate) fn apply_preset_agent_as(
     (project, events)
 }
 
+/// 从一条轨道抓音色快照：乐器 + 有序效果链 + 增益/声像。
+///
+/// 抓之前先抢救外部插件编辑器里的二进制状态，确保存下来的是用户**听到的**那份。
+pub(crate) fn sound_snapshot_for(
+    state: &AppState,
+    track: TrackId,
+) -> Result<SoundSnapshot, String> {
+    capture_plugin_states(state);
+    let engine = state.engine.lock().unwrap();
+    let project = engine.project();
+    let t = project
+        .tracks
+        .iter()
+        .find(|t| t.id == track)
+        .ok_or_else(|| format!("轨道 {} 不存在", track.0))?;
+    Ok(SoundSnapshot {
+        instrument: t.instrument.as_ref().map(PluginSnapshot::from_instance),
+        effects: t.effects.iter().map(PluginSnapshot::from_instance).collect(),
+        mixer: SoundMixer {
+            gain_db: t.mixer.gain_db,
+            pan: t.mixer.pan,
+        },
+        source_project: Some(project.name.clone()),
+        role: t.meta.as_ref().and_then(|m| m.role.clone()),
+    })
+}
+
+/// 应用一条音色记忆的**内核**：一次事务写回乐器、整条效果链、增益/声像。
+///
+/// 效果链是**替换**而不是叠加。插件二进制状态在事务后补写：`set_*_state` 不产生事件，
+/// 因此不进入撤销/重做重放——这是引擎现状，内置合成器/效果器只用参数，不受影响。
+pub(crate) fn apply_sound_memory_inner(
+    state: &AppState,
+    track: TrackId,
+    memory: &SoundMemory,
+    actor: Actor,
+) -> Result<(Project, Vec<Event>), String> {
+    capture_plugin_states(state);
+    let mut engine = state.engine.lock().unwrap();
+    if !engine.project().tracks.iter().any(|t| t.id == track) {
+        return Err(format!("轨道 {} 不存在", track.0));
+    }
+    let existing = engine
+        .project()
+        .tracks
+        .iter()
+        .find(|t| t.id == track)
+        .map_or(0, |t| t.effects.len());
+
+    let mut commands: Vec<Command> = Vec::new();
+    match &memory.instrument {
+        Some(inst) => {
+            commands.push(Command::SetTrackInstrument {
+                track,
+                plugin_id: inst.plugin_id.clone(),
+            });
+            for (param, value) in &inst.params {
+                if value.is_finite() {
+                    commands.push(Command::SetParam {
+                        track,
+                        param: param.clone(),
+                        value: *value,
+                    });
+                }
+            }
+        }
+        None => commands.push(Command::SetTrackInstrument {
+            track,
+            plugin_id: String::new(),
+        }),
+    }
+
+    for _ in 0..existing {
+        commands.push(Command::RemoveEffect { track, index: 0 });
+    }
+    for (index, fx) in memory.effects.iter().enumerate() {
+        commands.push(Command::AddEffect {
+            track,
+            plugin_id: fx.plugin_id.clone(),
+        });
+        for (param, value) in &fx.params {
+            if value.is_finite() {
+                commands.push(Command::SetEffectParam {
+                    track,
+                    index,
+                    param: param.clone(),
+                    value: *value,
+                });
+            }
+        }
+    }
+
+    if memory.mixer.gain_db.is_finite() {
+        commands.push(Command::SetGain {
+            track,
+            gain_db: memory.mixer.gain_db,
+        });
+    }
+    if memory.mixer.pan.is_finite() {
+        commands.push(Command::SetPan {
+            track,
+            pan: memory.mixer.pan,
+        });
+    }
+
+    let events = engine.execute_all(commands, actor);
+
+    if let Some(inst) = &memory.instrument {
+        let bytes = inst.state_bytes();
+        if !bytes.is_empty() {
+            engine.set_instrument_state(track, &inst.plugin_id, bytes);
+        }
+    }
+    for (index, fx) in memory.effects.iter().enumerate() {
+        let bytes = fx.state_bytes();
+        if !bytes.is_empty() {
+            engine.set_effect_state(track, index, bytes);
+        }
+    }
+
+    Ok((engine.project().clone(), events))
+}
+
+/// 应用一条音色记忆（代理入口）：执行 → 广播 → 同步音频线程。
+pub(crate) fn apply_sound_memory_agent_as(
+    app: &tauri::AppHandle,
+    actor: Actor,
+    track: TrackId,
+    memory: &SoundMemory,
+) -> Result<(Project, Vec<Event>), String> {
+    let state = app.state::<AppState>();
+    let (project, events) = apply_sound_memory_inner(&state, track, memory, actor)?;
+    for event in &events {
+        let _ = app.emit(EVENT_ENGINE, event);
+    }
+    state.audio.sync_events(&project, &events);
+    Ok((project, events))
+}
+
+/// 音色记忆库变更后通知前端刷新。
+pub(crate) fn notify_sound_memories(app: &tauri::AppHandle) {
+    let _ = app.emit(crate::state::EVENT_SOUND_MEMORIES, ());
+}
+
 /// 设置拍号；越界值由引擎归一化（分子 1..=32，分母吸附到 2 的幂）。
 #[tauri::command]
 pub fn set_time_signature(
@@ -664,12 +827,24 @@ pub fn set_time_signature(
 #[tauri::command]
 pub fn set_keyframe(
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
     beat: f64,
     tempo: f64,
     num: u8,
     den: u8,
 ) -> Project {
+    set_keyframe_as(&app, Actor::Human, beat, tempo, num, den)
+}
+
+/// 写入速度关键点的共用实现（界面命令与 MCP 工具共用）。
+pub(crate) fn set_keyframe_as(
+    app: &tauri::AppHandle,
+    actor: Actor,
+    beat: f64,
+    tempo: f64,
+    num: u8,
+    den: u8,
+) -> Project {
+    let state = app.state::<AppState>();
     let mut t = state.engine.lock().unwrap().project().transport.clone();
     if let Some(kf) = Transport::normalize_keyframe(Keyframe {
         beat,
@@ -679,15 +854,21 @@ pub fn set_keyframe(
     }) {
         t.upsert_keyframe(kf);
     }
-    run_tempo(&app, &state, Command::SetKeyframe { beat, tempo, num, den }, t)
+    run_tempo(app, &state, actor, Command::SetKeyframe { beat, tempo, num, den }, t)
 }
 
 /// 删除第 `beat` 拍的关键点。
 #[tauri::command]
-pub fn remove_keyframe(app: tauri::AppHandle, state: State<'_, AppState>, beat: f64) -> Project {
+pub fn remove_keyframe(app: tauri::AppHandle, beat: f64) -> Project {
+    remove_keyframe_as(&app, Actor::Human, beat)
+}
+
+/// 删除速度关键点的共用实现（界面命令与 MCP 工具共用）。
+pub(crate) fn remove_keyframe_as(app: &tauri::AppHandle, actor: Actor, beat: f64) -> Project {
+    let state = app.state::<AppState>();
     let mut t = state.engine.lock().unwrap().project().transport.clone();
     t.remove_keyframe(beat);
-    run_tempo(&app, &state, Command::RemoveKeyframe { beat }, t)
+    run_tempo(app, &state, actor, Command::RemoveKeyframe { beat }, t)
 }
 
 /// 设置音频片段的**播放速度**（`rate`，1.0 = 原速）与**升降调**（半音，0 = 不变）。
@@ -697,12 +878,24 @@ pub fn remove_keyframe(app: tauri::AppHandle, state: State<'_, AppState>, beat: 
 #[tauri::command]
 pub fn set_clip_rate(
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
     track: u64,
     clip: u64,
     rate: f64,
     pitch_semitones: f64,
 ) -> Project {
+    set_clip_rate_as(&app, Actor::Human, track, clip, rate, pitch_semitones)
+}
+
+/// 设置片段速度 / 升降调的共用实现（界面命令与 MCP 工具共用）。
+pub(crate) fn set_clip_rate_as(
+    app: &tauri::AppHandle,
+    actor: Actor,
+    track: u64,
+    clip: u64,
+    rate: f64,
+    pitch_semitones: f64,
+) -> Project {
+    let state = app.state::<AppState>();
     let track_id = TrackId(track);
     let clip_id = ClipId(clip);
     let project = state.engine.lock().unwrap().project().clone();
@@ -727,7 +920,7 @@ pub fn set_clip_rate(
             }
         }
     }
-    run_all(&app, &state, Actor::Human, commands).0
+    run_all(app, &state, actor, commands).0
 }
 
 /// 裁剪 / 移动一个片段：`start` / `length` 是新的起点与拍长。
@@ -738,12 +931,24 @@ pub fn set_clip_rate(
 #[tauri::command]
 pub fn trim_clip(
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
     track: u64,
     clip: u64,
     start: f64,
     length: f64,
 ) -> Result<Project, String> {
+    trim_clip_as(&app, Actor::Human, track, clip, start, length)
+}
+
+/// 裁剪片段的共用实现（界面命令与 MCP 工具共用）。
+pub(crate) fn trim_clip_as(
+    app: &tauri::AppHandle,
+    actor: Actor,
+    track: u64,
+    clip: u64,
+    start: f64,
+    length: f64,
+) -> Result<Project, String> {
+    let state = app.state::<AppState>();
     let track_id = TrackId(track);
     let clip_id = ClipId(clip);
     let project = state.engine.lock().unwrap().project().clone();
@@ -811,7 +1016,7 @@ pub fn trim_clip(
     }
     commands.push(Command::MoveClip { track: track_id, clip: clip_id, start });
     commands.push(Command::ResizeClip { track: track_id, clip: clip_id, length });
-    Ok(run_all(&app, &state, Actor::Human, commands).0)
+    Ok(run_all(app, &state, actor, commands).0)
 }
 
 /// 片段能「展开」到的范围（拍）：左端 = 素材第一帧所在的位置，右端 = 素材最后一帧所在的位置。
@@ -867,12 +1072,22 @@ pub fn clip_bounds(
 #[tauri::command]
 pub fn new_project(
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
     track_names: Option<Vec<String>>,
     tempo: Option<f64>,
 ) -> Project {
+    new_project_as(&app, Actor::Human, track_names, tempo)
+}
+
+/// 新建工程的共用实现（界面署名 `Human`，MCP 用代理署名）。
+pub(crate) fn new_project_as(
+    app: &tauri::AppHandle,
+    actor: Actor,
+    track_names: Option<Vec<String>>,
+    tempo: Option<f64>,
+) -> Project {
+    let state = app.state::<AppState>();
     // 新建会清空当前工程：先把它收进历史，用户随时能回去。
-    remember_current(&app, &state);
+    remember_current(app, &state);
     let mut commands = vec![Command::NewProject { name: "untitled".into(), track_names }];
     // 设置里可配的「新工程默认速度」：与模板默认 120 不同才补一条命令（同一个撤销步骤）。
     if let Some(bpm) = tempo {
@@ -880,7 +1095,7 @@ pub fn new_project(
             commands.push(Command::SetTempo(bpm));
         }
     }
-    let project = run_all(&app, &state, Actor::Human, commands).0;
+    let project = run_agent_all_as(app, actor, commands).0;
     // 刚新建的工程没有任何未保存的改动，还没有对应的文件。
     state.engine.lock().unwrap().mark_saved();
     state.set_session_path(None);
@@ -1727,29 +1942,28 @@ pub fn transport_set_metronome(state: State<'_, AppState>, on: bool) -> Result<(
 
 /// 把当前工程保存为 JSON 文件，返回写入的绝对路径。
 #[tauri::command]
-pub async fn save_project(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<String, String> {
+pub async fn save_project(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || save_project_impl(&app, &path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 保存工程的同步实现（界面命令与 MCP 工具共用）。
+pub(crate) fn save_project_impl(app: &tauri::AppHandle, path: &str) -> Result<String, String> {
+    let state = app.state::<AppState>();
     // 落盘前先把插件实例的内部状态抢救进工程，否则存出去的工程会丢掉外部插件的补丁。
     capture_plugin_states(&state);
     // 覆盖已有文件前，先把旧版本留进历史（防止「保存坏了的一版」把上一版顶掉）。
-    remember_file_version(&app, &path);
+    remember_file_version(app, path);
     let project = { state.engine.lock().unwrap().project().clone() };
     let json = serde_json::to_string_pretty(&project).map_err(|e| e.to_string())?;
-    let written = tauri::async_runtime::spawn_blocking(move || {
-        std::fs::write(&path, json).map_err(|e| e.to_string())?;
-        Ok::<String, String>(path)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    std::fs::write(path, json).map_err(|e| e.to_string())?;
     // 写盘成功：当前工程成为新的「已保存」基线，并记下文件路径。
     state.engine.lock().unwrap().mark_saved();
-    state.set_session_path(Some(written.clone()));
+    state.set_session_path(Some(path.to_string()));
     // 刚保存的这一版也进历史：界面列表里能直接看到已保存的工程。
-    remember_snapshot(&app, &state);
-    Ok(written)
+    remember_snapshot(app, &state);
+    Ok(path.to_string())
 }
 
 /// 当前工程对应的文件路径（尚未保存过时为 `null`）。
@@ -1813,14 +2027,19 @@ pub fn delete_project_history(app: tauri::AppHandle, id: String) -> Result<(), S
 /// 恢复前先把**当前**工程收进历史，所以来回切换不会丢东西；被恢复的那份则从列表里取出
 /// （它已经是当前工程了，再留在列表里只会制造重复项）。
 #[tauri::command]
-pub fn restore_project_history(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    id: String,
+pub fn restore_project_history(app: tauri::AppHandle, id: String) -> Result<Project, String> {
+    restore_project_history_impl(&app, &id)
+}
+
+/// 从历史恢复工程的同步实现（界面命令与 MCP 工具共用）。
+pub(crate) fn restore_project_history_impl(
+    app: &tauri::AppHandle,
+    id: &str,
 ) -> Result<Project, String> {
-    let dir = crate::history_dir(&app).ok_or_else(|| "拿不到应用配置目录".to_string())?;
-    let (snapshot, entry) = crate::history::take(&dir, &id)?;
-    remember_current(&app, &state);
+    let state = app.state::<AppState>();
+    let dir = crate::history_dir(app).ok_or_else(|| "拿不到应用配置目录".to_string())?;
+    let (snapshot, entry) = crate::history::take(&dir, id)?;
+    remember_current(app, &state);
 
     let restored = normalize_project(snapshot.project);
     let saved = normalize_project(snapshot.saved);
@@ -1831,7 +2050,7 @@ pub fn restore_project_history(
     }
     state.audio.load(&restored);
     // 整个工程被替换：已开的插件窗口一律作废。
-    close_all_plugin_windows(&app, &state);
+    close_all_plugin_windows(app, &state);
     state.set_session_path(entry.path);
     Ok(restored)
 }
@@ -1873,22 +2092,25 @@ fn normalize_project(mut project: Project) -> Project {
 
 /// 从 JSON 文件导入工程：替换当前工程并清空历史（导入是一个新的起点）。
 #[tauri::command]
-pub async fn open_project(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<Project, String> {
-    let path_for_session = path.clone();
-    let text = tauri::async_runtime::spawn_blocking(move || std::fs::read_to_string(&path))
+pub async fn open_project(app: tauri::AppHandle, path: String) -> Result<Project, String> {
+    tauri::async_runtime::spawn_blocking(move || open_project_impl(&app, &path))
         .await
         .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+}
+
+/// 打开工程的同步实现（界面命令与 MCP 工具共用）。
+pub(crate) fn open_project_impl(
+    app: &tauri::AppHandle,
+    path: &str,
+) -> Result<Project, String> {
+    let state = app.state::<AppState>();
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let project: Project =
         serde_json::from_str(&text).map_err(|e| format!("不是有效的工程文件：{e}"))?;
     let project = normalize_project(project);
 
     // 打开另一个工程同样会丢弃当前工程：先记进历史。
-    remember_current(&app, &state);
+    remember_current(app, &state);
     let snapshot = {
         let mut engine = state.engine.lock().unwrap();
         *engine = Engine::from_project(project);
@@ -1896,9 +2118,9 @@ pub async fn open_project(
     };
     state.audio.load(&snapshot);
     // 整个工程被替换：已开的插件窗口一律作废（哪怕轨道 id 碰巧撞上，内容也换了）。
-    close_all_plugin_windows(&app, &state);
+    close_all_plugin_windows(app, &state);
     // 打开的工程即为「已保存」状态，并记下它的文件路径。
-    state.set_session_path(Some(path_for_session));
+    state.set_session_path(Some(path.to_string()));
     Ok(snapshot)
 }
 
@@ -2413,6 +2635,16 @@ pub fn record_start(
     start: f64,
     device: Option<String>,
 ) -> Result<(), String> {
+    record_start_impl(&state, track, start, device)
+}
+
+/// 开始录音的共用实现（界面命令与 MCP 工具共用）。
+pub(crate) fn record_start_impl(
+    state: &AppState,
+    track: u64,
+    start: f64,
+    device: Option<String>,
+) -> Result<(), String> {
     // 录音前挂载输入流：这里**要等**确认，设备打不开才好立刻提示。
     state.audio.arm_input(device, true)?;
     state.audio.start_recording()?;
@@ -2423,10 +2655,18 @@ pub fn record_start(
 
 /// 结束录音：停带、写 WAV、把片段挂到轨道上（一个撤销步骤）。没录到内容返回 `None`。
 #[tauri::command]
-pub async fn record_stop(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
+pub async fn record_stop(app: tauri::AppHandle) -> Result<Option<Project>, String> {
+    tauri::async_runtime::spawn_blocking(move || record_stop_as(&app, Actor::Human))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 结束录音的共用实现（界面署名 `Human`，MCP 用代理署名）。
+pub(crate) fn record_stop_as(
+    app: &tauri::AppHandle,
+    actor: Actor,
 ) -> Result<Option<Project>, String> {
+    let state = app.state::<AppState>();
     let _ = state.audio.send(TransportCommand::Pause);
     let target = state.take_recording();
     let captured = state.audio.stop_recording()?;
@@ -2438,18 +2678,14 @@ pub async fn record_stop(
     }
 
     // 落盘到「应用数据目录 /recordings/rec-<epochms>.wav」。
-    let path = recording_path(&app)?;
+    let path = recording_path(app)?;
     let audio = Arc::new(audio);
-    let for_write = Arc::clone(&audio);
-    let path_for_write = path.clone();
     let rate = audio.sample_rate.round().max(1.0) as u32;
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut buffer = AudioBuffer::silence(for_write.channels, for_write.frames());
-        buffer.data_mut().copy_from_slice(&for_write.samples);
-        ai_daw_engine::wav::write_wav(&path_for_write, &buffer, rate).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    {
+        let mut buffer = AudioBuffer::silence(audio.channels, audio.frames());
+        buffer.data_mut().copy_from_slice(&audio.samples);
+        ai_daw_engine::wav::write_wav(&path, &buffer, rate).map_err(|e| e.to_string())?;
+    }
 
     // 免去立刻重解码，并追加一条可撤销的音频片段。
     state.assets.insert(&path, Arc::clone(&audio));
@@ -2458,16 +2694,16 @@ pub async fn record_stop(
         let engine = state.engine.lock().unwrap();
         natural_length_beats(engine.project(), start, audio.frames() as f64 / audio.sample_rate)
     };
-    Ok(Some(run(
-        &app,
-        &state,
+    Ok(Some(run_agent_as(
+        app,
+        actor,
         Command::AddAudioClip {
             track: target.track,
             start,
             length,
             source: AudioSource { path, offset_frames: 0, frames: Some(audio.frames() as u64), rate: 1.0, pitch_semitones: 0.0 },
         },
-    )))
+    ).0))
 }
 
 /// 录音文件路径：应用数据目录下的 `recordings/rec-<epochms>.wav`。
@@ -3126,6 +3362,104 @@ pub fn delete_preset(state: State<'_, AppState>, id: String) -> Result<(), Strin
     state.presets.lock().unwrap().remove(&id)
 }
 
+// ---------------------------------------------------------------------------
+// 音色记忆库（跨工程）
+// ---------------------------------------------------------------------------
+
+/// 全部音色记忆的摘要（不含参数/状态，界面列表用）。
+#[tauri::command]
+pub fn list_sound_memories(
+    state: State<'_, AppState>,
+) -> Vec<crate::sound_memories::SoundMemorySummary> {
+    state.sound_memories.lock().unwrap().summaries()
+}
+
+/// 把当前轨道的音色链存成一条记忆；传 `id` 表示覆盖该条记忆的内容。
+#[tauri::command]
+pub fn save_sound_memory(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    name: String,
+    description: Option<String>,
+    tags: Option<Vec<String>>,
+    id: Option<String>,
+) -> Result<crate::sound_memories::SoundMemorySummary, String> {
+    let snapshot = sound_snapshot_for(&state, TrackId(track))?;
+    let meta = MemoryMeta {
+        name,
+        description: description.unwrap_or_default(),
+        tags: tags.unwrap_or_default(),
+        role: snapshot.role.clone(),
+    };
+    let memory = {
+        let mut store = state.sound_memories.lock().unwrap();
+        match id {
+            Some(id) => store.replace(&id, meta, snapshot)?,
+            None => store.create(meta, snapshot)?,
+        }
+    };
+    notify_sound_memories(&app);
+    Ok(memory.summary())
+}
+
+/// 只修改一条记忆的元数据（名称/描述/标签/分工），不动声音快照。
+#[tauri::command]
+pub fn update_sound_memory(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    name: Option<String>,
+    description: Option<String>,
+    tags: Option<Vec<String>>,
+    role: Option<String>,
+) -> Result<crate::sound_memories::SoundMemorySummary, String> {
+    let memory = state.sound_memories.lock().unwrap().update_metadata(
+        &id,
+        name.as_deref(),
+        description.as_deref(),
+        tags,
+        role.as_deref(),
+    )?;
+    notify_sound_memories(&app);
+    Ok(memory.summary())
+}
+
+/// 删除一条音色记忆。
+#[tauri::command]
+pub fn delete_sound_memory(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    state.sound_memories.lock().unwrap().remove(&id)?;
+    notify_sound_memories(&app);
+    Ok(())
+}
+
+/// 把一条音色记忆应用到轨道（一次事务：乐器 + 效果链 + 增益/声像）。
+#[tauri::command]
+pub fn apply_sound_memory(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    track: u64,
+) -> Result<Project, String> {
+    let memory = state
+        .sound_memories
+        .lock()
+        .unwrap()
+        .get(&id)
+        .ok_or_else(|| format!("音色记忆不存在：{id}"))?;
+    let (project, events) =
+        apply_sound_memory_inner(&state, TrackId(track), &memory, Actor::Human)?;
+    for event in &events {
+        let _ = app.emit(EVENT_ENGINE, event);
+    }
+    state.audio.sync_events(&project, &events);
+    Ok(project)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3249,5 +3583,109 @@ mod tests {
         // 已消耗的素材也除以 rate：偏移 2 s 素材在 rate=2 下只占 1 s 时间轴。
         let (min2, _) = clip_bounds_for(&map, 4.0, 96_000, 384_000, 48_000.0, 2.0);
         assert!((min2 - 2.0).abs() < 1e-9, "第 4 拍（2 s）左移 1 s → 第 2 拍，实际 {min2}");
+    }
+
+    /// 音色记忆：从轨道抓快照 → 应用回去，乐器/效果链/增益声像逐值一致，且只占一个撤销步。
+    #[test]
+    fn sound_memory_snapshot_and_apply_roundtrip() {
+        use std::collections::BTreeMap;
+
+        let state = AppState::new("t");
+        let track = {
+            let engine = state.engine.lock().unwrap();
+            engine.project().tracks[0].id
+        };
+        {
+            let mut engine = state.engine.lock().unwrap();
+            let events = engine.execute_all(
+                vec![
+                    Command::SetTrackInstrument {
+                        track,
+                        plugin_id: "builtin.synth".into(),
+                    },
+                    Command::SetParam {
+                        track,
+                        param: "attack".into(),
+                        value: 0.25,
+                    },
+                    Command::AddEffect {
+                        track,
+                        plugin_id: "builtin.reverb".into(),
+                    },
+                    Command::SetEffectParam {
+                        track,
+                        index: 0,
+                        param: "mix".into(),
+                        value: 0.4,
+                    },
+                    Command::AddEffect {
+                        track,
+                        plugin_id: "builtin.delay".into(),
+                    },
+                    Command::SetGain {
+                        track,
+                        gain_db: -3.0,
+                    },
+                    Command::SetPan { track, pan: 0.2 },
+                ],
+                Actor::Human,
+            );
+            assert!(!events.is_empty());
+        }
+
+        let snapshot = sound_snapshot_for(&state, track).unwrap();
+        assert_eq!(
+            snapshot.instrument.as_ref().unwrap().plugin_id,
+            "builtin.synth"
+        );
+        assert_eq!(snapshot.instrument.as_ref().unwrap().params["attack"], 0.25);
+        assert_eq!(snapshot.effects.len(), 2);
+        assert_eq!(snapshot.effects[0].plugin_id, "builtin.reverb");
+        assert_eq!(snapshot.effects[1].plugin_id, "builtin.delay");
+        assert_eq!(snapshot.mixer.gain_db, -3.0);
+        assert_eq!(snapshot.mixer.pan, 0.2);
+
+        let memory = SoundMemory {
+            id: "s1".into(),
+            name: "test".into(),
+            description: String::new(),
+            tags: Vec::new(),
+            role: None,
+            instrument: Some(PluginSnapshot {
+                plugin_id: "builtin.synth".into(),
+                params: BTreeMap::from([("cutoff".into(), 900.0)]),
+                state: String::new(),
+            }),
+            effects: vec![PluginSnapshot {
+                plugin_id: "builtin.chorus".into(),
+                params: BTreeMap::from([("mix".into(), 0.5)]),
+                state: String::new(),
+            }],
+            mixer: SoundMixer {
+                gain_db: -9.0,
+                pan: -0.5,
+            },
+            source_project: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let depth_before = state.engine.lock().unwrap().undo_depth();
+        let (project, events) =
+            apply_sound_memory_inner(&state, track, &memory, Actor::Human).unwrap();
+        assert!(!events.is_empty());
+        assert_eq!(state.engine.lock().unwrap().undo_depth(), depth_before + 1);
+
+        let t = project.tracks.iter().find(|t| t.id == track).unwrap();
+        assert_eq!(t.instrument.as_ref().unwrap().plugin_id, "builtin.synth");
+        assert_eq!(t.instrument.as_ref().unwrap().params["cutoff"], 900.0);
+        assert_eq!(t.effects.len(), 1, "旧效果链必须被整体替换");
+        assert_eq!(t.effects[0].plugin_id, "builtin.chorus");
+        assert_eq!(t.effects[0].params["mix"], 0.5);
+        assert_eq!(t.mixer.gain_db, -9.0);
+        assert_eq!(t.mixer.pan, -0.5);
+
+        // 不存在的轨道必须明确报错，不能静默成功。
+        assert!(apply_sound_memory_inner(&state, TrackId(9999), &memory, Actor::Human).is_err());
     }
 }

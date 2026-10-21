@@ -1,6 +1,6 @@
 ---
 name: aidaw
-description: 通过内嵌 MCP 工具或 aidaw 命令行操作正在运行的 AI DAW——读写工程、轨道、片段、音符、批量编曲（转调/量化/摇摆/人性化/和弦分析）、乐理与曲风配方（音阶/调式/和弦进行/鼓谱/配器）、内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）、混音（增益/声像/发送/自动化）、传输播放、音频导入与录音、响度与频谱分析、导出 WAV、扫描插件。凡用户要求编曲、分析曲风、建轨、写音符、改和弦、量化节奏、调混音、录音、分析或导出音频时使用。
+description: 通过内嵌 MCP 工具或 aidaw 命令行操作正在运行的 AI DAW——读写工程、保存/打开/新建与历史快照、轨道、片段、音符、批量编曲（转调/量化/摇摆/人性化/和弦分析）、乐理与曲风配方（音阶/调式/和弦进行/鼓谱/配器）、内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）、内置合成器音色设计（捏音色/调参数/离线预听）、跨工程音色记忆库（保存/检索/应用整条音色链）、效果器参数与效果链、混音（增益/声像/发送/自动化）、传输播放、音频导入与录音、音频转 MIDI/降噪/音源分离、响度与频谱分析、导出 WAV、扫描插件。凡用户要求编曲、分析曲风、建轨、写音符、改和弦、量化节奏、调混音、捏音色、录音、转 MIDI、降噪、分析或导出音频时使用。
 license: Apache-2.0
 ---
 
@@ -21,6 +21,7 @@ license: Apache-2.0
 1. **逐个 MCP 工具**（`get_project` / `add_track` / …）：与下面的域一一对应，工具名即能力。
 2. **网关**（推荐给大模型）：`aidaw_help(topic)` 按域取回文档（就是这里）；`aidaw_call(op, args)`
    用「操作名 + JSON 参数」执行——固定两条工具，能力按需拉取。
+   例：`aidaw_call(op="set_effect_params", args={"track":1,"index":0,"params":{"mix":0.3}})`。
 3. **命令行**：`aidaw` 是这些工具的**薄客户端**，命令面 = 工具面。
 
 ### 定位 App 与 CLI（**不用搜索**）
@@ -70,16 +71,18 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 
 | 域 | 加载 | 覆盖 |
 | --- | --- | --- |
-| 工程 | `references/project.md` | 读工程（全量）、**分页读片段音符**、速度/拍号、撤销/重做、**工程元数据（和弦表 / 段落 / 轨道分工与音域）** |
+| 工程 | `references/project.md` | 读工程（全量）、**分页读片段音符**、**保存 / 打开 / 新建 / 重命名、历史快照恢复**、速度/拍号/**速度关键点**、撤销/重做、**工程元数据（和弦表 / 段落 / 轨道分工与音域）** |
 | 轨道 | `references/track.md` | 增删改轨道、挂/换乐器、效果链 |
-| 片段 | `references/clip.md` | MIDI / 音频片段的增删改、**移动、缩放、切分、复制、合并** |
+| 片段 | `references/clip.md` | MIDI / 音频片段的增删改、**移动、裁剪、变速/升降调、缩放、切分、复制、合并** |
 | 音符 | `references/note.md` | 钢琴卷帘里的音符与力度 / 音量、**音高表达（推弦 / 揉弦 / 滑音）** |
 | 编曲 | `references/composition.md` | **批量改音符（一个撤销步）、量化 / 摇摆 / 人性化、音域折叠、节奏统计、半音冲突、和弦分析** |
 | 混音 | `references/mix.md` | 增益/声像/静音/独奏/总输出、**发送 → 总线**、**自动化** |
-| 音频 | `references/audio.md` | 导入音频、波形、**录音** |
+| 音频 | `references/audio.md` | 导入音频、波形、**录音（开始 / 结束 / 选输入设备）**、**音频转 MIDI、降噪、音源分离** |
 | 传输 | `references/transport.md` | 播放 / 暂停 / 停止 / 定位 / 循环 |
 | 分析导出 | `references/analysis.md` | 渲染预览、响度 / 频谱分析、导出 WAV |
-| 插件 | `references/plugin.md` | **按分类与音色描述挑乐器/效果器**、**内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）**、参数表、效果链、用户预设 |
+| 插件 | `references/plugin.md` | **按分类与音色描述挑乐器/效果器**、**重扫插件**、**内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）**、参数表、**效果器参数与顺序**、**用户预设（列表 / 新增 / 覆盖 / 删除）** |
+| 音色设计 | `references/sound-design.md` | **内置合成器捏音色**：参数语义、`preview_synth` 预听闭环、**36 条出厂音色（`list_synth_presets`）**、风格配方、独立滤波包络 / 每声部 LFO / unison / 过采样 |
+| 音色记忆 | `references/sound-memory.md` | **跨工程保存 / 检索 / 应用整条音色链**；用户明确要求或确认后才保存，默认不自动存 |
 | 乐理 | `references/theory.md` | MIDI 音高、音阶/调式、和弦与进行、声部连接、音域、旋律写作 |
 | 节奏 | `references/rhythm.md` | 拍/网格换算、GM 鼓映射、`builtin.drums` 原声鼓组、鼓型、力度/量化/swing/人性化 |
 | 曲风 | `references/genres.md` | 14 类曲风的 BPM/拍号/和声/鼓型/贝斯/配器/结构/混音配方 |
@@ -108,7 +111,8 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 1. `references/project.md`：`get_project` 看清现状（轨道 id、片段 id、速度、拍号）。
 2. `references/genres.md` + `theory.md` + `rhythm.md`：定风格卡、和弦谱、鼓型与 MIDI 设计。
 3. `references/track.md`：`add_track` 建轨 → 先 `list_plugins`（读分类与音色描述）再
-   `set_track_instrument` 选音色 → `set_track_meta` 写 role/音区。
+   `set_track_instrument` 选音色 → `set_track_meta` 写 role/音区。挂的是 `builtin.synth` 且需要
+   定制音色时，先读 `references/sound-design.md`，用 `preview_synth` 试、`set_params` 落地。
 4. `references/clip.md`：`add_clip` 画片段（`move_clip` / `resize_clip` / `split_clip` / `duplicate_clip` 调结构）。
 5. `references/composition.md` + `references/note.md`：`add_notes` **一次写完一个乐句**
    → `quantize_notes` / `apply_swing` 定节奏 → `set_project_harmony` 写和弦 → `analyze_harmony` 查错音。
@@ -118,6 +122,9 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 
 ## 约定与坑
 
+- **音色记忆默认不保存**：只有用户明确说「记住这个音色」，或你问过且用户确认后，才
+  `save_sound_memory`。用户表达满意时可以问一次，别反复追问；**绝不自动删除**。
+  用户要某类音色时，先 `list_sound_memories(query=...)` 查他存过的。
 - **先读后写**：`get_project` 拿到的 id 才是真相；`add_track` / `add_clip` / `add_note` 会在返回文本里
   给出新建对象的 id，下一步要用它。
 - **挑音色先看目录**：插件名只是型号（`JC303` 是 TB-303 克隆的**单音酸性贝斯**，不是普通合成器）。
@@ -125,6 +132,12 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
   `set_track_instrument` / `add_effect` 也接受名字，但**别凭名字猜音色**——认不出的条目会自己说明「未收录」。
 - **批量优先，别一条条加**：写一个乐句用 `add_notes`（一次事务 = 一个撤销步），不要循环 `add_note`；
   改一批音符用 `update_notes` / `transpose_notes`，别删了重加（删了 id 就变了）。
+- **捏音色先预听、再批量落地**：先 `list_synth_presets` 看 36 条出厂音色（或按类别/关键词筛），
+  用 `preview_synth`（离线渲染一个音，返回频谱重心 / 平坦度 / 波峰因数 / 分段能量，不写工程）
+  反复比较，满意后用 **`set_params`（一次事务）** 写入，别循环 `set_param`。换音色带
+  `reset: true`，否则上一条音色的参数会残留。参数语义与配方见 `references/sound-design.md`。
+- **`apply_preset` 不是「只调音色」**：它的 `effects` 是**整体替换**，不传就清空整条效果链。
+  只改乐器参数一律用 `set_params`。
 - **批量返回的 `notes` 只有前 32 个**：那是摘要，不是全量。`get_project` 是全量；要逐音核对
   大工程用 `get_clip_notes(track, clip, offset?, limit?, range?)` 分页读。
 - **倚音/装饰音**：没有独立字段，用「短 `duration`（0.04–0.08 拍）+ 负 `offset`」写；主音留在

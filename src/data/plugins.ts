@@ -4,9 +4,11 @@
  * 外部插件（VST3 / CLAP）不在这里——它们由 Tauri 后端扫描得到，见 `stores/plugins.ts`。
  * 界面侧**唯一**的插件数据源是那个 store：它把这里的内置音色与扫描结果合并成一份清单。
  *
- * 内置合成器的「预设」是同一套 DSP 配不同包络，但它们是各自独立的插件 id
- * （见 `crates/engine/src/registry.rs` 的 `BUILTIN_PRESETS`）——所以这里就是一条条真实的音色。
+ * 内置合成器的「预设」是同一套 DSP 配不同参数；其中 5 条在引擎注册表里有独立 id
+ * （见 `crates/engine/src/registry.rs` 的 `BUILTIN_PRESETS`），其余 31 条只是参数补丁。
  */
+import factoryPresets from "./synth-factory-presets.json";
+
 export type PluginKind = "instrument" | "effect";
 
 export interface PluginInfo {
@@ -68,23 +70,30 @@ export const EQ_ID = "builtin.eq";
  * 这些 id 曾经是独立的插件条目（`builtin.synth.lead` 等）。现在它们只是「内置合成器的一组
  * 参数」：插件清单里只留内置合成器一条，切预设即切音色。
  *
- * 其中**前四条**（lead / pluck / bass / pad）在引擎里仍然按原 id 注册
- * （老工程照旧能加载、听感不变，见 `registry.rs::BUILTIN_PRESETS`），所以它们的数值必须与
- * 那边保持一致；后 20 条是新加的音色，只存在于界面这一层。
+ * 其中 5 条（8-bit 主音 / 低音 / 底鼓 / 弦乐 / 铺底）在引擎里仍然按原 id 注册
+ * （老工程照旧能加载，见 `registry.rs::BUILTIN_PRESETS`），所以它们的数值必须与那边一致；
+ * 其余 31 条只存在于界面这一层。
  */
 export interface FactoryPreset {
-  /** 稳定 id；前四条同时也是老的插件 id（见 `LEGACY_SYNTH_IDS`）。 */
+  /** 稳定 id；其中 5 条同时也是老的插件 id（见 `ENGINE_PRESET_IDS`）。 */
   id: string;
+  /** i18n key（界面显示用）。 */
   name: string;
+  /** i18n key（界面显示用）。 */
   note: string;
-  /** 类别 slug：8bit | guitar | bass | drums | strings | winds | pad | fx（映射为 i18n 键 presetCategory.<slug>）。 */
+  /** 给 MCP 的中文名快照（界面不用；由 `synth-factory-presets.json` 提供）。 */
+  label?: string;
+  /** 给 MCP 的中文一句话描述（界面不用）。 */
+  description?: string;
+  /** 类别 slug：8bit | epiano | guitar | bass | drums | strings | winds | pad | fx（映射为 i18n 键 presetCategory.<slug>）。 */
   category: string;
   params: Record<string, number>;
 }
 
 /**
- * 32 条出厂预设：**8 类各 4 条**，8-bit 是第一类。
+ * 36 条出厂预设：**9 类各 4 条**。
  *
+ * 数据在 `synth-factory-presets.json`：前端与 Rust/MCP **共用同一份**，避免两边的参数漂移。
  * 每条都是**补丁**（只列改过的参数），未列出的取 `SYNTH_DEFAULTS`；`wave` 一律显式写出，
  * 免得将来改默认波形时听感跟着漂。
  *
@@ -93,469 +102,11 @@ export interface FactoryPreset {
  *
  * 其中 5 条（8-bit 主音 / 低音 / 底鼓 / 弦乐 / 铺底）在引擎注册表里有同名条目，供**默认分轨模板**
  * 直接挂上；它们的 id 与数值必须与 `crates/engine/src/registry.rs::BUILTIN_PRESETS` 完全一致。
- * 其余 27 条只活在界面层：轨道始终挂在 `builtin.synth` 上，只记参数差异。
+ * 其余 31 条只活在界面层：轨道始终挂在 `builtin.synth` 上，只记参数差异。
  */
-export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
-  // ---- 8-bit 键盘（第一类）----
-  //
-  // 依据 NES 2A03（RP2A03）硬件的实际规格，不靠猜：
-  // - 两个脉冲通道的**占空比固定为 12.5% / 25% / 50% / 75%**（见 nesdev wiki "APU Pulse"）。
-  //   本合成器的 `pwm` 映射是 `占空比 = 0.5 + (pwm-0.5)*0.9`，所以四个占空比对应
-  //   pwm = 0.083 / 0.222 / 0.5 / 0.778——之前的 0.125/0.25 并不是硬件值。
-  // - **没有滤波器**：所以 cutoff 开到 1（≈18 kHz，等于旁通）、resonance / filterEnv 全 0。
-  // - 一个三角波通道（用于低音与旋律主干），没有占空比概念。
-  // - 音量是 4 bit、包络按 **60 Hz 帧**推进（FamiTracker 的乐器包络就是帧数）：
-  //   下面把帧数换算成秒（1 帧 ≈ 16.7 ms）写进 ADSR。
-  // - 硬件**不量化波形**，所以这里的 crush 一律为 0（早先拿它当「8 bit 味道」是错的，
-  //   而且旧实现是降采样，会引入大量混叠）。
-  // - 主音带**延迟颤音**（起音后才起振的 vibrato），这是芯片音乐主音的标志性奏法。
-  {
-    id: "builtin.synth.lead",
-    name: "preset.bit.lead.name",
-    note: "preset.bit.lead.note",
-    category: "8bit",
-    params: {
-      gain: 0.45, wave: 1, pwm: 0.222, attack: 0.002, decay: 0.25, sustain: 0.6, release: 0.08,
-      cutoff: 1.0, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.0,
-      // 25% 占空比的脉冲均值为 -0.5：一阶高通（约 41 Hz）按真机那样把直流耦合掉，
-      // 否则包络一起伏就是「砰」的一声，还白吃动态余量。
-      hpf: 0.15,
-      lfoRate: 0.8, lfoDelay: 0.35, lfoPitch: 0.16,
-    },
-  },
-  {
-    id: "builtin.synth.bit.chord",
-    name: "preset.bit.chord.name",
-    note: "preset.bit.chord.note",
-    category: "8bit",
-    params: {
-      // 50% 占空比（标准方波）+ 轻微失谐：两个脉冲通道齐奏的厚度。
-      gain: 0.5, wave: 1, pwm: 0.5, detune: 0.15, attack: 0.002, decay: 0.12, sustain: 0.3,
-      release: 0.06, cutoff: 1.0, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.0,
-    },
-  },
-  {
-    id: "builtin.synth.bit.arp",
-    name: "preset.bit.arp.name",
-    note: "preset.bit.arp.note",
-    category: "8bit",
-    params: {
-      // 12.5% 占空比：最薄最「芯片」的那个音色，配极短包络（约 3 帧）做琶音。
-      gain: 0.45, wave: 1, pwm: 0.083, attack: 0.001, decay: 0.05, sustain: 0.0, release: 0.03,
-      cutoff: 1.0, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.0,
-      // 12.5% 占空比直流更大（均值 -0.75），同样耦合掉。
-      hpf: 0.15,
-    },
-  },
-  {
-    id: "builtin.synth.bit.tri",
-    name: "preset.bit.tri.name",
-    note: "preset.bit.tri.note",
-    category: "8bit",
-    params: {
-      // 三角波通道：NES 的低音与旋律主干，长持续、无滤波。
-      gain: 0.6, wave: 3, attack: 0.002, decay: 0.4, sustain: 0.85, release: 0.1,
-      cutoff: 1.0, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.0,
-    },
-  },
-
-  // ---- 电钢琴（第二类）----
-  //
-  // 依据 DX7 的 **E.PIANO 1**（ROM1A）：算法 5，两组「载波 + 调制器」，频率比 **1:1**（琴体）
-  // 与 **14:1**（音头那一下金属味的 tine）。公开资料里的具体数值多是**建模重建**而非文档记录
-  // （见 musicproductionwiki 那篇自己也这么声明），所以这里按**结构**来搭，不假装逐值照抄：
-  // 正弦载波 + FM、比值 1 或 14、长衰减 + 低延音（电钢的「越按越弱」）。
-  //
-  // 无法复现的部分要说清楚：本合成器的 FM 调制指数**不随时间衰减**，而真实 E.PIANO 1 的
-  // 调制器包络是快速衰减的（那正是「音头亮一下、随后变暖」的来源）。这里的近似是
-  // 「调制器全程常开」——音色会比真机更亮、更「电」，所以比值给得克制。
-  {
-    id: "builtin.synth.ep.rhodes",
-    name: "preset.ep.rhodes.name",
-    note: "preset.ep.rhodes.note",
-    category: "epiano",
-    params: {
-      // 1:1 那对：琴体。长衰减 + 低延音是电钢的性格。
-      gain: 0.7, wave: 2, attack: 0.004, decay: 1.6, sustain: 0.3, release: 0.35,
-      cutoff: 0.88, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.3,
-      fm: 0.3, fmRatio: 1.0,
-    },
-  },
-  {
-    id: "builtin.synth.ep.tine",
-    name: "preset.ep.tine.name",
-    note: "preset.ep.tine.note",
-    category: "epiano",
-    params: {
-      // 14:1 那对：音头。指数刻意压小，否则常开的高比值调制会变成刺耳的边。
-      gain: 0.62, wave: 2, attack: 0.002, decay: 1.2, sustain: 0.2, release: 0.3,
-      cutoff: 0.9, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.3,
-      fm: 0.12, fmRatio: 14.0,
-    },
-  },
-  {
-    id: "builtin.synth.ep.chorus",
-    name: "preset.ep.chorus.name",
-    note: "preset.ep.chorus.note",
-    category: "epiano",
-    params: {
-      gain: 0.65, wave: 2, detune: 0.25, attack: 0.006, decay: 2.0, sustain: 0.35,
-      release: 0.4, cutoff: 0.9, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.3,
-      fm: 0.35, fmRatio: 1.0,
-    },
-  },
-  {
-    id: "builtin.synth.ep.dx",
-    name: "preset.ep.dx.name",
-    note: "preset.ep.dx.note",
-    category: "epiano",
-    params: {
-      // 3:1：介于琴体与铃音之间，80 年代那种透亮的 FM 电钢。
-      gain: 0.66, wave: 2, attack: 0.003, decay: 1.4, sustain: 0.25, release: 0.3,
-      cutoff: 0.92, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.3,
-      fm: 0.24, fmRatio: 3.0,
-    },
-  },
-
-  // ---- 吉他 ----
-  {
-    id: "builtin.synth.guitar.acoustic",
-    name: "preset.guitar.acoustic.name",
-    note: "preset.guitar.acoustic.note",
-    category: "guitar",
-    params: {
-      // 拨弦的起振噪声 + 快速衰减到低延音；截止约 4.5 kHz。
-      gain: 0.72, wave: 0, attack: 0.001, decay: 0.6, sustain: 0.12, release: 0.3,
-      cutoff: 0.72, resonance: 0.1, filterEnv: 0.4, keyFollow: 0.35, noise: 0.15,
-      pitchEnv: 0.08, pitchDecay: 0.05,
-    },
-  },
-  {
-    id: "builtin.synth.guitar.electric",
-    name: "preset.guitar.electric.name",
-    note: "preset.guitar.electric.note",
-    category: "guitar",
-    params: {
-      // 清音：截止收到约 2.5 kHz，配一点共振（拾音器的峰）。
-      gain: 0.62, wave: 0, attack: 0.002, decay: 0.8, sustain: 0.3, release: 0.35,
-      cutoff: 0.65, resonance: 0.28, filterEnv: 0.3, keyFollow: 0.3, noise: 0.08,
-    },
-  },
-  {
-    id: "builtin.synth.guitar.mute",
-    name: "preset.guitar.mute.name",
-    note: "preset.guitar.mute.note",
-    category: "guitar",
-    params: {
-      // 闷音：极短的衰减 + 低截止（约 1.6 kHz），拨片噪声更明显。
-      gain: 0.6, wave: 0, attack: 0.001, decay: 0.1, sustain: 0.0, release: 0.05,
-      cutoff: 0.62, resonance: 0.2, filterEnv: 0.35, keyFollow: 0.3, noise: 0.22,
-    },
-  },
-  {
-    id: "builtin.synth.guitar.harmonic",
-    name: "preset.guitar.harmonic.name",
-    note: "preset.guitar.harmonic.note",
-    category: "guitar",
-    params: {
-      // 泛音：正弦为主、长衰减、几乎不留延音；FM 只给一点点金属边。
-      gain: 0.5, wave: 2, attack: 0.001, decay: 1.2, sustain: 0.05, release: 0.4,
-      cutoff: 0.85, resonance: 0.1, filterEnv: 0.1, keyFollow: 0.3,
-      fm: 0.18, fmRatio: 3.5,
-    },
-  },
-
-  // ---- 贝斯 ----
-  {
-    id: "builtin.synth.bass",
-    name: "preset.bass.name",
-    note: "preset.bass.note",
-    category: "bass",
-    params: {
-      // 指弹贝斯：截止约 900 Hz（贝斯的能量就在低频），包络推一点起振的「嗡」。
-      gain: 0.75, wave: 0, sub: 0.35, attack: 0.005, decay: 0.5, sustain: 0.4, release: 0.12,
-      cutoff: 0.45, resonance: 0.15, filterEnv: 0.35, keyFollow: 0.3, noise: 0.08,
-    },
-  },
-  {
-    id: "builtin.synth.bass.sub",
-    name: "preset.bass.sub.name",
-    note: "preset.bass.sub.note",
-    category: "bass",
-    params: {
-      // 合成低音：正弦主体 + 大量低八度方波，几乎不要高通音色。
-      gain: 0.6, wave: 2, sub: 0.7, attack: 0.008, decay: 0.6, sustain: 0.7, release: 0.15,
-      cutoff: 0.42, resonance: 0.0, filterEnv: 0.1, keyFollow: 0.2,
-    },
-  },
-  {
-    id: "builtin.synth.bass.pick",
-    name: "preset.bass.pick.name",
-    note: "preset.bass.pick.note",
-    category: "bass",
-    params: {
-      // 拨片：起振更硬（攻击噪声 + 高一点的包络量），截止约 1.6 kHz。
-      gain: 0.7, wave: 0, sub: 0.2, attack: 0.002, decay: 0.35, sustain: 0.25, release: 0.1,
-      cutoff: 0.55, resonance: 0.3, filterEnv: 0.45, keyFollow: 0.3, noise: 0.1,
-    },
-  },
-  {
-    id: "builtin.synth.bass.fm",
-    name: "preset.bass.fm.name",
-    note: "preset.bass.fm.note",
-    category: "bass",
-    params: {
-      // FM 贝斯：2:1 的调制给低音一点金属质地，低八度补重量。
-      gain: 0.62, wave: 2, sub: 0.4, attack: 0.004, decay: 0.5, sustain: 0.35, release: 0.12,
-      cutoff: 0.5, resonance: 0.0, filterEnv: 0.2, keyFollow: 0.25,
-      fm: 0.25, fmRatio: 2.0,
-    },
-  },
-
-  // ---- 鼓 ----
-  //
-  // 参照 TR-808 的经典合成配方（Bridging 的电路分析那一类资料；具体数字是各家建模的重建值）：
-  // 底鼓 = 正弦，音高从约 60 Hz 掉到 40 Hz（约 30 ms）+ 幅度衰减约 300–500 ms；
-  // 军鼓 = 两个失谐正弦（约 180 / 330 Hz）叠噪声，音头短；闭镲 = 高通噪声，衰减极短（约 50 ms）。
-  {
-    id: "builtin.synth.drums",
-    name: "preset.drum.kick.name",
-    note: "preset.drum.kick.note",
-    category: "drums",
-    params: {
-      // 音高包络 0.35 ≈ 8.4 半音（65 Hz → 约 40 Hz），扫描时长 pitchDecay 0.3 ≈ 31 ms。
-      gain: 0.85, wave: 2, attack: 0.0, decay: 0.35, sustain: 0.0, release: 0.05,
-      cutoff: 1.0, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.0,
-      pitchEnv: 0.35, pitchDecay: 0.3,
-    },
-  },
-  {
-    id: "builtin.synth.drums.snare",
-    name: "preset.drum.snare.name",
-    note: "preset.drum.snare.note",
-    category: "drums",
-    params: {
-      // 噪声占大头（0.6），三角波给出约 180–330 Hz 的鼓皮音，**音高包络**是那记「裂」：
-      // 0.2 ≈ 4.8 半音、pitchDecay 0.12 ≈ 10 ms 往下掉。低通约 4 kHz，一阶高通 53 Hz 去掉隆隆声。
-      gain: 0.8, wave: 3, noise: 0.6, attack: 0.0, decay: 0.16, sustain: 0.0, release: 0.06,
-      cutoff: 0.75, resonance: 0.15, filterEnv: 0.2, keyFollow: 0.0, hpf: 0.2,
-      pitchEnv: 0.2, pitchDecay: 0.12,
-    },
-  },
-  {
-    id: "builtin.synth.drums.hat",
-    name: "preset.drum.hat.name",
-    note: "preset.drum.hat.note",
-    category: "drums",
-    params: {
-      // 纯噪声 + 高通（滤波类型 2 = 高通，截止约 8.5 kHz）+ 一阶高通拉满 = 又薄又亮。
-      gain: 0.45, wave: 0, noise: 1.0, attack: 0.0, decay: 0.045, sustain: 0.0, release: 0.02,
-      cutoff: 0.9, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.0, hpf: 1.0, filterType: 2,
-    },
-  },
-  {
-    id: "builtin.synth.drums.tom",
-    name: "preset.drum.tom.name",
-    note: "preset.drum.tom.note",
-    category: "drums",
-    params: {
-      gain: 0.85, wave: 2, attack: 0.0, decay: 0.4, sustain: 0.0, release: 0.08,
-      cutoff: 1.0, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.0,
-      pitchEnv: 0.25, pitchDecay: 0.25,
-    },
-  },
-
-  // ---- 弦乐 ----
-  {
-    id: "builtin.synth.strings",
-    name: "preset.strings.name",
-    note: "preset.strings.note",
-    category: "strings",
-    params: {
-      // 弦乐合奏：多个振荡器轻微失谐（0.35）撑出群感，慢起音 + 长释音。
-      gain: 0.55, wave: 0, detune: 0.35, attack: 0.18, decay: 1.5, sustain: 0.85, release: 0.5,
-      cutoff: 0.72, resonance: 0.08, filterEnv: 0.1, keyFollow: 0.3,
-    },
-  },
-  {
-    id: "builtin.synth.strings.solo",
-    name: "preset.strings.solo.name",
-    note: "preset.strings.solo.note",
-    category: "strings",
-    params: {
-      // 独奏小提琴：起音比合奏快一点，带延迟颤音（弓弦的揉弦）。
-      gain: 0.6, wave: 0, attack: 0.06, decay: 1.2, sustain: 0.8, release: 0.25,
-      cutoff: 0.78, resonance: 0.1, filterEnv: 0.15, keyFollow: 0.4,
-      lfoRate: 0.85, lfoDelay: 0.4, lfoPitch: 0.1,
-    },
-  },
-  {
-    id: "builtin.synth.strings.cello",
-    name: "preset.strings.cello.name",
-    note: "preset.strings.cello.note",
-    category: "strings",
-    params: {
-      // 大提琴：更暗（截止约 2 kHz）、起音更慢、揉弦更宽。
-      gain: 0.62, wave: 0, attack: 0.09, decay: 1.3, sustain: 0.82, release: 0.3,
-      cutoff: 0.66, resonance: 0.1, filterEnv: 0.12, keyFollow: 0.35,
-      lfoRate: 0.8, lfoDelay: 0.5, lfoPitch: 0.09,
-    },
-  },
-  {
-    id: "builtin.synth.strings.pizz",
-    name: "preset.strings.pizz.name",
-    note: "preset.strings.pizz.note",
-    category: "strings",
-    params: {
-      // 拨弦（pizzicato）：极短、不留延音，包络推一点让起振有「啪」。
-      gain: 0.6, wave: 0, attack: 0.001, decay: 0.25, sustain: 0.0, release: 0.12,
-      cutoff: 0.75, resonance: 0.15, filterEnv: 0.3, keyFollow: 0.35,
-    },
-  },
-
-  // ---- 管乐 ----
-  {
-    id: "builtin.synth.winds.flute",
-    name: "preset.winds.flute.name",
-    note: "preset.winds.flute.note",
-    category: "winds",
-    params: {
-      // 长笛：接近正弦/三角（谐波极少），吹气噪声不可少，带一点延迟颤音。
-      gain: 0.6, wave: 3, noise: 0.12, attack: 0.05, decay: 0.6, sustain: 0.85, release: 0.15,
-      cutoff: 0.7, resonance: 0.0, filterEnv: 0.05, keyFollow: 0.3,
-      lfoRate: 0.82, lfoDelay: 0.4, lfoPitch: 0.06,
-    },
-  },
-  {
-    id: "builtin.synth.winds.clarinet",
-    name: "preset.winds.clarinet.name",
-    note: "preset.winds.clarinet.note",
-    category: "winds",
-    params: {
-      // 单簧管：**只有奇次谐波**，正是方波的频谱结构（50% 占空比），所以用方波。
-      gain: 0.55, wave: 1, pwm: 0.5, attack: 0.045, decay: 0.5, sustain: 0.85, release: 0.12,
-      cutoff: 0.62, resonance: 0.1, filterEnv: 0.08, keyFollow: 0.3,
-    },
-  },
-  {
-    id: "builtin.synth.winds.sax",
-    name: "preset.winds.sax.name",
-    note: "preset.winds.sax.note",
-    category: "winds",
-    params: {
-      gain: 0.55, wave: 0, noise: 0.08, attack: 0.04, decay: 0.6, sustain: 0.8, release: 0.15,
-      cutoff: 0.66, resonance: 0.18, filterEnv: 0.15, keyFollow: 0.3,
-    },
-  },
-  {
-    id: "builtin.synth.winds.brass",
-    name: "preset.winds.brass.name",
-    note: "preset.winds.brass.note",
-    category: "winds",
-    params: {
-      // 铜管：慢起音（0.08 s）+ 滤波包络扫上去，就是那记「嗷」的由来。
-      gain: 0.55, wave: 0, attack: 0.08, decay: 0.7, sustain: 0.8, release: 0.18,
-      cutoff: 0.6, resonance: 0.12, filterEnv: 0.35, keyFollow: 0.3,
-    },
-  },
-
-  // ---- 铺底 ----
-  {
-    id: "builtin.synth.pad",
-    name: "preset.pad.name",
-    note: "preset.pad.note",
-    category: "pad",
-    params: {
-      // 暖垫：慢起慢落 + 大幅失谐 + 极慢的滤波起伏。
-      gain: 0.55, wave: 0, detune: 0.4, attack: 0.35, decay: 2.0, sustain: 0.8, release: 0.9,
-      cutoff: 0.6, resonance: 0.1, filterEnv: 0.12, keyFollow: 0.2,
-      lfoRate: 0.25, lfoFilter: 0.15,
-    },
-  },
-  {
-    id: "builtin.synth.pad.strings",
-    name: "preset.pad.strings.name",
-    note: "preset.pad.strings.note",
-    category: "pad",
-    params: {
-      gain: 0.5, wave: 0, detune: 0.5, attack: 0.5, decay: 2.0, sustain: 0.85, release: 1.2,
-      cutoff: 0.65, resonance: 0.08, filterEnv: 0.1, keyFollow: 0.25,
-    },
-  },
-  {
-    id: "builtin.synth.pad.choir",
-    name: "preset.pad.choir.name",
-    note: "preset.pad.choir.note",
-    category: "pad",
-    params: {
-      // 合唱垫：更多失谐 + 一点噪声当「气声」，滤波缓慢摆动。
-      gain: 0.58, wave: 0, detune: 0.6, noise: 0.06, attack: 0.6, decay: 2.0, sustain: 0.8,
-      release: 1.0, cutoff: 0.68, resonance: 0.1, filterEnv: 0.1, keyFollow: 0.25,
-      lfoRate: 0.3, lfoFilter: 0.2,
-    },
-  },
-  {
-    id: "builtin.synth.pad.glass",
-    name: "preset.pad.glass.name",
-    note: "preset.pad.glass.note",
-    category: "pad",
-    params: {
-      gain: 0.5, wave: 3, attack: 0.3, decay: 2.0, sustain: 0.6, release: 1.0,
-      cutoff: 0.85, resonance: 0.0, filterEnv: 0.05, keyFollow: 0.3,
-      fm: 0.2, fmRatio: 3.0,
-    },
-  },
-
-  // ---- 音效 ----
-  {
-    id: "builtin.synth.fx.blip",
-    name: "preset.fx.blip.name",
-    note: "preset.fx.blip.note",
-    category: "fx",
-    params: {
-      // 激光：正弦 + 极快的下行音高扫（0.7 ≈ 17 半音，扫完约 24 ms）。
-      gain: 0.7, wave: 2, attack: 0.0, decay: 0.25, sustain: 0.0, release: 0.05,
-      cutoff: 1.0, resonance: 0.0, filterEnv: 0.0, keyFollow: 0.0,
-      pitchEnv: 0.7, pitchDecay: 0.12,
-    },
-  },
-  {
-    id: "builtin.synth.fx.boom",
-    name: "preset.fx.boom.name",
-    note: "preset.fx.boom.note",
-    category: "fx",
-    params: {
-      // 爆炸：纯噪声 + 低通（截止约 1.6 kHz）扫出闷响的长尾巴。
-      gain: 0.7, wave: 0, noise: 1.0, attack: 0.0, decay: 0.9, sustain: 0.0, release: 0.15,
-      cutoff: 0.62, resonance: 0.2, filterEnv: 0.4, keyFollow: 0.0,
-    },
-  },
-  {
-    id: "builtin.synth.fx.riser",
-    name: "preset.fx.riser.name",
-    note: "preset.fx.riser.note",
-    category: "fx",
-    params: {
-      // 上升音：音高包络拉满（+24 半音）慢慢扫上去，同时滤波也打开。
-      gain: 0.5, wave: 0, attack: 0.0, decay: 1.2, sustain: 0.5, release: 0.3,
-      cutoff: 0.55, resonance: 0.3, filterEnv: 0.5, keyFollow: 0.0,
-      lfoRate: 0.6, lfoFilter: 0.4,
-      pitchEnv: 0.5, pitchDecay: 1.0,
-    },
-  },
-  {
-    id: "builtin.synth.fx.wobble",
-    name: "preset.fx.wobble.name",
-    note: "preset.fx.wobble.note",
-    category: "fx",
-    params: {
-      // 噪扫：噪声 + 高共振 + LFO 扫滤波，dubstep 那种「哇」。
-      gain: 0.5, wave: 0, noise: 0.4, attack: 0.01, decay: 0.8, sustain: 0.7, release: 0.2,
-      cutoff: 0.55, resonance: 0.6, filterEnv: 0.3, keyFollow: 0.2,
-      lfoRate: 0.55, lfoFilter: 0.6,
-    },
-  },
-];
+// JSON import 会把每个对象的可选键推断成 `undefined` 的联合类型；数据形状由 Rust 侧测试
+// （`factory_presets::tests`）与 `SYNTH_PARAMS` 兜底，这里直接按接口断言。
+export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = factoryPresets as unknown as FactoryPreset[];
 
 /**
  * **在引擎注册表里**有同名条目的那 5 条预设（见 `crates/engine/src/registry.rs::BUILTIN_PRESETS`）。
@@ -563,7 +114,7 @@ export const SYNTH_FACTORY_PRESETS: FactoryPreset[] = [
  * 它们存在的唯一理由是**默认分轨模板**要直接挂上去（`STARTER_TRACKS`）：模板里的
  * `plugin_id` 必须是引擎认得的 id，否则那几条轨道一新建就是「缺失插件」占位。
  *
- * 因此只有这 5 条走过 `canonicalPluginId`；其余 27 条只是「同一台合成器的一组参数」，
+ * 因此只有这 5 条走过 `canonicalPluginId`；其余 31 条只是「同一台合成器的一组参数」，
  * id 仅用于界面匹配，不参与归一键。
  */
 export const ENGINE_PRESET_IDS: string[] = [
@@ -895,6 +446,17 @@ export const SYNTH_PARAMS: ParamSpec[] = [
   { id: "pitchEnv", name: "音高包络", min: 0, max: 1, step: 0.01, default: 0, digits: 2 },
   { id: "pitchDecay", name: "音高扫时长", min: 0, max: 1, step: 0.01, default: 0.1, digits: 2 },
   { id: "filterType", name: "滤波类型", min: 0, max: 2, step: 1, default: 0, digits: 0 },
+  // ---- 音色设计扩展（与 Rust 侧 PARAM_TABLE 同顺序；默认值 = 老行为） ----
+  { id: "filterEnvMode", name: "滤波包络模式", min: 0, max: 1, step: 1, default: 0, digits: 0 },
+  { id: "fAttack", name: "滤波起音", min: 0, max: 1, step: 0.005, default: 0.01, unit: "s", digits: 3 },
+  { id: "fDecay", name: "滤波衰减", min: 0, max: 2, step: 0.01, default: 0.4, unit: "s", digits: 2 },
+  { id: "fSustain", name: "滤波延音", min: 0, max: 1, step: 0.01, default: 0.75, digits: 2 },
+  { id: "fRelease", name: "滤波释音", min: 0, max: 4, step: 0.01, default: 0.3, unit: "s", digits: 2 },
+  { id: "lfoMode", name: "LFO 模式", min: 0, max: 1, step: 1, default: 0, digits: 0 },
+  { id: "pitchEnvDir", name: "音高包络方向", min: 0, max: 1, step: 1, default: 0, digits: 0 },
+  { id: "spread", name: "声部宽度", min: 0, max: 1, step: 0.01, default: 0, digits: 2 },
+  { id: "unison", name: "振荡器副本", min: 1, max: 4, step: 1, default: 1, digits: 0 },
+  { id: "oversample", name: "2x 过采样", min: 0, max: 1, step: 1, default: 0, digits: 0 },
 ];
 
 /**
@@ -930,6 +492,16 @@ export const SYNTH_PARAM_LABELS: Record<string, string> = {
   pitchEnv: "synth.pitchEnv",
   pitchDecay: "synth.pitchDecay",
   filterType: "synth.filterType",
+  filterEnvMode: "synth.filterEnvMode",
+  fAttack: "synth.fAttack",
+  fDecay: "synth.fDecay",
+  fSustain: "synth.fSustain",
+  fRelease: "synth.fRelease",
+  lfoMode: "synth.lfoMode",
+  pitchEnvDir: "synth.pitchEnvDir",
+  spread: "synth.spread",
+  unison: "synth.unison",
+  oversample: "synth.oversample",
 };
 
 /**
@@ -957,7 +529,17 @@ export const SYNTH_PARAM_HINTS: Record<string, string> = {
  * 想加/减内置合成器的可选参数，**只改这里**。
  */
 export const COMMON_INSTRUMENT_PARAMS: Record<string, string[]> = {
-  [SYNTH_ID]: ["cutoff", "resonance", "attack", "decay", "sustain", "release", "detune", "lfoRate"],
+  [SYNTH_ID]: [
+    "cutoff",
+    "resonance",
+    "attack",
+    "decay",
+    "sustain",
+    "release",
+    "fDecay",
+    "detune",
+    "lfoRate",
+  ],
   [PIANO_ID]: ["gain", "tone"],
   [NYLON_GUITAR_ID]: ["gain", "tone"],
   [ELECTRIC_GUITAR_ID]: ["gain", "tone"],
@@ -981,7 +563,7 @@ export const COMMON_INSTRUMENT_PARAMS: Record<string, string[]> = {
 /**
  * 某插件**默认绑定**的目标键（**只给参数 id**，`inst:` / `fx<i>:` 前缀由调用方拼）。
  *
- * 这就是「精选集」（`COMMON_INSTRUMENT_PARAMS`）——内置合成器 8 个，采样乐器各 2 个，其他插件空。
+ * 这就是「精选集」（`COMMON_INSTRUMENT_PARAMS`）——内置合成器 9 个，采样乐器各 2 个，其他插件空。
  * 走 `canonicalPluginId`，所以老工程的预设音色 id（`builtin.synth.lead` 等）也算内置合成器。
  */
 export function defaultBoundParamIds(pluginId: string): string[] {

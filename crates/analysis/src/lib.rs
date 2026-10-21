@@ -73,6 +73,136 @@ pub struct Report {
     pub spectrum: Spectrum,
 }
 
+/// 分段能量（相对满幅正弦，dB）。
+///
+/// 边界按「听感八度」粗分，够模型判断「太闷 / 太亮 / 太薄」，又不至于把 1025 个 bin 灌给模型。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BandEnergy {
+    /// 20–120 Hz：超低音 / 底鼓重量。
+    pub sub_db: f64,
+    /// 120–500 Hz：低频主体 / 贝斯根音。
+    pub bass_db: f64,
+    /// 500–2000 Hz：中频 / 人声与和弦的肉。
+    pub mid_db: f64,
+    /// 2000–6000 Hz：临场 / 拨弦与铜管的锐度。
+    pub presence_db: f64,
+    /// 6000 Hz 以上：空气感 / 噪声与镲片。
+    pub air_db: f64,
+}
+
+/// 音色指纹：把一整段音频压成几个可比较的标量。
+///
+/// 这是给「捏音色」的闭环反馈：模型没法听声音，但可以看频谱重心（亮/暗）、
+/// 频谱平坦度（噪声性/乐音性）、波峰因数（冲击力）与分段能量，一次只调一个维度。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Timbre {
+    /// 频谱重心（Hz）：感知上的「亮度」。
+    pub spectral_centroid_hz: f64,
+    /// 频谱平坦度（0..1）：接近 0 = 乐音/谐波，接近 1 = 噪声。
+    pub spectral_flatness: f64,
+    /// 过零率（每帧）：噪声与高频内容的粗代理。
+    pub zero_crossing_rate: f64,
+    /// 波峰因数（dB）：峰值减 RMS，越大越「有冲击力」。
+    pub crest_factor_db: f64,
+    /// 分段能量。
+    pub bands: BandEnergy,
+}
+
+/// 音色指纹：从交错采样里算 [`Timbre`]。
+pub fn timbre(
+    interleaved: &[f32],
+    channels: usize,
+    sample_rate: f64,
+) -> Result<Timbre, AnalysisError> {
+    if channels == 0 {
+        return Err(AnalysisError::BadFormat("channels must be >= 1".into()));
+    }
+    if !sample_rate.is_finite() || sample_rate <= 0.0 {
+        return Err(AnalysisError::BadFormat(format!("bad sample rate: {sample_rate}")));
+    }
+    if interleaved.len() % channels != 0 {
+        return Err(AnalysisError::BadFormat(format!(
+            "sample count {} is not a multiple of {} channels",
+            interleaved.len(),
+            channels
+        )));
+    }
+
+    let frames = interleaved.len() / channels;
+    let mono = mono(interleaved, channels, frames);
+    let spectrum = spectrum(&mono, sample_rate);
+    let bin_hz = spectrum.bin_hz;
+
+    let amps: Vec<f64> = spectrum
+        .magnitudes_db
+        .iter()
+        .map(|db| if db.is_finite() { 10f64.powf(db / 20.0) } else { 0.0 })
+        .collect();
+
+    // 用**功率**加权：谱底噪（约 -90 dB）在幅度加权下会把重心明显抬高，
+    // 而听感上的「亮度」更接近能量分布。
+    let total: f64 = amps.iter().map(|a| a * a).sum();
+    let centroid = if total > 0.0 {
+        amps.iter()
+            .enumerate()
+            .map(|(k, a)| k as f64 * bin_hz * a * a)
+            .sum::<f64>()
+            / total
+    } else {
+        0.0
+    };
+
+    // 几何平均 / 算术平均：噪声的谱更平，值趋近 1；纯正弦远小于 1。
+    let eps = 1e-12;
+    let flatness = if amps.is_empty() {
+        0.0
+    } else {
+        let mean = amps.iter().sum::<f64>() / amps.len() as f64;
+        if mean <= 0.0 {
+            0.0
+        } else {
+            let log_mean = amps.iter().map(|a| (a + eps).ln()).sum::<f64>() / amps.len() as f64;
+            (log_mean.exp() / mean).clamp(0.0, 1.0)
+        }
+    };
+
+    let crossings = mono.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count();
+    let zero_crossing_rate = if mono.is_empty() { 0.0 } else { crossings as f64 / mono.len() as f64 };
+
+    let peak = mono.iter().fold(0.0f64, |acc, x| acc.max(x.abs() as f64));
+    let rms = if mono.is_empty() {
+        0.0
+    } else {
+        (mono.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>() / mono.len() as f64).sqrt()
+    };
+    let crest_factor_db = if peak > 0.0 && rms > 0.0 { 20.0 * (peak / rms).log10() } else { 0.0 };
+
+    let band = |lo: f64, hi: f64| -> f64 {
+        let mut energy = 0.0f64;
+        for (k, amp) in amps.iter().enumerate() {
+            let f = k as f64 * bin_hz;
+            if f >= lo && f < hi {
+                energy += amp * amp;
+            }
+        }
+        if energy > 0.0 { (10.0 * energy.log10()).max(-120.0) } else { -120.0 }
+    };
+
+    Ok(Timbre {
+        spectral_centroid_hz: centroid,
+        spectral_flatness: flatness,
+        zero_crossing_rate,
+        crest_factor_db,
+        bands: BandEnergy {
+            sub_db: band(20.0, 120.0),
+            bass_db: band(120.0, 500.0),
+            mid_db: band(500.0, 2_000.0),
+            presence_db: band(2_000.0, 6_000.0),
+            air_db: band(6_000.0, sample_rate / 2.0),
+        },
+    })
+}
+
 /// 线性幅度 → dB（0 或负值 → -∞）。
 fn to_db(x: f64) -> f64 {
     if x > 0.0 {
@@ -327,6 +457,36 @@ mod tests {
         let quiet = analyze(&sine(440.0, 0.1, 1.0, 48_000.0), 2, 48_000.0).unwrap();
         let loud = analyze(&sine(440.0, 1.0, 1.0, 48_000.0), 2, 48_000.0).unwrap();
         assert!(loud.loudness.integrated_lufs > quiet.loudness.integrated_lufs + 15.0);
+    }
+
+    #[test]
+    fn timbre_of_a_sine_is_tonal_and_centered_at_the_fundamental() {
+        let freq = 43.0 * 48_000.0 / FFT_SIZE as f64;
+        let samples = sine(freq, 1.0, 0.5, 48_000.0);
+        let t = timbre(&samples, 2, 48_000.0).unwrap();
+        assert!((t.spectral_centroid_hz - freq).abs() < 10.0, "centroid={}", t.spectral_centroid_hz);
+        assert!(t.spectral_flatness < 0.2, "纯正弦不该像噪声：{}", t.spectral_flatness);
+        assert!(t.bands.mid_db > -3.0, "mid={}", t.bands.mid_db);
+        assert!(t.bands.air_db < -40.0, "air={}", t.bands.air_db);
+    }
+
+    #[test]
+    fn timbre_of_noise_is_flat_and_high() {
+        // 确定性伪随机噪声（xorshift）：谱平坦度必须显著高于正弦。
+        let mut state = 0x1234_5678u32;
+        let mut samples = Vec::with_capacity(48_000 * 2);
+        for _ in 0..48_000 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let s = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+            samples.push(s);
+            samples.push(s);
+        }
+        let t = timbre(&samples, 2, 48_000.0).unwrap();
+        assert!(t.spectral_flatness > 0.5, "噪声应当平坦：{}", t.spectral_flatness);
+        assert!(t.spectral_centroid_hz > 5_000.0, "噪声重心应当高：{}", t.spectral_centroid_hz);
+        assert!(t.bands.air_db > -30.0, "air={}", t.bands.air_db);
     }
 
     #[test]

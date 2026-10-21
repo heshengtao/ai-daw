@@ -49,13 +49,30 @@ pub struct Params {
     pub pitch_decay: f32,
     /// 滤波器输出类型（0 = 低通，1 = 带通，2 = 高通）。
     pub filter_type: f32,
+    /// 滤波包络模式：0 = 跟随幅度包络（老行为），1 = 使用独立的 fADSR。
+    pub filter_env_mode: f32,
+    /// 独立滤波包络的四个段。
+    pub f_attack: f32,
+    pub f_decay: f32,
+    pub f_sustain: f32,
+    pub f_release: f32,
+    /// LFO 模式：0 = 全局（老行为），1 = 每声部独立。
+    pub lfo_mode: f32,
+    /// 音高包络方向：0 = 从 +amount 下扫（老行为），1 = 从 0 上扫到 +amount。
+    pub pitch_env_dir: f32,
+    /// 声部分布宽度（0 = 单声道；>0 时和弦声部按左右交替展开）。
+    pub spread: f32,
+    /// 每声部的振荡器副本数（1..=4；1 = 老行为）。
+    pub unison: f32,
+    /// 过采样：0 = 关闭，1 = 2x（内部 2 倍采样 + 半带抽取）。
+    pub oversample: f32,
 }
 
 /// 参数表：id、显示名、范围、默认值。
 ///
 /// 顺序即 `save_state` 的字节顺序；新增参数一律**追加在末尾**，于是「状态比当前参数表短」时
 /// 缺的那几个保持默认（见 `load_state`）。
-const PARAM_TABLE: [(&str, &str, f32, f32, f32); 26] = [
+const PARAM_TABLE: [(&str, &str, f32, f32, f32); 36] = [
     ("gain", "Level", 0.0, 1.0, 0.8),
     ("attack", "Attack", 0.0, 1.0, 0.01),
     ("release", "Release", 0.0, 4.0, 0.3),
@@ -83,11 +100,35 @@ const PARAM_TABLE: [(&str, &str, f32, f32, f32); 26] = [
     ("pitchEnv", "Pitch Env", 0.0, 1.0, 0.0),
     ("pitchDecay", "Pitch Decay", 0.0, 1.0, 0.1),
     ("filterType", "Filter Type", 0.0, 2.0, 0.0),
+    // ---- 音色设计扩展（继续追加；默认值全部是「老行为」，保证默认音色逐字节不变） ----
+    ("filterEnvMode", "Filter Env Mode", 0.0, 1.0, 0.0),
+    ("fAttack", "Filter Attack", 0.0, 1.0, 0.01),
+    ("fDecay", "Filter Decay", 0.0, 2.0, 0.4),
+    ("fSustain", "Filter Sustain", 0.0, 1.0, 0.75),
+    ("fRelease", "Filter Release", 0.0, 4.0, 0.3),
+    ("lfoMode", "LFO Mode", 0.0, 1.0, 0.0),
+    ("pitchEnvDir", "Pitch Env Dir", 0.0, 1.0, 0.0),
+    ("spread", "Spread", 0.0, 1.0, 0.0),
+    ("unison", "Unison", 1.0, 4.0, 1.0),
+    ("oversample", "Oversample", 0.0, 1.0, 0.0),
 ];
 
 /// LFO 速率映射：0..1 → 0.05..20 Hz（指数，慢速区好调）。
-fn lfo_hz(rate: f32) -> f64 {
+pub(crate) fn lfo_hz(rate: f32) -> f64 {
     0.05 * 400f64.powf(rate as f64)
+}
+
+/// 声部分布：0 号声部永远居中（单音旋律不会被甩到一边），其余声部按左右交替展开。
+///
+/// 等功率声像并归一化到「pan=0 时左右都是 1.0」，所以 `spread = 0` 与老的单声道输出完全一致。
+fn voice_gain(index: usize, spread: f32) -> (f32, f32) {
+    if spread <= 0.0 || index == 0 {
+        return (1.0, 1.0);
+    }
+    let pan = if index % 2 == 1 { spread } else { -spread };
+    let angle = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
+    let (sin, cos) = angle.sin_cos();
+    (cos * std::f32::consts::SQRT_2, sin * std::f32::consts::SQRT_2)
 }
 
 /// 内置合成器：DCO（主振 + 副振）→ HPF → VCF → VCA 的复音减法合成器。
@@ -227,6 +268,16 @@ impl SynthPlugin {
             self.params.pitch_env,
             self.params.pitch_decay,
             self.params.filter_type,
+            self.params.filter_env_mode,
+            self.params.f_attack,
+            self.params.f_decay,
+            self.params.f_sustain,
+            self.params.f_release,
+            self.params.lfo_mode,
+            self.params.pitch_env_dir,
+            self.params.spread,
+            self.params.unison,
+            self.params.oversample,
         ]
     }
 }
@@ -259,6 +310,16 @@ fn default_params() -> Params {
         pitch_env: 0.0,
         pitch_decay: 0.1,
         filter_type: 0.0,
+        filter_env_mode: 0.0,
+        f_attack: 0.01,
+        f_decay: 0.4,
+        f_sustain: 0.75,
+        f_release: 0.3,
+        lfo_mode: 0.0,
+        pitch_env_dir: 0.0,
+        spread: 0.0,
+        unison: 1.0,
+        oversample: 0.0,
     }
 }
 
@@ -333,6 +394,16 @@ impl Plugin for SynthPlugin {
             23 => p.pitch_env = value,
             24 => p.pitch_decay = value,
             25 => p.filter_type = value,
+            26 => p.filter_env_mode = value,
+            27 => p.f_attack = value,
+            28 => p.f_decay = value,
+            29 => p.f_sustain = value,
+            30 => p.f_release = value,
+            31 => p.lfo_mode = value,
+            32 => p.pitch_env_dir = value,
+            33 => p.spread = value,
+            34 => p.unison = value,
+            35 => p.oversample = value,
             _ => {}
         }
     }
@@ -353,7 +424,9 @@ impl Plugin for SynthPlugin {
         let params = self.params;
         // 与采样无关的派生常量（滤波器阻尼、脉宽、FM/压碎/音高包络的系数）算一次就够：
         // 扩展后每采样要跑两个振荡器 + 一个调制器，能提出循环的量都要提出来。
-        let block = voice::Block::new(&params, sr);
+        // 2x 过采样时，声部内部的包络 / 滤波 / 相位全部按 2 倍采样率推进。
+        let oversample = if params.oversample > 0.5 { 2 } else { 1 };
+        let block = voice::Block::new(&params, sr * oversample as f64);
 
         for frame in 0..frames {
             for ev in events.iter().filter(|e| e.frame as usize == frame) {
@@ -372,13 +445,22 @@ impl Plugin for SynthPlugin {
             self.lfo_age += 1.0;
             let lfo = (tri * fade) as f32;
 
-            let mut mix = 0.0f32;
-            for v in self.voices.iter_mut() {
-                mix += v.next_sample(sr, &params, &block, lfo);
+            let mut left = 0.0f32;
+            let mut right = 0.0f32;
+            for (index, v) in self.voices.iter_mut().enumerate() {
+                let sample = v.next_sample(sr, &params, &block, lfo);
+                let (gl, gr) = voice_gain(index, params.spread);
+                left += sample * gl;
+                right += sample * gr;
             }
-            mix = (mix * params.gain).clamp(-1.0, 1.0);
-            for ch in audio.iter_mut() {
-                ch[frame] = mix;
+            let left = (left * params.gain).clamp(-1.0, 1.0);
+            let right = (right * params.gain).clamp(-1.0, 1.0);
+            for (channel, buffer) in audio.iter_mut().enumerate() {
+                buffer[frame] = match channel {
+                    0 => left,
+                    1 => right,
+                    _ => (left + right) * 0.5,
+                };
             }
         }
     }
@@ -723,6 +805,30 @@ mod tests {
         out
     }
 
+    /// 渲染左右声道（用来验证声部分布）。
+    fn render_stereo(
+        params: &[(&str, f32)],
+        events: &[TimedMidiEvent],
+        blocks: usize,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let mut s = SynthPlugin::new();
+        for (id, value) in params {
+            s.set_param(&ParamId::from(*id), *value);
+        }
+        s.prepare(48_000.0, 256);
+        let mut left = Vec::with_capacity(blocks * 256);
+        let mut right = Vec::with_capacity(blocks * 256);
+        for block in 0..blocks {
+            let mut l = [0.0f32; 256];
+            let mut r = [0.0f32; 256];
+            let evs = if block == 0 { events } else { &[] };
+            s.process(&ctx(256), &mut [&mut l, &mut r], evs);
+            left.extend_from_slice(&l);
+            right.extend_from_slice(&r);
+        }
+        (left, right)
+    }
+
     /// 上升过零次数：基频的粗略代理（纯净单音下 ≈ 基频 × 秒数）。
     fn crossings(data: &[f32]) -> usize {
         data.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count()
@@ -806,6 +912,16 @@ mod tests {
                 ("detune", 0.0),
                 ("fm", 0.0),
                 ("pitchEnv", 0.0),
+                ("filterEnvMode", 0.0),
+                ("fAttack", 0.01),
+                ("fDecay", 0.4),
+                ("fSustain", 0.75),
+                ("fRelease", 0.3),
+                ("lfoMode", 0.0),
+                ("pitchEnvDir", 0.0),
+                ("spread", 0.0),
+                ("unison", 1.0),
+                ("oversample", 0.0),
             ],
             &note,
             6,
@@ -878,6 +994,115 @@ mod tests {
         assert!((h2 as i64 - t2 as i64).abs() <= 4, "关掉后前后应当一致：{h2} / {t2}");
     }
 
+    /// 独立滤波包络：幅度保持满延音时，滤波包络可以自己关掉（老版本做不到）。
+    #[test]
+    fn independent_filter_envelope_closes_while_amp_sustains() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 127 } }];
+        let base: Vec<(&'static str, f32)> = vec![
+            ("gain", 0.8),
+            ("attack", 0.0),
+            ("decay", 2.0),
+            ("sustain", 1.0),
+            ("cutoff", 0.2),
+            ("filterEnv", 1.0),
+            ("keyFollow", 0.0),
+            ("wave", 0.0),
+            ("fAttack", 0.0),
+            ("fDecay", 0.05),
+            ("fSustain", 0.0),
+            ("fRelease", 0.05),
+        ];
+        let rms = |d: &[f32]| {
+            (d.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / d.len() as f64).sqrt()
+        };
+        let follow = render(&with(&base, &[("filterEnvMode", 0.0)]), &note, 30);
+        let independent = render(&with(&base, &[("filterEnvMode", 1.0)]), &note, 30);
+        let half = follow.len() / 2;
+        assert!(
+            rms(&follow[half..]) > rms(&independent[half..]) * 2.0,
+            "独立滤波包络应当把尾音关暗：follow={} independent={}",
+            rms(&follow[half..]),
+            rms(&independent[half..])
+        );
+    }
+
+    /// 音高包络现在也能**上扫**（`pitchEnvDir = 1`）：后段频率明显高于前段。
+    #[test]
+    fn pitch_envelope_can_sweep_up() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 57, velocity: 127 } }];
+        let data = render(
+            &with(
+                &flat(),
+                &[("pitchEnv", 1.0), ("pitchDecay", 0.5), ("pitchEnvDir", 1.0)],
+            ),
+            &note,
+            40,
+        );
+        let head = crossings(&data[0..4800]);
+        let tail = crossings(&data[5400..10200]);
+        assert!(tail > head * 3 / 2, "起音应当是上扫：前段 {head} vs 后段 {tail}");
+    }
+
+    /// 4 副本 unison 必须有限、限幅，而且确实改变波形。
+    #[test]
+    fn unison_stays_bounded_and_changes_the_waveform() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 57, velocity: 127 } }];
+        let single = render(&with(&flat(), &[("unison", 1.0), ("detune", 0.5)]), &note, 20);
+        let stack = render(&with(&flat(), &[("unison", 4.0), ("detune", 0.5)]), &note, 20);
+        assert!(stack.iter().all(|x| x.is_finite()), "不得出现 NaN / Inf");
+        let peak = stack.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(peak > 0.01 && peak <= 1.0, "unison 输出必须有限且限幅：{peak}");
+        assert_ne!(single, stack, "4 副本 unison 应当与单振不同");
+    }
+
+    /// 声部分布：`spread = 0` 必须保持老的单声道输出；和弦在 `spread > 0` 时左右不同。
+    #[test]
+    fn spread_pans_chord_voices_and_is_mono_at_zero() {
+        let events = [
+            TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } },
+            TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 64, velocity: 100 } },
+            TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 67, velocity: 100 } },
+        ];
+        let mono = with(&flat(), &[("spread", 0.0)]);
+        let (l0, r0) = render_stereo(&mono, &events, 8);
+        assert_eq!(l0, r0, "spread=0 必须与老的单声道输出一致");
+
+        let wide = with(&flat(), &[("spread", 1.0)]);
+        let (l1, r1) = render_stereo(&wide, &events, 8);
+        assert!(
+            l1.iter().zip(&r1).any(|(a, b)| a != b),
+            "和弦在 spread>0 时应当被展开到左右"
+        );
+    }
+
+    /// 2x 过采样：高 FM 下仍然有限、限幅、出声。
+    #[test]
+    fn oversampling_stays_bounded_and_sounds() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 45, velocity: 127 } }];
+        let data = render(
+            &with(&flat(), &[("fm", 1.0), ("fmRatio", 8.0), ("oversample", 1.0)]),
+            &note,
+            20,
+        );
+        assert!(data.iter().all(|x| x.is_finite()), "不得出现 NaN / Inf");
+        let peak = data.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(peak > 0.01 && peak <= 1.0, "过采样输出：{peak}");
+    }
+
+    /// 每声部 LFO 模式必须真的在调制（不是静音、不是坏值）。
+    #[test]
+    fn per_voice_lfo_modulates() {
+        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let flat_pitch = render(&with(&flat(), &[("lfoPitch", 0.0)]), &note, 40);
+        let vibrato = render(
+            &with(&flat(), &[("lfoMode", 1.0), ("lfoPitch", 1.0), ("lfoRate", 1.0)]),
+            &note,
+            40,
+        );
+        assert!(vibrato.iter().all(|x| x.is_finite()));
+        assert_ne!(flat_pitch, vibrato, "每声部 LFO 应当产生颤音");
+    }
+
     /// 高通真的把低频削掉：同一颗低音用高通播会明显更轻。
     #[test]
     fn filter_type_high_pass_removes_the_low_end() {
@@ -905,6 +1130,16 @@ mod tests {
             ("pitchEnv", 0.61),
             ("pitchDecay", 0.23),
             ("filterType", 2.0),
+            ("filterEnvMode", 1.0),
+            ("fAttack", 0.05),
+            ("fDecay", 0.33),
+            ("fSustain", 0.44),
+            ("fRelease", 0.55),
+            ("lfoMode", 1.0),
+            ("pitchEnvDir", 1.0),
+            ("spread", 0.66),
+            ("unison", 3.0),
+            ("oversample", 1.0),
         ] {
             s.set_param(&ParamId::from(id), value);
         }
@@ -916,19 +1151,35 @@ mod tests {
         }
     }
 
-    /// 状态比当前参数表短：多出来的（新增）参数保持默认，而不是报错或读到垃圾。
+    /// 老工程的状态（只有前 26 个参数）必须照读，新增参数保持默认。
     #[test]
     fn shorter_state_keeps_new_params_at_defaults() {
         let mut s = SynthPlugin::new();
         s.set_param(&ParamId::from("noise"), 0.9);
         let state = s.save_state();
-        let short = &state[..state.len() - 8]; // 砍掉最后两个（pitchDecay / filterType）
+        let short = &state[..26 * 4]; // 音色设计扩展之前的参数表长度
 
         let mut t = SynthPlugin::new();
         t.load_state(short).unwrap();
-        assert_eq!(t.get_param(&ParamId::from("pitchDecay")), Some(0.1), "缺失的参数保持默认");
-        assert_eq!(t.get_param(&ParamId::from("filterType")), Some(0.0));
-        assert_eq!(t.get_param(&ParamId::from("noise")), Some(0.9), "短的也照读");
+        assert_eq!(t.get_param(&ParamId::from("noise")), Some(0.9), "老的参数照读");
+        for (id, expected) in [
+            ("filterEnvMode", 0.0),
+            ("fAttack", 0.01),
+            ("fDecay", 0.4),
+            ("fSustain", 0.75),
+            ("fRelease", 0.3),
+            ("lfoMode", 0.0),
+            ("pitchEnvDir", 0.0),
+            ("spread", 0.0),
+            ("unison", 1.0),
+            ("oversample", 0.0),
+        ] {
+            assert_eq!(
+                t.get_param(&ParamId::from(id)),
+                Some(expected),
+                "缺失的新参数 {id} 应保持默认"
+            );
+        }
     }
 
     /// **别的乐器**的状态（VST3 / CLAP 的二进制）绝不能被当成参数表读进来。

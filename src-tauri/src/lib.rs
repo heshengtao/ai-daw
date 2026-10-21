@@ -7,6 +7,7 @@ mod assets;
 mod backends;
 mod cli;
 mod commands;
+mod factory_presets;
 mod history;
 mod main_thread;
 mod manager;
@@ -16,6 +17,7 @@ mod plugin_info;
 mod plugins;
 mod presets;
 mod session;
+mod sound_memories;
 mod state;
 
 use std::sync::Arc;
@@ -230,6 +232,14 @@ fn preset_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("presets.json"))
 }
 
+/// 音色记忆库文件的位置：应用配置目录下的 `sound-memories.json`。
+fn sound_memory_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("sound-memories.json"))
+}
+
 /// MCP 服务器配置文件的位置：应用配置目录下的 `mcp.json`。
 fn mcp_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("mcp.json"))
@@ -283,6 +293,7 @@ pub fn run() {
             }
             let state = app.state::<AppState>();
             state.init_presets(preset_file(app.handle()));
+            state.init_sound_memories(sound_memory_file(app.handle()));
             let audio = state.audio.clone();
             drop(state);
             // 插件源的网络配置（镜像 / 下载代理）：要在预热线程之前装上。
@@ -437,6 +448,11 @@ pub fn run() {
             commands::save_preset,
             commands::update_preset,
             commands::delete_preset,
+            commands::list_sound_memories,
+            commands::save_sound_memory,
+            commands::update_sound_memory,
+            commands::delete_sound_memory,
+            commands::apply_sound_memory,
             mcp::mcp_status,
             mcp::set_mcp_config,
             agent::agent_config,
@@ -449,6 +465,7 @@ pub fn run() {
             agent::agent_set_head,
             agent::agent_send,
             agent::agent_cancel,
+            agent::agent_running,
             cli::cli_status,
             cli::install_cli,
             cli::uninstall_cli,

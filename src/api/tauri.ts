@@ -59,6 +59,7 @@ import type {
   ProxyStatus,
   Section,
   Send,
+  SoundMemorySummary,
   StoreNetwork,
   TransportSnapshot,
   VelocityShape,
@@ -81,6 +82,8 @@ export const EVENT_IMPORT = "engine://import";
 export const EVENT_EXPORT = "engine://export";
 /** 写歌智能体事件广播通道名，与后端 `agent::EVENT_AGENT` 保持一致。 */
 export const EVENT_AGENT = "engine://agent";
+/** 音色记忆库变更广播通道名，与后端 `state::EVENT_SOUND_MEMORIES` 保持一致。 */
+export const EVENT_SOUND_MEMORIES = "engine://sound-memories";
 
 /** 读取当前工程。 */
 export function getProject(): Promise<Project> {
@@ -789,10 +792,16 @@ export function agentSend(sessionId: string | null, parentId: string | null, tex
   return invoke<string>("agent_send", { sessionId, parentId, text });
 }
 
-/** 停止当前一轮。 */
-export function agentCancel(): Promise<void> {
-  if (mockEnabled()) return Promise.resolve(mockApi.agentCancel());
-  return invoke<void>("agent_cancel");
+/** 停止当前一轮。返回停下之前是否真的有一轮在跑。 */
+export function agentCancel(): Promise<boolean> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentCancel() ?? false);
+  return invoke<boolean>("agent_cancel");
+}
+
+/** 当前后端是否有轮次在跑（面板重新挂载后用它对齐状态）。 */
+export function agentRunning(): Promise<boolean> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentRunning());
+  return invoke<boolean>("agent_running");
 }
 
 /** 订阅写歌智能体事件。 */
@@ -1227,6 +1236,49 @@ export function updatePreset(
 export function deletePreset(id: string): Promise<void> {
   if (mockEnabled()) return Promise.resolve(mockApi.deletePreset(id));
   return invoke<void>("delete_preset", { id });
+}
+
+// ---------------------------------------------------------------------------
+// 音色记忆库（跨工程）
+// ---------------------------------------------------------------------------
+
+/** 全部音色记忆的摘要。 */
+export function listSoundMemories(): Promise<SoundMemorySummary[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.listSoundMemories());
+  return invoke<SoundMemorySummary[]>("list_sound_memories");
+}
+
+/** 只修改元数据（名称 / 描述 / 标签 / 分工）。 */
+export function updateSoundMemory(
+  id: string,
+  patch: { name?: string; description?: string; tags?: string[]; role?: string },
+): Promise<SoundMemorySummary> {
+  if (mockEnabled()) return Promise.resolve(mockApi.updateSoundMemory(id, patch));
+  return invoke<SoundMemorySummary>("update_sound_memory", {
+    id,
+    name: patch.name ?? null,
+    description: patch.description ?? null,
+    tags: patch.tags ?? null,
+    role: patch.role ?? null,
+  });
+}
+
+/** 删除一条音色记忆。 */
+export function deleteSoundMemory(id: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.deleteSoundMemory(id));
+  return invoke<void>("delete_sound_memory", { id });
+}
+
+/** 把一条音色记忆应用到轨道（一次事务）。 */
+export function applySoundMemory(id: string, track: number): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.applySoundMemory(id, track));
+  return invoke<Project>("apply_sound_memory", { id, track });
+}
+
+/** 订阅音色记忆库变更（AI 保存/删除后前端自动刷新）。 */
+export function onSoundMemoriesEvent(handler: () => void): Promise<UnlistenFn> {
+  if (mockEnabled()) return Promise.resolve(() => {});
+  return listen(EVENT_SOUND_MEMORIES, () => handler());
 }
 
 /**

@@ -58,6 +58,8 @@ import type {
   ProjectHistoryEntry,
   Section,
   Send,
+  SoundMemory,
+  SoundMemorySummary,
   StoreNetwork,
   TrackMeta,
   TrackOverlap,
@@ -662,6 +664,46 @@ function writePresets(presets: Preset[]): void {
   localStorage.setItem(PRESET_KEY, JSON.stringify(presets));
 }
 
+/** 音色记忆：浏览器预览里用 localStorage 顶替后端的 `sound-memories.json`。 */
+const SOUND_MEMORY_KEY = "ai-daw-sound-memories";
+
+function readSoundMemories(): SoundMemory[] {
+  try {
+    return JSON.parse(localStorage.getItem(SOUND_MEMORY_KEY) ?? "[]") as SoundMemory[];
+  } catch {
+    return [];
+  }
+}
+
+function writeSoundMemories(memories: SoundMemory[]): void {
+  localStorage.setItem(SOUND_MEMORY_KEY, JSON.stringify(memories));
+}
+
+function stateBytes(state: string): number[] {
+  if (!state) return [];
+  try {
+    return Array.from(atob(state), (ch) => ch.charCodeAt(0));
+  } catch {
+    return [];
+  }
+}
+
+function toSoundSummary(memory: SoundMemory): SoundMemorySummary {
+  return {
+    id: memory.id,
+    name: memory.name,
+    description: memory.description,
+    tags: memory.tags,
+    role: memory.role,
+    instrument_plugin_id: memory.instrument?.plugin_id ?? null,
+    effect_plugin_ids: memory.effects.map((fx) => fx.plugin_id),
+    mixer: memory.mixer,
+    source_project: memory.source_project,
+    created_at: memory.created_at,
+    updated_at: memory.updated_at,
+  };
+}
+
 function clip(trackId: number, clipId: number) {
   return track(trackId)?.clips.find((c) => c.id === clipId);
 }
@@ -1209,6 +1251,57 @@ export const mockApi = {
   deletePreset: (id: string): void => {
     writePresets(readPresets().filter((p) => p.id !== id));
   },
+
+  listSoundMemories: (): SoundMemorySummary[] => readSoundMemories().map(toSoundSummary),
+
+  updateSoundMemory: (
+    id: string,
+    patch: { name?: string; description?: string; tags?: string[]; role?: string },
+  ): SoundMemorySummary => {
+    const all = readSoundMemories();
+    const found = all.find((m) => m.id === id);
+    if (!found) throw new Error(`音色记忆不存在：${id}`);
+    if (patch.name !== undefined) {
+      const name = patch.name.trim();
+      if (!name) throw new Error("音色记忆的名字不能为空");
+      found.name = name;
+    }
+    if (patch.description !== undefined) found.description = patch.description.trim();
+    if (patch.tags !== undefined) found.tags = patch.tags.map((t) => t.trim()).filter(Boolean);
+    if (patch.role !== undefined) found.role = patch.role.trim() || null;
+    found.updated_at = Date.now();
+    writeSoundMemories(all);
+    return toSoundSummary(found);
+  },
+
+  deleteSoundMemory: (id: string): void => {
+    const all = readSoundMemories();
+    const next = all.filter((m) => m.id !== id);
+    if (next.length === all.length) throw new Error(`音色记忆不存在：${id}`);
+    writeSoundMemories(next);
+  },
+
+  applySoundMemory: (id: string, trackId: number): Project =>
+    commit(() => {
+      const memory = readSoundMemories().find((m) => m.id === id);
+      if (!memory) throw new Error(`音色记忆不存在：${id}`);
+      const t = track(trackId);
+      if (!t) throw new Error(`轨道 ${trackId} 不存在`);
+      t.instrument = memory.instrument
+        ? {
+            plugin_id: memory.instrument.plugin_id,
+            params: { ...memory.instrument.params },
+            state: stateBytes(memory.instrument.state),
+          }
+        : null;
+      t.effects = memory.effects.map((fx) => ({
+        plugin_id: fx.plugin_id,
+        params: { ...fx.params },
+        state: stateBytes(fx.state),
+      }));
+      t.mixer.gain_db = memory.mixer.gain_db;
+      t.mixer.pan = memory.mixer.pan;
+    }),
 
   setTempo: (bpm: number): Project =>
     commit(() => {
@@ -1965,7 +2058,8 @@ export const mockApi = {
     return found;
   },
   agentSend: (_sessionId: string | null, _parentId: string | null, _text: string): string => "mock-session",
-  agentCancel: (): void => {},
+  agentCancel: (): boolean => false,
+  agentRunning: (): boolean => false,
   onAgentEvent: (_handler: (event: AgentEvent) => void): Promise<() => void> => Promise.resolve(() => {}),
 
   cliStatus: (): CliStatus => mockCliStatus(),

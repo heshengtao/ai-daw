@@ -11,6 +11,7 @@ import {
   agentConfig,
   agentDeleteSession,
   agentModels,
+  agentRunning,
   agentSend,
   agentSession,
   agentSessions,
@@ -46,6 +47,8 @@ export const useAgentStore = defineStore("agent", () => {
   const sessions = ref<AgentSessionSummary[]>([]);
   const session = ref<AgentSession | null>(null);
   const running = ref(false);
+  /** 已按过停止、正在等后端收尾（按钮立刻给出反馈，不必干等 `turn_finished`）。 */
+  const stopping = ref(false);
   /** 最近一轮是否被用户中途停止（由 `turn_finished.stopped` 给出）。 */
   const stopped = ref(false);
 
@@ -231,7 +234,9 @@ export const useAgentStore = defineStore("agent", () => {
     const trimmed = text.trim();
     if (!trimmed || running.value) return;
     running.value = true;
+    stopping.value = false;
     stopped.value = false;
+    clearStopFallback();
     resetStream();
     try {
       await agentSend(session.value?.id ?? null, parentId, trimmed);
@@ -252,8 +257,85 @@ export const useAgentStore = defineStore("agent", () => {
     return sendFrom(node?.parent ?? null, text);
   }
 
+  /** 停止兜底定时器：后端迟迟不回声时用 `agent_running` 对齐一次。 */
+  let stopFallback: ReturnType<typeof setTimeout> | null = null;
+
+  function clearStopFallback(): void {
+    if (stopFallback !== null) {
+      clearTimeout(stopFallback);
+      stopFallback = null;
+    }
+  }
+
+  /** 本地补收尾：`turn_finished` 可能因为面板卸载而错过了。 */
+  function finalizeStopped(): void {
+    clearStopFallback();
+    running.value = false;
+    stopping.value = false;
+    stopped.value = true;
+    resetStream();
+    void reloadSession();
+    void loadSessions();
+  }
+
+  /** 从后端回读当前会话（补齐面板卸载期间错过的节点）。 */
+  async function reloadSession(): Promise<void> {
+    const id = session.value?.id;
+    if (!id) return;
+    try {
+      session.value = await agentSession(id);
+    } catch {
+      // 会话可能已被删除：保持现状即可。
+    }
+  }
+
   async function stop(): Promise<void> {
-    await agentCancel().catch(() => {});
+    if (!running.value || stopping.value) return;
+    // 立刻给出「正在停止」反馈——后端可能正卡在一次不可打断的渲染里。
+    stopping.value = true;
+    const wasRunning = await agentCancel().catch(() => null);
+    // 等待期间 `turn_finished` 可能已经先到，这里不要再动手。
+    if (!stopping.value) return;
+    if (wasRunning === false) {
+      finalizeStopped();
+      return;
+    }
+    clearStopFallback();
+    stopFallback = setTimeout(() => {
+      stopFallback = null;
+      if (!stopping.value) return;
+      void agentRunning()
+        .catch(() => null)
+        .then((actual) => {
+          if (!stopping.value) return;
+          if (actual === true) {
+            // 后端还卡在不可打断的阻塞任务里：先放开按钮，允许用户再按一次。
+            stopping.value = false;
+            return;
+          }
+          finalizeStopped();
+        });
+    }, 4000);
+  }
+
+  /**
+   * 面板每次挂载都跟后端对齐一次：卸载期间的事件已经丢了，`running` 会永远停在
+   * `true`（停止按钮看起来彻底失灵）。这里回读会话与运行状态，把本地状态拉回来。
+   */
+  async function syncFromBackend(): Promise<void> {
+    const actual = await agentRunning().catch(() => null);
+    if (actual === null) return;
+    await reloadSession();
+    if (actual) {
+      running.value = true;
+      stopping.value = false;
+    } else if (running.value) {
+      running.value = false;
+      stopping.value = false;
+      stopped.value = true;
+      resetStream();
+      void loadSessions();
+    }
   }
 
   // ---- 事件 ----
@@ -277,7 +359,9 @@ export const useAgentStore = defineStore("agent", () => {
         if (s && !s.nodes.some((n) => n.id === event.user_node.id)) s.nodes.push(event.user_node);
         if (s) s.head = event.user_node.id;
         running.value = true;
+        stopping.value = false;
         stopped.value = false;
+        clearStopFallback();
         resetStream();
         break;
       }
@@ -319,13 +403,17 @@ export const useAgentStore = defineStore("agent", () => {
           s.updated_at = Date.now();
         }
         running.value = false;
+        stopping.value = false;
         stopped.value = event.stopped;
+        clearStopFallback();
         resetStream();
         void loadSessions();
         break;
       }
       case "error":
         running.value = false;
+        stopping.value = false;
+        clearStopFallback();
         layout.notify(event.message);
         break;
     }
@@ -357,6 +445,7 @@ export const useAgentStore = defineStore("agent", () => {
 
   function dispose(): void {
     wanted = false;
+    clearStopFallback();
     dropPending();
     unlisten?.();
     unlisten = null;
@@ -367,6 +456,7 @@ export const useAgentStore = defineStore("agent", () => {
     sessions,
     session,
     running,
+    stopping,
     stopped,
     streamingNodeId,
     streamingContent,
@@ -389,6 +479,7 @@ export const useAgentStore = defineStore("agent", () => {
     editAndResend,
     stop,
     start,
+    syncFromBackend,
     dispose,
   };
 });

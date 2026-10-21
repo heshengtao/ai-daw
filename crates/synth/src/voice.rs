@@ -1,4 +1,4 @@
-use crate::Params;
+use crate::{lfo_hz, Params};
 
 /// 一个声部的包络阶段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +114,10 @@ pub struct Block {
     /// 位深压碎的量化档数（2^位数）。
     pub crush_levels: f32,
     pub filter_type: FilterType,
+    /// 每声部的振荡器副本数（1..=4）。
+    pub unison_copies: usize,
+    /// 1 = 关闭，2 = 2x 过采样。
+    pub oversample: u32,
 }
 
 impl Block {
@@ -139,14 +143,22 @@ impl Block {
             // 它是**量化**而不是降采样，所以不会引入混叠。
             crush_levels: 2f32.powf(16.0 - p.crush * 12.0),
             filter_type: FilterType::from_param(p.filter_type),
+            // 老行为：`unison = 1` 时，`detune > 0` 仍然代表「主振 + 一个失谐副本」。
+            unison_copies: if p.unison <= 1.0 && p.detune > 0.0 {
+                2
+            } else {
+                (p.unison.round() as i32).clamp(1, 4) as usize
+            },
+            oversample: if p.oversample > 0.5 { 2 } else { 1 },
         }
     }
 }
 
 /// 一个声部：DCO（主振 + 失谐副振 + 低八度副振 + 噪声 + FM）→ HPF → VCF → 压碎 → VCA。
 ///
-/// 每个声部自带包络与滤波器状态，所以按键之间互不干扰；LFO 是**全局**的（老式模拟合成器
-/// 只有一个 LFO），由 [`crate::SynthPlugin`] 推进后把当前值传进来。
+/// 每个声部自带包络与滤波器状态，所以按键之间互不干扰。LFO 默认是**全局**的（老式模拟
+/// 合成器只有一个 LFO），由 [`crate::SynthPlugin`] 推进后把当前值传进来；`lfoMode = 1` 时
+/// 每个声部用自己的相位与延迟，和弦里每个音可以独立揉弦。
 #[derive(Debug, Clone, Copy)]
 pub struct Voice {
     pub note: u8,
@@ -176,6 +188,16 @@ pub struct Voice {
     /// 一阶高通的上一拍输入。
     hpf_prev_in: f32,
     hpf_prev_out: f32,
+    /// 独立滤波包络（`filterEnvMode = 1` 时使用）。
+    fenv: f32,
+    fstage: Stage,
+    /// 每声部 LFO 的相位与延迟计时（`lfoMode = 1` 时使用）。
+    lfo_phase: f64,
+    lfo_age: f64,
+    /// 额外 unison 副本的相位（主振仍用 `phase`，最多 4 个副本）。
+    uni_phase: [f64; 3],
+    /// 2x 过采样抽取滤波器的前两个内部样本。
+    decim_prev: [f32; 2],
 }
 
 impl Voice {
@@ -199,6 +221,13 @@ impl Voice {
             ic2: 0.0,
             hpf_prev_in: 0.0,
             hpf_prev_out: 0.0,
+            fenv: 0.0,
+            fstage: Stage::Idle,
+            // 0.25 是三角波 `4|p-0.5|-1` 的零点；每声部从 0 起振，起音不会被颤音拉偏。
+            lfo_phase: 0.25,
+            lfo_age: 0.0,
+            uni_phase: [0.0; 3],
+            decim_prev: [0.0; 2],
         }
     }
 
@@ -219,6 +248,13 @@ impl Voice {
         self.det_phase = 0.0;
         self.fm_phase = 0.0;
         self.pitch_env = 1.0;
+        self.fenv = 0.0;
+        self.fstage = Stage::Attack;
+        // 从三角波的零点（0）起振：颤音不会在起音瞬间把音高拉偏。
+        self.lfo_phase = 0.25;
+        self.lfo_age = 0.0;
+        self.uni_phase = [0.0; 3];
+        self.decim_prev = [0.0; 2];
         // 噪声按音高播种：否则 16 个声部的噪声完全相干，叠起来只会变得更响而不是更厚。
         let seed = 0x9E37_79B9 ^ (note as u32).wrapping_mul(2_654_435_761);
         self.rng = if seed == 0 { 1 } else { seed };
@@ -244,6 +280,9 @@ impl Voice {
         if self.stage != Stage::Idle {
             self.stage = Stage::Release;
         }
+        if self.fstage != Stage::Idle {
+            self.fstage = Stage::Release;
+        }
     }
 
     /// 双极性白噪声（xorshift32）。声部自带状态，回调里不分配。
@@ -256,8 +295,58 @@ impl Voice {
         (x as f32 / u32::MAX as f32) * 2.0 - 1.0
     }
 
-    /// 推进一个采样并返回输出。
+    /// 推进一个输出采样：2x 过采样时内部跑两次，再用 4-tap 半带 FIR 抽取。
     pub fn next_sample(&mut self, sample_rate: f64, p: &Params, b: &Block, lfo: f32) -> f32 {
+        if b.oversample <= 1 {
+            return self.render_sample(sample_rate, p, b, lfo);
+        }
+        let sr = sample_rate * b.oversample as f64;
+        let s0 = self.render_sample(sr, p, b, lfo);
+        let s1 = self.render_sample(sr, p, b, lfo);
+        let history = [self.decim_prev[0], self.decim_prev[1], s0, s1];
+        self.decim_prev = [s0, s1];
+        // 半带低通：通带到内部 Nyquist/2（= 输出 Nyquist），压住折叠回基带的镜像。
+        // 系数和为 1；`oversample = 0` 时这条路径完全不执行，默认音色不受影响。
+        -0.0625 * history[0] + 0.5625 * history[1] + 0.5625 * history[2]
+            - 0.0625 * history[3]
+    }
+
+    /// 独立滤波包络：只在 `filterEnvMode = 1` 时参与滤波截止。
+    fn tick_filter_env(&mut self, sr: f64, p: &Params) {
+        let secs = |t: f32| -> f64 { (t.max(0.0) as f64) * sr };
+        match self.fstage {
+            Stage::Attack => {
+                let a = secs(p.f_attack);
+                self.fenv += if a <= 1.0 { 1.0 } else { (1.0 / a) as f32 };
+                if self.fenv >= 1.0 {
+                    self.fenv = 1.0;
+                    self.fstage = Stage::Decay;
+                }
+            }
+            Stage::Decay => {
+                let d = secs(p.f_decay);
+                let step = if d <= 1.0 { 1.0 } else { ((1.0 - p.f_sustain) / d as f32).max(0.0) };
+                self.fenv -= step;
+                if self.fenv <= p.f_sustain {
+                    self.fenv = p.f_sustain;
+                    self.fstage = Stage::Sustain;
+                }
+            }
+            Stage::Sustain => {}
+            Stage::Release => {
+                let r = secs(p.f_release);
+                self.fenv -= if r <= 1.0 { 1.0 } else { (1.0 / r) as f32 };
+                if self.fenv <= 0.0 {
+                    self.fenv = 0.0;
+                    self.fstage = Stage::Idle;
+                }
+            }
+            Stage::Idle => {}
+        }
+    }
+
+    /// 单个内部采样的完整声部 DSP（过采样时会被同一输出采样调用两次）。
+    fn render_sample(&mut self, sample_rate: f64, p: &Params, b: &Block, lfo: f32) -> f32 {
         if self.stage == Stage::Idle {
             return 0.0;
         }
@@ -294,8 +383,25 @@ impl Voice {
             }
             Stage::Idle => {}
         }
+        self.tick_filter_env(sr, p);
 
-        // ---- 音高：滑音 + LFO 颤音 + 音高包络（起音扫频） ----
+        // ---- LFO：全局三角波（老行为）或每声部独立三角波 ----
+        let lfo = if p.lfo_mode > 0.5 {
+            self.lfo_phase = (self.lfo_phase + lfo_hz(p.lfo_rate) / sr).fract();
+            let tri = 4.0 * (self.lfo_phase - 0.5).abs() - 1.0;
+            let delay_samples = (p.lfo_delay as f64) * 2.0 * sr;
+            let fade = if delay_samples <= 1.0 {
+                1.0
+            } else {
+                (self.lfo_age / delay_samples).min(1.0)
+            };
+            self.lfo_age += 1.0;
+            (tri * fade) as f32
+        } else {
+            lfo
+        };
+
+        // ---- 音高：滑音 + LFO 颤音 + 音高包络（可下扫 / 上扫） ----
         if p.glide > 0.0 {
             let step = 1.0 / secs(p.glide).max(1.0);
             let diff = self.target_freq - self.freq;
@@ -307,15 +413,15 @@ impl Voice {
         }
         let mut semis = p.lfo_pitch * lfo + self.bend_cents / 100.0;
         if b.pitch_step > 0.0 {
-            semis += self.pitch_env * b.pitch_amount;
+            let amount =
+                if p.pitch_env_dir > 0.5 { 1.0 - self.pitch_env } else { self.pitch_env };
+            semis += amount * b.pitch_amount;
             self.pitch_env = (self.pitch_env - b.pitch_step).max(0.0);
         }
         let f = self.freq * 2f64.powf((semis / 12.0) as f64);
         let dt = f / sr;
-        self.phase = (self.phase + dt).fract();
-        self.sub_phase = (self.sub_phase + dt * 0.5).fract();
 
-        // ---- 振荡器：主振 +（可选）失谐伴振；主振相位受 FM 调制 ----
+        // ---- 振荡器：主振 +（可选）失谐副本 / unison；主振相位受 FM 调制 ----
         // 用**相位调制**而不是频率调制：任何载波波形（锯齿/方波/正弦…）都能直接用。
         let fmd = if b.fm_index > 0.0 {
             (std::f64::consts::TAU * self.fm_phase).sin() * b.fm_index
@@ -325,16 +431,39 @@ impl Voice {
         self.fm_phase = (self.fm_phase + dt * b.fm_ratio).fract();
 
         let wave = Wave::from_param(p.wave);
-        let main = wave.sample(self.phase + fmd, b.pulse_width, dt);
-        let mut sig = if p.detune > 0.0 {
-            // 失谐量很小（±1%），相位增量随之微调，抗混叠的 `dt` 也用同一个。
+        let mut sig;
+        if b.unison_copies <= 1 {
+            // 老路径：一个振荡器。
+            self.phase = (self.phase + dt).fract();
+            sig = wave.sample(self.phase + fmd, b.pulse_width, dt);
+        } else if b.unison_copies == 2 && p.detune > 0.0 {
+            // 老路径：主振 + 一个 +2% 的失谐副本（默认音色逐字节不变）。
+            self.phase = (self.phase + dt).fract();
+            let main = wave.sample(self.phase + fmd, b.pulse_width, dt);
             let dt_det = dt * (1.0 + p.detune as f64 * 0.02);
             self.det_phase = (self.det_phase + dt_det).fract();
-            // 两个振荡器各取一半：失谐是「变厚」，不该顺带变响。
-            0.5 * (main + wave.sample(self.det_phase + fmd, b.pulse_width, dt_det))
+            sig = 0.5 * (main + wave.sample(self.det_phase + fmd, b.pulse_width, dt_det));
         } else {
-            main
-        };
+            // 真 unison：<= 4 个副本围绕主音对称展开（detune=0 时给 0.5% 的最小宽度）。
+            let copies = b.unison_copies;
+            let spread = if p.detune > 0.0 { p.detune as f64 * 0.02 } else { 0.005 };
+            let mut sum = 0.0;
+            for k in 0..copies {
+                let offset = -spread + 2.0 * spread * (k as f64 / (copies - 1) as f64);
+                let dt_k = dt * (1.0 + offset);
+                let phase = if k == 0 {
+                    self.phase = (self.phase + dt_k).fract();
+                    self.phase
+                } else {
+                    let slot = &mut self.uni_phase[k - 1];
+                    *slot = (*slot + dt_k).fract();
+                    *slot
+                };
+                sum += wave.sample(phase + fmd, b.pulse_width, dt_k);
+            }
+            sig = sum / copies as f32;
+        }
+        self.sub_phase = (self.sub_phase + dt * 0.5).fract();
         if p.sub > 0.0 {
             sig += p.sub * Wave::Square.sample(self.sub_phase, 0.5, dt * 0.5);
         }
@@ -359,7 +488,9 @@ impl Voice {
 
         // ---- 状态变量滤波（2 极点）：截止 = 基础截止 × 包络量 × 键跟随 × LFO ----
         let octaves = self.note as f32 / 12.0 - 5.0;
-        let bend = p.filter_env * self.env * 7.0 + p.key_follow * octaves + p.lfo_filter * lfo * 2.0;
+        let env_for_filter = if p.filter_env_mode > 0.5 { self.fenv } else { self.env };
+        let bend =
+            p.filter_env * env_for_filter * 7.0 + p.key_follow * octaves + p.lfo_filter * lfo * 2.0;
         let fc = (20.0 * 900.0f32.powf(p.cutoff) * 2f32.powf(bend))
             .clamp(20.0, (sr * 0.45) as f32);
         let g = (std::f64::consts::PI * fc as f64 / sr).tan() as f32;
