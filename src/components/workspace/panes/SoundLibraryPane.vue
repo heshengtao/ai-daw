@@ -164,11 +164,18 @@ onUnmounted(() => stop?.());
           <input v-model="draftName" class="md3-field" :placeholder="t('sounds.name')" />
           <textarea
             v-model="draftDescription"
-            class="md3-field"
-            rows="2"
+            class="net-input"
+            rows="3"
+            spellcheck="false"
             :placeholder="t('sounds.description')"
           />
-          <input v-model="draftTags" class="md3-field" :placeholder="t('sounds.tags')" />
+          <textarea
+            v-model="draftTags"
+            class="net-input"
+            rows="2"
+            spellcheck="false"
+            :placeholder="t('sounds.tags')"
+          />
           <div class="actions">
             <button
               class="btn primary"
@@ -330,6 +337,24 @@ onUnmounted(() => stop?.());
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+/* 与设置页的多行输入框同一套样式。 */
+.net-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+  border-radius: 10px;
+  background-color: var(--app-card);
+  color: rgb(var(--md-on-surface));
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.net-input:focus {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 0;
 }
 .card-head {
   display: flex;
