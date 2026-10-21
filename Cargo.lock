@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "ai-daw-analysis"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "ebur128",
  "rustfft",
@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-asset"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "ai-daw-engine",
  "hound",
@@ -24,14 +24,14 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-effects"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "ai-daw-plugin-api",
 ]
 
 [[package]]
 name = "ai-daw-engine"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "ai-daw-analysis",
  "ai-daw-effects",
@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-host-vst3"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "ai-daw-plugin-api",
  "block2",
@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-instruments"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "ai-daw-plugin-api",
  "rustysynth-ext",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-ipc"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -89,7 +89,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-local-ai"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "beat-this",
  "ort",
@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-mastering"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "ai-daw-analysis",
  "serde",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-plugin-api"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -115,14 +115,14 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-synth"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "ai-daw-plugin-api",
 ]
 
 [[package]]
 name = "ai-daw-vst3-helper"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "objc2",
  "objc2-app-kit",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "aidaw"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "clap",
  "serde_json",
