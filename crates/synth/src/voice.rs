@@ -153,6 +153,8 @@ pub struct Voice {
     velocity: f32,
     /// 单音音量（0.0..=1.0，1.0 = 不衰减）；由 `NoteVolume` 事件设定，与力度互不影响。
     volume: f32,
+    /// 该声部的音高偏移（音分）；由通道弯音 / 逐音弯音事件设定。
+    bend_cents: f32,
     /// 滑音的目标频率与当前频率（Hz）。
     target_freq: f64,
     freq: f64,
@@ -182,6 +184,7 @@ impl Voice {
             note: 0,
             velocity: 0.0,
             volume: 1.0,
+            bend_cents: 0.0,
             target_freq: 0.0,
             freq: 0.0,
             phase: 0.0,
@@ -226,6 +229,15 @@ impl Voice {
     /// 设定该声部的单音音量（0..=127）。
     pub fn set_volume(&mut self, value: u8) {
         self.volume = value.min(127) as f32 / 127.0;
+    }
+
+    /// 设定该声部的音高偏移（音分）。
+    pub fn set_bend(&mut self, cents: f32) {
+        self.bend_cents = if cents.is_finite() {
+            cents.clamp(-2400.0, 2400.0)
+        } else {
+            0.0
+        };
     }
 
     pub fn note_off(&mut self) {
@@ -293,7 +305,7 @@ impl Voice {
                 self.freq += diff.signum() * step;
             }
         }
-        let mut semis = p.lfo_pitch * lfo;
+        let mut semis = p.lfo_pitch * lfo + self.bend_cents / 100.0;
         if b.pitch_step > 0.0 {
             semis += self.pitch_env * b.pitch_amount;
             self.pitch_env = (self.pitch_env - b.pitch_step).max(0.0);

@@ -40,12 +40,15 @@ use clack_extensions::params::{
 };
 use clack_extensions::state::{HostState, HostStateImpl, PluginState};
 use clack_extensions::thread_check::{HostThreadCheck, HostThreadCheckImpl};
-use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
+use clack_host::events::event_types::{
+    MidiEvent as ClapMidiEvent, NoteOffEvent, NoteOnEvent, ParamValueEvent,
+};
 use clack_host::prelude::*;
 
 use ai_daw_plugin_api::{
-    IoLayout, MidiEvent as HostEvent, ParamId, ParamInfo, Plugin, PluginCapabilities,
-    PluginDescriptor, PluginError, PluginKind, ProcessContext, TimedMidiEvent,
+    pitch_bend_midi_bytes, IoLayout, MidiEvent as HostEvent, ParamId, ParamInfo, Plugin,
+    PluginCapabilities, PluginDescriptor, PluginError, PluginKind, ProcessContext,
+    TimedMidiEvent,
 };
 
 use crate::error::HostError;
@@ -469,6 +472,8 @@ pub struct ClapHostedPlugin {
     param_queue: Vec<(ClapId, f64)>,
     /// 插件侧产生的参数变化，等待宿主抽干。
     pending: Vec<(ParamId, f32)>,
+    /// 通道弯音范围（半音）。
+    pitch_bend_range: f32,
 }
 
 // SAFETY: clack 故意把 `PluginInstance` 标记为 `!Send`，因为 CLAP 有自己的线程模型
@@ -560,6 +565,7 @@ impl ClapHostedPlugin {
             out_events: EventBuffer::new(),
             param_queue: Vec::new(),
             pending: Vec::new(),
+            pitch_bend_range: 2.0,
         })
     }
 
@@ -894,7 +900,12 @@ impl Plugin for ClapHostedPlugin {
             name: self.name.clone(),
             kind: self.kind,
             io: self.io,
-            capabilities: PluginCapabilities { per_note_volume: false, has_editor: self.has_editor },
+            capabilities: PluginCapabilities {
+                per_note_volume: false,
+                has_editor: self.has_editor,
+                per_note_pitch: false,
+                channel_pitch_bend: self.kind == PluginKind::Instrument,
+            },
         }
     }
 
@@ -980,6 +991,14 @@ impl Plugin for ClapHostedPlugin {
         }
     }
 
+    fn set_pitch_bend_range(&mut self, semitones: f32) {
+        self.pitch_bend_range = if semitones.is_finite() && semitones > 0.0 {
+            semitones.clamp(0.01, 24.0)
+        } else {
+            2.0
+        };
+    }
+
     fn reset(&mut self) {
         // `clap_plugin.reset()` 是**音频线程**专属，而本方法正是被音频回调调用的
         // （换位置 / 静音 / 独奏都会走到）。用它即可，**不碰实例锁**。
@@ -1043,8 +1062,24 @@ impl Plugin for ClapHostedPlugin {
                     let pckn = Pckn::new(0u16, 0u16, u16::from(note), 0u32);
                     self.in_events.push(&NoteOffEvent::new(e.frame, pckn, 0.0));
                 }
+                // CLAP 后端 v1 走通道弯音（clack-host 0.2 没有 host 侧的
+                // note-expression 扩展探测）。原始 MIDI 是所有 CLAP 音源都认的路径。
+                HostEvent::PitchBend { cents } | HostEvent::NotePitch { cents, .. } => {
+                    self.in_events.push(&ClapMidiEvent::new(
+                        e.frame,
+                        0,
+                        pitch_bend_midi_bytes(cents, self.pitch_bend_range),
+                    ));
+                }
+                HostEvent::ControlChange { controller, value } => {
+                    self.in_events.push(&ClapMidiEvent::new(
+                        e.frame,
+                        0,
+                        [0xB0, controller, value.min(127)],
+                    ));
+                }
                 // 折叠路径已在 `Player` 里完成；本适配器声明不支持 per-note 音量。
-                HostEvent::NoteVolume { .. } | HostEvent::ControlChange { .. } => {}
+                HostEvent::NoteVolume { .. } => {}
             }
         }
         self.in_events.sort();

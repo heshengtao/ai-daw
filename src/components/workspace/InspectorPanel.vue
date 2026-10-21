@@ -24,7 +24,7 @@ import { useParamBrowserStore } from "@/stores/paramBrowser";
 import { usePluginInterface } from "@/composables/usePluginInterface";
 import { canonicalPluginId } from "@/data/plugins";
 import { useI18n } from "@/i18n";
-import type { Note, NotePatch } from "@/api/types";
+import type { Note, NotePatch, PitchExpression } from "@/api/types";
 
 const store = useProjectStore();
 const selection = useSelectionStore();
@@ -339,6 +339,78 @@ async function setLegato(on: boolean): Promise<void> {
     layout.notify(i18n.t("error.updateNotes", { error: String(err) }));
   }
 }
+
+// ---- 音高表达（推弦 / 揉弦 / 滑音） ----
+
+const exprBend = ref(0);
+const exprBendTo = ref(0);
+const exprBendTime = ref(0);
+const exprVibrato = ref(0);
+const exprRate = ref(5.5);
+const exprDelay = ref(0);
+const exprFade = ref(0);
+
+/** 选中音符变化时，用第一颗音符的值回填表单。 */
+watch(
+  () => pickedNotes.value[0]?.note.expr,
+  (expr) => {
+    exprBend.value = expr?.bend ?? 0;
+    exprBendTo.value = expr?.bend_to ?? 0;
+    exprBendTime.value = expr?.bend_time ?? 0;
+    exprVibrato.value = expr?.vibrato ?? 0;
+    exprRate.value = expr?.vibrato_rate || 5.5;
+    exprDelay.value = expr?.vibrato_delay ?? 0;
+    exprFade.value = expr?.vibrato_fade ?? 0;
+  },
+  { immediate: true },
+);
+
+function exprPayload(): PitchExpression {
+  return {
+    bend: Math.round(exprBend.value),
+    bend_to: Math.round(exprBendTo.value),
+    bend_time: exprBendTime.value,
+    vibrato: Math.round(exprVibrato.value),
+    vibrato_rate: exprRate.value,
+    vibrato_delay: exprDelay.value,
+    vibrato_fade: exprFade.value,
+  };
+}
+
+/** 把表单应用到所有选中音符（全零 = 清除表达）。 */
+async function applyExpr(): Promise<void> {
+  const c = selection.clip;
+  const t = track.value;
+  if (!c || !t || pickedNotes.value.length === 0) return;
+  const expr = exprPayload();
+  const patches: NotePatch[] = pickedNotes.value.map((entry) => ({ id: entry.id, expr }));
+  try {
+    await store.updateNotes(t.id, c.id, patches);
+    layout.notify(i18n.t("inspector.exprApplied", { count: patches.length }));
+  } catch (err) {
+    layout.notify(i18n.t("error.updateNotes", { error: String(err) }));
+  }
+}
+
+/** 清除选中音符的音高表达。 */
+async function clearExpr(): Promise<void> {
+  const c = selection.clip;
+  const t = track.value;
+  if (!c || !t || pickedNotes.value.length === 0) return;
+  exprBend.value = 0;
+  exprBendTo.value = 0;
+  exprBendTime.value = 0;
+  exprVibrato.value = 0;
+  exprRate.value = 5.5;
+  exprDelay.value = 0;
+  exprFade.value = 0;
+  const patches: NotePatch[] = pickedNotes.value.map((entry) => ({ id: entry.id, expr: {} }));
+  try {
+    await store.updateNotes(t.id, c.id, patches);
+  } catch (err) {
+    layout.notify(i18n.t("error.updateNotes", { error: String(err) }));
+  }
+}
 </script>
 
 <template>
@@ -529,6 +601,89 @@ async function setLegato(on: boolean): Promise<void> {
               </button>
             </div>
           </div>
+
+          <!-- 音高表达：推弦 / 揉弦 / 滑音 -->
+          <details class="expr-editor">
+            <summary class="row-label">{{ i18n.t("inspector.pitchExpr") }}</summary>
+            <div class="row">
+              <span class="row-label">{{ i18n.t("inspector.exprBend") }}</span>
+              <NumberField
+                v-model="exprBend"
+                :sr-label="i18n.t('inspector.exprBend')"
+                :min="-2400"
+                :max="2400"
+                :step="10"
+              />
+            </div>
+            <div class="row">
+              <span class="row-label">{{ i18n.t("inspector.exprBendTo") }}</span>
+              <NumberField
+                v-model="exprBendTo"
+                :sr-label="i18n.t('inspector.exprBendTo')"
+                :min="-2400"
+                :max="2400"
+                :step="10"
+              />
+            </div>
+            <div class="row">
+              <span class="row-label">{{ i18n.t("inspector.exprBendTime") }}</span>
+              <NumberField
+                v-model="exprBendTime"
+                :sr-label="i18n.t('inspector.exprBendTime')"
+                :min="0"
+                :max="8"
+                :step="0.0625"
+              />
+            </div>
+            <div class="row">
+              <span class="row-label">{{ i18n.t("inspector.exprVibrato") }}</span>
+              <NumberField
+                v-model="exprVibrato"
+                :sr-label="i18n.t('inspector.exprVibrato')"
+                :min="0"
+                :max="1200"
+                :step="5"
+              />
+            </div>
+            <div class="row">
+              <span class="row-label">{{ i18n.t("inspector.exprRate") }}</span>
+              <NumberField
+                v-model="exprRate"
+                :sr-label="i18n.t('inspector.exprRate')"
+                :min="0.1"
+                :max="20"
+                :step="0.1"
+              />
+            </div>
+            <div class="row">
+              <span class="row-label">{{ i18n.t("inspector.exprDelay") }}</span>
+              <NumberField
+                v-model="exprDelay"
+                :sr-label="i18n.t('inspector.exprDelay')"
+                :min="0"
+                :max="8"
+                :step="0.0625"
+              />
+            </div>
+            <div class="row">
+              <span class="row-label">{{ i18n.t("inspector.exprFade") }}</span>
+              <NumberField
+                v-model="exprFade"
+                :sr-label="i18n.t('inspector.exprFade')"
+                :min="0"
+                :max="8"
+                :step="0.0625"
+              />
+            </div>
+            <div class="row">
+              <button class="open-editor small" @click="applyExpr">
+                {{ i18n.t("inspector.exprApply") }}
+              </button>
+              <button class="pill" @click="clearExpr">
+                {{ i18n.t("inspector.exprClear") }}
+              </button>
+            </div>
+          </details>
         </div>
       </section>
 
@@ -737,6 +892,17 @@ async function setLegato(on: boolean): Promise<void> {
   font-size: 11px;
   line-height: 1.5;
   color: rgb(var(--md-on-surface-muted));
+}
+/* 音高表达：默认折叠，避免把音符区撑得太长 */
+.expr-editor {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid rgb(var(--md-outline-variant) / 0.3);
+}
+.expr-editor > summary {
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 4px;
 }
 /* 效果器链 */
 .fx {

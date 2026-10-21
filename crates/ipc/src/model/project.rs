@@ -354,7 +354,7 @@ mod tests {
                 id: ClipId(3),
                 start: 0.0,
                 length: 1.0,
-                notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }],
+                notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
                 audio: None,
             }],
             mixer: MixerChannel::default(),

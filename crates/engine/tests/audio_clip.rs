@@ -250,7 +250,7 @@ fn audio_and_instrument_sum_on_the_same_track() {
         id: ClipId(2),
         start: 0.0,
         length: 2.0,
-        notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 1.5, velocity: 100, volume: 127, offset: 0.0, legato: false }],
+        notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 1.5, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: ai_daw_engine::model::PitchExpression::NONE }],
         audio: None,
     });
 

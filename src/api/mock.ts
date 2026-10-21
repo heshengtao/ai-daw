@@ -51,6 +51,7 @@ import type {
   NoteRange,
   NoteStats,
   OverlapReport,
+  PitchExpression,
   PitchRange,
   Preset,
   Project,
@@ -537,10 +538,10 @@ const redoStack: Project[] = [];
 /**
  * 历史工程：浏览器预览用 localStorage 模拟后端的 `history/` 目录。
  *
- * 只保留展示用的元信息 + 完整工程快照；最多 30 份，与后端一致。
+ * 只保留展示用的元信息 + 完整工程快照；最多 50 份，与后端一致。
  */
 const HISTORY_KEY = "ai-daw-project-history";
-const HISTORY_MAX = 30;
+const HISTORY_MAX = 50;
 
 interface MockHistoryRecord {
   entry: ProjectHistoryEntry;
@@ -677,10 +678,38 @@ function nextNoteId(c: { notes: Note[] }): number {
 /** 夹进片段范围：起点不早于 0、时值至少 1/32、不越出片段。 */
 function clampNote(n: Note, length: number): Note {
   const MIN = 1 / 32;
-  if (n.start < 0) return { ...n, duration: Math.max(MIN, n.duration) };
+  const expr = normalizeExpr(n.expr);
+  const base: Note = expr ? { ...n, expr } : { ...n };
+  if (!expr) delete base.expr;
+  if (n.start < 0) return { ...base, duration: Math.max(MIN, n.duration) };
   const start = Math.min(Math.max(0, n.start), Math.max(0, length - MIN));
   const duration = Math.min(Math.max(MIN, n.duration), Math.max(MIN, length - start));
-  return { ...n, start, duration };
+  return { ...base, start, duration };
+}
+
+/** 与引擎同语义：音分 ±2400、时间/延迟 0..256 拍、速率 0..20 Hz；全零 = 无表达。 */
+function normalizeExpr(expr?: PitchExpression): PitchExpression | undefined {
+  if (!expr) return undefined;
+  const num = (v: number | undefined) => (Number.isFinite(v) ? (v as number) : 0);
+  const cents = (v: number | undefined) => Math.max(-2400, Math.min(2400, num(v)));
+  const out: PitchExpression = {};
+  const bend = cents(expr.bend);
+  const bendTo = cents(expr.bend_to);
+  const bendTime = Math.max(0, Math.min(256, num(expr.bend_time)));
+  const vibrato = Math.max(0, Math.min(2400, num(expr.vibrato)));
+  const rate = Math.max(0, Math.min(20, num(expr.vibrato_rate)));
+  const delay = Math.max(0, Math.min(256, num(expr.vibrato_delay)));
+  const fade = Math.max(0, Math.min(256, num(expr.vibrato_fade)));
+  if (bend) out.bend = bend;
+  if (bendTo) out.bend_to = bendTo;
+  if (bendTime) out.bend_time = bendTime;
+  if (vibrato) {
+    out.vibrato = vibrato;
+    if (rate) out.vibrato_rate = rate;
+    if (delay) out.vibrato_delay = delay;
+    if (fade) out.vibrato_fade = fade;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** 范围是**片段内**拍、左闭右开；不给 = 整段。 */
@@ -1737,13 +1766,20 @@ export const mockApi = {
       state.sections = [...sections].sort((a, b) => a.start - b.start);
     }),
 
-  setTrackMeta: (trackId: number, role?: string, pitchRange?: PitchRange): Project =>
+  setTrackMeta: (
+    trackId: number,
+    role?: string,
+    pitchRange?: PitchRange,
+    pitchBendRange?: number,
+  ): Project =>
     commit(() => {
       const t = track(trackId);
       if (!t) return;
       const meta: TrackMeta = {};
       if (role) meta.role = role;
       if (pitchRange) meta.pitch_range = pitchRange;
+      if (pitchBendRange != null && Number.isFinite(pitchBendRange))
+        meta.pitch_bend_range = Math.max(0.01, Math.min(24, pitchBendRange));
       if (Object.keys(meta).length === 0) delete t.meta;
       else t.meta = meta;
     }),
@@ -1821,6 +1857,8 @@ export const mockApi = {
   saveProject: (path: string): string => {
     dirty = false;
     sessionPath = path;
+    // 保存成功的这一版也进历史（与后端 `save_project` 一致）。
+    recordHistory();
     return path;
   },
 
@@ -1855,6 +1893,13 @@ export const mockApi = {
 
   cacheSession: (path: string | null): void => {
     sessionPath = path;
+  },
+
+  deleteProjectHistory: (id: string): void => {
+    const records = readHistory();
+    const rest = records.filter((record) => record.entry.id !== id);
+    if (rest.length === records.length) throw new Error("历史工程不存在");
+    writeHistory(rest);
   },
 
   openProject: (): Project => {

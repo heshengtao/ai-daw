@@ -243,6 +243,17 @@ function noteTitle(note: Note): string {
   ];
   if (note.offset) parts.push(i18n.t("edit.noteOffset", { beats: note.offset.toFixed(3) }));
   if (note.legato) parts.push(i18n.t("edit.noteLegato"));
+  const expr = note.expr;
+  if (expr) {
+    const bits: string[] = [];
+    if (expr.bend || expr.bend_to) {
+      bits.push(`bend ${expr.bend ?? 0}→${expr.bend_to ?? expr.bend ?? 0}¢`);
+    }
+    if (expr.vibrato) {
+      bits.push(`vib ±${expr.vibrato}¢ @${(expr.vibrato_rate || 5.5).toFixed(1)}Hz`);
+    }
+    if (bits.length > 0) parts.push(i18n.t("edit.notePitchExpr", { expr: bits.join(", ") }));
+  }
   return parts.join(" · ");
 }
 

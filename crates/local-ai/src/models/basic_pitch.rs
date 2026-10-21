@@ -6,7 +6,7 @@
 //!
 //! 这里把官方 `inference.py` / `note_creation.py` 的窗口化与音符解码**逐行照搬**（含
 //! 半重叠补零、每窗掐掉首尾 15 帧、由帧差补 onset、邻频能量抑制、以及 melodia 后处理），
-//! 只省略了 pitch bend（工程里的音符事件没有弯音）。参数与官方默认值一致：
+//! 只省略了 pitch bend（转录结果暂不写音符的 `expr`）。参数与官方默认值一致：
 //! onset 0.5 / frame 0.3 / 最短音符 127.7 ms / 频率范围不限。
 
 use std::path::PathBuf;

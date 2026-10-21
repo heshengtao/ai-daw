@@ -16,7 +16,7 @@ fn agent() -> Actor {
 }
 
 fn note(pitch: u8, start: f64, duration: f64, velocity: u8) -> Note {
-    Note { id: 0, pitch, start, duration, velocity, volume: 127, offset: 0.0, legato: false }
+    Note { id: 0, pitch, start, duration, velocity, volume: 127, offset: 0.0, legato: false, expr: ai_daw_engine::model::PitchExpression::NONE }
 }
 
 /// 一条轨道 + 一个 16 拍的 MIDI 片段。
@@ -129,6 +129,7 @@ fn update_and_remove_by_stable_id() {
                 volume: None,
                 offset: None,
                 legato: None,
+                expr: None,
             }],
         },
         agent(),
@@ -453,6 +454,7 @@ fn composition_metadata_roundtrips_and_clears() {
             track,
             role: Some("lead".into()),
             pitch_range: Some(ai_daw_engine::model::PitchRange { min: 60, max: 84 }),
+            pitch_bend_range: None,
         },
         agent(),
     );
@@ -461,7 +463,10 @@ fn composition_metadata_roundtrips_and_clears() {
     assert_eq!(t.pitch_range().unwrap().min, 60);
 
     // 清空：两者都不写进 JSON。
-    e.execute(Command::SetTrackMeta { track, role: None, pitch_range: None }, agent());
+    e.execute(
+        Command::SetTrackMeta { track, role: None, pitch_range: None, pitch_bend_range: None },
+        agent(),
+    );
     assert!(e.project().track(track).unwrap().meta.is_none());
     let json = serde_json::to_string(e.project()).unwrap();
     assert!(!json.contains("\"meta\""), "空元数据不该出现在 JSON 里");

@@ -182,6 +182,12 @@ export function restoreProjectHistory(id: string): Promise<Project> {
   return invoke<Project>("restore_project_history", { id });
 }
 
+/** 删除一份历史快照（只动历史目录，不影响磁盘上的工程文件）。 */
+export function deleteProjectHistory(id: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.deleteProjectHistory(id));
+  return invoke<void>("delete_project_history", { id });
+}
+
 /** 把启动时铺的默认分轨名改成当前语言的名字（仅当工程仍是默认模板）。 */
 export function localizeStarterTracks(names: string[]): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.localizeStarterTracks(names));
@@ -503,18 +509,21 @@ export function setProjectSections(sections: Section[]): Promise<Project> {
   return invoke<Project>("set_project_sections", { sections });
 }
 
-/** 设置轨道的编曲元数据（分工 / 目标音域）。 */
+/** 设置轨道的编曲元数据（分工 / 目标音域 / 弯音范围）。 */
 export function setTrackMeta(
   track: number,
   role?: string,
   pitchRange?: PitchRange,
+  pitchBendRange?: number,
 ): Promise<Project> {
-  if (mockEnabled()) return Promise.resolve(mockApi.setTrackMeta(track, role, pitchRange));
+  if (mockEnabled())
+    return Promise.resolve(mockApi.setTrackMeta(track, role, pitchRange, pitchBendRange));
   return invoke<Project>("set_track_meta", {
     track,
     role: role ?? null,
     minPitch: pitchRange?.min ?? null,
     maxPitch: pitchRange?.max ?? null,
+    pitchBendRange: pitchBendRange ?? null,
   });
 }
 

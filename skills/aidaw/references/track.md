@@ -20,5 +20,7 @@
   `pitch_range`——插件名只是型号，`JC303` 是**单音酸性贝斯**而不是普通合成器。
 - 乐器挂上后建议 `set_track_meta` 写 `role` 与 `pitch_range`：`fit_notes_to_range` 会照它折返，
   `analyze_track_overlap` 也会用分工给冲突建议。
+- 写推弦 / 揉弦前确认音源的弯音范围：默认 ±2 半音，非标准音源用
+  `set_track_meta(track, pitch_bend_range=<半音>, …)` 改（0.01–24）。
 - 需要一条「总线」时，直接 `add_track` 出一条空轨，再把别的轨道 `set_sends` 指向它（见 `mix.md`）。
 - 乐器缺失（本机没有该插件）时该轨静音，但工程与界面照常。

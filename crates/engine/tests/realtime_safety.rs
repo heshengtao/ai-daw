@@ -73,7 +73,22 @@ fn schedule() -> ScheduledEvents {
             id: ClipId(1),
             start: 0.0,
             length: 4.0,
-            notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false }],
+            notes: vec![Note {
+                id: 0,
+                pitch: 69,
+                start: 0.0,
+                duration: 0.5,
+                velocity: 100,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+                // 音高表达也要走零分配门禁：内置合成器支持逐音，事件会直接进 DSP。
+                expr: ai_daw_engine::model::PitchExpression {
+                    vibrato: 30,
+                    vibrato_rate: 5.5,
+                    ..ai_daw_engine::model::PitchExpression::NONE
+                },
+            }],
             audio: None,
         }],
         mixer: Default::default(),
@@ -102,6 +117,14 @@ fn schedule() -> ScheduledEvents {
                 points: vec![
                     ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.2 },
                     ai_daw_engine::model::AutomationPoint { beat: 8.0, value: 0.7 },
+                ],
+            },
+            // MIDI CC 车道：逐块求值并推进预分配的事件缓冲（新路径也要在门禁覆盖范围内）。
+            ai_daw_engine::model::AutomationLane {
+                param: "cc:64".into(),
+                points: vec![
+                    ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.0 },
+                    ai_daw_engine::model::AutomationPoint { beat: 8.0, value: 127.0 },
                 ],
             },
         ],

@@ -31,8 +31,8 @@ use ai_daw_engine::audio::AudioBuffer;
 use ai_daw_engine::command::Command;
 use ai_daw_engine::event::{Actor, Event};
 use ai_daw_engine::model::{
-    AudioSource, BeatFilter, Clip, ClipId, FitMode, Note, NotePatch, NoteRange, NoteTag, Project,
-    StrumDirection, TrackId, Transport, VelocityShape,
+    AudioSource, BeatFilter, Clip, ClipId, FitMode, Note, NotePatch, NoteRange, NoteTag,
+    PitchExpression, Project, StrumDirection, TrackId, Transport, VelocityShape,
 };
 use ai_daw_engine::tempo::TempoMap;
 use ai_daw_engine::transport::TransportCommand;
@@ -201,6 +201,47 @@ pub(crate) struct ClipRefArgs {
     clip: u64,
 }
 
+/// 音符级音高表达：推弦 / 滑音 / 揉弦。全部可选，单位见字段说明。
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ExprArg {
+    /// 起音时的音高偏移（音分，100 = 1 个半音）。预推弦 = 200。
+    #[serde(default)]
+    bend: Option<i16>,
+    /// 推弦 / 滑音的目标偏移（音分）。
+    #[serde(default)]
+    bend_to: Option<i16>,
+    /// 从 `bend` 到 `bend_to` 的时间（拍）；0 = 立即到达。
+    #[serde(default)]
+    bend_time: Option<f32>,
+    /// 揉弦深度（音分，0 = 不揉）。
+    #[serde(default)]
+    vibrato: Option<i16>,
+    /// 揉弦速率（Hz）；0 = 默认 5.5。
+    #[serde(default)]
+    vibrato_rate: Option<f32>,
+    /// 起音后延迟多少拍开始揉。
+    #[serde(default)]
+    vibrato_delay: Option<f32>,
+    /// 揉弦渐入时长（拍）；0 = 立即满深度。
+    #[serde(default)]
+    vibrato_fade: Option<f32>,
+}
+
+impl ExprArg {
+    fn to_expr(&self) -> PitchExpression {
+        PitchExpression {
+            bend: self.bend.unwrap_or(0),
+            bend_to: self.bend_to.unwrap_or(0),
+            bend_time: self.bend_time.unwrap_or(0.0),
+            vibrato: self.vibrato.unwrap_or(0),
+            vibrato_rate: self.vibrato_rate.unwrap_or(0.0),
+            vibrato_delay: self.vibrato_delay.unwrap_or(0.0),
+            vibrato_fade: self.vibrato_fade.unwrap_or(0.0),
+        }
+        .normalize()
+    }
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct NoteArgs {
     /// 轨道 id。
@@ -224,6 +265,9 @@ pub(crate) struct NoteArgs {
     /// 连奏（NoteOff 延到同音高的下一个音）；缺省 false。
     #[serde(default)]
     legato: Option<bool>,
+    /// 音高表达（推弦 / 揉弦 / 滑音）；缺省 = 无。
+    #[serde(default)]
+    expr: Option<ExprArg>,
     /// 放置吸附：`off`（缺省，原样写入）/ `bar` / `1/4` / `1/8` / `1/16` / `1/12` / `1/24` / `1/32`。
     /// **只吸起点**。
     #[serde(default)]
@@ -266,7 +310,8 @@ pub(crate) struct PointArg {
 pub(crate) struct SetAutomationArgs {
     /// 轨道 id。
     track: u64,
-    /// 参数名：`gain_db` 或 `pan`，或 `inst:<参数id>`（轨道乐器）/ `fx<i>:<参数id>`（效果链第 i 个，i 从 0 起）。
+    /// 参数名：`gain_db` / `pan` / `cc:<0..=127>`（MIDI 控制变化），或 `inst:<参数id>`（轨道乐器）/
+    /// `fx<i>:<参数id>`（效果链第 i 个，i 从 0 起）。
     param: String,
     /// 关键点（整体替换；空数组 = 删除该车道）。
     points: Vec<PointArg>,
@@ -436,6 +481,9 @@ pub(crate) struct NoteInput {
     /// 连奏：NoteOff 延到同音高的下一个音起点；缺省 false。
     #[serde(default)]
     legato: bool,
+    /// 音高表达（推弦 / 揉弦 / 滑音）；缺省 = 无。
+    #[serde(default)]
+    expr: Option<ExprArg>,
 }
 
 fn default_velocity() -> u8 {
@@ -457,6 +505,7 @@ impl NoteInput {
             volume: self.volume,
             offset: self.offset,
             legato: self.legato,
+            expr: self.expr.as_ref().map(ExprArg::to_expr).unwrap_or(PitchExpression::NONE),
         }
     }
 }
@@ -544,6 +593,9 @@ pub(crate) struct NotePatchInput {
     /// 新连奏开关（true = NoteOff 延到同音高的下一个音）。
     #[serde(default)]
     legato: Option<bool>,
+    /// 新的音高表达；给了就整体替换，`{}` = 清除。
+    #[serde(default)]
+    expr: Option<ExprArg>,
 }
 
 impl NotePatchInput {
@@ -557,6 +609,7 @@ impl NotePatchInput {
             volume: self.volume,
             offset: self.offset,
             legato: self.legato,
+            expr: self.expr.as_ref().map(ExprArg::to_expr),
         }
     }
 }
@@ -907,6 +960,9 @@ pub(crate) struct TrackMetaArgs {
     /// 目标音域上界。
     #[serde(default)]
     max_pitch: Option<u8>,
+    /// MIDI 弯音范围（半音，默认 2）。推弦/揉弦依赖它把音分换算成插件实际范围。
+    #[serde(default)]
+    pitch_bend_range: Option<f32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1490,6 +1546,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             volume: args.volume.unwrap_or(Note::MAX_VOLUME),
             offset: args.offset.unwrap_or(0.0),
             legato: args.legato.unwrap_or(false),
+            expr: args.expr.as_ref().map(ExprArg::to_expr).unwrap_or(PitchExpression::NONE),
         };
         snap_note_starts(&project, &clip, std::slice::from_mut(&mut note), args.snap.as_deref())?;
         let snapped = args.snap.is_some() && (note.start - args.start).abs() > 1e-9;
@@ -2281,7 +2338,12 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         commands::run_agent_as(
             app,
             actor.clone(),
-            Command::SetTrackMeta { track: TrackId(args.track), role: args.role.clone(), pitch_range },
+            Command::SetTrackMeta {
+                track: TrackId(args.track),
+                role: args.role.clone(),
+                pitch_range,
+                pitch_bend_range: args.pitch_bend_range,
+            },
         );
         let mut parts = Vec::new();
         if let Some(role) = &args.role {
@@ -2289,6 +2351,9 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         }
         if let Some(range) = pitch_range {
             parts.push(format!("音域 {}..={}", range.min, range.max));
+        }
+        if let Some(range) = args.pitch_bend_range {
+            parts.push(format!("弯音范围 ±{range} 半音"));
         }
         Ok(if parts.is_empty() {
             format!("轨道 {} 的编曲元数据已清除", args.track)
@@ -2639,7 +2704,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("set_solo", "设置轨道独奏。", ToggleArgs),
             tool_def!("set_master_gain", "设置总输出增益（dB）。", MasterGainArgs),
             tool_def!("set_sends", "设置轨道发送列表（整体替换；空数组 = 清空）。目标通常是一条总线轨道。", SetSendsArgs),
-            tool_def!("set_automation", "设置一条自动化车道（参数 `gain_db` / `pan`，或 `inst:<参数id>`（轨道乐器）/ `fx<i>:<参数id>`（效果链第 i 个，i 从 0 起）；整体替换该曲线，空 points = 删除）。", SetAutomationArgs),
+            tool_def!("set_automation", "设置一条自动化车道（参数 `gain_db` / `pan` / `cc:<0..=127>`（MIDI 控制变化，值 0..127），或 `inst:<参数id>`（轨道乐器）/ `fx<i>:<参数id>`（效果链第 i 个，i 从 0 起）；整体替换该曲线，空 points = 删除）。", SetAutomationArgs),
             tool_def!("aidaw_help", "取回某个能力域的用法文档（渐进式披露）：留空给索引，按域取细则。", HelpArgs),
             tool_def!("undo", "撤销最后一次编辑。"),
             tool_def!("redo", "重做上一次被撤销的编辑。"),
@@ -2877,24 +2942,24 @@ impl DawMcpServer {
         tools::remove_clip(&self.app, &self.actor(), args).map_err(fail)
     }
 
-    #[tool(description = "在片段的指定位置新增一个音符。")]
+    #[tool(description = "在片段的指定位置新增一个音符；可选 `expr` 写推弦 / 揉弦 / 滑音（单位见 schema）。")]
     fn add_note(&self, Parameters(args): Parameters<NoteArgs>) -> Result<String, ErrorData> {
         tools::add_note(&self.app, &self.actor(), args).map_err(fail)
     }
 
     // ---- 批量音符 / 律动 / 音域 ----
 
-    #[tool(description = "一次写入一组音符（一次事务 = 一条撤销记录，最多 5000 个）。返回新增的 id 与片段摘要；编曲请优先用它而不是循环 add_note。")]
+    #[tool(description = "一次写入一组音符（一次事务 = 一条撤销记录，最多 5000 个）。每个音符可带 `expr` 写推弦/揉弦/滑音；返回新增的 id 与片段摘要。编曲请优先用它而不是循环 add_note。")]
     fn add_notes(&self, Parameters(args): Parameters<NotesArgs>) -> Result<String, ErrorData> {
         tools::add_notes(&self.app, &self.actor(), args).map_err(fail)
     }
 
-    #[tool(description = "原子替换片段内的全部音符（空数组 = 清空片段）。返回片段摘要。")]
+    #[tool(description = "原子替换片段内的全部音符（空数组 = 清空片段）；音符可带 `expr`。返回片段摘要。")]
     fn replace_notes(&self, Parameters(args): Parameters<NotesArgs>) -> Result<String, ErrorData> {
         tools::replace_notes(&self.app, &self.actor(), args).map_err(fail)
     }
 
-    #[tool(description = "按稳定 id 批量改写音符（只改给出的字段）；删过音符之后 id 仍然指得准。")]
+    #[tool(description = "按稳定 id 批量改写音符（只改给出的字段）；`expr` 用于写/清除推弦、揉弦、滑音。删过音符之后 id 仍然指得准。")]
     fn update_notes(&self, Parameters(args): Parameters<UpdateNotesArgs>) -> Result<String, ErrorData> {
         tools::update_notes(&self.app, &self.actor(), args).map_err(fail)
     }
@@ -3008,7 +3073,7 @@ impl DawMcpServer {
         tools::set_project_sections(&self.app, &self.actor(), args).map_err(fail)
     }
 
-    #[tool(description = "设置轨道的编曲元数据：分工（lead/chords/bass/drums…）与目标音域。")]
+    #[tool(description = "设置轨道的编曲元数据：分工（lead/chords/bass/drums…）、目标音域、MIDI 弯音范围（半音，默认 2）。")]
     fn set_track_meta(&self, Parameters(args): Parameters<TrackMetaArgs>) -> Result<String, ErrorData> {
         tools::set_track_meta(&self.app, &self.actor(), args).map_err(fail)
     }
@@ -3045,7 +3110,7 @@ impl DawMcpServer {
         tools::set_sends(&self.app, &self.actor(), args).map_err(fail)
     }
 
-    #[tool(description = "设置一条自动化车道（参数 `gain_db` / `pan`，或 `inst:<参数id>`（轨道乐器）/ `fx<i>:<参数id>`（效果链第 i 个，i 从 0 起）；整体替换该曲线，空 points = 删除）。")]
+    #[tool(description = "设置一条自动化车道（参数 `gain_db` / `pan` / `cc:<0..=127>`（MIDI 控制变化，值 0..127），或 `inst:<参数id>`（轨道乐器）/ `fx<i>:<参数id>`（效果链第 i 个，i 从 0 起）；整体替换该曲线，空 points = 删除）。")]
     fn set_automation(&self, Parameters(args): Parameters<SetAutomationArgs>) -> Result<String, ErrorData> {
         tools::set_automation(&self.app, &self.actor(), args).map_err(fail)
     }
@@ -3543,6 +3608,29 @@ mod tests {
             .expect_err("缺 clip / notes 必须解析失败");
         let text = err.to_string();
         assert!(text.contains("clip") || text.contains("notes"), "{text}");
+    }
+
+    /// 批量音符与 id 改写都要把 `expr` 带进引擎；`{}` 表示清除。
+    #[test]
+    fn note_input_and_patch_thread_pitch_expression() {
+        let input: NoteInput = serde_json::from_value(serde_json::json!({
+            "pitch": 64,
+            "start": 0.0,
+            "duration": 1.0,
+            "expr": { "bend": 0, "bend_to": 200, "bend_time": 0.25 }
+        }))
+        .unwrap();
+        let note = input.to_note();
+        assert_eq!((note.expr.bend, note.expr.bend_to), (0, 200));
+        assert!((note.expr.bend_time - 0.25).abs() < 1e-6);
+
+        let patch: NotePatchInput =
+            serde_json::from_value(serde_json::json!({ "id": 7, "expr": {} })).unwrap();
+        assert_eq!(patch.to_patch().expr, Some(PitchExpression::NONE));
+
+        let absent: NotePatchInput =
+            serde_json::from_value(serde_json::json!({ "id": 7 })).unwrap();
+        assert_eq!(absent.to_patch().expr, None, "没给 expr 时不应覆盖原值");
     }
 
     /// `describe_plugin` 只展开「音色参数」：MIDI CC 映射（每通道 128 个）不是旋钮，

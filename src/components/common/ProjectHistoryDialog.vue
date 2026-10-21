@@ -2,35 +2,33 @@
 /**
  * 历史工程：宽模态框里铺一排工程卡片，缩略图用迷你时间线画出轨道与片段。
  *
- * 列表每次打开都重新取——后端在「新建 / 打开 / 恢复」时写入历史，界面不该拿旧快照。
- * 点卡片直接恢复；恢复前后端会把**当前**工程也收进历史，所以来回切换不会丢东西。
+ * 列表每次打开都重新取——后端在「保存 / 新建 / 打开 / 退出 / 恢复」时写入历史，
+ * 界面不该拿旧快照。点卡片只负责**交出选择并关闭**：恢复由 `App.vue` 执行，
+ * 期间用顶栏下边缘的进度条提示（与音频导入同一套，不再弹旋转动画）。
  */
 import { computed, ref, watch } from "vue";
-import {
-  ArrowPathIcon,
-  ClockIcon,
-  ExclamationTriangleIcon,
-} from "@heroicons/vue/24/outline";
+import { ClockIcon, ExclamationTriangleIcon, TrashIcon } from "@heroicons/vue/24/outline";
 import ModalShell from "@/components/common/ModalShell.vue";
+import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import { useProjectStore } from "@/stores/project";
-import { useLayoutStore } from "@/stores/layout";
-import { useTransportStore } from "@/stores/transport";
 import { useI18n } from "@/i18n";
 import { trackHue } from "@/utils/trackColor";
 import type { HistoryClip, ProjectHistoryEntry } from "@/api/types";
 
 const props = defineProps<{ open: boolean }>();
-const emit = defineEmits<{ (e: "update:open", value: boolean): void }>();
+const emit = defineEmits<{
+  (e: "update:open", value: boolean): void;
+  (e: "select", entry: ProjectHistoryEntry): void;
+}>();
 
 const project = useProjectStore();
-const layout = useLayoutStore();
-const transport = useTransportStore();
 const i18n = useI18n();
 
 const entries = ref<ProjectHistoryEntry[]>([]);
 const loading = ref(false);
+const deleting = ref<string | null>(null);
+const pendingDelete = ref<ProjectHistoryEntry | null>(null);
 const error = ref<string | null>(null);
-const restoring = ref<string | null>(null);
 
 const dateFormat = computed(
   () =>
@@ -44,6 +42,7 @@ watch(
   () => props.open,
   (open) => {
     if (open) void load();
+    else pendingDelete.value = null;
   },
 );
 
@@ -53,7 +52,7 @@ async function load(): Promise<void> {
   try {
     entries.value = await project.listHistory();
   } catch (err) {
-    error.value = String(err);
+    error.value = i18n.t("history.failed", { error: String(err) });
   } finally {
     loading.value = false;
   }
@@ -79,19 +78,34 @@ function meta(entry: ProjectHistoryEntry): string {
   ].join(" · ");
 }
 
-async function choose(entry: ProjectHistoryEntry): Promise<void> {
-  if (restoring.value) return;
-  restoring.value = entry.id;
+function choose(entry: ProjectHistoryEntry): void {
+  if (deleting.value) return;
+  emit("select", entry);
+  emit("update:open", false);
+}
+
+function askDelete(entry: ProjectHistoryEntry): void {
+  if (deleting.value) return;
+  pendingDelete.value = entry;
+}
+
+function closeDeletePrompt(open: boolean): void {
+  if (!open) pendingDelete.value = null;
+}
+
+async function confirmDelete(): Promise<void> {
+  const entry = pendingDelete.value;
+  if (!entry || deleting.value) return;
+
+  deleting.value = entry.id;
   error.value = null;
   try {
-    await transport.stop();
-    await project.restoreHistory(entry.id);
-    layout.notify(i18n.t("history.restored", { name: displayName(entry) }));
-    emit("update:open", false);
+    await project.deleteHistory(entry.id);
+    entries.value = entries.value.filter((item) => item.id !== entry.id);
   } catch (err) {
-    error.value = String(err);
+    error.value = i18n.t("history.deleteFailed", { error: String(err) });
   } finally {
-    restoring.value = null;
+    deleting.value = null;
   }
 }
 
@@ -139,12 +153,11 @@ function clipFill(trackIndex: number, clip: HistoryClip): string {
     <div class="body">
       <div v-if="error" class="error-bar" role="alert">
         <ExclamationTriangleIcon class="w-4 h-4" />
-        <span class="error-text">{{ i18n.t("history.failed", { error }) }}</span>
+        <span class="error-text">{{ error }}</span>
         <button class="retry" type="button" @click="load">{{ i18n.t("app.retry") }}</button>
       </div>
 
       <div v-if="loading" class="state">
-        <ArrowPathIcon class="w-5 h-5 spin" />
         <p>{{ i18n.t("history.loading") }}</p>
       </div>
 
@@ -155,73 +168,94 @@ function clipFill(trackIndex: number, clip: HistoryClip): string {
       </div>
 
       <div v-else class="grid">
-        <button
-          v-for="entry in entries"
-          :key="entry.id"
-          class="card"
-          type="button"
-          :disabled="restoring !== null"
-          :aria-label="displayName(entry)"
-          @click="choose(entry)"
-        >
-          <span class="thumb">
-            <svg viewBox="0 0 160 90" preserveAspectRatio="none" aria-hidden="true">
-              <line
-                v-for="n in 7"
-                :key="`grid-${n}`"
-                :x1="(n * 160) / 8"
-                y1="0"
-                :x2="(n * 160) / 8"
-                y2="90"
-                class="thumb-grid"
-              />
-              <g v-for="(track, i) in lanes(entry)" :key="i">
-                <rect
-                  x="0"
-                  :y="laneY(entry, i)"
-                  width="160"
-                  :height="laneHeight(entry)"
-                  :fill="i % 2 === 0 ? 'rgba(255,255,255,0.035)' : 'transparent'"
+        <div v-for="entry in entries" :key="entry.id" class="card">
+          <button
+            class="card-open"
+            type="button"
+            :disabled="deleting !== null"
+            :aria-label="displayName(entry)"
+            @click="choose(entry)"
+          >
+            <span class="thumb">
+              <svg viewBox="0 0 160 90" preserveAspectRatio="none" aria-hidden="true">
+                <line
+                  v-for="n in 7"
+                  :key="`grid-${n}`"
+                  :x1="(n * 160) / 8"
+                  y1="0"
+                  :x2="(n * 160) / 8"
+                  y2="90"
+                  class="thumb-grid"
                 />
-                <rect
-                  v-for="(clip, c) in track.clips"
-                  :key="c"
-                  :x="clipX(entry, clip)"
-                  :y="laneY(entry, i) + 1"
-                  :width="clipWidth(entry, clip)"
-                  :height="Math.max(laneHeight(entry) - 2, 1)"
-                  rx="1.2"
-                  :fill="clipFill(i, clip)"
-                />
-              </g>
-            </svg>
+                <g v-for="(track, i) in lanes(entry)" :key="i">
+                  <rect
+                    x="0"
+                    :y="laneY(entry, i)"
+                    width="160"
+                    :height="laneHeight(entry)"
+                    :fill="i % 2 === 0 ? 'rgba(255,255,255,0.035)' : 'transparent'"
+                  />
+                  <rect
+                    v-for="(clip, c) in track.clips"
+                    :key="c"
+                    :x="clipX(entry, clip)"
+                    :y="laneY(entry, i) + 1"
+                    :width="clipWidth(entry, clip)"
+                    :height="Math.max(laneHeight(entry) - 2, 1)"
+                    rx="1.2"
+                    :fill="clipFill(i, clip)"
+                  />
+                </g>
+              </svg>
 
-            <span class="thumb-fade" aria-hidden="true" />
+              <span class="thumb-fade" aria-hidden="true" />
 
-            <span v-if="entry.dirty" class="unsaved-badge">{{ i18n.t("history.dirty") }}</span>
-
-            <span v-if="restoring === entry.id" class="busy" aria-hidden="true">
-              <ArrowPathIcon class="w-5 h-5 spin" />
+              <span v-if="entry.dirty" class="unsaved-badge">{{ i18n.t("history.dirty") }}</span>
             </span>
-          </span>
 
-          <span class="card-body">
-            <span class="name-row">
-              <span class="name">{{ displayName(entry) }}</span>
-              <span v-if="entry.dirty" class="dirty-dot" aria-hidden="true" />
-            </span>
-            <span class="meta">{{ meta(entry) }}</span>
-            <span class="foot-row">
-              <span class="date">{{ updatedAt(entry) }}</span>
-              <span class="path" :title="entry.path ?? undefined">
-                {{ entry.path ? fileName(entry.path) : i18n.t("history.unsaved") }}
+            <span class="card-body">
+              <span class="name-row">
+                <span class="name">{{ displayName(entry) }}</span>
+                <span v-if="entry.dirty" class="dirty-dot" aria-hidden="true" />
+              </span>
+              <span class="meta">{{ meta(entry) }}</span>
+              <span class="foot-row">
+                <span class="date">{{ updatedAt(entry) }}</span>
+                <span class="path" :title="entry.path ?? undefined">
+                  {{ entry.path ? fileName(entry.path) : i18n.t("history.unsaved") }}
+                </span>
               </span>
             </span>
-          </span>
-        </button>
+          </button>
+
+          <button
+            class="delete-btn"
+            type="button"
+            :disabled="deleting !== null"
+            :aria-label="i18n.t('history.delete')"
+            :title="i18n.t('history.delete')"
+            @click="askDelete(entry)"
+          >
+            <TrashIcon class="w-[15px] h-[15px]" />
+          </button>
+        </div>
       </div>
     </div>
   </ModalShell>
+
+  <ConfirmDialog
+    :open="pendingDelete !== null"
+    :title="i18n.t('history.deleteTitle')"
+    :message="
+      i18n.t('history.deleteMessage', {
+        name: pendingDelete ? displayName(pendingDelete) : '',
+      })
+    "
+    :confirm-label="i18n.t('common.delete')"
+    danger
+    @update:open="closeDeletePrompt"
+    @confirm="confirmDelete"
+  />
 </template>
 
 <style scoped>
@@ -238,15 +272,11 @@ function clipFill(trackIndex: number, clip: HistoryClip): string {
 }
 
 .card {
-  display: flex;
-  flex-direction: column;
-  padding: 0;
+  position: relative;
   border: 1px solid rgb(var(--md-outline-variant) / 0.55);
   border-radius: 16px;
   background-color: rgb(var(--md-surface-container));
   overflow: hidden;
-  text-align: left;
-  cursor: pointer;
   transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .card:hover {
@@ -254,19 +284,59 @@ function clipFill(trackIndex: number, clip: HistoryClip): string {
   border-color: rgb(var(--md-primary) / 0.65);
   box-shadow: var(--md-elevation-2);
 }
-.card:focus-visible {
-  outline: 2px solid rgb(var(--md-primary));
-  outline-offset: 2px;
+.card-open {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.card:disabled {
+.card-open:disabled {
   cursor: default;
 }
-.card:disabled:hover {
-  transform: none;
-  border-color: rgb(var(--md-outline-variant) / 0.55);
-  box-shadow: none;
+.card-open:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: -2px;
 }
-
+.delete-btn {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background-color: rgba(10, 8, 13, 0.62);
+  color: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+  backdrop-filter: blur(4px);
+}
+.card:hover .delete-btn,
+.delete-btn:focus-visible {
+  opacity: 1;
+}
+.delete-btn:hover {
+  background-color: rgb(var(--md-error));
+  color: rgb(var(--md-on-error));
+}
+.delete-btn:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 1px;
+}
+.delete-btn:disabled {
+  opacity: 0;
+  cursor: default;
+}
 .thumb {
   position: relative;
   display: block;
@@ -297,7 +367,7 @@ function clipFill(trackIndex: number, clip: HistoryClip): string {
 .unsaved-badge {
   position: absolute;
   top: 7px;
-  right: 7px;
+  left: 7px;
   padding: 2px 7px;
   border-radius: 999px;
   background-color: rgba(10, 8, 13, 0.68);
@@ -306,16 +376,6 @@ function clipFill(trackIndex: number, clip: HistoryClip): string {
   line-height: 1.4;
   letter-spacing: 0.2px;
   backdrop-filter: blur(4px);
-}
-
-.busy {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: rgba(10, 8, 13, 0.42);
-  color: #fff;
 }
 
 .card-body {
@@ -428,21 +488,12 @@ function clipFill(trackIndex: number, clip: HistoryClip): string {
   background-color: rgb(var(--md-error) / 0.12);
 }
 
-.spin {
-  animation: spin 0.9s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .card {
     transition: none;
   }
-  .spin {
-    animation: none;
+  .delete-btn {
+    transition: none;
   }
 }
 </style>

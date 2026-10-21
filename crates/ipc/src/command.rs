@@ -225,5 +225,10 @@ pub enum Command {
     /// 整体替换工程的段落表（空 = 清除）。
     SetProjectSections { sections: Vec<Section> },
     /// 设置轨道的编曲元数据（分工 / 目标音域）；两者都为空 = 清除。
-    SetTrackMeta { track: TrackId, role: Option<String>, pitch_range: Option<PitchRange> },
+    SetTrackMeta {
+        track: TrackId,
+        role: Option<String>,
+        pitch_range: Option<PitchRange>,
+        pitch_bend_range: Option<f32>,
+    },
 }

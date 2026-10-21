@@ -15,7 +15,7 @@ fn main() {
     let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
     for (i, pitch) in [60u8, 64, 67, 72, 67, 64].into_iter().enumerate() {
         e.execute(
-            Command::AddNote { track, clip, note: Note { id: 0, pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false } },
+            Command::AddNote { track, clip, note: Note { id: 0, pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: ai_daw_engine::model::PitchExpression::NONE } },
             Actor::Human,
         );
     }

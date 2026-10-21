@@ -73,7 +73,7 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 | 工程 | `references/project.md` | 读工程（全量）、**分页读片段音符**、速度/拍号、撤销/重做、**工程元数据（和弦表 / 段落 / 轨道分工与音域）** |
 | 轨道 | `references/track.md` | 增删改轨道、挂/换乐器、效果链 |
 | 片段 | `references/clip.md` | MIDI / 音频片段的增删改、**移动、缩放、切分、复制、合并** |
-| 音符 | `references/note.md` | 钢琴卷帘里的音符与力度 / 音量 |
+| 音符 | `references/note.md` | 钢琴卷帘里的音符与力度 / 音量、**音高表达（推弦 / 揉弦 / 滑音）** |
 | 编曲 | `references/composition.md` | **批量改音符（一个撤销步）、量化 / 摇摆 / 人性化、音域折叠、节奏统计、半音冲突、和弦分析** |
 | 混音 | `references/mix.md` | 增益/声像/静音/独奏/总输出、**发送 → 总线**、**自动化** |
 | 音频 | `references/audio.md` | 导入音频、波形、**录音** |
@@ -134,7 +134,8 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 - **整体替换类操作**：`set_sends` / `set_automation` / `replace_notes` / `set_project_harmony` /
   `set_project_sections` 是**整体替换**（空数组 = 清空 / 删除该车道）；`apply_preset` 的 `effects`
   是**替换**整条效果链，不是叠加。
-- **自动化的 `param` 命名空间**：`gain_db` / `pan`，或 `inst:<参数id>`（轨道乐器）、
+- **自动化的 `param` 命名空间**：`gain_db` / `pan` / `cc:<0..=127>`（MIDI 控制变化），或
+  `inst:<参数id>`（轨道乐器）、
   `fx<i>:<参数id>`（效果链第 i 个，i 从 0 起）。
 - **音频片段的时间语义**：片段拍长是唯一真相，素材铺满跨度——**改速度 / 缩放会变调**（v1 不做保音高变速）。
 - **能力面 = MCP 工具面**：只在命令层、没暴露成 MCP 工具的动作（如「打开插件窗口」）在这里不可用；

@@ -6,6 +6,140 @@ use super::track::TrackId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ClipId(pub u64);
 
+/// 音符级音高表达：推弦 / 滑音 / 揉弦。
+///
+/// 全部是标量，保持 [`Note`] 为 `Copy`。位置单位是「相对起音的拍」，音高单位是音分
+/// （100 音分 = 1 个半音），速率单位是 Hz。默认值不会写进工程 JSON。
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct PitchExpression {
+    /// 起音时的音高偏移（音分）。预推弦 = 200（起音就在目标音高上）。
+    #[serde(default, skip_serializing_if = "is_zero_i16")]
+    pub bend: i16,
+    /// 推弦 / 滑音的目标偏移（音分）。与 `bend` 相同表示保持。
+    #[serde(default, skip_serializing_if = "is_zero_i16")]
+    pub bend_to: i16,
+    /// 从 `bend` 到 `bend_to` 的时间（拍）；0 = 立即到达 `bend_to`。
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub bend_time: f32,
+    /// 揉弦深度（音分，0 = 不揉）。
+    #[serde(default, skip_serializing_if = "is_zero_i16")]
+    pub vibrato: i16,
+    /// 揉弦速率（Hz）；0 = 默认 5.5 Hz。
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub vibrato_rate: f32,
+    /// 起音后延迟多少拍开始揉（0 = 立即）。
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub vibrato_delay: f32,
+    /// 揉弦渐入时长（拍）；0 = 立即满深度。
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub vibrato_fade: f32,
+}
+
+impl PitchExpression {
+    /// 没有任何音高表达。
+    pub const NONE: Self = Self {
+        bend: 0,
+        bend_to: 0,
+        bend_time: 0.0,
+        vibrato: 0,
+        vibrato_rate: 0.0,
+        vibrato_delay: 0.0,
+        vibrato_fade: 0.0,
+    };
+
+    /// 音高偏移上界（音分）：两个八度，足够推弦 / 滑音，同时挡住荒谬输入。
+    pub const MAX_CENTS: i16 = 2400;
+    /// 过渡时长上界（拍）。
+    pub const MAX_TIME_BEATS: f32 = 256.0;
+    /// 揉弦速率上界（Hz）。
+    pub const MAX_VIBRATO_RATE: f32 = 20.0;
+    /// 揉弦延迟 / 渐入上界（拍）。
+    pub const MAX_VIBRATO_BEATS: f32 = 256.0;
+    /// 未指定揉弦速率时的默认值（Hz）。
+    pub const DEFAULT_VIBRATO_RATE: f32 = 5.5;
+
+    /// 是否完全没有可听的音高表达。
+    ///
+    /// 只看三个「有声音」的分量：只设置了揉弦速率 / 延迟但深度为 0 时仍算「无表达」。
+    pub fn is_none(&self) -> bool {
+        self.bend == 0 && self.bend_to == 0 && self.vibrato == 0
+    }
+
+    /// 归一化：夹紧所有字段，非有限值回落到 0。
+    pub fn normalize(self) -> Self {
+        let clamp_cents = |v: i16| v.clamp(-Self::MAX_CENTS, Self::MAX_CENTS);
+        let finite_or_zero = |v: f32| if v.is_finite() { v } else { 0.0 };
+        let vibrato = self.vibrato.clamp(0, Self::MAX_CENTS);
+        // 没有揉弦深度时，速率 / 延迟 / 渐入都没有意义：归零，避免写进 JSON 或生成空事件。
+        let (rate, delay, fade) = if vibrato == 0 {
+            (0.0, 0.0, 0.0)
+        } else {
+            (
+                finite_or_zero(self.vibrato_rate).clamp(0.0, Self::MAX_VIBRATO_RATE),
+                finite_or_zero(self.vibrato_delay).clamp(0.0, Self::MAX_VIBRATO_BEATS),
+                finite_or_zero(self.vibrato_fade).clamp(0.0, Self::MAX_VIBRATO_BEATS),
+            )
+        };
+        Self {
+            bend: clamp_cents(self.bend),
+            bend_to: clamp_cents(self.bend_to),
+            bend_time: finite_or_zero(self.bend_time).clamp(0.0, Self::MAX_TIME_BEATS),
+            vibrato,
+            vibrato_rate: rate,
+            vibrato_delay: delay,
+            vibrato_fade: fade,
+        }
+    }
+
+    /// 在「相对起音 `at_beats` 拍」处求总音高偏移（音分）。
+    ///
+    /// 推弦分量 + 揉弦分量相加；结果夹到 ±[`MAX_CENTS`](Self::MAX_CENTS)。
+    pub fn cents_at(&self, at_beats: f64, duration_beats: f64) -> f32 {
+        let t = at_beats.max(0.0);
+        let mut cents = if self.bend_time <= 0.0 {
+            // 预推弦 / 瞬间滑到目标音高。
+            f32::from(self.bend_to)
+        } else {
+            let progress = (t / f64::from(self.bend_time)).clamp(0.0, 1.0) as f32;
+            let from = f32::from(self.bend);
+            from + (f32::from(self.bend_to) - from) * progress
+        };
+
+        if self.vibrato != 0 {
+            let delay = f64::from(self.vibrato_delay.max(0.0));
+            if t >= delay {
+                let elapsed = t - delay;
+                let fade = if self.vibrato_fade > 0.0 {
+                    (elapsed / f64::from(self.vibrato_fade)).clamp(0.0, 1.0) as f32
+                } else {
+                    1.0
+                };
+                let rate = if self.vibrato_rate > 0.0 {
+                    self.vibrato_rate
+                } else {
+                    Self::DEFAULT_VIBRATO_RATE
+                };
+                let phase = std::f64::consts::TAU * f64::from(rate) * elapsed;
+                cents += f32::from(self.vibrato) * fade * phase.sin() as f32;
+            }
+        }
+
+        let _ = duration_beats;
+        cents.clamp(
+            -f32::from(Self::MAX_CENTS),
+            f32::from(Self::MAX_CENTS),
+        )
+    }
+}
+
+fn is_zero_i16(value: &i16) -> bool {
+    *value == 0
+}
+
+fn is_zero_f32(value: &f32) -> bool {
+    value.abs() < f32::EPSILON
+}
+
 /// 音符；位置与时长单位为拍。
 ///
 /// 两个「响度类」属性刻意分开，语义不同：
@@ -40,6 +174,9 @@ pub struct Note {
     /// 指弹 / 单音线条里很常用：重复同一个音高时不该在音与音之间留一道缝（采样器会听成断音）。
     #[serde(default, skip_serializing_if = "is_false")]
     pub legato: bool,
+    /// 音高表达（推弦 / 揉弦 / 滑音）。缺省 = 无，且不写进 JSON。
+    #[serde(default, skip_serializing_if = "PitchExpression::is_none")]
+    pub expr: PitchExpression,
 }
 
 /// 旧工程文件（以及手写的 JSON）可能没有 `volume` 字段——按「不衰减」读入，
@@ -88,6 +225,7 @@ impl Note {
             // 偏移同样允许为负（提前一点起音也是演奏姿态），只夹上下界。
             offset: clamp_signed_beats(note.offset, Self::MAX_OFFSET_BEATS),
             legato: note.legato,
+            expr: note.expr.normalize(),
         }
     }
 
@@ -248,6 +386,9 @@ pub struct NotePatch {
     /// 新的连奏开关。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legato: Option<bool>,
+    /// 新的音高表达；`Some(PitchExpression::NONE)` = 清除。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expr: Option<PitchExpression>,
 }
 
 impl NotePatch {
@@ -262,6 +403,7 @@ impl NotePatch {
             volume: self.volume.unwrap_or(note.volume),
             offset: self.offset.unwrap_or(note.offset),
             legato: self.legato.unwrap_or(note.legato),
+            expr: self.expr.unwrap_or(note.expr),
         }
     }
 }
@@ -459,7 +601,7 @@ mod tests {
 
     #[test]
     fn note_normalization_clamps_every_field() {
-        let n = Note::normalize(Note { id: 0, pitch: 200, start: -3.0, duration: 0.0, velocity: 250, volume: 250, offset: 0.0, legato: false });
+        let n = Note::normalize(Note { id: 0, pitch: 200, start: -3.0, duration: 0.0, velocity: 250, volume: 250, offset: 0.0, legato: false, expr: PitchExpression::NONE });
         assert_eq!(n.pitch, 127);
         // 起点是**相对片段起点**的拍，允许为负（收起时被裁掉的音符要留着）。
         assert_eq!(n.start, -3.0);
@@ -470,7 +612,7 @@ mod tests {
 
     #[test]
     fn note_normalization_rejects_non_finite() {
-        let n = Note::normalize(Note { id: 0, pitch: 60, start: f64::NAN, duration: f64::INFINITY, velocity: 100, volume: 127, offset: 0.0, legato: false });
+        let n = Note::normalize(Note { id: 0, pitch: 60, start: f64::NAN, duration: f64::INFINITY, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: PitchExpression::NONE });
         // 非有限的起点回落到 0；非有限的时长回落到最短时长（而不是让它永远挂着）。
         assert_eq!(n.start, 0.0);
         assert_eq!(n.duration, Note::MIN_DURATION_BEATS);
@@ -479,7 +621,7 @@ mod tests {
     /// `offset` 夹到 ±4 拍、非有限值回落 0；`legato` 原样保留。
     #[test]
     fn note_normalization_clamps_the_offset() {
-        let base = Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false };
+        let base = Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: PitchExpression::NONE };
         assert_eq!(Note::normalize(Note { offset: 99.0, ..base }).offset, Note::MAX_OFFSET_BEATS);
         assert_eq!(Note::normalize(Note { offset: -99.0, ..base }).offset, -Note::MAX_OFFSET_BEATS);
         assert_eq!(Note::normalize(Note { offset: f64::NAN, ..base }).offset, 0.0);
@@ -507,6 +649,86 @@ mod tests {
         let json = r#"{"pitch":60,"start":0.0,"duration":1.0,"velocity":100}"#;
         let n: Note = serde_json::from_str(json).expect("旧格式必须仍可解析");
         assert_eq!(n.volume, Note::MAX_VOLUME);
+        assert!(n.expr.is_none(), "旧工程没有音高表达");
+    }
+
+    #[test]
+    fn pitch_expression_is_optional_and_roundtrips() {
+        let plain = Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: PitchExpression::NONE };
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("expr"), "没有表达时不该写出 expr：{json}");
+
+        let bent = Note {
+            expr: PitchExpression {
+                bend: 0,
+                bend_to: 200,
+                bend_time: 0.25,
+                vibrato: 35,
+                vibrato_rate: 5.5,
+                vibrato_delay: 0.5,
+                vibrato_fade: 0.25,
+            },
+            ..plain
+        };
+        let back: Note = serde_json::from_str(&serde_json::to_string(&bent).unwrap()).unwrap();
+        assert_eq!(back, bent);
+    }
+
+    #[test]
+    fn pitch_expression_normalizes_and_evaluates() {
+        let expr = PitchExpression {
+            bend: 0,
+            bend_to: 200,
+            bend_time: 1.0,
+            vibrato: 0,
+            vibrato_rate: f32::NAN,
+            vibrato_delay: -1.0,
+            vibrato_fade: f32::INFINITY,
+        }
+        .normalize();
+        assert_eq!(expr.vibrato_rate, 0.0);
+        assert_eq!(expr.vibrato_delay, 0.0);
+        assert_eq!(expr.vibrato_fade, 0.0);
+
+        assert!((expr.cents_at(0.0, 4.0) - 0.0).abs() < 1e-3);
+        assert!((expr.cents_at(0.5, 4.0) - 100.0).abs() < 1e-3);
+        assert!((expr.cents_at(1.0, 4.0) - 200.0).abs() < 1e-3);
+        assert!((expr.cents_at(3.0, 4.0) - 200.0).abs() < 1e-3, "到达目标后保持");
+
+        // 预推弦：bend_time = 0 时从起音就在目标音高。
+        let pre = PitchExpression { bend: 200, bend_to: 200, ..PitchExpression::NONE };
+        assert!((pre.cents_at(0.0, 4.0) - 200.0).abs() < 1e-3);
+
+        // 揉弦：延迟前为 0，延迟后开始摆动。
+        let vib = PitchExpression {
+            vibrato: 100,
+            vibrato_rate: 5.5,
+            vibrato_delay: 0.5,
+            ..PitchExpression::NONE
+        };
+        assert_eq!(vib.cents_at(0.25, 4.0), 0.0);
+        assert!(vib.cents_at(0.5 + 0.045, 4.0).abs() > 50.0);
+    }
+
+    #[test]
+    fn pitch_expression_clamps_absurd_values() {
+        let expr = PitchExpression {
+            bend: i16::MAX,
+            bend_to: i16::MIN,
+            bend_time: 1e9,
+            vibrato: i16::MAX,
+            vibrato_rate: 1e9,
+            vibrato_delay: 1e9,
+            vibrato_fade: -5.0,
+        }
+        .normalize();
+        assert_eq!(expr.bend, PitchExpression::MAX_CENTS);
+        assert_eq!(expr.bend_to, -PitchExpression::MAX_CENTS);
+        assert_eq!(expr.bend_time, PitchExpression::MAX_TIME_BEATS);
+        assert_eq!(expr.vibrato, PitchExpression::MAX_CENTS);
+        assert_eq!(expr.vibrato_rate, PitchExpression::MAX_VIBRATO_RATE);
+        assert_eq!(expr.vibrato_delay, PitchExpression::MAX_VIBRATO_BEATS);
+        assert_eq!(expr.vibrato_fade, 0.0);
     }
 
     #[test]
@@ -541,7 +763,7 @@ mod tests {
             id: ClipId(2),
             start: -3.0,
             length: 0.0,
-            notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }],
+            notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: PitchExpression::NONE }],
             audio: Some(AudioSource {
                 path: "/tmp/kick.wav".into(),
                 offset_frames: 0,

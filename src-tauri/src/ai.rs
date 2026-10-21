@@ -335,7 +335,7 @@ fn run_job(
                 velocity: n.velocity,
                 volume: Note::MAX_VOLUME,
                 offset: 0.0,
-                legato: false,
+                legato: false, expr: ai_daw_engine::model::PitchExpression::NONE,
             })
             .collect();
         let count = notes.len();

@@ -9,12 +9,14 @@
 | --- | --- | --- |
 | `add_notes` | `track`,`clip`,`notes[]`,`snap?` | 一次写入一组音符（最多 5000）。返回 `added_ids` 与片段摘要。 |
 | `replace_notes` | `track`,`clip`,`notes[]` | **原子替换**片段内全部音符；空数组 = 清空片段。 |
-| `update_notes` | `track`,`clip`,`updates[]` | 按**稳定 id** 改写：`{id, pitch?, start?, duration?, velocity?, volume?, offset?, legato?}`。 |
+| `update_notes` | `track`,`clip`,`updates[]` | 按**稳定 id** 改写：`{id, pitch?, start?, duration?, velocity?, volume?, offset?, legato?, expr?}`。 |
 | `remove_notes` | `track`,`clip`,`ids[]` | 按稳定 id 删除。 |
 
 `notes[]` 的字段：`pitch`（0..127）、`start`/`duration`（拍，**片段内相对**）、
 `velocity`（0..127，缺省 100）、`volume`（0..127，缺省 127）、
-`offset`（起始偏移，拍，缺省 0 = 与 `start` 同时发声）、`legato`（连奏，缺省 false）。
+`offset`（起始偏移，拍，缺省 0 = 与 `start` 同时发声）、`legato`（连奏，缺省 false）、
+`expr`（音高表达：`bend` / `bend_to` / `bend_time` / `vibrato` / `vibrato_rate` /
+`vibrato_delay` / `vibrato_fade`；缺省无，详见 `note.md`）。
 `id` 由引擎发放，不用自己填。
 
 `snap`（可选）把**起点**吸到网格上：`off`（缺省，原样写入）/ `bar` / `1/4` / `1/8` / `1/16` /

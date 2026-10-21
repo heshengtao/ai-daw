@@ -154,15 +154,13 @@ fn capture_plugin_states(state: &AppState) {
     }
 }
 
-/// 把当前工程收进历史（工程即将被替换时调用）。
+/// 只把引擎当前状态写进历史；调用方负责先抢救插件状态。
 ///
-/// 历史是「尽力而为」：拿不到配置目录、写盘失败都只打一行日志，绝不阻断新建 / 打开。
-/// 外部插件的内部状态也要先抢救进工程，否则历史里的那份会丢掉插件补丁。
-fn remember_current(app: &tauri::AppHandle, state: &AppState) {
+/// 历史是「尽力而为」：拿不到配置目录、写盘失败都只打一行日志，绝不阻断保存 / 新建 / 打开。
+fn remember_snapshot(app: &tauri::AppHandle, state: &AppState) {
     let Some(dir) = crate::history_dir(app) else {
         return;
     };
-    capture_plugin_states(state);
     let (project, saved) = {
         let engine = state.engine.lock().unwrap();
         (engine.project().clone(), engine.saved().clone())
@@ -170,6 +168,42 @@ fn remember_current(app: &tauri::AppHandle, state: &AppState) {
     if let Err(err) = crate::history::record(&dir, &project, &saved, state.session_path()) {
         eprintln!("记录历史工程失败：{err}");
     }
+}
+
+/// 把当前工程收进历史（工程即将被替换时调用）。
+///
+/// 外部插件的内部状态也要先抢救进工程，否则历史里的那份会丢掉插件补丁。
+fn remember_current(app: &tauri::AppHandle, state: &AppState) {
+    capture_plugin_states(state);
+    remember_snapshot(app, state);
+}
+
+/// 覆盖已有工程文件前，把文件里的旧版本收进历史。
+///
+/// 这样「保存坏了的一版」不会把上一版顶掉——旧版还能从历史卡片里找回来。
+/// 文件不存在、读不出来或不是合法工程都只是跳过（历史不能妨碍保存本身）。
+fn remember_file_version(app: &tauri::AppHandle, path: &str) {
+    let Some(dir) = crate::history_dir(app) else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(project) = serde_json::from_str::<Project>(&text) else {
+        return;
+    };
+    let saved = project.clone();
+    if let Err(err) = crate::history::record(&dir, &project, &saved, Some(path.to_string())) {
+        eprintln!("记录旧版工程失败：{err}");
+    }
+}
+
+/// 应用退出兜底：会话缓存已经落盘、插件状态也抢救过了，这里再记一份历史。
+///
+/// 程序坞「退出」/ Cmd+Q 不会走前端的关闭守卫，只能靠后端这一下。
+pub(crate) fn remember_before_exit(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    remember_snapshot(app, &state);
 }
 
 /// 界面走的编辑入口（署名 `Actor::Human`）。
@@ -768,7 +802,7 @@ pub fn trim_clip(
                         velocity: n.velocity,
                         volume: n.volume,
                         offset: 0.0,
-                        legato: false,
+                        legato: false, expr: ai_daw_engine::model::PitchExpression::NONE,
                     },
                 })
                 .collect();
@@ -1437,16 +1471,27 @@ pub fn set_project_sections(
     run(&app, &state, Command::SetProjectSections { sections })
 }
 
-/// 设置轨道的编曲元数据（分工 / 目标音域）；两者都空 = 清除。
+/// 设置轨道的编曲元数据（分工 / 目标音域 / 弯音范围）；三者都空 = 清除。
 #[tauri::command]
 pub fn set_track_meta(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     track: u64,
     role: Option<String>,
-    pitch_range: Option<PitchRange>,
+    min_pitch: Option<u8>,
+    max_pitch: Option<u8>,
+    pitch_bend_range: Option<f32>,
 ) -> Project {
-    run(&app, &state, Command::SetTrackMeta { track: TrackId(track), role, pitch_range })
+    let pitch_range = match (min_pitch, max_pitch) {
+        (Some(min), Some(max)) => Some(PitchRange { min, max }),
+        (None, None) => None,
+        _ => return state.engine.lock().unwrap().project().clone(),
+    };
+    run(
+        &app,
+        &state,
+        Command::SetTrackMeta { track: TrackId(track), role, pitch_range, pitch_bend_range },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1682,9 +1727,15 @@ pub fn transport_set_metronome(state: State<'_, AppState>, on: bool) -> Result<(
 
 /// 把当前工程保存为 JSON 文件，返回写入的绝对路径。
 #[tauri::command]
-pub async fn save_project(state: State<'_, AppState>, path: String) -> Result<String, String> {
+pub async fn save_project(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
     // 落盘前先把插件实例的内部状态抢救进工程，否则存出去的工程会丢掉外部插件的补丁。
     capture_plugin_states(&state);
+    // 覆盖已有文件前，先把旧版本留进历史（防止「保存坏了的一版」把上一版顶掉）。
+    remember_file_version(&app, &path);
     let project = { state.engine.lock().unwrap().project().clone() };
     let json = serde_json::to_string_pretty(&project).map_err(|e| e.to_string())?;
     let written = tauri::async_runtime::spawn_blocking(move || {
@@ -1696,6 +1747,8 @@ pub async fn save_project(state: State<'_, AppState>, path: String) -> Result<St
     // 写盘成功：当前工程成为新的「已保存」基线，并记下文件路径。
     state.engine.lock().unwrap().mark_saved();
     state.set_session_path(Some(written.clone()));
+    // 刚保存的这一版也进历史：界面列表里能直接看到已保存的工程。
+    remember_snapshot(&app, &state);
     Ok(written)
 }
 
@@ -1748,6 +1801,13 @@ pub fn project_history(app: tauri::AppHandle) -> Vec<crate::history::HistoryEntr
         .unwrap_or_default()
 }
 
+/// 删除一份历史快照（只动历史目录，不影响磁盘上的工程文件）。
+#[tauri::command]
+pub fn delete_project_history(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let dir = crate::history_dir(&app).ok_or_else(|| "拿不到应用配置目录".to_string())?;
+    crate::history::delete(&dir, &id)
+}
+
 /// 回到一份历史工程。
 ///
 /// 恢复前先把**当前**工程收进历史，所以来回切换不会丢东西；被恢复的那份则从列表里取出
@@ -1762,17 +1822,53 @@ pub fn restore_project_history(
     let (snapshot, entry) = crate::history::take(&dir, &id)?;
     remember_current(&app, &state);
 
-    let restored = snapshot.project;
+    let restored = normalize_project(snapshot.project);
+    let saved = normalize_project(snapshot.saved);
     {
         let mut engine = state.engine.lock().unwrap();
         // 保存基线一并还原：当时有未保存改动，恢复后也照旧显示「未保存」。
-        *engine = Engine::restore(restored.clone(), snapshot.saved);
+        *engine = Engine::restore(restored.clone(), saved);
     }
     state.audio.load(&restored);
     // 整个工程被替换：已开的插件窗口一律作废。
     close_all_plugin_windows(&app, &state);
     state.set_session_path(entry.path);
     Ok(restored)
+}
+
+/// 工程读入后的统一归一化：手改过的文件、旧版本工程都按引擎的合法范围夹紧。
+fn normalize_project(mut project: Project) -> Project {
+    // 与 `SetTempo` 一致地夹紧：非有限或 0 的速度会让离线渲染时长变成 Inf。
+    if !project.transport.tempo.is_finite() {
+        project.transport.tempo = 120.0;
+    }
+    project.transport.tempo = project.transport.tempo.clamp(1.0, 1000.0);
+    // 拍号同样归一化：分母为 0 会让按小节换算的长度除不尽。
+    let (num, den) = ai_daw_engine::model::Transport::normalize_time_sig(
+        project.transport.time_sig_num,
+        project.transport.time_sig_den,
+    );
+    project.transport.time_sig_num = num;
+    project.transport.time_sig_den = den;
+    // 混音参数与片段/音符同样要过一遍归一化：工程文件可能被手改过。
+    project.master.gain_db =
+        ai_daw_engine::model::MixerChannel::normalize_gain_db(project.master.gain_db);
+    project.master.pan = ai_daw_engine::model::MixerChannel::normalize_pan(project.master.pan);
+    for track in project.tracks.iter_mut() {
+        track.mixer.gain_db =
+            ai_daw_engine::model::MixerChannel::normalize_gain_db(track.mixer.gain_db);
+        track.mixer.pan = ai_daw_engine::model::MixerChannel::normalize_pan(track.mixer.pan);
+        for clip in track.clips.iter_mut() {
+            clip.start = ai_daw_engine::model::Clip::normalize_start(clip.start);
+            clip.length = ai_daw_engine::model::Clip::normalize_length(clip.length);
+            for note in clip.notes.iter_mut() {
+                *note = Note::normalize(*note);
+            }
+        }
+    }
+    // 旧工程文件可能没有音符 id；补号后当前工程与保存基线才可比。
+    project.ensure_note_ids();
+    project
 }
 
 /// 从 JSON 文件导入工程：替换当前工程并清空历史（导入是一个新的起点）。
@@ -1787,34 +1883,9 @@ pub async fn open_project(
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
-    let mut project: Project =
+    let project: Project =
         serde_json::from_str(&text).map_err(|e| format!("不是有效的工程文件：{e}"))?;
-    // 与 `SetTempo` 一致地夹紧：非有限或 0 的速度会让离线渲染时长变成 Inf。
-    if !project.transport.tempo.is_finite() {
-        project.transport.tempo = 120.0;
-    }
-    project.transport.tempo = project.transport.tempo.clamp(1.0, 1000.0);
-    // 拍号同样归一化：分母为 0 会让按小节换算的长度除不尽。
-    let (num, den) = ai_daw_engine::model::Transport::normalize_time_sig(
-        project.transport.time_sig_num,
-        project.transport.time_sig_den,
-    );
-    project.transport.time_sig_num = num;
-    project.transport.time_sig_den = den;
-    // 混音参数与片段/音符同样要过一遍归一化：工程文件可能被手改过。
-    project.master.gain_db = ai_daw_engine::model::MixerChannel::normalize_gain_db(project.master.gain_db);
-    project.master.pan = ai_daw_engine::model::MixerChannel::normalize_pan(project.master.pan);
-    for track in project.tracks.iter_mut() {
-        track.mixer.gain_db = ai_daw_engine::model::MixerChannel::normalize_gain_db(track.mixer.gain_db);
-        track.mixer.pan = ai_daw_engine::model::MixerChannel::normalize_pan(track.mixer.pan);
-        for clip in track.clips.iter_mut() {
-            clip.start = ai_daw_engine::model::Clip::normalize_start(clip.start);
-            clip.length = ai_daw_engine::model::Clip::normalize_length(clip.length);
-            for note in clip.notes.iter_mut() {
-                *note = Note::normalize(*note);
-            }
-        }
-    }
+    let project = normalize_project(project);
 
     // 打开另一个工程同样会丢弃当前工程：先记进历史。
     remember_current(&app, &state);

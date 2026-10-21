@@ -467,6 +467,11 @@ export const useProjectStore = defineStore("project", () => {
     void cacheSession();
   }
 
+  /** 删除一份历史快照（后端只动历史目录，不影响磁盘上的工程文件）。 */
+  function deleteHistory(id: string): Promise<void> {
+    return api.deleteProjectHistory(id);
+  }
+
   /** 从文件导入工程（会清空历史），并记下它的路径。 */
   async function openFrom(path: string): Promise<void> {
     project.value = await api.openProject(path);
@@ -579,6 +584,7 @@ export const useProjectStore = defineStore("project", () => {
     localizeStarterTracks,
     listHistory,
     restoreHistory,
+    deleteHistory,
     openFrom,
     saveTo,
     loadPath,

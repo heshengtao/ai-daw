@@ -38,6 +38,13 @@ pub trait Plugin: Send {
     fn set_param(&mut self, id: &ParamId, value: f32);
     /// 采样率/块大小变化时调用（可能在任意线程；见上文的线程契约）。
     fn prepare(&mut self, sample_rate: f64, block_size: usize);
+
+    /// 设置通道级弯音范围（半音）。
+    ///
+    /// 引擎每条轨道构建实例时调用一次；适配器保存它，把
+    /// [`MidiEvent::PitchBend`](crate::MidiEvent::PitchBend) 的音分换算成 MIDI 14-bit。
+    /// 纯 DSP 插件若自己按音分处理，可以忽略（默认空操作）。
+    fn set_pitch_bend_range(&mut self, _semitones: f32) {}
     /// 清空内部状态（延迟线、包络、声部）。在音频线程上调用。
     fn reset(&mut self);
     /// 就地处理一个音频块。

@@ -13,7 +13,8 @@
 字段：`id`（片段内稳定标识，由引擎发放）、`pitch`（0..127）、`start`/`duration`（拍，片段内相对）、
 `velocity`（0..127，演奏强度）、`volume`（0..127，127 = 不衰减）、
 `offset`（**起始偏移**，拍，**负 = 提前、正 = 延后**，范围 ±4 拍；缺省 0 = 与 `start` 同时发声）、
-`legato`（**连奏**：NoteOff 延到**同音高**的下一个音；缺省 false）。
+`legato`（**连奏**：NoteOff 延到**同音高**的下一个音；缺省 false）、
+`expr`（**音高表达**：推弦 / 揉弦 / 滑音；缺省无，见下节）。
 
 **最短时值**是 **0.03125 拍（1/32 拍）**，4/4 下相当于 **1/128 音符**；76 BPM 时约 **25 ms**。
 别把它和「32 分音符」混淆：32 分音符是 **0.125 拍**（76 BPM 时约 99 ms）。
@@ -33,6 +34,67 @@
 - 力度影响音色/振幅（各插件自行解释）；`volume` 是纯增益微调，不改变音色。
 - `offset` / `legato` 为缺省值（0 / false）时**不写进工程 JSON**，旧工程形状逐字不变。
 - 写整段旋律 / 伴奏请用 `add_notes`（一次事务 = 一个撤销步骤），别循环 `add_note`。
+
+## 音高表达：推弦 / 揉弦 / 滑音（`expr`）
+
+`expr` 是音符上的可选对象，**不改变记谱音高**，只改变发声时的音高曲线：
+
+| 字段 | 单位 | 说明 |
+| --- | --- | --- |
+| `bend` | 音分 | 起音时的偏移；预推弦 = 200（起音就在目标音高） |
+| `bend_to` | 音分 | 推弦 / 滑音的目标偏移；与 `bend` 相同 = 保持 |
+| `bend_time` | 拍 | 从 `bend` 到 `bend_to` 的时间；0 = 立即到达 |
+| `vibrato` | 音分 | 揉弦深度（0 = 不揉） |
+| `vibrato_rate` | Hz | 揉弦速率；0 = 默认 5.5 |
+| `vibrato_delay` | 拍 | 起音后延迟多久开始揉 |
+| `vibrato_fade` | 拍 | 揉弦渐入时长；0 = 立即满深度 |
+
+单位：**100 音分 = 1 个半音**。范围：音分 ±2400，时间 / 延迟 0–256 拍，速率 0–20 Hz。
+
+### 常用写法
+
+**推弦（0 → +200 音分，0.25 拍推到位，然后保持）**
+
+```json
+{"pitch": 64, "start": 4.0, "duration": 1.5, "velocity": 100,
+ "expr": {"bend": 0, "bend_to": 200, "bend_time": 0.25}}
+```
+
+**预推弦（起音就在 +200 音分，之后再揉）**
+
+```json
+{"pitch": 64, "start": 4.0, "duration": 1.5, "velocity": 100,
+ "expr": {"bend": 200, "bend_to": 200, "vibrato": 35, "vibrato_rate": 5.5,
+          "vibrato_delay": 0.5, "vibrato_fade": 0.5}}
+```
+
+**延迟揉弦（起音 0.5 拍后开始，0.5 拍渐入）**
+
+```json
+{"pitch": 67, "start": 8.0, "duration": 2.0, "velocity": 95,
+ "expr": {"vibrato": 40, "vibrato_rate": 5.5,
+          "vibrato_delay": 0.5, "vibrato_fade": 0.5}}
+```
+
+**下滑（0 → -200 音分）**
+
+```json
+{"pitch": 67, "start": 12.0, "duration": 0.75, "velocity": 90,
+ "expr": {"bend": 0, "bend_to": -200, "bend_time": 0.3}}
+```
+
+**推弦后揉弦**：把 `bend_to` 与 `vibrato` 写在同一个 `expr` 里即可，两个分量相加。
+
+### 播放路径与限制
+
+- 支持逐音表达的插件（VST3 声明了 Tuning note expression / 内置合成器）：每颗音符独立弯曲。
+- 只有通道弯音的插件（CLAP / AU / 内置采样乐器 / 多数 VST3）：引擎把逐音表达折叠成通道弯音；
+  **重叠音符以「最晚起音」为主**，和弦里同时揉多个音不保证独立。
+- 弯音范围默认 ±2 个半音；音源不是这个范围时，用
+  `set_track_meta(track, pitch_bend_range=<半音>)` 改。
+- `quantize_notes` / `apply_swing` / `humanize_notes` / `strum_notes` **不改** `expr`；
+  `transpose_notes` 只改 `pitch`，音分偏移保持不变。
+- 与倚音一起用时：先写主音与 `expr`，再加倚音，之后不要再量化 / humanize。
 
 ## 倚音 / 装饰音（没有独立字段，但可以正确表达）
 

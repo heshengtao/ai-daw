@@ -1,7 +1,8 @@
-//! 历史工程：工程被替换前留下的一份工作副本。
+//! 历史工程：工作副本与保存版本的快照。
 //!
-//! 每当当前工程即将被「新建 / 打开文件 / 从历史恢复」替换掉时，先把工作副本与保存基线
-//! 记一份到应用配置目录的 `history/`。界面据此展示缩略图卡片，点一下就能回到之前的工程。
+//! 写历史的时机：保存成功、覆盖文件前（旧版）、新建 / 打开 / 从历史恢复前、应用退出时。
+//! 快照连同保存基线一起写入应用配置目录的 `history/`，界面据此展示缩略图卡片，点一下就能
+//! 回到之前的工程或版本。
 //!
 //! 索引（`index.json`）只存展示用的轻量元信息（轨道 / 片段布局），完整工程放在
 //! `<id>.json` 里——列历史时不必把几十份工程全塞进 IPC 载荷。
@@ -11,8 +12,8 @@ use std::path::{Path, PathBuf};
 use ai_daw_engine::model::Project;
 use serde::{Deserialize, Serialize};
 
-/// 最多保留多少份历史（超出的从最旧开始丢弃）。
-pub const MAX_ENTRIES: usize = 30;
+/// 最多保留多少份历史（超出的优先丢弃磁盘上已有副本的旧快照）。
+pub const MAX_ENTRIES: usize = 50;
 
 /// 缩略图里的一段片段（拍）。只留画图需要的字段。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -215,9 +216,14 @@ pub fn record(
     let entry = make_entry(id, project, saved, path, saved_at);
     entries.insert(0, entry.clone());
     while entries.len() > MAX_ENTRIES {
-        if let Some(old) = entries.pop() {
-            let _ = std::fs::remove_file(dir.join(format!("{}.json", old.id)));
-        }
+        // 优先丢弃「磁盘上已经有一份」的最旧条目（有路径且没有未保存改动）。
+        // 全都是未保存快照时才丢最旧的一条——没落盘的工作最不该丢。
+        let victim = entries
+            .iter()
+            .rposition(|e| e.path.is_some() && !e.dirty)
+            .unwrap_or(entries.len() - 1);
+        let old = entries.remove(victim);
+        let _ = std::fs::remove_file(dir.join(format!("{}.json", old.id)));
     }
     write_index(dir, &entries)?;
     Ok(Some(entry))
@@ -248,6 +254,28 @@ pub fn take(dir: &Path, id: &str) -> Result<(HistorySnapshot, HistoryEntry), Str
     let _ = std::fs::remove_file(&file);
     write_index(dir, &rest)?;
     Ok((snapshot, entry))
+}
+
+/// 删除一份历史工程（索引项 + 快照文件）。
+///
+/// 只动历史目录，不影响用户磁盘上的工程文件。
+pub fn delete(dir: &Path, id: &str) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err("无效的历史工程 id".into());
+    }
+    let mut entries = load_index(dir);
+    let before = entries.len();
+    entries.retain(|e| e.id != id);
+    if entries.len() == before {
+        return Err("历史工程不存在".into());
+    }
+
+    match std::fs::remove_file(dir.join(format!("{id}.json"))) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("删除历史工程失败：{error}")),
+    }
+    write_index(dir, &entries)
 }
 
 #[cfg(test)]
@@ -332,6 +360,37 @@ mod tests {
     }
 
     #[test]
+    fn prunes_saved_snapshots_before_unsaved_ones() {
+        let dir = temp_dir("prune-priority");
+        for i in 0..MAX_ENTRIES {
+            let project = ai_daw_engine::bus::Engine::new_project(format!("saved-{i}"))
+                .project()
+                .clone();
+            record(&dir, &project, &project, Some(format!("/tmp/{i}.json"))).unwrap();
+        }
+        let saved = ai_daw_engine::bus::Engine::new_project("unsaved")
+            .project()
+            .clone();
+        let mut unsaved = saved.clone();
+        unsaved.tracks[0].name = "changed".into();
+        record(&dir, &unsaved, &saved, None).unwrap();
+
+        let entries = load_index(&dir);
+        assert_eq!(entries.len(), MAX_ENTRIES);
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.name == "unsaved" && e.path.is_none()),
+            "未保存的快照必须留下"
+        );
+        assert!(
+            !entries.iter().any(|e| e.name == "saved-0"),
+            "应该先淘汰最旧的已保存条目"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn prunes_beyond_the_cap() {
         let dir = temp_dir("prune");
         for i in 0..(MAX_ENTRIES + 3) {
@@ -356,6 +415,46 @@ mod tests {
         let dir = temp_dir("traversal");
         assert!(take(&dir, "../session").is_err());
         assert!(take(&dir, "1/2").is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn deletes_only_the_chosen_entry_and_its_snapshot() {
+        let dir = temp_dir("delete");
+        let a = ai_daw_engine::bus::Engine::new_project("a")
+            .project()
+            .clone();
+        let b = ai_daw_engine::bus::Engine::new_project("b")
+            .project()
+            .clone();
+        let a_entry = record(&dir, &a, &a, Some("/tmp/a.json".into()))
+            .unwrap()
+            .unwrap();
+        let b_entry = record(&dir, &b, &b, Some("/tmp/b.json".into()))
+            .unwrap()
+            .unwrap();
+
+        delete(&dir, &a_entry.id).unwrap();
+
+        let entries = load_index(&dir);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, b_entry.id);
+        assert!(!dir.join(format!("{}.json", a_entry.id)).exists());
+        assert!(dir.join(format!("{}.json", b_entry.id)).exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn delete_rejects_unknown_and_invalid_ids() {
+        let dir = temp_dir("delete-reject");
+        let project = ai_daw_engine::bus::Engine::new_project("demo")
+            .project()
+            .clone();
+        record(&dir, &project, &project, Some("/tmp/demo.json".into())).unwrap();
+
+        assert!(delete(&dir, "404").is_err());
+        assert!(delete(&dir, "../session").is_err());
+        assert_eq!(load_index(&dir).len(), 1, "失败时不该动索引");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

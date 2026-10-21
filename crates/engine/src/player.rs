@@ -10,7 +10,8 @@ use ai_daw_plugin_api::{
 use crate::model::MixerChannel;
 use crate::registry::{PluginRegistry, PluginSlot};
 use crate::schedule::{
-    LaneTarget, ScheduledAudioClip, ScheduledEvents, ScheduledLane, ScheduledMidi, ScheduledSend,
+    LaneTarget, PitchSpan, ScheduledAudioClip, ScheduledEvents, ScheduledLane, ScheduledMidi,
+    ScheduledSend,
 };
 use crate::stretch::Stretcher;
 use crate::tempo::TempoMap;
@@ -93,8 +94,76 @@ fn fold_note_volume(events: &mut Vec<ScheduledMidi>) {
                 // 折叠后不再转发 NoteVolume。
             }
             MidiEvent::ControlChange { .. } => out.push(e),
+            // 音高事件与音量无关，原样保留；逐音→通道的折叠在 `fold_note_pitch` 里做。
+            MidiEvent::PitchBend { .. } | MidiEvent::NotePitch { .. } => out.push(e),
         }
     }
+    *events = out;
+}
+
+/// 把逐音音高表达折叠成通道弯音：**仅**用于不支持 per-note 音高的插件。
+///
+/// 通道弯音（MIDI 1.0）同一时刻只能表达一个音高，所以重叠音符用「**最晚起音的音符主导**」
+/// 规则：同一帧上所有正在响的表达音符里，起音最晚的那个生效；它结束时立刻切到下一个。
+/// 这条规则是确定的，构建播放器时一次算完，`process_block` 里不做任何变换。
+fn fold_note_pitch(
+    events: &mut Vec<ScheduledMidi>,
+    spans: &[PitchSpan],
+    tempo_map: &TempoMap,
+    sample_rate: f64,
+) {
+    if spans.is_empty() {
+        return;
+    }
+
+    // 逐音事件已经按控制率展开过；复用它们的帧位置作为通道弯音的采样点。
+    let mut frames: Vec<u64> = Vec::with_capacity(events.len() + spans.len() * 2);
+    for e in events.iter() {
+        if matches!(e.event, MidiEvent::NotePitch { .. }) {
+            frames.push(e.frame);
+        }
+    }
+    for span in spans {
+        frames.push(span.start_frame);
+        frames.push(span.end_frame);
+    }
+    frames.sort_unstable();
+    frames.dedup();
+
+    let mut out: Vec<ScheduledMidi> = Vec::with_capacity(events.len() + frames.len());
+    for e in events.drain(..) {
+        if !matches!(e.event, MidiEvent::NotePitch { .. }) {
+            out.push(e);
+        }
+    }
+
+    let mut last: Option<i16> = None;
+    for frame in frames {
+        let beat = tempo_map.seconds_to_beats(frame as f64 / sample_rate);
+        // 主导 = 起音最晚；起音相同则音高更高的优先（确定性的平局规则）。
+        let dominant = spans
+            .iter()
+            .filter(|span| span.start_frame <= frame && frame < span.end_frame)
+            .max_by(|a, b| {
+                a.start_frame
+                    .cmp(&b.start_frame)
+                    .then_with(|| a.note.cmp(&b.note))
+            });
+        let cents = dominant
+            .map(|span| {
+                let duration =
+                    tempo_map.seconds_to_beats(span.end_frame as f64 / sample_rate) - span.start_beat;
+                span.expr.cents_at(beat - span.start_beat, duration.max(0.0)).round() as i16
+            })
+            .unwrap_or(0);
+        if last == Some(cents) {
+            continue;
+        }
+        last = Some(cents);
+        out.push(ScheduledMidi { frame, event: MidiEvent::PitchBend { cents } });
+    }
+
+    out.sort_by_key(|e| e.frame);
     *events = out;
 }
 
@@ -305,6 +374,12 @@ struct TrackVoice {
     audible: bool,
     left_gain: f32,
     right_gain: f32,
+    /// seek / 静音后需要在本块开头补一条「弯音归零」，避免旧弯音残留。
+    pitch_dirty: bool,
+    /// 每条 CC 上一次发出的值（-1 = 尚未发过）：避免每块重复送同一个值。
+    ///
+    /// 插件被 `reset()`（seek / 静音）后要清回 -1，否则恢复播放时 CC 状态会丢。
+    cc_last: [i16; 128],
 }
 
 /// 实时安全的逐块播放器：构造后 `process_block` 不再分配内存。
@@ -416,7 +491,26 @@ impl Player {
         };
         let has_automation = schedule.tracks.iter().any(|t| !t.lanes.is_empty());
         // 单块内某轨最多发出的事件数 = 该轨事件总数上界（游标单调前进，每块只消费一次）。
-        let max_track_events = schedule.tracks.iter().map(|t| t.events.len()).max().unwrap_or(0);
+        // +1 给 seek / 静音后的弯音归零事件。
+        let max_track_events = schedule
+            .tracks
+            .iter()
+            .map(|t| t.events.len() + 1)
+            .max()
+            .unwrap_or(0);
+        // 每块最多给每条 CC 车道发一个事件；实时 `SetAutomation` 还能再加 4 条车道
+        // （见下面的 `lanes.reserve(4)`），预留时要一起算上，音频线程才不会扩容。
+        let max_cc_lanes = schedule
+            .tracks
+            .iter()
+            .map(|t| {
+                t.lanes
+                    .iter()
+                    .filter(|lane| matches!(lane.param, LaneTarget::ControlChange(_)))
+                    .count()
+            })
+            .max()
+            .unwrap_or(0);
         let mut tracks = Vec::with_capacity(schedule.tracks.len());
         for st in &schedule.tracks {
             // 乐器是**可选**的：没挂乐器（或插件缺失）的轨道仍然存在，只为它的音频片段出声。
@@ -437,6 +531,7 @@ impl Player {
             let mut events = st.events.clone();
             if let (Some(p), Some(instance)) = (plugin.as_mut(), instrument) {
                 p.prepare(sample_rate, max_block);
+                p.set_pitch_bend_range(st.pitch_bend_range);
                 // 先还原**插件自身的状态**（外部插件的内部补丁），再用工程记的参数覆盖。
                 // 状态为空表示「没有可还原的」，跳过即可。
                 if !instance.state.is_empty() {
@@ -448,6 +543,15 @@ impl Player {
                 if !p.descriptor().capabilities.per_note_volume {
                     fold_note_volume(&mut events);
                 }
+            }
+            // 音高表达：插件支持逐音（VST3 Tuning / 内置合成器）就保留 `NotePitch`；
+            // 否则折叠成通道弯音。折叠在控制侧一次完成，实时路径不再变换。
+            let per_note_pitch = plugin
+                .as_ref()
+                .map(|p| p.descriptor().capabilities.per_note_pitch)
+                .unwrap_or(false);
+            if !per_note_pitch && !st.pitch_spans.is_empty() {
+                fold_note_pitch(&mut events, &st.pitch_spans, &tempo_map, sample_rate);
             }
             // 效果链：只收「效果」类插件。缺失或类型不符的条目**用占位顶住**，不能丢——
             // `fx<i>` 自动化按**声明链下标**寻址，跳过任何一个都会让后面的下标前移。占位是
@@ -521,7 +625,7 @@ impl Player {
                     LaneTarget::Effect { index, param } => {
                         lane.static_value = effects.get(*index).and_then(|fx| fx.get_param(param));
                     }
-                    LaneTarget::GainDb | LaneTarget::Pan => {}
+                    LaneTarget::GainDb | LaneTarget::Pan | LaneTarget::ControlChange(_) => {}
                 }
             }
             tracks.push(TrackVoice {
@@ -541,6 +645,8 @@ impl Player {
                 audible: false,
                 left_gain: 0.0,
                 right_gain: 0.0,
+                pitch_dirty: false,
+                cc_last: [-1; 128],
             });
         }
         let mut player = Player {
@@ -564,7 +670,9 @@ impl Player {
             master_right: 1.0,
             scratch_left: vec![0.0; max_block],
             scratch_right: vec![0.0; max_block],
-            scratch_events: Vec::with_capacity(max_track_events.max(64) + AUDITION_CAPACITY),
+            scratch_events: Vec::with_capacity(
+                max_track_events.max(64) + AUDITION_CAPACITY + max_cc_lanes + 4,
+            ),
             audition: Vec::with_capacity(AUDITION_CAPACITY),
             yield_sink,
             order,
@@ -647,6 +755,9 @@ impl Player {
             if let Some(plugin) = track.plugin.as_mut() {
                 plugin.reset();
             }
+            // 插件内部可能保留旧的弯音 / CC 状态；下一块开头补一条归零并重发 CC。
+            track.pitch_dirty = true;
+            track.cc_last = [-1; 128];
             // 音频片段的游标同样要跟着播放头重算，否则定位后片段会错位。
             for playback in track.audio.iter_mut() {
                 playback.cursor = audio_cursor(&playback.clip, frame);
@@ -673,6 +784,8 @@ impl Player {
                 if let Some(plugin) = track.plugin.as_mut() {
                     plugin.reset();
                 }
+                track.pitch_dirty = true;
+                track.cc_last = [-1; 128];
             }
             track.audible = want;
             // 自动化**覆盖**推子值（读取模式）：有曲线的参数以曲线为准。
@@ -698,6 +811,8 @@ impl Player {
                                 fx.set_param(param, value);
                             }
                         }
+                        // CC 是 MIDI 事件，不走混音计算；由 `process_block` 逐块送给乐器。
+                        LaneTarget::ControlChange(_) => {}
                     }
                 }
                 (mix_gain_db, mix_pan)
@@ -728,6 +843,8 @@ impl Player {
             for fx in track.effects.iter_mut() {
                 fx.reset();
             }
+            track.pitch_dirty = true;
+            track.cc_last = [-1; 128];
         }
         self.audition.clear();
     }
@@ -819,7 +936,7 @@ impl Player {
                                         fx.set_param(param, value);
                                     }
                                 }
-                                LaneTarget::GainDb | LaneTarget::Pan => {}
+                                LaneTarget::GainDb | LaneTarget::Pan | LaneTarget::ControlChange(_) => {}
                             }
                         }
                         lanes.retain(|lane| lane.param != target);
@@ -838,7 +955,9 @@ impl Player {
                                 LaneTarget::Effect { index, param } => {
                                     effects.get(*index).and_then(|fx| fx.get_param(param))
                                 }
-                                LaneTarget::GainDb | LaneTarget::Pan => None,
+                                LaneTarget::GainDb | LaneTarget::Pan | LaneTarget::ControlChange(_) => {
+                                    None
+                                }
                             };
                         }
                         lanes.retain(|lane| lane.param != target);
@@ -950,6 +1069,9 @@ impl Player {
         let playing = self.playing;
         let block_start = self.position;
         let block_end = block_start + frames as u64;
+        // CC 自动化按块求值：先把本块起点换算成拍（速度表支持分段速度）。
+        let block_beats =
+            self.tempo_map.seconds_to_beats(block_start as f64 / self.sample_rate);
 
         while self.tempo_cursor + 1 < self.tempo_points.len()
             && self.tempo_points[self.tempo_cursor + 1].0 <= block_start
@@ -982,6 +1104,40 @@ impl Player {
             // 即便本轨当前不可听，也要推进事件游标：否则解除静音时会把积压的历史
             // 音符一次性补发出去。停止时游标原地不动，恢复播放才不会跳音。
             scratch_events.clear();
+            // seek / 静音后补一条弯音归零：插件内部可能还停在上一次的弯音位置。
+            // 不可听时先记着，等真正开始处理这一轨的那一块再发（否则事件被 continue 丢掉）。
+            if track.audible && track.pitch_dirty {
+                track.pitch_dirty = false;
+                scratch_events.push(TimedMidiEvent {
+                    frame: 0,
+                    event: MidiEvent::PitchBend { cents: 0 },
+                });
+            }
+            // MIDI CC 自动化：逐块采样（约块率），只发**变化**的值。
+            // 它必须作为 MIDI 事件送进乐器，而不是混音参数——延音踏板、调制轮、
+            // 表情、明亮度这些都由音源自己在内部解释；标准 MIDI，无需插件改造。
+            if playing && track.audible {
+                for lane in track.lanes.iter() {
+                    let LaneTarget::ControlChange(controller) = &lane.param else { continue };
+                    let Some(value) = lane.value_at(block_beats) else { continue };
+                    if !value.is_finite() {
+                        continue;
+                    }
+                    let value = value.round().clamp(0.0, 127.0) as i16;
+                    let slot = &mut track.cc_last[*controller as usize];
+                    if *slot == value {
+                        continue;
+                    }
+                    *slot = value;
+                    scratch_events.push(TimedMidiEvent {
+                        frame: 0,
+                        event: MidiEvent::ControlChange {
+                            controller: *controller,
+                            value: value as u8,
+                        },
+                    });
+                }
+            }
             if playing {
                 while let Some(ev) = track.events.get(track.cursor).copied() {
                     if ev.frame >= block_end {
@@ -1270,7 +1426,7 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 1.0,
-                notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false }],
+                notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -1300,6 +1456,88 @@ mod tests {
         // 100 × 64 / 127 ≈ 50。
         assert!(matches!(events[0].event, MidiEvent::NoteOn { note: 60, velocity: 50 }));
         assert!(matches!(events[1].event, MidiEvent::NoteOff { note: 60 }));
+    }
+
+    #[test]
+    fn fold_note_pitch_turns_per_note_expression_into_channel_bend() {
+        let project = crate::model::Project::new("p");
+        let map = TempoMap::from_transport(&project.transport);
+        let mut events = vec![
+            ScheduledMidi { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } },
+            ScheduledMidi { frame: 0, event: MidiEvent::NotePitch { note: 60, cents: 0 } },
+            ScheduledMidi { frame: 10, event: MidiEvent::NotePitch { note: 60, cents: 100 } },
+            ScheduledMidi { frame: 20, event: MidiEvent::NotePitch { note: 60, cents: 0 } },
+            ScheduledMidi { frame: 20, event: MidiEvent::NoteOff { note: 60 } },
+        ];
+        let spans = vec![PitchSpan {
+            note: 60,
+            start_frame: 0,
+            end_frame: 20,
+            start_beat: 0.0,
+            // bend_time = 0 → 起音就在目标音高，便于断言。
+            expr: crate::model::PitchExpression {
+                bend_to: 100,
+                ..crate::model::PitchExpression::NONE
+            },
+        }];
+        fold_note_pitch(&mut events, &spans, &map, 48_000.0);
+
+        assert!(
+            !events.iter().any(|e| matches!(e.event, MidiEvent::NotePitch { .. })),
+            "逐音事件应被折叠掉"
+        );
+        let bends: Vec<(u64, i16)> = events
+            .iter()
+            .filter_map(|e| match e.event {
+                MidiEvent::PitchBend { cents } => Some((e.frame, cents)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bends, vec![(0, 100), (20, 0)], "起音弯曲、收音归零");
+    }
+
+    #[test]
+    fn overlapping_pitch_expression_is_won_by_the_latest_note() {
+        let project = crate::model::Project::new("p");
+        let map = TempoMap::from_transport(&project.transport);
+        let mut events = vec![
+            ScheduledMidi { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } },
+            ScheduledMidi { frame: 10, event: MidiEvent::NoteOn { note: 64, velocity: 100 } },
+            ScheduledMidi { frame: 30, event: MidiEvent::NoteOff { note: 64 } },
+            ScheduledMidi { frame: 20, event: MidiEvent::NoteOff { note: 60 } },
+        ];
+        let spans = vec![
+            PitchSpan {
+                note: 60,
+                start_frame: 0,
+                end_frame: 20,
+                start_beat: 0.0,
+                expr: crate::model::PitchExpression {
+                    bend_to: 100,
+                    ..crate::model::PitchExpression::NONE
+                },
+            },
+            PitchSpan {
+                note: 64,
+                start_frame: 10,
+                end_frame: 30,
+                start_beat: 0.0,
+                expr: crate::model::PitchExpression {
+                    bend_to: -100,
+                    ..crate::model::PitchExpression::NONE
+                },
+            },
+        ];
+        fold_note_pitch(&mut events, &spans, &map, 48_000.0);
+        let bends: Vec<(u64, i16)> = events
+            .iter()
+            .filter_map(|e| match e.event {
+                MidiEvent::PitchBend { cents } => Some((e.frame, cents)),
+                _ => None,
+            })
+            .collect();
+        // 0–10: 60 号音 +100；10–30: 后起音的 64 号音 −100；30 之后归零。
+        assert_eq!(bends, vec![(0, 100), (10, -100), (30, 0)]);
     }
 
     #[test]
@@ -1972,7 +2210,7 @@ mod tests {
                 id: ClipId(2),
                 start: 0.0,
                 length: 1.0,
-                notes: vec![Note { id: 0, pitch: 40, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false }],
+                notes: vec![Note { id: 0, pitch: 40, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -2147,6 +2385,98 @@ mod tests {
             "自动化 -60 dB 应把该轨压到几乎无声（峰值 {}）",
             peak(&out)
         );
+    }
+
+    /// CC 自动化：逐块把控制变化送给乐器；相同值不重复发，seek 后重发。
+    #[test]
+    fn cc_automation_lanes_emit_control_change_events() {
+        struct CcRecorder {
+            log: Arc<Mutex<Vec<MidiEvent>>>,
+        }
+
+        impl Plugin for CcRecorder {
+            fn descriptor(&self) -> PluginDescriptor {
+                PluginDescriptor {
+                    id: "test.cc".into(),
+                    name: "CC Recorder".into(),
+                    kind: PluginKind::Instrument,
+                    io: IoLayout { inputs: 0, outputs: 2 },
+                    capabilities: Default::default(),
+                }
+            }
+            fn params(&self) -> Vec<ParamInfo> {
+                Vec::new()
+            }
+            fn get_param(&self, _id: &ParamId) -> Option<f32> {
+                None
+            }
+            fn set_param(&mut self, _id: &ParamId, _value: f32) {}
+            fn prepare(&mut self, _sample_rate: f64, _block_size: usize) {}
+            fn reset(&mut self) {}
+            fn process(
+                &mut self,
+                _ctx: &ProcessContext,
+                _audio: &mut [&mut [f32]],
+                events: &[TimedMidiEvent],
+            ) {
+                let mut log = self.log.lock().unwrap();
+                for event in events {
+                    if matches!(event.event, MidiEvent::ControlChange { .. }) {
+                        log.push(event.event);
+                    }
+                }
+            }
+            fn save_state(&self) -> Vec<u8> {
+                Vec::new()
+            }
+            fn load_state(&mut self, _state: &[u8]) -> Result<(), PluginError> {
+                Ok(())
+            }
+        }
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&log);
+        let mut registry = PluginRegistry::new();
+        registry.register("test.cc", move |_track, _slot| {
+            Box::new(CcRecorder { log: Arc::clone(&sink) })
+        });
+
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        let mut track = tone_track(1, "T", 255);
+        track.instrument = Some(PluginInstance {
+            plugin_id: "test.cc".into(),
+            params: Default::default(),
+            state: vec![],
+        });
+        track.automation = vec![AutomationLane {
+            param: "cc:64".into(),
+            points: vec![AutomationPoint { beat: 0.0, value: 127.0 }],
+        }];
+        p.tracks.push(track);
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        let mut out = vec![0.0f32; 512 * 2];
+
+        player.process_block(&mut out, 512);
+        assert!(log.lock().unwrap().is_empty(), "停止时不发 CC");
+
+        player.apply_command(TransportCommand::Play);
+        player.process_block(&mut out, 512);
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            &[MidiEvent::ControlChange { controller: 64, value: 127 }]
+        );
+
+        // 值没变就不该每块重复送。
+        player.process_block(&mut out, 512);
+        assert_eq!(log.lock().unwrap().len(), 1);
+
+        // seek 后插件被 reset，CC 状态要重发。
+        player.apply_command(TransportCommand::Seek { frame: 0 });
+        player.process_block(&mut out, 512);
+        assert_eq!(log.lock().unwrap().len(), 2, "seek 后要重发当前 CC");
     }
 
     /// 实时推入 / 移除自动化曲线：无需重建播放器即生效。

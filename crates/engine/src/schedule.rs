@@ -3,14 +3,22 @@ use std::sync::Arc;
 use ai_daw_plugin_api::{MidiEvent, ParamId};
 
 use crate::audio::{DecodedAudio, SampleProvider};
-use crate::model::{AutomationPoint, MixerChannel, Note, PluginInstance, Project, TrackId};
+use crate::model::{
+    AutomationPoint, MixerChannel, Note, PitchExpression, PluginInstance, Project, TrackId,
+    TrackMeta,
+};
 use crate::player::db_to_linear;
 use crate::tempo::TempoMap;
+
+/// 单颗音符最多展开多少个音高表达事件（约 40 秒 @100 Hz，足够任何真实乐句）。
+const MAX_EXPRESSION_EVENTS: usize = 4096;
+/// 揉弦控制率（Hz）。5–7 Hz 的揉弦在 100 Hz 采样下足够平滑。
+const EXPRESSION_CONTROL_HZ: f64 = 100.0;
 
 /// 一条自动化车道的**已解析目标**。
 ///
 /// 键的形式（见 `specs/2026-10-10-plugin-param-automation-design.md` §4）：
-/// `gain_db` / `pan` / `inst:<param_id>` / `fx<i>:<param_id>`（`i` 从 0 起）。
+/// `gain_db` / `pan` / `cc:<0..=127>` / `inst:<param_id>` / `fx<i>:<param_id>`（`i` 从 0 起）。
 ///
 /// 非 `Copy`：`ParamId` 拥有自己的 `String`。**构造只在控制侧 / 调度构建时发生**
 /// （`from_key` 会分配），解析好的目标随 `ScheduledLane` 带进播放器，音频线程只做移动。
@@ -20,6 +28,8 @@ pub enum LaneTarget {
     GainDb,
     /// 轨道声像（-1..=1）。
     Pan,
+    /// MIDI 控制变化（0..=127）：逐块发给轨道乐器。延音踏板 / 调制轮 / 表情等走这里。
+    ControlChange(u8),
     /// 轨道的乐器参数。
     Instrument(ParamId),
     /// 效果链第 `index` 个效果器的参数。
@@ -33,6 +43,10 @@ impl LaneTarget {
             "gain_db" => return Some(LaneTarget::GainDb),
             "pan" => return Some(LaneTarget::Pan),
             _ => {}
+        }
+        if let Some(rest) = key.strip_prefix("cc:") {
+            let controller: u8 = rest.parse().ok()?;
+            return (controller <= 127).then_some(LaneTarget::ControlChange(controller));
         }
         if let Some(rest) = key.strip_prefix("inst:") {
             return (!rest.is_empty()).then(|| LaneTarget::Instrument(ParamId(rest.to_string())));
@@ -120,6 +134,21 @@ pub struct ScheduledAudioClip {
     pub audio: Arc<DecodedAudio>,
 }
 
+/// 一条带音高表达的音符，供播放器在「插件不支持逐音表达」时折叠成通道弯音。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PitchSpan {
+    /// MIDI 音高。
+    pub note: u8,
+    /// 起音绝对帧。
+    pub start_frame: u64,
+    /// 收音绝对帧。
+    pub end_frame: u64,
+    /// 起音拍（绝对）。
+    pub start_beat: f64,
+    /// 音高表达参数。
+    pub expr: PitchExpression,
+}
+
 /// 单轨的定帧事件表与播放所需信息（自带插件引用与混音参数，使 `Player` 不依赖 `Project`）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScheduledTrack {
@@ -133,6 +162,10 @@ pub struct ScheduledTrack {
     pub mixer: MixerChannel,
     /// 按帧稳定排序的事件列表。
     pub events: Vec<ScheduledMidi>,
+    /// 带音高表达的音符（只含 `expr != NONE` 的音符）。
+    pub pitch_spans: Vec<PitchSpan>,
+    /// MIDI 弯音范围（半音），来自 `TrackMeta`，缺省 2。
+    pub pitch_bend_range: f32,
     /// 音频片段（可能为空）。素材缺失的片段不会出现在这里（按静音处理）。
     pub audio_clips: Vec<ScheduledAudioClip>,
     /// 自动化车道（已解析参数；求值时按速度表换算拍）。
@@ -248,6 +281,7 @@ impl ScheduledEvents {
         let mut edges: Vec<Vec<usize>> = Vec::with_capacity(project.tracks.len());
         for track in &project.tracks {
             let mut events = Vec::new();
+            let mut pitch_spans = Vec::new();
             let mut audio_clips = Vec::new();
             for clip in &track.clips {
                 // 音频片段：接素材、定绝对帧。素材缺失 → 整段静音（跳过）。
@@ -323,6 +357,69 @@ impl ScheduledEvents {
                             event: MidiEvent::NoteVolume { note: note.pitch, value: note.volume },
                         });
                     }
+                    // 音高表达：推弦 / 揉弦 / 滑音。展开成逐音事件；不支持逐音的插件由
+                    // `Player` 折叠成通道弯音。
+                    if !note.expr.is_none() {
+                        let start_frame = to_frame(onset);
+                        let end_frame = to_frame(off);
+                        let duration_beats = (off - onset).max(0.0);
+                        pitch_spans.push(PitchSpan {
+                            note: note.pitch,
+                            start_frame,
+                            end_frame,
+                            start_beat: onset,
+                            expr: note.expr,
+                        });
+
+                        let mut points: Vec<(u64, i16)> = Vec::new();
+                        // 揉弦、以及「有实际音高变化的推弦」都需要连续采样；否则插件只会
+                        // 收到起止两点，听到的是跳变而不是滑音。
+                        let needs_ramp = note.expr.bend_time > 0.0
+                            && note.expr.bend != note.expr.bend_to;
+                        if note.expr.vibrato != 0 || needs_ramp {
+                            let step = (sample_rate / EXPRESSION_CONTROL_HZ).round().max(1.0) as u64;
+                            let mut frame = start_frame;
+                            while frame < end_frame && points.len() + 1 < MAX_EXPRESSION_EVENTS {
+                                let beat = map.seconds_to_beats(frame as f64 / sample_rate);
+                                let cents = note
+                                    .expr
+                                    .cents_at(beat - onset, duration_beats)
+                                    .round() as i16;
+                                points.push((frame, cents));
+                                frame = frame.saturating_add(step);
+                            }
+                            // 保证起音点一定有值（极短音符 / 采样步长大于时值时）。
+                            if points.first().map(|p| p.0) != Some(start_frame) {
+                                let cents =
+                                    note.expr.cents_at(0.0, duration_beats).round() as i16;
+                                points.insert(0, (start_frame, cents));
+                            }
+                        } else {
+                            // 恒定偏移 / 瞬间到位：只需要起音点。
+                            points.push((
+                                start_frame,
+                                note.expr.cents_at(0.0, duration_beats).round() as i16,
+                            ));
+                        }
+
+                        // 去掉相邻重复值，减少事件量（推弦保持段只留一条）。
+                        let mut last: Option<i16> = None;
+                        for (frame, cents) in points {
+                            if last == Some(cents) {
+                                continue;
+                            }
+                            last = Some(cents);
+                            events.push(ScheduledMidi {
+                                frame,
+                                event: MidiEvent::NotePitch { note: note.pitch, cents },
+                            });
+                        }
+                        // 收音前把音高归零：下一颗同音音符不会继承上一颗的弯音。
+                        events.push(ScheduledMidi {
+                            frame: end_frame,
+                            event: MidiEvent::NotePitch { note: note.pitch, cents: 0 },
+                        });
+                    }
                     events.push(ScheduledMidi {
                         frame: to_frame(off),
                         event: MidiEvent::NoteOff { note: note.pitch },
@@ -365,6 +462,12 @@ impl ScheduledEvents {
                 effects: track.effects.clone(),
                 mixer: track.mixer,
                 events,
+                pitch_spans,
+                pitch_bend_range: track
+                    .meta
+                    .as_ref()
+                    .map(|m| m.effective_pitch_bend_range())
+                    .unwrap_or(TrackMeta::DEFAULT_PITCH_BEND_RANGE),
                 audio_clips,
                 lanes,
                 sends,
@@ -406,6 +509,15 @@ mod tests {
             LaneTarget::from_key("fx2:mix"),
             Some(LaneTarget::Effect { index: 2, param: ParamId("mix".into()) })
         );
+        assert_eq!(
+            LaneTarget::from_key("cc:64"),
+            Some(LaneTarget::ControlChange(64))
+        );
+        assert_eq!(
+            LaneTarget::from_key("cc:0"),
+            Some(LaneTarget::ControlChange(0)),
+            "CC 从 0 起"
+        );
         // 不认识 / 残缺的形式
         assert_eq!(LaneTarget::from_key(""), None);
         assert_eq!(LaneTarget::from_key("nope"), None);
@@ -413,6 +525,10 @@ mod tests {
         assert_eq!(LaneTarget::from_key("fx:mix"), None, "下标必须是数字");
         assert_eq!(LaneTarget::from_key("fx1:"), None, "参数名不能为空");
         assert_eq!(LaneTarget::from_key("fx"), None);
+        assert_eq!(LaneTarget::from_key("cc:"), None);
+        assert_eq!(LaneTarget::from_key("cc:128"), None, "CC 最大 127");
+        assert_eq!(LaneTarget::from_key("cc:-1"), None);
+        assert_eq!(LaneTarget::from_key("cc:x"), None);
     }
 
     fn project_with_note() -> Project {
@@ -428,7 +544,7 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 4.0,
-                notes: vec![Note { id: 0, pitch: 60, start: 1.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }],
+                notes: vec![Note { id: 0, pitch: 60, start: 1.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -464,7 +580,7 @@ mod tests {
             velocity: 100,
             volume: 127,
             offset: 0.0,
-            legato: false,
+            legato: false, expr: crate::model::PitchExpression::NONE,
         });
         // 第 1 拍那个音符拉长到第 6 拍 → 越过框尾，应截断在第 4 拍。
         p.tracks[0].clips[0].notes[0].duration = 5.0;
@@ -501,6 +617,78 @@ mod tests {
         assert_eq!(off.frame, 54_000, "时值仍是 1 拍：1.25 + 1.0 = 2.25 拍 = 54000 帧");
     }
 
+    /// 推弦：起音点、到位点、收音前归零，三条事件都在正确的帧上。
+    #[test]
+    fn pitch_expression_expands_into_note_pitch_events() {
+        let mut p = project_with_note();
+        p.tracks[0].clips[0].notes[0].expr = crate::model::PitchExpression {
+            bend: 0,
+            bend_to: 200,
+            bend_time: 0.5,
+            ..crate::model::PitchExpression::NONE
+        };
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        let ev = &s.tracks[0].events;
+        let pitches: Vec<(u64, i16)> = ev
+            .iter()
+            .filter_map(|e| match e.event {
+                MidiEvent::NotePitch { cents, .. } => Some((e.frame, cents)),
+                _ => None,
+            })
+            .collect();
+        // 120 BPM / 48 kHz：1 拍 = 24000 帧。起音 1.0 拍、到位 1.5 拍、收音 2.0 拍。
+        // 推弦必须连续采样（否则插件听到的是跳变）：起点 0，1.5 拍 ≈ 200，收音前归零。
+        assert_eq!(pitches.first(), Some(&(24_000, 0)));
+        assert_eq!(pitches.last(), Some(&(48_000, 0)));
+        assert!(
+            pitches.iter().any(|(frame, cents)| *frame == 36_000 && (*cents - 200).abs() <= 4),
+            "到位点应在 1.5 拍附近达到 200 音分：{pitches:?}"
+        );
+        let ramp: Vec<i16> = pitches
+            .iter()
+            .filter(|(frame, _)| *frame >= 24_000 && *frame <= 36_000)
+            .map(|(_, cents)| *cents)
+            .collect();
+        assert!(ramp.windows(2).all(|w| w[0] <= w[1]), "推弦过程应单调上升：{ramp:?}");
+        assert!(pitches.len() > 20, "推弦应按控制率展开：{pitches:?}");
+        assert_eq!(s.tracks[0].pitch_spans.len(), 1);
+
+        // 同帧时归零必须排在 NoteOff 之前（稳定的 `sort_by_key` 保持 push 顺序）。
+        let reset = ev
+            .iter()
+            .position(|e| e.frame == 48_000 && matches!(e.event, MidiEvent::NotePitch { cents: 0, .. }))
+            .unwrap();
+        let off = ev
+            .iter()
+            .position(|e| e.frame == 48_000 && matches!(e.event, MidiEvent::NoteOff { .. }))
+            .unwrap();
+        assert!(reset < off, "归零事件要先于 NoteOff");
+    }
+
+    /// 揉弦按控制率展开成多条事件，而不是只发起止两点。
+    #[test]
+    fn vibrato_expands_at_the_control_rate() {
+        let mut p = project_with_note();
+        p.tracks[0].clips[0].notes[0].duration = 2.0;
+        p.tracks[0].clips[0].notes[0].expr = crate::model::PitchExpression {
+            vibrato: 40,
+            vibrato_rate: 5.5,
+            ..crate::model::PitchExpression::NONE
+        };
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        let pitches: Vec<i16> = s.tracks[0]
+            .events
+            .iter()
+            .filter_map(|e| match e.event {
+                MidiEvent::NotePitch { cents, .. } => Some(cents),
+                _ => None,
+            })
+            .collect();
+        assert!(pitches.len() > 20, "2 拍 @100 Hz 应产生足够多的采样点");
+        assert!(pitches.iter().any(|c| *c > 10), "应出现正半周");
+        assert!(pitches.iter().any(|c| *c < -10), "应出现负半周");
+    }
+
     /// 连奏：NoteOff 延到**同音高**的下一个音发声处；没有下一个就按原时值。
     #[test]
     fn legato_holds_the_note_until_the_next_same_pitch() {
@@ -516,7 +704,7 @@ mod tests {
             velocity: 100,
             volume: 127,
             offset: 0.0,
-            legato: false,
+            legato: false, expr: crate::model::PitchExpression::NONE,
         });
 
         let s = ScheduledEvents::from_project(&p, 48_000.0);
@@ -546,7 +734,7 @@ mod tests {
             velocity: 100,
             volume: 127,
             offset: 0.0,
-            legato: false,
+            legato: false, expr: crate::model::PitchExpression::NONE,
         });
         let s2 = ScheduledEvents::from_project(&p2, 48_000.0);
         let first_off = s2.tracks[0]
@@ -627,7 +815,7 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 4.0,
-                notes: vec![Note { id: 0, pitch: 60, start: 3.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false }],
+                notes: vec![Note { id: 0, pitch: 60, start: 3.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
                 audio: None,
             }],
             mixer: Default::default(),

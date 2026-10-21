@@ -106,8 +106,17 @@ function specHint(pluginId: string, label: string, spec: ParamSpec, t: Translate
   return pluginHint(label, spec, t);
 }
 
+/** 常用 MIDI CC：键 `cc:<编号>`，值与 MIDI 一致（0..127）。 */
+const MIDI_CC_TARGETS: ReadonlyArray<{ cc: number; label: string; hint: string }> = [
+  { cc: 1, label: "auto.cc.mod", hint: "param.hint.cc.mod" },
+  { cc: 2, label: "auto.cc.breath", hint: "param.hint.cc.breath" },
+  { cc: 11, label: "auto.cc.expression", hint: "param.hint.cc.expression" },
+  { cc: 64, label: "auto.cc.sustain", hint: "param.hint.cc.sustain" },
+  { cc: 74, label: "auto.cc.brightness", hint: "param.hint.cc.brightness" },
+];
+
 /**
- * 一条轨道当前可自动化的全部目标，顺序：轨道混音 → 乐器 → 效果器 1..n。
+ * 一条轨道当前可自动化的全部目标，顺序：轨道混音 → MIDI CC → 乐器 → 效果器 1..n。
  *
  * **唯一口径就是"全量"**（设计 §4.2）：每个插件的**全部**参数都在，含精选表之外的，含插件声明
  * 不可自动化的（后者在目标上标 `automatable: false`）。参数页要用它列出一切；给车道下拉看的
@@ -126,6 +135,38 @@ export function automationTargetsFor(
     { key: "gain_db", label: t("auto.gain"), group: t("auto.group.track"), min: -60, max: 12, step: 0.5, digits: 1, unit: "dB", hint: t("param.hint.gain_db"), automatable: true },
     { key: "pan", label: t("auto.pan"), group: t("auto.group.track"), min: -1, max: 1, step: 0.05, digits: 2, hint: t("param.hint.pan"), automatable: true },
   ];
+
+  // 常用 CC 永远在列表里（车道下拉与参数页共用这份口径）。
+  for (const cc of MIDI_CC_TARGETS) {
+    out.push({
+      key: `cc:${cc.cc}`,
+      label: t(cc.label),
+      group: t("auto.group.midi"),
+      min: 0,
+      max: 127,
+      step: 1,
+      digits: 0,
+      hint: t(cc.hint),
+      automatable: true,
+    });
+  }
+  // MCP 可能写了常用表之外的 CC：把它补进列表，否则车道下拉里选不到已存在的曲线。
+  for (const lane of track.automation ?? []) {
+    const match = /^cc:(\d+)$/.exec(lane.param);
+    if (!match) continue;
+    const n = Number(match[1]);
+    if (n > 127 || out.some((target) => target.key === lane.param)) continue;
+    out.push({
+      key: lane.param,
+      label: t("auto.cc.generic", { n }),
+      group: t("auto.group.midi"),
+      min: 0,
+      max: 127,
+      step: 1,
+      digits: 0,
+      automatable: true,
+    });
+  }
 
   const instrumentId = track.instrument?.plugin_id;
   if (instrumentId) {
@@ -219,7 +260,9 @@ export function curateTargets(
   };
 
   for (const target of all) {
-    if (target.key === "gain_db" || target.key === "pan") push(target.key);
+    if (target.key === "gain_db" || target.key === "pan" || target.key.startsWith("cc:")) {
+      push(target.key);
+    }
   }
   for (const key of opts.bound ?? opts.fallbackBound) push(key);
   for (const key of opts.usedKeys) push(key);

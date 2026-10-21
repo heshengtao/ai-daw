@@ -49,7 +49,7 @@ fn project(effects: Vec<PluginInstance>) -> Project {
                 velocity: 110,
                 volume: 127,
                 offset: 0.0,
-                legato: false,
+                legato: false, expr: ai_daw_engine::model::PitchExpression::NONE,
             }],
             audio: None,
         }],

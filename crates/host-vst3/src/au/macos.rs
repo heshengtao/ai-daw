@@ -74,8 +74,9 @@ use objc2_foundation::{
 };
 
 use ai_daw_plugin_api::{
-    IoLayout, MidiEvent as HostEvent, ParamId, ParamInfo, Plugin, PluginCapabilities,
-    PluginDescriptor, PluginError, PluginKind, ProcessContext, TimedMidiEvent,
+    pitch_bend_midi_bytes, IoLayout, MidiEvent as HostEvent, ParamId, ParamInfo, Plugin,
+    PluginCapabilities, PluginDescriptor, PluginError, PluginKind, ProcessContext,
+    TimedMidiEvent,
 };
 
 use crate::error::HostError;
@@ -839,6 +840,8 @@ pub struct AuHostedPlugin {
     /// 已渲染的采样数（作为时间戳给插件，音源会拿它调度 MIDI）。
     sample_position: u64,
     pending: Vec<(ParamId, f32)>,
+    /// 通道弯音范围（半音）。
+    pitch_bend_range: f32,
 }
 
 impl AuHostedPlugin {
@@ -886,6 +889,7 @@ impl AuHostedPlugin {
             }),
             sample_position: 0,
             pending: Vec::new(),
+            pitch_bend_range: 2.0,
         })
     }
 
@@ -903,7 +907,12 @@ impl Plugin for AuHostedPlugin {
             kind: self.kind,
             io: self.io,
             // AUAudioUnit 基类总能给一个界面（自带或通用参数界面）。
-            capabilities: PluginCapabilities { per_note_volume: false, has_editor: true },
+            capabilities: PluginCapabilities {
+                per_note_volume: false,
+                has_editor: true,
+                per_note_pitch: false,
+                channel_pitch_bend: self.kind == PluginKind::Instrument,
+            },
         }
     }
 
@@ -993,6 +1002,14 @@ impl Plugin for AuHostedPlugin {
         }
     }
 
+    fn set_pitch_bend_range(&mut self, semitones: f32) {
+        self.pitch_bend_range = if semitones.is_finite() && semitones > 0.0 {
+            semitones.clamp(0.01, 24.0)
+        } else {
+            2.0
+        };
+    }
+
     fn reset(&mut self) {
         // 音频线程：切断全部发声。用 try_lock，绝不阻塞实时线程。
         let Ok(inst) = self.shared.try_lock() else { return };
@@ -1048,8 +1065,16 @@ impl Plugin for AuHostedPlugin {
                         (0x90u8, note, velocity.min(127))
                     }
                     HostEvent::NoteOff { note } => (0x80, note, 0),
+                    // AUv2 没有逐音表达；通道弯音对所有音源都可用。
+                    HostEvent::PitchBend { cents } | HostEvent::NotePitch { cents, .. } => {
+                        let bytes = pitch_bend_midi_bytes(cents, self.pitch_bend_range);
+                        (bytes[0], bytes[1], bytes[2])
+                    }
+                    HostEvent::ControlChange { controller, value } => {
+                        (0xB0, controller, value.min(127))
+                    }
                     // 折叠路径已在 `Player` 里完成；本适配器声明不支持 per-note 音量。
-                    HostEvent::NoteVolume { .. } | HostEvent::ControlChange { .. } => continue,
+                    HostEvent::NoteVolume { .. } => continue,
                 };
                 let bytes = [status, data1, data2];
                 let offset = i64::from(e.frame).min(last).max(0);

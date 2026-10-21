@@ -127,6 +127,8 @@ pub enum Event {
         track: TrackId,
         role: Option<String>,
         pitch_range: Option<PitchRange>,
+        /// MIDI 弯音范围（半音）；`None` = 使用默认 2。
+        pitch_bend_range: Option<f32>,
     },
     /// 一个音符的标签被改写（`None` = 清除）。
     NoteTagChanged {
@@ -244,7 +246,7 @@ mod tests {
                 track: crate::model::TrackId(1),
                 clip: crate::model::ClipId(2),
                 index: 0,
-                note: crate::model::Note { id: 0, pitch: 64, start: 1.0, duration: 0.5, velocity: 90, volume: 127, offset: 0.0, legato: false },
+                note: crate::model::Note { id: 0, pitch: 64, start: 1.0, duration: 0.5, velocity: 90, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
             },
             Event::NoteRemoved { actor: Actor::Human, track: crate::model::TrackId(1), clip: crate::model::ClipId(2), index: 1 },
             Event::NotesChanged {
@@ -253,7 +255,7 @@ mod tests {
                 clip: crate::model::ClipId(2),
                 entries: vec![crate::model::NoteEdit {
                     index: 0,
-                    note: crate::model::Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 64, volume: 127, offset: 0.0, legato: false },
+                    note: crate::model::Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 64, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
                 }],
             },
             Event::NotesRemoved {

@@ -102,6 +102,8 @@ pub struct SynthPlugin {
     lfo_phase: f64,
     /// 距最近一次按键的采样数：LFO 的淡入延迟用它。
     lfo_age: f64,
+    /// 通道级弯音（音分）：新声部继承它，逐音事件再覆盖。
+    global_bend_cents: f32,
     /// 该实例对外声明的插件 id（预设实例报自己的 id，而不是 `builtin.synth`）。
     id: &'static str,
     name: &'static str,
@@ -138,6 +140,7 @@ impl SynthPlugin {
             params: default_params(),
             lfo_phase: 0.0,
             lfo_age: 0.0,
+            global_bend_cents: 0.0,
             id,
             name,
         };
@@ -162,6 +165,8 @@ impl SynthPlugin {
                     .position(|v| v.stage == voice::Stage::Idle)
                     .unwrap_or(0);
                 self.voices[slot].note_on(note, velocity, self.params.glide);
+                // 新声部继承当前通道弯音；随后到来的逐音事件可以覆盖它。
+                self.voices[slot].set_bend(self.global_bend_cents);
                 // LFO 的延迟从「最近一次按键」重新计时。
                 self.lfo_age = 0.0;
             }
@@ -174,6 +179,19 @@ impl SynthPlugin {
             MidiEvent::NoteVolume { note, value } => {
                 for v in self.voices.iter_mut().filter(|v| v.note == note) {
                     v.set_volume(value);
+                }
+            }
+            // 通道弯音：所有声部一起弯。
+            MidiEvent::PitchBend { cents } => {
+                self.global_bend_cents = cents as f32;
+                for v in self.voices.iter_mut() {
+                    v.set_bend(self.global_bend_cents);
+                }
+            }
+            // 逐音弯音：只弯指定音高。
+            MidiEvent::NotePitch { note, cents } => {
+                for v in self.voices.iter_mut().filter(|v| v.note == note) {
+                    v.set_bend(cents as f32);
                 }
             }
             MidiEvent::ControlChange { .. } => {}
@@ -253,7 +271,12 @@ impl Plugin for SynthPlugin {
             io: IoLayout { inputs: 0, outputs: 2 },
             // 内置合成器能单独处理单音音量（每个声部一个增益）；它的「界面」是前端那套
             // 合成器面板，不是原生窗口，因此 `has_editor` 为 false。
-            capabilities: PluginCapabilities { per_note_volume: true, has_editor: false },
+            capabilities: PluginCapabilities {
+                per_note_volume: true,
+                has_editor: false,
+                per_note_pitch: true,
+                channel_pitch_bend: true,
+            },
         }
     }
 
@@ -581,6 +604,33 @@ mod tests {
         );
         let crossings = l.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count();
         assert!((crossings as i64 - 440).abs() <= 4, "crossings={crossings}");
+    }
+
+    /// `NotePitch` 必须真的把基频抬高：+200 音分 ≈ 493.9 Hz。
+    #[test]
+    fn note_pitch_bend_raises_the_frequency() {
+        let mut s = SynthPlugin::new();
+        s.set_param(&ParamId::from("wave"), 2.0);
+        s.set_param(&ParamId::from("cutoff"), 1.0);
+        s.set_param(&ParamId::from("filterEnv"), 0.0);
+        s.set_param(&ParamId::from("decay"), 2.0);
+        s.set_param(&ParamId::from("sustain"), 1.0);
+        s.prepare(48_000.0, 48_000);
+        let mut l = [0.0f32; 48_000];
+        let mut r = [0.0f32; 48_000];
+        s.process(
+            &ctx(48_000),
+            &mut [&mut l, &mut r],
+            &[
+                TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } },
+                TimedMidiEvent {
+                    frame: 0,
+                    event: MidiEvent::NotePitch { note: 69, cents: 200 },
+                },
+            ],
+        );
+        let crossings = l.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count();
+        assert!((crossings as i64 - 494).abs() <= 5, "crossings={crossings}");
     }
 
     #[test]

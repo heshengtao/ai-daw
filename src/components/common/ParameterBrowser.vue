@@ -84,9 +84,9 @@ function isAutomatable(t: AutomationTarget): boolean {
   return t.automatable !== false;
 }
 
-/** 增益 / 声像由 `curateTargets` 钉住：永远在车道下拉里，**不可能解绑**。 */
+/** 增益 / 声像 / 常用 MIDI CC 由 `curateTargets` 钉住：永远在车道下拉里，**不可能解绑**。 */
 function isPinned(key: string): boolean {
-  return key === "gain_db" || key === "pan";
+  return key === "gain_db" || key === "pan" || key.startsWith("cc:");
 }
 
 /** 生效的绑定状态（与车道下拉同一个判定）。 */

@@ -874,7 +874,7 @@ mod tests {
                         velocity: 100,
                         volume: 127,
                         offset: 0.0,
-                        legato: false,
+                        legato: false, expr: crate::model::PitchExpression::NONE,
                     })
                     .collect(),
                 audio: None,

@@ -346,6 +346,7 @@ pub fn run() {
             commands::current_project_path,
             commands::cache_session,
             commands::project_history,
+            commands::delete_project_history,
             commands::restore_project_history,
             commands::add_clip,
             commands::remove_clip,
@@ -487,6 +488,8 @@ pub fn run() {
             if let Err(err) = commands::write_session(app_handle) {
                 eprintln!("退出时写会话缓存失败：{err}");
             }
+            // 会话缓存之外再留一份历史：下次打开即使点了「新建工程」，也能从历史回去。
+            commands::remember_before_exit(app_handle);
         }
     });
 }

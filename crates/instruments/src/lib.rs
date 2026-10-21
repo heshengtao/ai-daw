@@ -12,8 +12,8 @@ use std::io::Cursor;
 use std::sync::{Arc, OnceLock};
 
 use ai_daw_plugin_api::{
-    IoLayout, MidiEvent, ParamId, ParamInfo, Plugin, PluginCapabilities, PluginDescriptor,
-    PluginError, PluginKind, ProcessContext, TimedMidiEvent,
+    pitch_bend_midi_bytes, IoLayout, MidiEvent, ParamId, ParamInfo, Plugin, PluginCapabilities,
+    PluginDescriptor, PluginError, PluginKind, ProcessContext, TimedMidiEvent,
 };
 use rustysynth_ext::{SoundFont, Synthesizer, SynthesizerSettings};
 
@@ -308,6 +308,8 @@ pub struct SoundFontPlugin {
     kind: Kind,
     synth: Option<Synthesizer>,
     sample_rate: f64,
+    /// 通道弯音范围（半音）；由 `Plugin::set_pitch_bend_range` 设置。
+    pitch_bend_range: f32,
     gain: f32,
     tone: f32,
     tone_l: f32,
@@ -320,6 +322,7 @@ impl SoundFontPlugin {
             kind,
             synth: None,
             sample_rate: 48_000.0,
+            pitch_bend_range: 2.0,
             gain: kind.default_gain(),
             tone: 1.0,
             tone_l: 0.0,
@@ -345,8 +348,21 @@ impl SoundFontPlugin {
                 }
             }
             MidiEvent::NoteOff { note } => synth.note_off(0, note as i32),
+            // 采样器没有逐声部变调接口；`per_note_pitch` 报 false，逐音事件由引擎折叠成通道弯音。
+            // 这里仍防御性地处理，避免漏掉。
+            MidiEvent::PitchBend { cents } => {
+                let bytes = pitch_bend_midi_bytes(cents, self.pitch_bend_range);
+                synth.process_midi_message(0, 0xE0, bytes[1] as i32, bytes[2] as i32);
+            }
+            MidiEvent::NotePitch { cents, .. } => {
+                let bytes = pitch_bend_midi_bytes(cents, self.pitch_bend_range);
+                synth.process_midi_message(0, 0xE0, bytes[1] as i32, bytes[2] as i32);
+            }
+            MidiEvent::ControlChange { controller, value } => {
+                synth.process_midi_message(0, 0xB0, controller as i32, value as i32);
+            }
             // 采样器没有逐声部增益接口；`per_note_volume` 报 false，忽略该事件。
-            MidiEvent::NoteVolume { .. } | MidiEvent::ControlChange { .. } => {}
+            MidiEvent::NoteVolume { .. } => {}
         }
     }
 
@@ -406,6 +422,8 @@ impl Plugin for SoundFontPlugin {
             capabilities: PluginCapabilities {
                 per_note_volume: false,
                 has_editor: false,
+                per_note_pitch: false,
+                channel_pitch_bend: true,
             },
         }
     }
@@ -470,6 +488,14 @@ impl Plugin for SoundFontPlugin {
             }
             synth.process_midi_message(0, 0xC0, patch, 0);
         }
+    }
+
+    fn set_pitch_bend_range(&mut self, semitones: f32) {
+        self.pitch_bend_range = if semitones.is_finite() && semitones > 0.0 {
+            semitones.clamp(0.01, 24.0)
+        } else {
+            2.0
+        };
     }
 
     fn reset(&mut self) {
@@ -614,6 +640,43 @@ mod tests {
         // 四件独奏弦乐共享资产；弦乐群奏与慢弦乐也共享资产。
         assert_eq!(Kind::Violin.asset(), Kind::Contrabass.asset());
         assert_eq!(Kind::StringEnsemble.asset(), Kind::SlowStrings.asset());
+    }
+
+    /// 通道弯音必须真的改变采样器的播放音高（rustysynth 的 0xE0 路径）。
+    #[test]
+    fn channel_pitch_bend_changes_the_sampler_output() {
+        let render = |events: &[TimedMidiEvent]| {
+            let mut plugin = SoundFontPlugin::new(Kind::ElectricGuitar);
+            plugin.prepare(48_000.0, 256);
+            let ctx = ProcessContext {
+                sample_rate: 48_000.0,
+                block_size: 256,
+                tempo: 120.0,
+                playing: true,
+            };
+            let mut left = vec![0.0f32; 8192];
+            let mut right = vec![0.0f32; 8192];
+            plugin.process(&ctx, &mut [&mut left, &mut right], events);
+            left
+        };
+        let base = render(&[TimedMidiEvent {
+            frame: 0,
+            event: MidiEvent::NoteOn { note: 60, velocity: 100 },
+        }]);
+        let bent = render(&[
+            TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } },
+            TimedMidiEvent { frame: 0, event: MidiEvent::PitchBend { cents: 200 } },
+        ]);
+        let diff: f32 = base.iter().zip(&bent).map(|(a, b)| (a - b).abs()).sum();
+        assert!(diff > 1.0, "弯音应当改变波形（diff={diff}）");
+
+        let crossings = |x: &[f32]| x.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count();
+        assert!(
+            crossings(&bent) > crossings(&base),
+            "上推应当提高过零率：base={} bent={}",
+            crossings(&base),
+            crossings(&bent)
+        );
     }
 
     #[test]

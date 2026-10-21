@@ -743,7 +743,7 @@ mod tests {
     }
 
     fn note(id: u64, pitch: u8, start: f64) -> Note {
-        Note { id, pitch, start, duration: 0.25, velocity: 100, volume: 127, offset: 0.0, legato: false }
+        Note { id, pitch, start, duration: 0.25, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }
     }
 
     fn track(notes: Vec<Note>) -> Track {
@@ -882,7 +882,7 @@ mod tests {
     #[test]
     fn transforms_clamp_into_the_clip() {
         // 起点 3.9 的 1 拍音符在 4 拍的片段里放不下：时值会被夹到 0.1。
-        let c = clip(vec![Note { id: 1, pitch: 60, start: 3.9, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }], 4.0);
+        let c = clip(vec![Note { id: 1, pitch: 60, start: 3.9, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }], 4.0);
         let t = quantize(&c, 1.0, 1.0, None, false);
         assert_eq!(t.clamped, 1);
         let n = t.edits[0].note;
@@ -937,7 +937,7 @@ mod tests {
                 velocity: 100,
                 volume: 127,
                 offset: 0.0,
-                legato: false,
+                legato: false, expr: crate::model::PitchExpression::NONE,
             }],
             4.0,
         );
@@ -978,7 +978,7 @@ mod tests {
                     velocity: 100,
                     volume: 127,
                     offset: -0.04,
-                    legato: false,
+                    legato: false, expr: crate::model::PitchExpression::NONE,
                 },
                 note(2, 64, 1.0),
             ],
@@ -1001,15 +1001,15 @@ mod tests {
     #[test]
     fn semitone_clashes_are_counted_in_stats_and_overlap() {
         let t = track(vec![
-            Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
-            Note { id: 2, pitch: 61, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
+            Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+            Note { id: 2, pitch: 61, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
         ]);
         let stats = note_stats(&t, None, 4.0);
         assert_eq!(stats.semitone_clashes, 1);
         assert!((stats.semitone_clash_beats - 1.0).abs() < 1e-9);
 
-        let a = track(vec![Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }]);
-        let mut b = track(vec![Note { id: 1, pitch: 61, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }]);
+        let a = track(vec![Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }]);
+        let mut b = track(vec![Note { id: 1, pitch: 61, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }]);
         b.id = TrackId(2);
         let overlap = track_overlap(&a, &b, None);
         assert_eq!(overlap.semitone_clashes, 1);
@@ -1020,9 +1020,9 @@ mod tests {
     #[test]
     fn stats_report_range_density_and_overlap() {
         let t = track(vec![
-            Note { id: 1, pitch: 60, start: 0.0, duration: 2.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
-            Note { id: 2, pitch: 60, start: 1.0, duration: 1.0, velocity: 80, volume: 127, offset: 0.0, legato: false },
-            Note { id: 3, pitch: 72, start: 5.0, duration: 1.0, velocity: 90, volume: 127, offset: 0.0, legato: false },
+            Note { id: 1, pitch: 60, start: 0.0, duration: 2.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+            Note { id: 2, pitch: 60, start: 1.0, duration: 1.0, velocity: 80, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+            Note { id: 3, pitch: 72, start: 5.0, duration: 1.0, velocity: 90, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
         ]);
         let s = note_stats(&t, None, 4.0);
         assert_eq!(s.note_count, 3);
@@ -1037,10 +1037,10 @@ mod tests {
 
     #[test]
     fn overlap_flags_two_tracks_in_the_same_register() {
-        let a = track(vec![Note { id: 1, pitch: 60, start: 0.0, duration: 8.0, velocity: 100, volume: 127, offset: 0.0, legato: false }]);
-        let mut b = track(vec![Note { id: 1, pitch: 64, start: 0.0, duration: 8.0, velocity: 100, volume: 127, offset: 0.0, legato: false }]);
+        let a = track(vec![Note { id: 1, pitch: 60, start: 0.0, duration: 8.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }]);
+        let mut b = track(vec![Note { id: 1, pitch: 64, start: 0.0, duration: 8.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }]);
         b.id = TrackId(2);
-        b.meta = Some(TrackMeta { role: Some("chords".into()), pitch_range: None });
+        b.meta = Some(TrackMeta { role: Some("chords".into()), pitch_range: None, pitch_bend_range: None });
         let o = track_overlap(&a, &b, None);
         assert!((o.overlap_beats - 8.0).abs() < 1e-9);
         assert!(o.conflict, "同音区同时发声 8 拍应当判为冲突：{o:?}");

@@ -185,7 +185,7 @@ mod tests {
             Command::AddNote {
                 track,
                 clip,
-                note: Note { id: 0, pitch: 69, start: 0.0, duration: 2.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
+                note: Note { id: 0, pitch: 69, start: 0.0, duration: 2.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
             },
             Actor::Human,
         );

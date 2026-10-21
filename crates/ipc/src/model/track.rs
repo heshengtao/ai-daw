@@ -168,12 +168,40 @@ pub struct TrackMeta {
     /// 目标音域；`fit_notes_to_range` 不传参数时用它。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pitch_range: Option<PitchRange>,
+    /// MIDI 弯音范围（半音，默认 2.0）。音源自身范围不同时改这里。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch_bend_range: Option<f32>,
 }
 
 impl TrackMeta {
+    /// 默认弯音范围（半音）：General MIDI 与多数音源的标准值。
+    pub const DEFAULT_PITCH_BEND_RANGE: f32 = 2.0;
+    /// 弯音范围下界（半音）。
+    pub const MIN_PITCH_BEND_RANGE: f32 = 0.01;
+    /// 弯音范围上界（半音）。
+    pub const MAX_PITCH_BEND_RANGE: f32 = 24.0;
+
     /// 是否什么都没设（用于决定要不要序列化）。
     pub fn is_empty(&self) -> bool {
-        self.role.is_none() && self.pitch_range.is_none()
+        self.role.is_none() && self.pitch_range.is_none() && self.pitch_bend_range.is_none()
+    }
+
+    /// 归一化：夹紧可选的弯音范围，非有限值直接丢弃。
+    pub fn normalized(mut self) -> Self {
+        self.pitch_bend_range = self.pitch_bend_range.and_then(|range| {
+            range
+                .is_finite()
+                .then(|| range.clamp(Self::MIN_PITCH_BEND_RANGE, Self::MAX_PITCH_BEND_RANGE))
+        });
+        self
+    }
+
+    /// 实际生效的弯音范围（缺省 2 个半音；手改工程里的越界值也会被夹住）。
+    pub fn effective_pitch_bend_range(&self) -> f32 {
+        self.pitch_bend_range
+            .filter(|range| range.is_finite())
+            .unwrap_or(Self::DEFAULT_PITCH_BEND_RANGE)
+            .clamp(Self::MIN_PITCH_BEND_RANGE, Self::MAX_PITCH_BEND_RANGE)
     }
 }
 

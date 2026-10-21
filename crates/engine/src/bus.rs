@@ -981,12 +981,15 @@ impl Engine {
                     sections: sections.clone(),
                 }]
             }
-            Command::SetTrackMeta { track, role, pitch_range } => vec![Event::TrackMetaChanged {
-                actor: actor.clone(),
-                track: *track,
-                role: role.clone(),
-                pitch_range: *pitch_range,
-            }],
+            Command::SetTrackMeta { track, role, pitch_range, pitch_bend_range } => {
+                vec![Event::TrackMetaChanged {
+                    actor: actor.clone(),
+                    track: *track,
+                    role: role.clone(),
+                    pitch_range: *pitch_range,
+                    pitch_bend_range: *pitch_bend_range,
+                }]
+            }
             Command::SetNoteTag { track, clip, id, tag } => vec![Event::NoteTagChanged {
                 actor: actor.clone(),
                 track: *track,
@@ -1169,7 +1172,7 @@ mod tests {
             Command::AddNote {
                 track,
                 clip,
-                note: Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
+                note: Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
             },
             Actor::Human,
         );
@@ -1413,7 +1416,7 @@ mod tests {
                 id: ClipId(3),
                 start: 0.0,
                 length: 4.0,
-                notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false }],
+                notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -1587,7 +1590,7 @@ mod tests {
         let (track, clip) = seeded(&mut e);
         for pitch in [60u8, 64] {
             e.execute(
-                Command::AddNote { track, clip, note: crate::model::Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false } },
+                Command::AddNote { track, clip, note: crate::model::Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE } },
                 Actor::Human,
             );
         }
@@ -1596,7 +1599,7 @@ mod tests {
                 track,
                 clip,
                 index: 0,
-                note: crate::model::Note { id: 0, pitch: 62, start: 1.5, duration: 0.5, velocity: 80, volume: 127, offset: 0.0, legato: false },
+                note: crate::model::Note { id: 0, pitch: 62, start: 1.5, duration: 0.5, velocity: 80, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
             },
             Actor::Human,
         );
@@ -1637,7 +1640,7 @@ mod tests {
         let (track, clip) = seeded(&mut e);
         for pitch in [60u8, 64, 67, 71] {
             e.execute(
-                Command::AddNote { track, clip, note: Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false } },
+                Command::AddNote { track, clip, note: Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE } },
                 Actor::Human,
             );
         }
@@ -1646,7 +1649,7 @@ mod tests {
         let entries: Vec<NoteEdit> = (0..4)
             .map(|i| NoteEdit {
                 index: i,
-                note: Note { id: 0, pitch: 60 + i as u8, start: 0.0, duration: 1.0, velocity: 40, volume: 127, offset: 0.0, legato: false },
+                note: Note { id: 0, pitch: 60 + i as u8, start: 0.0, duration: 1.0, velocity: 40, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
             })
             .collect();
         e.execute(Command::SetNotes { track, clip, entries }, Actor::Human);
@@ -1676,7 +1679,7 @@ mod tests {
         assert!(e.execute(Command::RemoveClips { items: vec![] }, Actor::Human).is_empty());
         assert_eq!(e.undo_depth(), depth);
         // 仅仅是构造一下类型，确保它在公开 API 上可用。
-        let _ = NoteEdit { index: 0, note: crate::model::Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false } };
+        let _ = NoteEdit { index: 0, note: crate::model::Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE } };
     }
 
     #[test]
@@ -1916,7 +1919,7 @@ mod tests {
         let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
         let ev = e.execute(Command::AddClip { track, start: 0.0, length: 4.0 }, Actor::Human);
         let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
-        let note = |pitch, start, duration| crate::model::Note { id: 0, pitch, start, duration, velocity: 100, volume: 127, offset: 0.0, legato: false };
+        let note = |pitch, start, duration| crate::model::Note { id: 0, pitch, start, duration, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE };
         e.execute(Command::AddNote { track, clip, note: note(60, 0.0, 1.0) }, Actor::Human);
         e.execute(Command::AddNote { track, clip, note: note(62, 1.0, 2.0) }, Actor::Human); // 跨过第 2 拍
         e.execute(Command::AddNote { track, clip, note: note(64, 3.0, 0.5) }, Actor::Human);
@@ -1992,8 +1995,8 @@ mod tests {
         let mut e = Engine::new("demo");
         let depth = e.undo_depth();
         let notes = vec![
-            Note { id: 0, pitch: 60, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false },
-            Note { id: 0, pitch: 64, start: 0.5, duration: 0.5, velocity: 90, volume: 127, offset: 0.0, legato: false },
+            Note { id: 0, pitch: 60, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+            Note { id: 0, pitch: 64, start: 0.5, duration: 0.5, velocity: 90, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
         ];
         e.execute(
             Command::AddNoteTrack { name: "MIDI".into(), start: 2.0, length: 4.0, notes, at: None },

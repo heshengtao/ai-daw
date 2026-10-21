@@ -29,6 +29,7 @@ import { useImportingStore, useExportingStore } from "@/stores/importing";
 import { useTimelineStore } from "@/stores/timeline";
 import { useI18n } from "@/i18n";
 import { exportAudio, onPluginsEvent, type ExportFormat } from "@/api/tauri";
+import type { ProjectHistoryEntry } from "@/api/types";
 import { pickAudioToOpen, pickAudioToSave, pickProjectToOpen, pickProjectToSave } from "@/api/dialogs";
 import { isTauri } from "@/utils/platform";
 import { shouldDeferToBrowser } from "@/utils/editable";
@@ -121,6 +122,14 @@ const shortcutsOpen = ref(false);
 /** 历史工程模态框。 */
 const historyOpen = ref(false);
 
+/**
+ * 工程级的「正在打开」状态：导入工程 / 从历史恢复。
+ *
+ * 和音频导入一样走顶栏下边缘那条进度条（总量不可知 → 不确定态滑动），
+ * 不再用旋转动画挡在界面中间。
+ */
+const projectBusy = ref<"import" | "restore" | null>(null);
+
 /** 退出确认模态框：关闭守卫等待用户三选一（保存 / 不保存 / 取消）。 */
 const unsavedOpen = ref(false);
 let unsavedResolve: ((choice: "save" | "discard" | "cancel") => void) | null = null;
@@ -164,11 +173,29 @@ async function onImport(): Promise<void> {
   try {
     const path = await pickProjectToOpen();
     if (!path) return;
+    projectBusy.value = "import";
     await project.openFrom(path);
     void project.cacheSession();
     layout.notify(i18n.t("app.imported"));
   } catch (err) {
     layout.notify(i18n.t("error.import", { error: String(err) }));
+  } finally {
+    projectBusy.value = null;
+  }
+}
+
+/** 从历史恢复：模态框先关闭，恢复过程用顶栏进度条提示。 */
+async function onRestoreHistory(entry: ProjectHistoryEntry): Promise<void> {
+  projectBusy.value = "restore";
+  try {
+    await transport.stop();
+    await project.restoreHistory(entry.id);
+    const name = !entry.name || entry.name === "untitled" ? i18n.t("settings.untitled") : entry.name;
+    layout.notify(i18n.t("history.restored", { name }));
+  } catch (err) {
+    layout.notify(i18n.t("history.failed", { error: String(err) }));
+  } finally {
+    projectBusy.value = null;
   }
 }
 
@@ -299,11 +326,18 @@ async function onExportConfirm(choice: ExportChoice): Promise<void> {
 }
 
 /**
- * 顶栏下边缘那条进度条要显示什么：导入优先，其次导出。
+ * 顶栏下边缘那条进度条要显示什么：工程导入 / 历史恢复优先，其次音频导入，最后导出。
  *
- * 两者都是用户主动触发的长任务，实际不会并发；真撞上就先显示导入——它更短，也更需要即时反馈。
+ * 都是用户主动触发的长任务，实际不会并发；真撞上就先显示工程级操作——界面内容正被整体替换，
+ * 最需要即时反馈。
  */
 const jobBar = computed(() => {
+  // 工程导入 / 历史恢复没有可细分的进度：画不确定态的滑动条。
+  if (projectBusy.value) {
+    const label =
+      projectBusy.value === "restore" ? i18n.t("history.restoring") : i18n.t("project.importing");
+    return { active: true, pct: null, label };
+  }
   if (importing.active) {
     return { active: true, pct: importing.progressPct, label: i18n.t("import.progressLabel") };
   }
@@ -584,8 +618,8 @@ onUnmounted(() => {
     @submit="onProjectDialogSubmit"
   />
 
-  <!-- 历史工程：新建 / 打开另一个工程时，当前工程会自动收进这里 -->
-  <ProjectHistoryDialog v-model:open="historyOpen" />
+  <!-- 历史工程：保存 / 新建 / 打开 / 退出时，当前工程会自动收进这里 -->
+  <ProjectHistoryDialog v-model:open="historyOpen" @select="onRestoreHistory" />
 
   <!-- 快捷键速查表：⌘ 按钮 / `?` / Ctrl+Cmd+/ 打开 -->
   <ShortcutsDialog v-model:open="shortcutsOpen" />

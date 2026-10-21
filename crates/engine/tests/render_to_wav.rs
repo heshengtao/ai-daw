@@ -19,7 +19,7 @@ fn demo() -> ai_daw_engine::model::Project {
             Command::AddNote {
                 track,
                 clip,
-                note: Note { id: 0, pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false },
+                note: Note { id: 0, pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: ai_daw_engine::model::PitchExpression::NONE },
             },
             Actor::Human,
         );
@@ -62,7 +62,7 @@ fn renders_builtin_sampled_instruments() {
                     velocity: 100,
                     volume: 127,
                     offset: 0.0,
-                    legato: false,
+                    legato: false, expr: ai_daw_engine::model::PitchExpression::NONE,
                 },
             },
             Actor::Human,

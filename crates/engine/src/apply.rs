@@ -384,13 +384,15 @@ pub fn apply(project: &mut Project, event: &Event) {
         }
         Event::ProjectRenamed { name, .. } => project.name = name.clone(),
         Event::ProjectCleared { name, .. } => *project = Project::new(name.clone()),
-        Event::TrackMetaChanged { track, role, pitch_range, .. } => {
+        Event::TrackMetaChanged { track, role, pitch_range, pitch_bend_range, .. } => {
             if let Some(t) = project.track_mut(*track) {
-                // 两者都空 → 元数据整个消失（JSON 里不再出现 `meta` 键）。
+                // 三者都空 → 元数据整个消失（JSON 里不再出现 `meta` 键）。
                 let meta = crate::model::TrackMeta {
                     role: role.clone().filter(|r| !r.trim().is_empty()),
                     pitch_range: pitch_range.map(|r| r.normalize()),
-                };
+                    pitch_bend_range: *pitch_bend_range,
+                }
+                .normalized();
                 t.meta = if meta.is_empty() { None } else { Some(meta) };
             }
         }
@@ -463,7 +465,7 @@ mod tests {
                 actor: Actor::Human,
                 track: t,
                 clip: c,
-                note: Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
+                note: Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
             },
         );
         assert_eq!(p.track(t).unwrap().clips[0].notes.len(), 1);
@@ -525,7 +527,7 @@ mod tests {
                     actor: Actor::Human,
                     track: t,
                     clip: c,
-                    note: Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false },
+                    note: Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
                 },
             );
         }
@@ -536,7 +538,7 @@ mod tests {
                 track: t,
                 clip: c,
                 index: 1,
-                note: Note { id: 0, pitch: 200, start: -1.0, duration: 0.0, velocity: 255, volume: 127, offset: 0.0, legato: false },
+                note: Note { id: 0, pitch: 200, start: -1.0, duration: 0.0, velocity: 255, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
             },
         );
         let n = p.track(t).unwrap().clips[0].notes[1];

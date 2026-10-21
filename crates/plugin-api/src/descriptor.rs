@@ -34,6 +34,13 @@ pub struct PluginCapabilities {
     pub per_note_volume: bool,
     /// 自带可视化编辑器（原生窗口）。
     pub has_editor: bool,
+    /// 支持逐音音高表达（VST3 Note Expression 的 Tuning / 内置合成器）。
+    ///
+    /// 不支持时，引擎会把 [`crate::MidiEvent::NotePitch`] 折叠成通道级
+    /// [`crate::MidiEvent::PitchBend`]。
+    pub per_note_pitch: bool,
+    /// 响应通道级弯音（[`crate::MidiEvent::PitchBend`]）。音源通常为 true，效果器为 false。
+    pub channel_pitch_bend: bool,
 }
 
 /// 插件描述符。
@@ -59,7 +66,12 @@ mod tests {
             name: "Builtin Synth".into(),
             kind: PluginKind::Instrument,
             io: IoLayout { inputs: 0, outputs: 2 },
-            capabilities: PluginCapabilities { per_note_volume: true, has_editor: false },
+            capabilities: PluginCapabilities {
+                per_note_volume: true,
+                has_editor: false,
+                per_note_pitch: true,
+                channel_pitch_bend: true,
+            },
         };
         let json = serde_json::to_string(&d).unwrap();
         let back: PluginDescriptor = serde_json::from_str(&json).unwrap();

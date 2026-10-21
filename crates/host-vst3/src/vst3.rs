@@ -7,15 +7,19 @@
 use std::sync::{Arc, Mutex};
 
 use ai_daw_plugin_api::{
-    IoLayout, MidiEvent as HostEvent, ParamId, ParamInfo, Plugin, PluginCapabilities,
-    PluginDescriptor, PluginError, PluginKind, ProcessContext, TimedMidiEvent,
+    cents_to_note_expression, cents_to_pitch_bend, IoLayout, MidiEvent as HostEvent, ParamId,
+    ParamInfo, Plugin, PluginCapabilities, PluginDescriptor, PluginError, PluginKind,
+    ProcessContext, TimedMidiEvent,
 };
-use vst3_host::midi::{MidiChannel, MidiEvent as Vst3Midi};
+use vst3_host::midi::{MidiChannel, MidiEvent as Vst3Midi, NoteExpressionType};
 use vst3_host::plugin::PluginInfo;
-use vst3_host::AudioBuffers;
+use vst3_host::{AudioBuffers, NoteId};
 
 /// 引擎侧恒为立体声（`Player` 每轨固定送左右两条平面缓冲）。
 const ENGINE_CHANNELS: usize = 2;
+
+/// 同时跟踪的逐音 NoteId 上界（复音数远低于此；满了就退回通道弯音）。
+const MAX_PENDING_NOTE_IDS: usize = 128;
 
 /// 编辑器句柄：与音频线程**共享同一个实例**。
 ///
@@ -52,6 +56,14 @@ pub struct Vst3HostedPlugin {
     pending_param_changes: Vec<(ParamId, f32)>,
     /// 处理音频失败只记一次日志：隔离模式下插件崩了会**每块**都返回错误，不能刷屏。
     process_error_logged: bool,
+    /// 插件是否支持逐音 Tuning note expression。
+    per_note_pitch: bool,
+    /// 正在发声的 NoteId（音高 → 最近一次 NoteOn）。用于把逐音弯音定位到具体声部。
+    ///
+    /// 容量在构造时预留；`process` 里绝不扩容（音频线程不分配）。
+    note_ids: Vec<(u8, NoteId)>,
+    /// 通道弯音范围（半音）。
+    pitch_bend_range: f32,
 }
 
 impl Vst3HostedPlugin {
@@ -66,7 +78,17 @@ impl Vst3HostedPlugin {
         };
         let inputs = if kind == PluginKind::Effect { ENGINE_CHANNELS } else { 0 };
         let io = IoLayout { inputs: inputs as u16, outputs: ENGINE_CHANNELS as u16 };
-        let capabilities = PluginCapabilities { per_note_volume: false, has_editor: info.has_gui };
+        // 只有插件自己声明了 Tuning 维度才走逐音表达；否则一律通道弯音。
+        let per_note_pitch = plugin
+            .note_expressions()
+            .map(|list| list.iter().any(|e| e.kind == NoteExpressionType::Tuning))
+            .unwrap_or(false);
+        let capabilities = PluginCapabilities {
+            per_note_volume: false,
+            has_editor: info.has_gui,
+            per_note_pitch,
+            channel_pitch_bend: kind == PluginKind::Instrument,
+        };
 
         let params = plugin
             .get_parameters()
@@ -102,6 +124,9 @@ impl Vst3HostedPlugin {
             buffers: AudioBuffers::new(inputs, ENGINE_CHANNELS, loaded_block, loaded_rate),
             pending_param_changes: Vec::new(),
             process_error_logged: false,
+            per_note_pitch,
+            note_ids: Vec::with_capacity(MAX_PENDING_NOTE_IDS),
+            pitch_bend_range: 2.0,
         }
     }
 
@@ -182,6 +207,8 @@ impl Plugin for Vst3HostedPlugin {
                     if was_started {
                         let _ = plugin.stop_processing();
                     }
+                    // 重配会让插件丢弃声部，旧的 NoteId 不再有效。
+                    self.note_ids.clear();
                     // **必须**把真实采样率交给插件。实例是加载时按 `vst3-host` 的默认 44100
                     // 配置的，不 `reconfigure` 就等于告诉插件「你在 44100 上跑」：它内部所有
                     // 采样率相关的计算（振荡器相位、包络/LFO 时间、延迟线）都按 44100 走，
@@ -199,6 +226,14 @@ impl Plugin for Vst3HostedPlugin {
         };
     }
 
+    fn set_pitch_bend_range(&mut self, semitones: f32) {
+        self.pitch_bend_range = if semitones.is_finite() && semitones > 0.0 {
+            semitones.clamp(0.01, 24.0)
+        } else {
+            2.0
+        };
+    }
+
     fn reset(&mut self) {
         // 只做「丢弃悬挂声部」这一件事：`midi_panic()` 就是全音符关（all-notes-off）。
         //
@@ -210,6 +245,7 @@ impl Plugin for Vst3HostedPlugin {
         //
         // 所以用 `try_lock`：拿不到就这一块先不清（下一块再来），绝不阻塞实时线程。
         let Ok(mut plugin) = self.inner.try_lock() else { return };
+        self.note_ids.clear();
         let _ = plugin.midi_panic();
     }
 
@@ -225,18 +261,92 @@ impl Plugin for Vst3HostedPlugin {
         // 先把本块事件排进队列（`send_midi_event_at` 作用于「下一个处理块」）。
         let last = frames.saturating_sub(1);
         for e in events {
-            let offset = (e.frame as usize).min(last);
-            let event = match e.event {
+            let offset = (e.frame as usize).min(last) as i32;
+            match e.event {
                 HostEvent::NoteOn { note, velocity } => {
-                    Vst3Midi::NoteOn { channel: MidiChannel::Ch1, note, velocity }
+                    if self.per_note_pitch && self.note_ids.len() < MAX_PENDING_NOTE_IDS {
+                        match plugin.note_on_at(MidiChannel::Ch1, note, velocity, offset) {
+                            Ok(id) => self.note_ids.push((note, id)),
+                            // 插件拒绝：退回普通 NoteOn，至少不丢音。
+                            Err(_) => {
+                                let _ = plugin.send_midi_event_at(
+                                    Vst3Midi::NoteOn {
+                                        channel: MidiChannel::Ch1,
+                                        note,
+                                        velocity,
+                                    },
+                                    offset,
+                                );
+                            }
+                        }
+                    } else {
+                        let _ = plugin.send_midi_event_at(
+                            Vst3Midi::NoteOn { channel: MidiChannel::Ch1, note, velocity },
+                            offset,
+                        );
+                    }
                 }
                 HostEvent::NoteOff { note } => {
-                    Vst3Midi::NoteOff { channel: MidiChannel::Ch1, note, velocity: 0 }
+                    if self.per_note_pitch {
+                        if let Some(index) =
+                            self.note_ids.iter().rposition(|(n, _)| *n == note)
+                        {
+                            let (_, id) = self.note_ids.swap_remove(index);
+                            let _ = plugin.note_off_at(id, offset);
+                            continue;
+                        }
+                    }
+                    let _ = plugin.send_midi_event_at(
+                        Vst3Midi::NoteOff {
+                            channel: MidiChannel::Ch1,
+                            note,
+                            velocity: 0,
+                        },
+                        offset,
+                    );
+                }
+                HostEvent::PitchBend { cents } => {
+                    let value = cents_to_pitch_bend(cents, self.pitch_bend_range);
+                    let _ = plugin.send_midi_event_at(
+                        Vst3Midi::PitchBend { channel: MidiChannel::Ch1, value },
+                        offset,
+                    );
+                }
+                HostEvent::NotePitch { note, cents } => {
+                    if self.per_note_pitch {
+                        if let Some((_, id)) =
+                            self.note_ids.iter().rev().find(|(n, _)| *n == note)
+                        {
+                            let value = cents_to_note_expression(cents, self.pitch_bend_range);
+                            let _ = plugin.send_note_expression_at(
+                                *id,
+                                NoteExpressionType::Tuning,
+                                value,
+                                offset,
+                            );
+                            continue;
+                        }
+                    }
+                    // 插件不支持逐音 / 音符已经结束：退化成通道弯音。
+                    let value = cents_to_pitch_bend(cents, self.pitch_bend_range);
+                    let _ = plugin.send_midi_event_at(
+                        Vst3Midi::PitchBend { channel: MidiChannel::Ch1, value },
+                        offset,
+                    );
+                }
+                HostEvent::ControlChange { controller, value } => {
+                    let _ = plugin.send_midi_event_at(
+                        Vst3Midi::ControlChange {
+                            channel: MidiChannel::Ch1,
+                            controller,
+                            value,
+                        },
+                        offset,
+                    );
                 }
                 // 折叠路径已在 `Player` 里完成；本适配器声明不支持 per-note 音量。
-                HostEvent::NoteVolume { .. } | HostEvent::ControlChange { .. } => continue,
-            };
-            let _ = plugin.send_midi_event_at(event, offset as i32);
+                HostEvent::NoteVolume { .. } => continue,
+            }
         }
 
         // 效果器：把上游信号拷进输入平面。

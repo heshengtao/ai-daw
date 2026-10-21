@@ -226,10 +226,11 @@ R&B 的「反拍重音」不要用 `apply_swing` 做：把音写在 `and`（0.5 
 写音符顺序：先写 12 小节和弦（全部属七）→ shuffle 鼓 → bass → 吉他 riff/旋律。
 蓝音 b5 只作经过音，时值短；`apply_swing(subdivision=0.5, ratio=0.66)`。
 
-**推弦 / 滑音的限制**：AIDAW v1 没有 pitch bend / portamento（见第 14 节）。蓝调里
-「♭3 滑到 3」只能用**两个相邻半音的音符**近似：第一个音短、力度低，第二个音落在目标音高；
-或者用短倚音（`duration 0.04–0.08` 拍 + 负 `offset`）。听感上是两个音，不是一次推弦——
-这是结构性限制，不要在文档里把它说成真正的 pitch bend。
+**推弦 / 滑音**：现在用音符上的 `expr` 表达，不要再拆成两个相邻半音。
+蓝调里「♭3 推弦到 3」写成
+`{"pitch": 63, "duration": 1.0, "expr": {"bend": 0, "bend_to": 100, "bend_time": 0.25}}`；
+长音再叠 `{"vibrato": 30, "vibrato_rate": 5.5, "vibrato_delay": 0.4, "vibrato_fade": 0.4}`。
+逐音/通道的播放差异见 `note.md`；短倚音仍然用 `duration 0.04–0.08` + 负 `offset`。
 
 ## 12. Bossa / Latin
 
@@ -282,8 +283,8 @@ R&B 的「反拍重音」不要用 `apply_swing` 做：把音写在 `and`（0.5 
 写音符顺序：先定调式（推荐羽调式 A C D E G）→ 写 4+4 句的旋律（五声骨架，4/7 只经过）
 → 和弦用空五度/sus/add9 → 低音长音 → 轻打击。`analyze_harmony` 传
 `allow_approach_notes: true`、`allow_non_chord_tone_duration: 0.5`。
-古筝的刮奏可以用快速五声音阶上行/下行音型近似；二胡的滑音用 `offset`/`legato` 近似，
-AIDAW v1 没有真正的 pitch bend。
+古筝的刮奏可以用快速五声音阶上行/下行音型近似；二胡的滑音用音符 `expr` 写
+（`bend` → `bend_to` + `bend_time`，长音再加 `vibrato`），比 `offset`/`legato` 更接近真实滑音。
 
 ## 15. Ambient
 

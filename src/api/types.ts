@@ -1,5 +1,23 @@
 /** 与引擎 `ai_daw_engine::model` 对应的前端视图类型（snake_case，id 为裸数字）。 */
 
+/** 音符级音高表达：推弦 / 滑音 / 揉弦。 */
+export interface PitchExpression {
+  /** 起音时的音高偏移（音分，100 = 1 个半音）。预推弦 = 200。 */
+  bend?: number;
+  /** 推弦 / 滑音的目标偏移（音分）。 */
+  bend_to?: number;
+  /** 从 `bend` 到 `bend_to` 的时间（拍）；0 = 立即到达。 */
+  bend_time?: number;
+  /** 揉弦深度（音分，0 = 不揉）。 */
+  vibrato?: number;
+  /** 揉弦速率（Hz）；0 = 默认 5.5。 */
+  vibrato_rate?: number;
+  /** 起音后延迟多少拍开始揉。 */
+  vibrato_delay?: number;
+  /** 揉弦渐入时长（拍）；0 = 立即满深度。 */
+  vibrato_fade?: number;
+}
+
 export interface Note {
   /**
    * 片段内**稳定**标识（批量工具用它定位，而不是数组下标）。
@@ -23,6 +41,8 @@ export interface Note {
   offset?: number;
   /** 连奏：NoteOff 延到同音高的下一个音起点（同片段内）；缺省 false。 */
   legato?: boolean;
+  /** 音高表达（推弦 / 揉弦 / 滑音）；缺省 = 无。 */
+  expr?: PitchExpression;
 }
 
 /** 按 id 定位的音符改写项：只带要改的字段。 */
@@ -36,6 +56,8 @@ export interface NotePatch {
   /** 起始偏移（拍）；`0` = 回到「同时发声」。 */
   offset?: number;
   legato?: boolean;
+  /** 音高表达；给了就整体替换，`{}` = 清除。 */
+  expr?: PitchExpression;
 }
 
 /** 片段内拍范围（左闭右开）：批量变换只作用于起点落在其中的音符。 */
@@ -171,6 +193,8 @@ export interface TrackMeta {
   /** `lead` / `chords` / `bass` / `drums` / `pad` / `fx`… */
   role?: string;
   pitch_range?: PitchRange;
+  /** MIDI 弯音范围（半音，默认 2）。 */
+  pitch_bend_range?: number;
 }
 
 /** 一个小节的和弦标记（工程元数据）。 */

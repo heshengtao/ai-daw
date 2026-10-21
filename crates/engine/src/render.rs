@@ -110,7 +110,7 @@ mod tests {
         let ev = e.execute(Command::AddClip { track, start: 0.0, length: 2.0 }, Actor::Human);
         let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
         e.execute(
-            Command::AddNote { track, clip, note: Note { id: 0, pitch: 69, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false } },
+            Command::AddNote { track, clip, note: Note { id: 0, pitch: 69, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE } },
             Actor::Human,
         );
         e.project().clone()
@@ -205,7 +205,7 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 0.05,
-                notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.05, velocity: 100, volume: 127, offset: 0.0, legato: false }],
+                notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.05, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
                 audio: None,
             }],
             mixer: Default::default(),

@@ -3,7 +3,7 @@
   <rect width="1024" height="1024" rx="232" fill="#6750A4" />
   <g fill="#FFFFFF">
     <rect x="152" y="352" width="120" height="320" rx="60" />
-    <rect x="352" y="232" width="120" height="560" rx="60" />
+    <rect x="352" y="232" width="120" height="560" rx="60" fill="#FFB74D" />
     <rect x="552" y="292" width="120" height="440" rx="60" />
     <rect x="752" y="392" width="120" height="240" rx="60" />
   </g>

@@ -187,15 +187,16 @@ aidaw call aidaw_help --json '{"topic":"genres"}'
 7. list_plugins → set_track_instrument  # 选音色（别凭名字猜）
 8. set_track_meta                       # role + pitch_range
 9. add_clip                             # 每条轨一个 MIDI 片段
-10. add_notes                           # 批量写（一次事务）
-11. quantize_notes / apply_swing        # 定节奏感
-12. strum_notes / humanize_notes        # 演奏姿态（humanize 要避开倚音）
-13. set_note_velocity                   # 力度曲线；可用 grid/beat 只改反拍
-14. add 倚音（短 duration + 负 offset） # 最后做，之后不要再量化/humanize
-15. add_effect / set_gain / set_pan     # 混音
-16. analyze_harmony / analyze_track_overlap / get_track_note_stats
-17. analyze_project                     # 响度/频谱
-18. export_wav                          # 导出
+10. add_notes                           # 批量写（一次事务）；带 expr 的音符同时写推弦/揉弦
+11. set_track_meta(pitch_bend_range)   # 音源弯音范围不是 ±2 半音时才需要
+12. quantize_notes / apply_swing        # 定节奏感（不改 expr）
+13. strum_notes / humanize_notes        # 演奏姿态（humanize 要避开倚音）
+14. set_note_velocity                   # 力度曲线；可用 grid/beat 只改反拍
+15. add 倚音（短 duration + 负 offset） # 最后做，之后不要再量化/humanize
+16. add_effect / set_gain / set_pan     # 混音
+17. analyze_harmony / analyze_track_overlap / get_track_note_stats
+18. analyze_project                     # 响度/频谱
+19. export_wav                          # 导出
 ```
 
 ### 4.1 关键约束（不遵守会白写）
