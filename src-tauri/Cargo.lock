@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "ai-daw-analysis",
  "ai-daw-asset",
@@ -53,7 +53,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-analysis"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "ebur128",
  "rustfft",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-asset"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "ai-daw-engine",
  "symphonia",
@@ -71,14 +71,14 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-effects"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "ai-daw-plugin-api",
 ]
 
 [[package]]
 name = "ai-daw-engine"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "ai-daw-effects",
  "ai-daw-instruments",
@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-host-vst3"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "ai-daw-plugin-api",
  "block2",
@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-instruments"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "ai-daw-plugin-api",
  "rustysynth-ext",
@@ -125,14 +125,14 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-ipc"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ai-daw-local-ai"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "beat-this",
  "ort",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-mastering"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "ai-daw-analysis",
  "serde",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-plugin-api"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-synth"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "ai-daw-plugin-api",
 ]
