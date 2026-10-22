@@ -15,7 +15,8 @@ export type PaneId =
   | "sounds"
   | "editor"
   | "agent"
-  | "ai";
+  | "ai"
+  | "ops";
 
 /**
  * 鼠标模式（顶栏三选一）：
@@ -38,6 +39,7 @@ export const PANES: { id: PaneId; labelKey: string; hintKey: string }[] = [
   { id: "plugins", labelKey: "panes.plugins", hintKey: "panes.pluginsHint" },
   { id: "manager", labelKey: "panes.manager", hintKey: "panes.managerHint" },
   { id: "sounds", labelKey: "panes.sounds", hintKey: "panes.soundsHint" },
+  { id: "ops", labelKey: "panes.ops", hintKey: "panes.opsHint" },
   { id: "agent", labelKey: "panes.agent", hintKey: "panes.agentHint" },
   { id: "ai", labelKey: "panes.ai", hintKey: "panes.aiHint" },
 ];
@@ -61,6 +63,8 @@ const MIN_TRACK_WIDTH = 200;
 const MIN_INSPECTOR_WIDTH = 300;
 
 interface Persisted {
+  /** 布局版本：新增面板时自增，用来给旧布局做一次性迁移。 */
+  version: number;
   showTrackHeaders: boolean;
   showInspector: boolean;
   trackWidth: number;
@@ -114,6 +118,9 @@ export function gridStepFor(grid: NoteGrid, meterBeat: number): number | null {
 /** 旧版本把底部窗格的高度分成两份存，`automationHeight` 只用于一次性迁移。 */
 type Saved = Partial<Persisted> & { automationHeight?: number };
 
+/** 当前布局版本（v2 = 新增「操作记录」面板）。 */
+const LAYOUT_VERSION = 2;
+
 function load(): Saved {
   try {
     return JSON.parse(localStorage.getItem(KEY) ?? "{}") as Saved;
@@ -149,6 +156,10 @@ export const useLayoutStore = defineStore("layout", () => {
   // 默认给宽一点：复杂插件（大量参数 / 将来的原生界面）需要地方。
   const inspectorWidth = ref(saved.inspectorWidth ?? 380);
   const tabs = ref<PaneId[]>(sanitizeTabs(saved.tabs));
+  // v2：操作记录面板上线。旧布局一次性补上这个标签；用户之后手动关掉就不会再塞回来。
+  if ((saved.version ?? 1) < LAYOUT_VERSION && !tabs.value.includes("ops")) {
+    tabs.value.push("ops");
+  }
   const activeTab = ref<PaneId>(
     saved.activeTab && tabs.value.includes(saved.activeTab) ? saved.activeTab : tabs.value[0],
   );
@@ -188,6 +199,7 @@ export const useLayoutStore = defineStore("layout", () => {
       localStorage.setItem(
         KEY,
         JSON.stringify({
+          version: LAYOUT_VERSION,
           showTrackHeaders: showTrackHeaders.value,
           showInspector: showInspector.value,
           trackWidth: trackWidth.value,

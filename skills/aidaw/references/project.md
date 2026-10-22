@@ -1,11 +1,12 @@
 # 域：工程（project）
 
 读工程与全局设置、工程文件（保存 / 打开 / 新建 / 历史）、撤销/重做、工程级元数据。
-**每次编辑前先 `get_project` 看清现状**。
+**每次编辑前先 `get_project_overview` 看清现状**（轨道 / 片段 id、乐器、速度、拍号）；要改音符时再按片段用 `get_clip_notes`。
 
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
-| `get_project` | — | 返回工程 JSON（`name` / `transport` / `tracks` / `master`，可能含 `harmony` / `sections` / `note_tags`）——**音符是全量的**。 |
+| `get_project_overview` | — | **轻量概览**：轨道 id / 名字 / 分工 / 乐器（id 与名称）/ 效果链 / 混音、每个片段的 id / 位置 / 音符数、速度拍号与总长、段落表。不含音符。了解现状先调它。 |
+| `get_project` | — | 返回工程 JSON（`name` / `transport` / `tracks` / `master`，可能含 `harmony` / `sections` / `note_tags`）——**音符是全量的**；插件二进制状态只给 `state_bytes`。 |
 | `get_project_path` | — | 当前工程的 `path` 与 `dirty`（是否有未保存改动）。保存前先看它。 |
 | `get_clip_notes` | `track`,`clip`,`offset?`,`limit?`,`range?` | 按页读一个片段的音符；缺省前 200 个、上限 1000，返回 `notes` / `tags` / `truncated` / `next_offset`。大工程核对音符用它。 |
 | `get_transport` | — | 实时传输快照（是否播放、位置帧、设备采样率、循环）。 |
@@ -45,9 +46,12 @@
 - **空就不序列化**：这些字段都是可选的，没写过的工程 JSON 里不会出现这些键，老工程原样打开。
 
 **要点**
+- 三层读取，按代价从低到高：`get_project_overview`（结构 + id）→ `get_clip_notes`（一个片段的音符，分页）
+  → `get_project`（全量快照）。**大工程不要一上来就 `get_project`**——插件状态和所有音符会把上下文挤爆。
 - `get_project` 是**全量快照**（所有音符都在）；`add_notes` / `update_notes` / `replace_notes` 等批量
   工具的返回摘要才只给**前 32 个**音符。要逐个核对时：小工程用 `get_project`，大工程用
   `get_clip_notes` 分页读，别把批量摘要当成完整列表。
+- 找不到轨道 / 片段时，报错会列出当前工程里**现有的 id 与名字**，直接照抄别猜。
 - 工程是唯一真相源：AI 与人类改同一份，所有写操作都可撤销。
 - 撤销基于「重放」：一次工具调用若产生多条命令，只占**一个**撤销步骤。
 - 元数据也走命令管线，同样可撤销；它们不触发音频重建（只改工程结构，不碰渲染）。

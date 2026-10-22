@@ -22,9 +22,11 @@ import Tooltip from "@/components/common/Tooltip.vue";
 import PanelIcon from "@/components/common/PanelIcon.vue";
 import PanelTabs from "@/components/workspace/PanelTabs.vue";
 import FloppyDiskIcon from "@/components/common/icons/FloppyDiskIcon.vue";
+import GitHubIcon from "@/components/common/icons/GitHubIcon.vue";
 import PianoIcon from "@/components/common/icons/PianoIcon.vue";
 import KeyboardIcon from "@/components/common/icons/KeyboardIcon.vue";
 import type { NavItem } from "@/components/common/nav";
+import { managerOpen } from "@/api/tauri";
 import { useLayoutStore } from "@/stores/layout";
 import { useI18n } from "@/i18n";
 import { useProjectStore } from "@/stores/project";
@@ -73,10 +75,26 @@ const dirty = computed(() => projectStore.dirty);
 /** 音轨栏收起（或处于设置页，侧栏本就不渲染）时，顶栏顶到窗口最左，macOS 下要给红绿灯让位。 */
 const showMacPad = computed(() => isMac && (isSettings.value || !layout.showTrackHeaders));
 
+/** 仓库地址：顶栏入口用它，Issue / PR 也指向这里。 */
+const REPO_URL = "https://github.com/heshengtao/ai-daw";
+
 /** 设置按钮：进入设置，或从设置返回上一个工作区视图。 */
 function toggleSettings(): void {
   if (isSettings.value) void router.push(lastWorkspace.value);
   else void router.push("/settings");
+}
+
+/** 在系统浏览器里打开 GitHub 仓库（浏览器调试时退回新标签页）。 */
+async function openRepo(): Promise<void> {
+  if (!isTauri()) {
+    window.open(REPO_URL, "_blank", "noopener,noreferrer");
+    return;
+  }
+  try {
+    await managerOpen(REPO_URL);
+  } catch {
+    window.open(REPO_URL, "_blank", "noopener,noreferrer");
+  }
 }
 
 function onMouseDown(e: MouseEvent): void {
@@ -166,6 +184,12 @@ function onMouseDown(e: MouseEvent): void {
         <Tooltip :text="i18n.t('shortcuts.title')" align="end">
           <button class="bar-btn" :aria-label="i18n.t('shortcuts.title')" @click="emit('shortcuts')">
             <KeyboardIcon class="bar-icon" />
+          </button>
+        </Tooltip>
+
+        <Tooltip :text="i18n.t('topbar.github')" align="end">
+          <button class="bar-btn" :aria-label="i18n.t('topbar.github')" @click="openRepo">
+            <GitHubIcon class="bar-icon" />
           </button>
         </Tooltip>
 

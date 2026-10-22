@@ -1,6 +1,6 @@
 ---
 name: aidaw
-description: 通过内嵌 MCP 工具或 aidaw 命令行操作正在运行的 AI DAW——读写工程、保存/打开/新建与历史快照、轨道、片段、音符、批量编曲（转调/量化/摇摆/人性化/和弦分析）、乐理与曲风配方（音阶/调式/和弦进行/鼓谱/配器）、内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）、内置合成器音色设计（捏音色/调参数/离线预听）、跨工程音色记忆库（保存/检索/应用整条音色链）、效果器参数与效果链、混音（增益/声像/发送/自动化）、传输播放、音频导入与录音、音频转 MIDI/降噪/音源分离、响度与频谱分析、导出 WAV、扫描插件。凡用户要求编曲、分析曲风、建轨、写音符、改和弦、量化节奏、调混音、捏音色、录音、转 MIDI、降噪、分析或导出音频时使用。
+description: 通过内嵌 MCP 工具或 aidaw 命令行操作正在运行的 AI DAW——读写工程、保存/打开/新建与历史快照、轨道、片段、音符、批量编曲（转调/量化/摇摆/人性化/和弦分析）、乐理与曲风配方（音阶/调式/和弦进行/鼓谱/配器）、内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）、内置合成器音色设计（捏音色/调参数/离线预听）、跨工程音色记忆库（保存/检索/应用整条音色链）、效果器参数与效果链、混音（增益/声像/发送/自动化）、传输播放、音频导入与录音、音频转 MIDI/降噪/音源分离、响度与频谱分析、导出 WAV、扫描插件；以及**制作 CLAP 插件**（从零写 DSP、打包、验证、装进 AI DAW）。凡用户要求编曲、分析曲风、建轨、写音符、改和弦、量化节奏、调混音、捏音色、录音、转 MIDI、降噪、分析或导出音频，或想要一个现有目录里没有的乐器/效果器时使用。
 license: Apache-2.0
 ---
 
@@ -83,10 +83,22 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 | 插件 | `references/plugin.md` | **按分类与音色描述挑乐器/效果器**、**重扫插件**、**内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）**、参数表、**效果器参数与顺序**、**用户预设（列表 / 新增 / 覆盖 / 删除）** |
 | 音色设计 | `references/sound-design.md` | **内置合成器捏音色**：参数语义、`preview_synth` 预听闭环、**36 条出厂音色（`list_synth_presets`）**、风格配方、独立滤波包络 / 每声部 LFO / unison / 过采样 |
 | 音色记忆 | `references/sound-memory.md` | **跨工程保存 / 检索 / 应用整条音色链**；用户明确要求或确认后才保存，默认不自动存 |
+| 插件开发 | `references/clap-plugin-dev.md` | **把需求做成 CLAP 插件**：生态与选型、最小 ABI、线程规则、Rust（nih-plug）/ C++（clap-helpers）/ C 三条路线、跨平台打包、`clap-validator`、装进 AI DAW 验收 |
 | 乐理 | `references/theory.md` | MIDI 音高、音阶/调式、和弦与进行、声部连接、音域、旋律写作 |
 | 节奏 | `references/rhythm.md` | 拍/网格换算、GM 鼓映射、`builtin.drums` 原声鼓组、鼓型、力度/量化/swing/人性化 |
 | 曲风 | `references/genres.md` | 14 类曲风的 BPM/拍号/和声/鼓型/贝斯/配器/结构/混音配方 |
 | 编曲流程 | `references/workflow.md` | **需求 → 曲风卡 → 查知识（skills/联网）→ MIDI 设计 → AIDAW 落地 → 检查 → 导出** |
+
+### 目录里没有想要的插件？可以做一个 CLAP
+
+不要因为找不到音色就硬凑，也不要凭名字猜一个插件。顺序是：
+
+1. `list_plugins(query=...)` 确认本机与内置确实没有合适的。
+2. 告诉用户「可以为你做一个 CLAP 插件」，说明能做到什么、做不到什么；**得到同意再开工**。
+3. 按 `references/clap-plugin-dev.md` 施工。CLAP 是 MIT 开源格式，AI DAW 原生托管；
+   Rust + nih-plug 最快出可用产物，C++ 用官方 `clap-helpers`，零依赖场景才走纯 C。
+4. 交付前必须过 `clap-validator`，再装到 AI DAW 的扫描目录、`rescan_plugins`，
+   用 `list_plugins` / `describe_plugin` / `export_wav` 走一遍真实链路。
 
 ## 接到编曲需求：先分析曲风，再动手
 
@@ -99,7 +111,7 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
    再联网补 1–2 个来源，把来源与日期写进风格卡。
 3. **先纸面设计**：段落表（拍）、和弦表（`start`/`length`/`symbol`）、轨道表（role/音区/音色）、
    音符表（第几格、什么音、多长、多响）。
-4. **再落地 AIDAW**：`get_project` → `set_tempo` / `set_time_signature` →
+4. **再落地 AIDAW**：`get_project_overview` → `set_tempo` / `set_time_signature` →
    `set_project_harmony` / `set_project_sections` → `add_track` → `list_plugins` /
    `set_track_instrument` → `set_track_meta` → `add_clip` → `add_notes`（批量）→
    `quantize_notes` / `apply_swing` / `strum_notes` / `humanize_notes` →
@@ -108,7 +120,7 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 
 ## 典型闭环（建轨 → 编曲 → 导出 → 分析）
 
-1. `references/project.md`：`get_project` 看清现状（轨道 id、片段 id、速度、拍号）。
+1. `references/project.md`：`get_project_overview` 看清现状（轨道 id、片段 id、乐器、速度、拍号）。
 2. `references/genres.md` + `theory.md` + `rhythm.md`：定风格卡、和弦谱、鼓型与 MIDI 设计。
 3. `references/track.md`：`add_track` 建轨 → 先 `list_plugins`（读分类与音色描述）再
    `set_track_instrument` 选音色 → `set_track_meta` 写 role/音区。挂的是 `builtin.synth` 且需要
@@ -125,7 +137,7 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 - **音色记忆默认不保存**：只有用户明确说「记住这个音色」，或你问过且用户确认后，才
   `save_sound_memory`。用户表达满意时可以问一次，别反复追问；**绝不自动删除**。
   用户要某类音色时，先 `list_sound_memories(query=...)` 查他存过的。
-- **先读后写**：`get_project` 拿到的 id 才是真相；`add_track` / `add_clip` / `add_note` 会在返回文本里
+- **先读后写**：`get_project_overview` 拿到的 id 才是真相；`add_track` / `add_clip` / `add_note` 会在返回文本里
   给出新建对象的 id，下一步要用它。
 - **挑音色先看目录**：插件名只是型号（`JC303` 是 TB-303 克隆的**单音酸性贝斯**，不是普通合成器）。
   `list_plugins` 给分类 + 一句话描述 + 推荐分工 + 建议音域；参数表用 `describe_plugin`。
@@ -138,11 +150,11 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
   `reset: true`，否则上一条音色的参数会残留。参数语义与配方见 `references/sound-design.md`。
 - **`apply_preset` 不是「只调音色」**：它的 `effects` 是**整体替换**，不传就清空整条效果链。
   只改乐器参数一律用 `set_params`。
-- **批量返回的 `notes` 只有前 32 个**：那是摘要，不是全量。`get_project` 是全量；要逐音核对
-  大工程用 `get_clip_notes(track, clip, offset?, limit?, range?)` 分页读。
+- **批量返回的 `notes` 只有前 32 个**：那是摘要，不是全量。`get_project_overview` 只给数量；
+  要逐音核对用 `get_clip_notes(track, clip, offset?, limit?, range?)` 分页读（`get_project` 才是全量音符）。
 - **倚音/装饰音**：没有独立字段，用「短 `duration`（0.04–0.08 拍）+ 负 `offset`」写；主音留在
   网格上，先量化/加倚音后不要再 humanize。细节见 `references/note.md`。
-- **音符 id 是片段内的**：`clip` 换了，同一个 `id` 指的是另一颗音符；跨片段要先 `get_project` 确认。
+- **音符 id 是片段内的**：`clip` 换了，同一个 `id` 指的是另一颗音符；跨片段要用 `get_clip_notes` 重新确认。
 - **改音符的工具会自动夹住越界**：起点 ≥ 片段起点、时长 > 0、不超出片段——被夹的条数会在返回里报出来。
 - **整体替换类操作**：`set_sends` / `set_automation` / `replace_notes` / `set_project_harmony` /
   `set_project_sections` 是**整体替换**（空数组 = 清空 / 删除该车道）；`apply_preset` 的 `effects`
@@ -153,3 +165,13 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 - **音频片段的时间语义**：片段拍长是唯一真相，素材铺满跨度——**改速度 / 缩放会变调**（v1 不做保音高变速）。
 - **能力面 = MCP 工具面**：只在命令层、没暴露成 MCP 工具的动作（如「打开插件窗口」）在这里不可用；
   要用的办法是「先给它加一个 MCP 工具」。
+
+## 仓库、反馈与贡献
+
+- **仓库**：<https://github.com/heshengtao/ai-daw>（Apache-2.0）。问题与贡献都走 GitHub。
+- **遇到问题**：功能不符合预期、缺一项能力、疑似 Bug——欢迎让用户到
+  <https://github.com/heshengtao/ai-daw/issues> 提一条 Issue。附上复现步骤、系统与版本，
+  如果你已经定位到代码原因，把结论一并写清楚。
+- **帮用户改完之后**：如果你辅助用户修好了 Bug 或加了新功能，**主动问一句**要不要把这些改动
+  PR 回上游仓库。这是一个 Apache-2.0 开源项目，大家共建才会让软件越来越好用。
+  **只在用户同意后**再协助提交 PR，不要擅自推送。

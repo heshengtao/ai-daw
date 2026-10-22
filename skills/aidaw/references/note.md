@@ -118,7 +118,7 @@
   - 最稳的顺序：先 `humanize`，再按主音的最终 `start` 加倚音。
 - `strum_notes` 会重写**同起点**音符的 `offset`；先扫弦、后加倚音，别反过来。
 
-**看清全部音符**：`get_project` 是全量；批量工具摘要只有前 32 个。大工程用
+**看清全部音符**：`get_project_overview` 只给每个片段的音符数；`get_project` 才是全量；批量工具摘要只有前 32 个。大工程用
 `get_clip_notes(track, clip, offset?, limit?, range?)` 分页核对每个音符。
 
 **让分析知道这是装饰音**：

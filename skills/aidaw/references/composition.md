@@ -23,8 +23,8 @@
 `1/12`（三连音）/ `1/24` / `1/32`。**只吸起点**，时值与 `offset` 都原样保留——所以要写精确的
 三连音就显式传 `snap: "1/12"`，或者干脆不传、自己把拍值算准。
 
-**为什么用 id 而不是下标**：删掉一个音符后，后面所有音符的数组下标都会前移。`get_project`
-返回的每个音符都带 `id`，`update_notes` / `remove_notes` 用它定位，改完还是指得准。
+**为什么用 id 而不是下标**：删掉一个音符后，后面所有音符的数组下标都会前移。`get_clip_notes`
+返回的每个音符都带 `id`（`get_project` 也是全量），`update_notes` / `remove_notes` 用它定位，改完还是指得准。
 
 返回形状（批量工具统一）：
 
@@ -132,8 +132,8 @@
   支持 major / minor / dorian / phrygian / lydian / mixolydian / locrian /
   harmonic_minor / melodic_minor / major_pentatonic / minor_pentatonic / blues。
 - `ornaments` 用 `[{track, clip, id}]` **一次性标记**装饰音；命中时无论时值长短都记成
-  `ornament` / `info`，优先于导音/延伸音/普通外音。id 从 `get_project` 或
-  `get_clip_notes` 拿。它不会写回工程。
+  `ornament` / `info`，优先于导音/延伸音/普通外音。id 从 `get_clip_notes` 或
+  `get_project` 拿。它不会写回工程。
 - 想持久保存装饰音意图：用 `set_note_tag(track, clip, id, ornament="grace")`，写进工程
   `note_tags`；`analyze_harmony` 会自动读取，不需要每次再传 `ornaments`。
 - **`allow_extensions: true` 才真正放行 9 / 11 / 13**：普通延伸音给 `extension` / `info`；
@@ -165,7 +165,7 @@
 
 ## 一个可用的编曲闭环
 
-1. `get_project` 看清轨道 / 片段 id 与速度、拍号。
+1. `get_project_overview` 看清轨道 / 片段 id 与速度、拍号。
 2. `set_project_harmony` 写一份和弦谱（也可以只在分析时传 `bars`）。
 3. `set_track_meta` 给每条轨标分工与目标音域（`lead` 60..84、`bass` 28..48…）。
 4. `add_notes` 一次写出整段旋律 / 伴奏（别循环 `add_note`）。

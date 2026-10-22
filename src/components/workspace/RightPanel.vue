@@ -12,6 +12,7 @@ import {
   PuzzlePieceIcon,
   SparklesIcon,
   ChatBubbleLeftRightIcon,
+  ListBulletIcon,
 } from "@heroicons/vue/24/outline";
 import InspectorPanel from "./InspectorPanel.vue";
 import MixerPanel from "./panes/MixerPanel.vue";
@@ -19,6 +20,7 @@ import PluginEditorPane from "./panes/PluginEditorPane.vue";
 import PluginsPane from "./panes/PluginsPane.vue";
 import ManagerPane from "./panes/ManagerPane.vue";
 import SoundLibraryPane from "./panes/SoundLibraryPane.vue";
+import OpsPane from "./panes/OpsPane.vue";
 import AiPanel from "./panes/AiPanel.vue";
 import { defineAsyncComponent } from "vue";
 import { PICKABLE_PANES, useLayoutStore, type PaneId } from "@/stores/layout";
@@ -37,6 +39,7 @@ const ICONS: Record<PaneId, unknown> = {
   plugins: CircleStackIcon,
   manager: PuzzlePieceIcon,
   sounds: BookmarkSquareIcon,
+  ops: ListBulletIcon,
   agent: ChatBubbleLeftRightIcon,
   ai: SparklesIcon,
 };
@@ -68,6 +71,7 @@ const ICONS: Record<PaneId, unknown> = {
       <PluginsPane v-else-if="layout.activeTab === 'plugins'" />
       <ManagerPane v-else-if="layout.activeTab === 'manager'" />
       <SoundLibraryPane v-else-if="layout.activeTab === 'sounds'" />
+      <OpsPane v-else-if="layout.activeTab === 'ops'" />
       <SongAgentPanel v-else-if="layout.activeTab === 'agent'" />
       <AiPanel v-else-if="layout.activeTab === 'ai'" />
     </div>

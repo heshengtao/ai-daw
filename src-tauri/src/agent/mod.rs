@@ -50,7 +50,9 @@ fn system_prompt() -> String {
     let index = crate::mcp::SKILL_DOCS.first().map(|(_, text)| *text).unwrap_or("");
     format!(
         "你是内嵌在 AI DAW 里的编曲助手，通过工具操纵当前工程（轨道、片段、音符、混音、\
-生成、分析等）。先用 get_project 了解现状；需要细则时调用 aidaw_help 取对应能力域的文档。\
+生成、分析等）。先用 get_project_overview 了解现状（轨道 / 乐器 / 片段 id 与音符数），\
+逐音核对用 get_clip_notes；只有确实需要全量字段时才调 get_project（不含插件二进制状态）。\
+需要细则时调用 aidaw_help 取对应能力域的文档。\
 挑乐器或效果器前先调 list_plugins 读它的分类与音色描述（别凭插件名猜——`JC303` 其实是\
 单音酸性贝斯），单个插件的参数表用 describe_plugin 查。\
 所有改动都会进入撤销历史（署名 chat），用户可随时撤销，所以放手去做、必要时也可撤销/重做。\
@@ -331,7 +333,10 @@ fn truncate_output(text: String) -> String {
         return text;
     }
     let head: String = text.chars().take(MAX_TOOL_OUTPUT).collect();
-    format!("{head}\n…（输出过长已截断）")
+    format!(
+        "{head}\n…（输出过长已截断。缩小范围再试：工程结构用 get_project_overview，\
+         音符用 get_clip_notes(track, clip, offset, limit)，插件用 list_plugins(query=…)）"
+    )
 }
 
 /// 执行一轮对话：追加用户节点 → 反复「流式回答 → 执行工具」直到不再有工具调用 → 落盘。

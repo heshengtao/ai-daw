@@ -9,6 +9,10 @@
 插件名通常只是型号（`JC303`、`KR-106`），名字里没有「贝斯」「铺底」这些信息。所以**挑音色前先调
 `list_plugins`，确定要用哪一件之后再 `describe_plugin`**——不要反过来，更不要凭名字猜。
 
+**目录里没有合适的？可以做一个 CLAP**：本机与内置都找不到时，不要硬凑音色。CLAP 是 MIT 开源的
+插件格式，AI DAW 原生托管；先向用户确认需求，再按 `clap-plugin-dev.md` 从零实现（Rust + nih-plug
+最快），装到扫描目录后 `rescan_plugins` 就能像普通插件一样挂轨、调参、保存、导出。
+
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
 | `list_plugins` | `kind?`,`query?` | 全部可用乐器/效果器（内置 + 本机 VST3/CLAP），**只给描述**。`kind` = `instrument` / `effect` / `all`；`query` 按名字/厂商/分类/描述/标签过滤。 |

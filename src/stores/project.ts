@@ -64,6 +64,11 @@ export const useProjectStore = defineStore("project", () => {
     dirty.value = state.dirty;
   }
 
+  /** 用后端返回的历史状态同步工程快照与深度（操作记录视图回撤到指定操作时用）。 */
+  function applyHistoryState(state: HistoryState): void {
+    applyHistory(state);
+  }
+
   /** 执行一条返回完整工程快照的编辑命令。 */
   async function edit(run: () => Promise<Project>): Promise<void> {
     project.value = await run();
@@ -597,6 +602,7 @@ export const useProjectStore = defineStore("project", () => {
     cacheSession,
     undo,
     redo,
+    applyHistoryState,
     refreshDepths,
   };
 });

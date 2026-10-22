@@ -18,7 +18,7 @@
 | 「像某某歌/某某人」 | 提取**风格特征**（BPM/律动/和声/音色），不抄旋律 | 复制原曲旋律/和弦序列 |
 | 「要燃一点/伤感一点」 | 情绪 → 曲风卡（见下表） | 只改音量，不改节奏/和声 |
 | 「给我一段和弦」 | 调、级数、voicing、每和弦几拍 | 只给和弦名不给节奏 |
-| 「帮我改这段」 | 先 `get_project` 看现状，再 `analyze_harmony` | 不看现状就覆盖 |
+| 「帮我改这段」 | 先 `get_project_overview` 看现状，再按片段 `get_clip_notes` / `analyze_harmony` | 不看现状就覆盖 |
 | 「分析这首参考音频」 | `import_audio` / `detect_tempo`（需 Beat This! 模型）/ `audio_waveform`；曲风靠特征判断 | 声称能「听」出精确曲风 |
 
 **用户没给曲风时**，从关键词映射到 `genres.md` 的卡片：
@@ -179,7 +179,7 @@ aidaw call aidaw_help --json '{"topic":"genres"}'
 
 ```
 1. aidaw status                         # 软件在不在
-2. get_project                          # 拿轨道/片段 id、速度、拍号、现有和弦（音符是全量）
+2. get_project_overview                 # 拿轨道/片段 id、乐器、速度、拍号（不含音符）
 3. set_tempo / set_time_signature       # 先定全局
 4. set_project_harmony                  # 和弦表（整体替换）
 5. set_project_sections                 # 段落表（整体替换）
@@ -201,7 +201,7 @@ aidaw call aidaw_help --json '{"topic":"genres"}'
 
 ### 4.1 关键约束（不遵守会白写）
 
-- **所有 id 从 `get_project` / `add_track` / `add_clip` 的返回里拿**，不要自己猜。
+- **所有 id 从 `get_project_overview` / `add_track` / `add_clip` 的返回里拿**，不要自己猜。
 - `add_clip` 的 `start`/`length` 是**拍**；`add_notes` 的 `start`/`duration` 是**片段内拍**。
 - 一次 `add_notes` 写一个段落（最多 5000 个音）；**不要循环 `add_note`**。
 - `set_project_harmony` / `set_project_sections` / `set_sends` / `set_automation` /

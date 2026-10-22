@@ -32,7 +32,8 @@ use ai_daw_engine::command::Command;
 use ai_daw_engine::event::{Actor, Event};
 use ai_daw_engine::model::{
     AudioSource, BeatFilter, Clip, ClipId, FitMode, Note, NotePatch, NoteRange, NoteTag,
-    PitchExpression, Project, StrumDirection, TrackId, Transport, VelocityShape,
+    PitchExpression, PluginInstance, Project, StrumDirection, Track, TrackId, Transport,
+    VelocityShape,
 };
 use ai_daw_engine::registry::{PluginRegistry, PluginSlot};
 use ai_daw_engine::tempo::TempoMap;
@@ -1307,8 +1308,91 @@ pub(crate) mod tools {
     pub(crate) const CHAT_ACTOR: &str = "chat";
 
     /// 工具返回值统一是一段结构化 JSON 文本（字符串错误版）。
+    ///
+    /// 用**紧凑格式**：工具结果会直接进模型上下文，缩进只是白白多花 token。
     fn json_s<T: serde::Serialize>(value: &T) -> Result<String, String> {
-        serde_json::to_string_pretty(value).map_err(|e| format!("序列化失败：{e}"))
+        serde_json::to_string(value).map_err(|e| format!("序列化失败：{e}"))
+    }
+
+    /// 把插件二进制状态（`Vec<u8>`）换成体积摘要。
+    ///
+    /// `PluginInstance.state` 序列化后是一大串字节数字：一个 AU / VST3 插件的状态就能到
+    /// 几百 KB，足以把整份工程快照挤出上下文。工具侧本来也无法回写这段二进制，所以只报
+    /// `state_bytes`。参数（`params`）保留——那是可读、可改的部分。
+    fn summarize_plugin_states(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Array(bytes)) = map.get("state") {
+                    let len = bytes.len();
+                    map.remove("state");
+                    map.insert("state_bytes".into(), serde_json::json!(len));
+                }
+                for child in map.values_mut() {
+                    summarize_plugin_states(child);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items {
+                    summarize_plugin_states(child);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 工程快照 → 文本：剥掉插件二进制状态后再序列化。
+    pub(crate) fn project_json(project: &Project) -> Result<String, String> {
+        let mut value = serde_json::to_value(project).map_err(|e| format!("序列化失败：{e}"))?;
+        summarize_plugin_states(&mut value);
+        json_s(&value)
+    }
+
+    /// 现有轨道清单（写进「找不到轨道」的错误里，省掉模型靠猜的第二轮）。
+    fn track_choices(project: &Project) -> String {
+        project
+            .tracks
+            .iter()
+            .map(|t| format!("#{}「{}」", t.id.0, t.name))
+            .collect::<Vec<_>>()
+            .join("、")
+    }
+
+    pub(crate) fn missing_track(project: &Project, track: u64) -> String {
+        if project.tracks.is_empty() {
+            format!("没有轨道 {track}：当前工程还没有轨道（先用 add_track 建一条）")
+        } else {
+            format!("没有轨道 {track}；现有轨道：{}", track_choices(project))
+        }
+    }
+
+    fn track_or_err<'a>(project: &'a Project, track: u64) -> Result<&'a Track, String> {
+        project.track(TrackId(track)).ok_or_else(|| missing_track(project, track))
+    }
+
+    /// 片段找不到时把该轨道的现有片段列出来（id + 位置），下一次调用就能用对 id。
+    pub(crate) fn missing_clip(track: &Track, clip: u64) -> String {
+        if track.clips.is_empty() {
+            format!(
+                "轨道 {}「{}」上没有片段 {clip}：这条轨道还没有片段（先用 add_clip 建一个）",
+                track.id.0, track.name
+            )
+        } else {
+            let choices = track
+                .clips
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{}（{:.2}–{:.2} 拍，{} 个音符）",
+                        c.id.0,
+                        c.start,
+                        c.start + c.length,
+                        c.notes.len()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("、");
+            format!("轨道 {}「{}」上没有片段 {clip}；现有片段：{choices}", track.id.0, track.name)
+        }
     }
 
     /// 校验采样率（字符串错误版）。
@@ -1354,7 +1438,7 @@ pub(crate) mod tools {
         }
         for id in tracks {
             if project.track(TrackId(*id)).is_none() {
-                return Err(format!("没有轨道 {id}"));
+                return Err(missing_track(project, *id));
             }
         }
         for track in &mut project.tracks {
@@ -1397,7 +1481,123 @@ pub(crate) mod tools {
 
     pub(crate) fn get_project(app: &AppHandle) -> Result<String, String> {
         let project = app.state::<AppState>().engine.lock().unwrap().project().clone();
-        json_s(&project)
+        project_json(&project)
+    }
+
+    /// 工程的**轻量概览**：id / 名字 / 乐器 / 片段骨架 / 计数，不含音符与插件二进制状态。
+    ///
+    /// `get_project` 是全量快照；大工程里模型真正先要的是「有哪些轨道、各挂什么、片段 id
+    /// 是多少」。把这层单独拆出来，避免为了看一眼结构就吞掉几百 KB 的插件状态。
+    pub(crate) fn get_project_overview(app: &AppHandle) -> Result<String, String> {
+        let project = snapshot(app);
+        let entries = catalog_entries(app);
+        json_s(&project_overview(&project, &entries))
+    }
+
+    pub(crate) fn project_overview(project: &Project, entries: &[plugin_info::Entry]) -> serde_json::Value {
+        let plugin = |instance: &PluginInstance| {
+            serde_json::json!({
+                "id": instance.plugin_id,
+                "name": entries
+                    .iter()
+                    .find(|e| e.id == instance.plugin_id)
+                    .map(|e| e.name.as_str()),
+                "params": instance.params.len(),
+                "state_bytes": instance.state.len(),
+            })
+        };
+
+        let tracks: Vec<serde_json::Value> = project
+            .tracks
+            .iter()
+            .map(|t| {
+                let clips: Vec<serde_json::Value> = t
+                    .clips
+                    .iter()
+                    .map(|c| {
+                        let mut item = serde_json::json!({
+                            "id": c.id.0,
+                            "kind": if c.is_audio() { "audio" } else { "midi" },
+                            "start": c.start,
+                            "length": c.length,
+                            "notes": c.notes.len(),
+                        });
+                        if let Some(audio) = &c.audio {
+                            item["path"] = serde_json::json!(audio.path);
+                        }
+                        item
+                    })
+                    .collect();
+                let note_count: usize = t.clips.iter().map(|c| c.notes.len()).sum();
+                serde_json::json!({
+                    "id": t.id.0,
+                    "name": t.name,
+                    "role": t.role(),
+                    "instrument": t.instrument.as_ref().map(plugin),
+                    "effects": t
+                        .effects
+                        .iter()
+                        .enumerate()
+                        .map(|(index, effect)| {
+                            let mut item = plugin(effect);
+                            item["index"] = serde_json::json!(index);
+                            item
+                        })
+                        .collect::<Vec<_>>(),
+                    "mixer": {
+                        "gain_db": t.mixer.gain_db,
+                        "pan": t.mixer.pan,
+                        "mute": t.mixer.mute,
+                        "solo": t.mixer.solo,
+                    },
+                    "note_count": note_count,
+                    "clips": clips,
+                })
+            })
+            .collect();
+
+        let clip_count: usize = project.tracks.iter().map(|t| t.clips.len()).sum();
+        let note_count: usize = project.tracks.iter().flat_map(|t| &t.clips).map(|c| c.notes.len()).sum();
+        let bar_beats = project.transport.bar_beats();
+        let length_beats = project.length_beats();
+        let bars = if bar_beats > 0.0 { (length_beats / bar_beats).ceil() } else { 0.0 };
+
+        serde_json::json!({
+            "name": project.name,
+            "transport": {
+                "tempo": project.transport.tempo,
+                "time_sig": format!(
+                    "{}/{}",
+                    project.transport.time_sig_num, project.transport.time_sig_den
+                ),
+                "keyframes": project.transport.keyframes.len(),
+                "length_beats": length_beats,
+                "bars": bars,
+            },
+            "totals": {
+                "tracks": project.tracks.len(),
+                "clips": clip_count,
+                "notes": note_count,
+            },
+            "master": {
+                "gain_db": project.master.gain_db,
+                "pan": project.master.pan,
+            },
+            "harmony_bars": project.harmony.len(),
+            "sections": project
+                .sections
+                .iter()
+                .map(|s| serde_json::json!({
+                    "name": s.name,
+                    "start": s.start,
+                    "end": s.end,
+                    "role": s.role,
+                }))
+                .collect::<Vec<_>>(),
+            "tracks": tracks,
+            "hint": "概览不含音符与插件二进制状态。逐音核对用 get_clip_notes(track, clip)；\
+                     要看全部字段（含音符与插件参数）再用 get_project。",
+        })
     }
 
     pub(crate) fn get_transport(app: &AppHandle) -> Result<String, String> {
@@ -1907,7 +2107,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     /// 轨道效果链的可读形式（`0:内置混响 → 1:JC303 Overdrive`），用于写操作的回执。
     fn effect_chain(app: &AppHandle, track: u64) -> Result<String, String> {
         let project = app.state::<AppState>().engine.lock().unwrap().project().clone();
-        let t = project.track(TrackId(track)).ok_or_else(|| format!("没有轨道 {track}"))?;
+        let t = track_or_err(&project, track)?;
         if t.effects.is_empty() {
             return Ok("空".into());
         }
@@ -2369,12 +2569,12 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
 
     /// 片段摘要：批量工具统一返回这个形状（音符多时只给前 32 个）。
     fn clip_summary(project: &Project, track: u64, clip: u64) -> Result<serde_json::Value, String> {
-        let t = project.track(TrackId(track)).ok_or_else(|| format!("没有轨道 {track}"))?;
+        let t = track_or_err(project, track)?;
         let c = t
             .clips
             .iter()
             .find(|c| c.id == ClipId(clip))
-            .ok_or_else(|| format!("轨道 {track} 上没有片段 {clip}"))?;
+            .ok_or_else(|| missing_clip(t, clip))?;
         let preview = &c.notes[..c.notes.len().min(32)];
         Ok(serde_json::json!({
             "track": track,
@@ -2391,20 +2591,23 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     /// 当前片段里的音符数（用于算「这次加了 / 删了几个」）。
     fn note_count(app: &AppHandle, track: u64, clip: u64) -> Result<usize, String> {
         let project = app.state::<AppState>().engine.lock().unwrap().project().clone();
-        let c = project
-            .track(TrackId(track))
-            .and_then(|t| t.clips.iter().find(|c| c.id == ClipId(clip)))
-            .ok_or_else(|| format!("轨道 {track} 上没有片段 {clip}"))?;
+        let t = track_or_err(&project, track)?;
+        let c = t
+            .clips
+            .iter()
+            .find(|c| c.id == ClipId(clip))
+            .ok_or_else(|| missing_clip(t, clip))?;
         Ok(c.notes.len())
     }
 
-    /// 取片段（不存在时报错，信息里带轨道 / 片段 id，便于代理自我纠正）。
+    /// 取片段（不存在时报错，信息里带现有轨道 / 片段，便于代理自我纠正）。
     fn clip_of(project: &Project, track: u64, clip: u64) -> Result<Clip, String> {
-        project
-            .track(TrackId(track))
-            .and_then(|t| t.clips.iter().find(|c| c.id == ClipId(clip)))
+        let t = track_or_err(project, track)?;
+        t.clips
+            .iter()
+            .find(|c| c.id == ClipId(clip))
             .cloned()
-            .ok_or_else(|| format!("轨道 {track} 上没有片段 {clip}"))
+            .ok_or_else(|| missing_clip(t, clip))
     }
 
     /// 把 `snap` 字面量换算成步长（拍）；`None` = 不吸附。
@@ -2504,10 +2707,12 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             actor.clone(),
             Command::AddNotes { track: TrackId(args.track), clip: ClipId(args.clip), notes },
         );
-        let clip = project
-            .track(TrackId(args.track))
-            .and_then(|t| t.clips.iter().find(|c| c.id == ClipId(args.clip)))
-            .ok_or_else(|| format!("轨道 {} 上没有片段 {}", args.track, args.clip))?;
+        let t = track_or_err(&project, args.track)?;
+        let clip = t
+            .clips
+            .iter()
+            .find(|c| c.id == ClipId(args.clip))
+            .ok_or_else(|| missing_clip(t, args.clip))?;
         let added: Vec<u64> = clip.notes[before.min(clip.notes.len())..].iter().map(|n| n.id).collect();
         let summary = clip_summary(&project, args.track, args.clip)?;
         let mut summary = summary;
@@ -2803,10 +3008,12 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
                 (args.min_pitch.unwrap_or(meta.min), args.max_pitch.unwrap_or(meta.max))
             }
         };
-        let clip = project
-            .track(TrackId(args.track))
-            .and_then(|t| t.clips.iter().find(|c| c.id == ClipId(args.clip)))
-            .ok_or_else(|| format!("轨道 {} 上没有片段 {}", args.track, args.clip))?;
+        let t = track_or_err(&project, args.track)?;
+        let clip = t
+            .clips
+            .iter()
+            .find(|c| c.id == ClipId(args.clip))
+            .ok_or_else(|| missing_clip(t, args.clip))?;
         let range = args.range.map(|r| r.to_range());
         // 先按「只报告」算一遍越界数量（fold 之后再算就算不出来了）。
         let preview = ai_daw_engine::compose::fit_to_range(clip, min, max, FitMode::Report, range);
@@ -2958,12 +3165,10 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             return Err("clips 至少要有两个片段".into());
         }
         let project = app.state::<AppState>().engine.lock().unwrap().project().clone();
-        let track = project
-            .track(TrackId(args.track))
-            .ok_or_else(|| format!("没有轨道 {}", args.track))?;
+        let track = track_or_err(&project, args.track)?;
         for id in &args.clips {
             let Some(c) = track.clips.iter().find(|c| c.id == ClipId(*id)) else {
-                return Err(format!("轨道 {} 上没有片段 {id}", args.track));
+                return Err(missing_clip(track, *id));
             };
             if c.is_audio() {
                 return Err(format!(
@@ -2997,9 +3202,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
 
     pub(crate) fn track_note_stats(app: &AppHandle, args: TrackStatsArgs) -> Result<String, String> {
         let project = snapshot(app);
-        let track = project
-            .track(TrackId(args.track))
-            .ok_or_else(|| format!("没有轨道 {}", args.track))?;
+        let track = track_or_err(&project, args.track)?;
         let stats = ai_daw_engine::compose::note_stats(
             track,
             args.clip.map(ClipId),
@@ -3016,9 +3219,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         let picked: Vec<&ai_daw_engine::model::Track> = args
             .tracks
             .iter()
-            .map(|id| {
-                project.track(TrackId(*id)).ok_or_else(|| format!("没有轨道 {id}"))
-            })
+            .map(|id| track_or_err(&project, *id))
             .collect::<Result<_, _>>()?;
         let mut pairs = Vec::new();
         for (i, a) in picked.iter().enumerate() {
@@ -3051,7 +3252,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         let picked: Vec<&ai_daw_engine::model::Track> = match &args.tracks {
             Some(ids) => ids
                 .iter()
-                .map(|id| project.track(TrackId(*id)).ok_or_else(|| format!("没有轨道 {id}")))
+                .map(|id| track_or_err(&project, *id))
                 .collect::<Result<_, _>>()?,
             None => project
                 .tracks
@@ -3709,7 +3910,9 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             .unwrap()
             .get(&args.id)
             .ok_or_else(|| format!("音色记忆不存在：{}", args.id))?;
-        json_s(&memory)
+        let mut value = serde_json::to_value(&memory).map_err(|e| format!("序列化失败：{e}"))?;
+        summarize_plugin_states(&mut value);
+        json_s(&value)
     }
 
     pub(crate) fn save_sound_memory(
@@ -3837,7 +4040,8 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     /// 全部工具的清单。**要与 `#[tool_router]` 的工具集一一对应**（有守卫测试）。
     pub(crate) fn definitions() -> Vec<ToolDef> {
         vec![
-            tool_def!("get_project", "读取当前工程的完整快照：轨道、片段、音符、速度/拍号（含关键点）、混音。"),
+            tool_def!("get_project", "读取当前工程的**全量**快照：轨道、片段、音符、速度/拍号（含关键点）、混音。插件二进制状态只给 `state_bytes`（不回传原始字节）。只想看结构时用 get_project_overview——这份快照在大工程里很占上下文。"),
+            tool_def!("get_project_overview", "读取工程的**轻量概览**：轨道 id / 名字 / 分工 / 乐器（id 与名称）/ 效果链 / 混音、每个片段的 id / 位置 / 音符数、速度拍号与总长、段落表。不含音符与插件二进制状态。**了解现状先调这个**，再按需读片段音符。"),
             tool_def!("get_project_path", "读取当前工程对应的文件路径与是否有未保存改动（`path` / `dirty`）。"),
             tool_def!("get_clip_notes", "按页读取一个片段的音符（只读）：可按片段内拍范围过滤；返回 notes / note_count / truncated / next_offset。大工程核对音符时用它，别依赖批量工具的前 32 个摘要。", GetNotesArgs),
             tool_def!("get_transport", "读取传输状态：是否可用、是否播放、播放头位置（帧）、采样率、是否循环。"),
@@ -3934,7 +4138,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("update_preset", "覆盖一条已存在的用户预设（改名或整体替换参数快照）。", UpdatePresetArgs),
             tool_def!("delete_preset", "删除一条用户预设。", PresetIdArgs),
             tool_def!("list_sound_memories", "列出用户存过的音色记忆（跨工程）。只返回摘要；`query` 搜名称/描述/标签/分工/插件 id，`tag` 精确匹配标签，`plugin_id` 过滤乐器或效果链。做同类音色前先查这里。", ListSoundMemoriesArgs),
-            tool_def!("get_sound_memory", "读取一条音色记忆的完整快照（乐器/效果链参数与二进制状态、增益/声像）。", SoundMemoryIdArgs),
+            tool_def!("get_sound_memory", "读取一条音色记忆的完整快照（乐器/效果链参数、增益/声像；插件二进制状态只给 `state_bytes`）。", SoundMemoryIdArgs),
             tool_def!("save_sound_memory", "把**当前轨道**的音色链存成一条音色记忆（后端从轨道抓快照，不需要逐字传参数）。传 `id` 表示覆盖该条记忆的内容。**只有用户明确要求或确认后才调用**。", SaveSoundMemoryArgs),
             tool_def!("update_sound_memory", "只修改音色记忆的元数据（名称/描述/标签/分工），不动声音快照。", UpdateSoundMemoryArgs),
             tool_def!("delete_sound_memory", "删除一条音色记忆。**只在用户明确要求时调用**。", SoundMemoryIdArgs),
@@ -3957,6 +4161,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     ) -> Result<String, String> {
         match name {
             "get_project" => get_project(app),
+            "get_project_overview" => get_project_overview(app),
             "get_project_path" => get_project_path(app),
             "get_clip_notes" => get_clip_notes(app, parse_args(args)?),
             "get_transport" => get_transport(app),
@@ -4085,9 +4290,14 @@ impl DawMcpServer {
 impl DawMcpServer {
     // ---- 只读 ----
 
-    #[tool(description = "读取当前工程的完整快照：轨道、片段、音符、速度/拍号（含关键点）、混音。")]
+    #[tool(description = "读取当前工程的**全量**快照：轨道、片段、音符、速度/拍号（含关键点）、混音。插件二进制状态只给 `state_bytes`。只想看结构时用 get_project_overview——这份快照在大工程里很占上下文。")]
     fn get_project(&self) -> Result<String, ErrorData> {
         tools::get_project(&self.app).map_err(fail)
+    }
+
+    #[tool(description = "读取工程的**轻量概览**：轨道 id / 名字 / 分工 / 乐器（id 与名称）/ 效果链 / 混音、每个片段的 id / 位置 / 音符数、速度拍号与总长、段落表。不含音符与插件二进制状态。**了解现状先调这个**。")]
+    fn get_project_overview(&self) -> Result<String, ErrorData> {
+        tools::get_project_overview(&self.app).map_err(fail)
     }
 
     #[tool(description = "读取当前工程对应的文件路径与是否有未保存改动（`path` / `dirty`）。")]
@@ -4703,7 +4913,9 @@ impl ServerHandler for DawMcpServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "AI DAW 的内嵌 MCP 服务器。所有写操作与人在界面上的操作走同一条管线：\
-             会进入撤销历史、在界面上留痕，人随时可以撤销。先用 get_project 了解现状，\
+             会进入撤销历史、在界面上留痕，人随时可以撤销。先用 get_project_overview 看结构\
+             （轨道 / 乐器 / 片段 id 与音符数），需要逐音核对时用 get_clip_notes，只有确实要\
+             全量字段时才用 get_project（它不含插件二进制状态）。\
              挑音色 / 效果器前先 list_plugins（带分类与音色描述，别凭插件名猜），\
              单个插件用 describe_plugin 看参数表；改完可以用 analyze_project 听感确认。",
         )
@@ -5056,6 +5268,7 @@ mod tests {
         let names: Vec<String> = router.list_all().into_iter().map(|t| t.name.to_string()).collect();
         let expected = [
             "get_project",
+            "get_project_overview",
             "get_project_path",
             "get_clip_notes",
             "get_transport",
@@ -5411,5 +5624,101 @@ mod tests {
     fn binding_an_ephemeral_port_picks_a_real_one() {
         let listener = bind_loopback(0).expect("应当能绑到回环临时端口");
         assert_ne!(listener.local_addr().unwrap().port(), 0);
+    }
+
+    fn demo_track(id: u64, name: &str) -> Track {
+        Track {
+            id: TrackId(id),
+            name: name.into(),
+            instrument: None,
+            effects: vec![],
+            clips: vec![],
+            mixer: ai_daw_engine::model::MixerChannel::default(),
+            sends: vec![],
+            automation: vec![],
+            meta: None,
+        }
+    }
+
+    fn demo_note(id: u64, pitch: u8) -> Note {
+        Note {
+            id,
+            pitch,
+            start: id as f64,
+            duration: 1.0,
+            velocity: 100,
+            volume: Note::MAX_VOLUME,
+            offset: 0.0,
+            legato: false,
+            expr: PitchExpression::NONE,
+        }
+    }
+
+    /// 插件 state 是 `Vec<u8>`，直接序列化会膨胀成几百 KB 的字节数组——快照里必须只留体积。
+    #[test]
+    fn project_snapshot_summarizes_plugin_state() {
+        let mut project = Project::new("demo");
+        let mut track = demo_track(1, "主旋律");
+        let mut params = std::collections::BTreeMap::new();
+        params.insert("cutoff".to_string(), 800.0);
+        track.instrument = Some(PluginInstance {
+            plugin_id: "au:aumu:mlrs:mLab".into(),
+            params,
+            state: vec![1, 2, 3, 4],
+        });
+        project.tracks.push(track);
+
+        let text = tools::project_json(&project).unwrap();
+        assert!(!text.contains("\"state\""), "二进制状态不应回传：{text}");
+        assert!(text.contains("\"state_bytes\":4"), "{text}");
+        assert!(text.contains("cutoff"), "可读参数应当保留：{text}");
+    }
+
+    /// 概览只给 id / 骨架，不把音符数组带出来；片段 id 必须可直接用于后续工具。
+    #[test]
+    fn overview_keeps_ids_but_drops_notes() {
+        let mut project = Project::new("demo");
+        let mut track = demo_track(1, "主旋律");
+        track.instrument = Some(PluginInstance {
+            plugin_id: "builtin.synth".into(),
+            params: std::collections::BTreeMap::new(),
+            state: vec![0; 100],
+        });
+        track.clips.push(Clip {
+            id: ClipId(7),
+            start: 0.0,
+            length: 8.0,
+            notes: vec![demo_note(1, 60), demo_note(2, 64)],
+            audio: None,
+        });
+        project.tracks.push(track);
+
+        let value = tools::project_overview(&project, &[]);
+        assert_eq!(value["tracks"][0]["id"], 1);
+        assert_eq!(value["tracks"][0]["instrument"]["state_bytes"], 100);
+        assert_eq!(value["tracks"][0]["clips"][0]["id"], 7);
+        assert_eq!(value["tracks"][0]["clips"][0]["notes"], 2);
+        assert_eq!(value["tracks"][0]["note_count"], 2);
+        assert_eq!(value["totals"]["notes"], 2);
+        assert!(!value.to_string().contains("\"pitch\""), "概览不应包含音符：{value}");
+    }
+
+    /// 找不到 id 的报错必须列出候选，模型才能一次改对，而不是挨个试。
+    #[test]
+    fn missing_id_errors_list_candidates() {
+        let mut project = Project::new("demo");
+        let mut track = demo_track(1, "主旋律");
+        track.clips.push(Clip {
+            id: ClipId(7),
+            start: 0.0,
+            length: 8.0,
+            notes: vec![demo_note(1, 60)],
+            audio: None,
+        });
+        let err = tools::missing_clip(&track, 9);
+        assert!(err.contains("7（0.00–8.00 拍"), "{err}");
+        project.tracks.push(track);
+        let err = tools::missing_track(&project, 9);
+        assert!(err.contains("#1「主旋律」"), "{err}");
     }
 }

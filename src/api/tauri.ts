@@ -49,6 +49,7 @@ import type {
   NotePatch,
   NoteRange,
   NoteStats,
+  OpRecord,
   OverlapReport,
   PitchRange,
   Preset,
@@ -615,6 +616,24 @@ export function undo(): Promise<HistoryState> {
 export function redo(): Promise<HistoryState> {
   if (mockEnabled()) return Promise.resolve(mockApi.redo());
   return invoke<HistoryState>("redo");
+}
+
+/** 本次编辑会话的全部操作（含人工与 AI），按时间从旧到新。 */
+export function listOperations(): Promise<OpRecord[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.listOperations());
+  return invoke<OpRecord[]>("ops_list");
+}
+
+/** 回撤到某条操作之前：该操作及其之后的改动都会被撤销（可以再重做回来）。 */
+export function revertToOperation(id: number): Promise<HistoryState> {
+  if (mockEnabled()) return Promise.resolve(mockApi.revertToOperation(id));
+  return invoke<HistoryState>("ops_revert_to", { id });
+}
+
+/** 重做到某条被撤销的操作（包含该操作本身）。 */
+export function reapplyToOperation(id: number): Promise<HistoryState> {
+  if (mockEnabled()) return Promise.resolve(mockApi.reapplyToOperation(id));
+  return invoke<HistoryState>("ops_reapply_to", { id });
 }
 
 // ---------------------------------------------------------------------------

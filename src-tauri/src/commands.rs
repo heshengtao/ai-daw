@@ -12,6 +12,7 @@ use ai_daw_engine::model::{
     Keyframe, Note, NoteEdit, NotePatch, NoteRange, PitchRange, Project, Section, Send,
     StrumDirection, TrackId, Transport, VelocityShape,
 };
+use ai_daw_engine::op::OpRecord;
 use ai_daw_engine::registry::{PluginRegistry, PluginSlot};
 use ai_daw_engine::render::{render_with_assets_progress, RenderOptions};
 use ai_daw_engine::tempo::TempoMap;
@@ -1811,20 +1812,22 @@ pub fn history_depths(state: State<'_, AppState>) -> HistoryDepths {
     HistoryDepths { undo: engine.undo_depth(), redo: engine.redo_depth(), dirty: engine.is_dirty() }
 }
 
+/// 从引擎当前状态取一份历史快照。
+fn history_state(engine: &Engine) -> HistoryState {
+    HistoryState {
+        project: engine.project().clone(),
+        undo_depth: engine.undo_depth(),
+        redo_depth: engine.redo_depth(),
+        dirty: engine.is_dirty(),
+    }
+}
+
 /// 撤销最后一次命令（界面命令与 MCP 共用）。
 pub(crate) fn undo_now(state: &AppState) -> HistoryState {
     let (out, project) = {
         let mut engine = state.engine.lock().unwrap();
         engine.undo();
-        (
-            HistoryState {
-                project: engine.project().clone(),
-                undo_depth: engine.undo_depth(),
-                redo_depth: engine.redo_depth(),
-                dirty: engine.is_dirty(),
-            },
-            engine.project().clone(),
-        )
+        (history_state(&engine), engine.project().clone())
     };
     // 撤销是"重放历史"实现的，结果可能任意偏离当前事件表，因此整表重建。
     state.audio.load(&project);
@@ -1836,18 +1839,55 @@ pub(crate) fn redo_now(state: &AppState) -> HistoryState {
     let (out, project) = {
         let mut engine = state.engine.lock().unwrap();
         engine.redo();
-        (
-            HistoryState {
-                project: engine.project().clone(),
-                undo_depth: engine.undo_depth(),
-                redo_depth: engine.redo_depth(),
-                dirty: engine.is_dirty(),
-            },
-            engine.project().clone(),
-        )
+        (history_state(&engine), engine.project().clone())
     };
     state.audio.load(&project);
     out
+}
+
+/// 操作记录：本次编辑会话的全部操作（含人工与 AI），按时间从旧到新排列。
+#[tauri::command]
+pub fn ops_list(state: State<'_, AppState>) -> Vec<OpRecord> {
+    state.engine.lock().unwrap().ops()
+}
+
+/// 回撤到某条操作之前：该操作及其之后的改动都会被撤销（可再重做回来）。
+#[tauri::command]
+pub fn ops_revert_to(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: u64,
+) -> Result<HistoryState, String> {
+    let (out, project) = {
+        let mut engine = state.engine.lock().unwrap();
+        if !engine.revert_to(id) {
+            return Err(format!("操作 {id} 不存在或已经被撤销"));
+        }
+        (history_state(&engine), engine.project().clone())
+    };
+    state.audio.load(&project);
+    // 回撤可能改回别的乐器：实例对不上的插件窗口要关掉。
+    close_stale_plugin_windows(&app, &state);
+    Ok(out)
+}
+
+/// 重做到某条被撤销的操作（包含该操作本身）。
+#[tauri::command]
+pub fn ops_reapply_to(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: u64,
+) -> Result<HistoryState, String> {
+    let (out, project) = {
+        let mut engine = state.engine.lock().unwrap();
+        if !engine.reapply_to(id) {
+            return Err(format!("操作 {id} 不存在或已经生效"));
+        }
+        (history_state(&engine), engine.project().clone())
+    };
+    state.audio.load(&project);
+    close_stale_plugin_windows(&app, &state);
+    Ok(out)
 }
 
 /// 撤销最后一次命令。

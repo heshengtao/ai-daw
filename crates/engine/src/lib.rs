@@ -10,6 +10,7 @@ pub mod event;
 pub mod harmony;
 pub mod model;
 pub mod mp3;
+pub mod op;
 pub mod player;
 pub mod registry;
 pub mod render;

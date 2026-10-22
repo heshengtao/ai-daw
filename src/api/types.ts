@@ -378,6 +378,36 @@ export interface HistoryDepths {
   dirty: boolean;
 }
 
+/** 变更来源：人类用户，或某个 AI 代理（`chat` = 内置助手，`mcp` = 外部 AI）。 */
+export type Actor = "Human" | { Agent: string };
+
+/** 操作记录里的一个附加参数值。 */
+export type OpValue = string | number | boolean;
+
+/** 操作记录里的一个附加参数。 */
+export interface OpArg {
+  key: string;
+  value: OpValue;
+}
+
+/** 一条操作记录（与后端 `OpRecord` 一一对应）。 */
+export interface OpRecord {
+  /** 会话内稳定自增 id。 */
+  id: number;
+  /** 操作发生的 Unix 毫秒时间。 */
+  at: number;
+  actor: Actor;
+  /** 机器可读的操作类型（前端据此本地化），如 `add_track`。 */
+  kind: string;
+  /** 操作对象（轨道名等）。 */
+  target: string | null;
+  args: OpArg[];
+  /** 本操作产生的事件条数。 */
+  event_count: number;
+  /** 是否仍生效；`false` = 已被撤销，可重做。 */
+  applied: boolean;
+}
+
 /** 历史缩略图里的一段片段。 */
 export interface HistoryClip {
   start: number;

@@ -2,6 +2,7 @@ use crate::apply::apply;
 use crate::command::Command;
 use crate::event::{Actor, Event};
 use crate::model::{ClipId, Project, TrackId};
+use crate::op::{describe, OpRecord};
 use crate::tempo::TempoMap;
 
 /// 引擎：持有工程状态、执行命令、产出事件、支持撤销。
@@ -12,8 +13,14 @@ pub struct Engine {
     /// 撤销时凭空消失。
     initial: Project,
     history: Vec<Vec<Event>>,
+    /// 与 `history` **逐项对应**的操作记录（供「操作记录」窗口展示 / 回撤到指定操作）。
+    history_ops: Vec<OpRecord>,
     /// 被撤销的命令批次，供 `redo` 重放；一旦执行新命令即清空。
     redo: Vec<Vec<Event>>,
+    /// 与 `redo` 逐项对应的操作记录。
+    redo_ops: Vec<OpRecord>,
+    /// 下一条操作记录的 id（会话内自增，撤销/重做不会复用）。
+    next_op_id: u64,
     next_track_id: u64,
     next_clip_id: u64,
     /// 引擎的初始工程名；撤销一次 `Clear` 时用它重建，恢复被清空前的名字。
@@ -34,7 +41,10 @@ impl Engine {
             initial: project.clone(),
             project: project.clone(),
             history: vec![],
+            history_ops: vec![],
             redo: vec![],
+            redo_ops: vec![],
+            next_op_id: 1,
             next_track_id: 1,
             next_clip_id: 1,
             initial_name: name,
@@ -52,7 +62,19 @@ impl Engine {
         let initial_name = project.name.clone();
         let initial = project.clone();
         let saved = project.clone();
-        Engine { initial, project, history: vec![], redo: vec![], next_track_id, next_clip_id, initial_name, saved }
+        Engine {
+            initial,
+            project,
+            history: vec![],
+            history_ops: vec![],
+            redo: vec![],
+            redo_ops: vec![],
+            next_op_id: 1,
+            next_track_id,
+            next_clip_id,
+            initial_name,
+            saved,
+        }
     }
 
     /// 从「工作副本 + 保存基线」构建引擎（会话缓存恢复用）。
@@ -222,16 +244,7 @@ impl Engine {
 
     /// 执行命令：产出事件、应用到状态、记录历史。
     pub fn execute(&mut self, command: Command, actor: Actor) -> Vec<Event> {
-        let events = self.translate(&command, &actor);
-        for ev in &events {
-            apply(&mut self.project, ev);
-        }
-        if !events.is_empty() {
-            self.history.push(events.clone());
-            // 新命令会作废已有的重做历史。
-            self.redo.clear();
-        }
-        events
+        self.execute_all(vec![command], actor)
     }
 
     /// 执行一批命令，**合成一个撤销步骤**。
@@ -239,6 +252,8 @@ impl Engine {
     /// 用于「一次改很多东西」的场景——例如切换预设会写回上百个参数：逐条 [`Self::execute`]
     /// 会让用户要按上百次撤销才能回到切换前。
     pub fn execute_all(&mut self, commands: Vec<Command>, actor: Actor) -> Vec<Event> {
+        // 描述必须在应用之前生成：`remove_track` / `rename_track` 之后轨道名就查不到了。
+        let (kind, target, args) = describe(self.project(), &commands);
         let mut events = Vec::new();
         for command in commands {
             let produced = self.translate(&command, &actor);
@@ -248,9 +263,22 @@ impl Engine {
             events.extend(produced);
         }
         if !events.is_empty() {
+            let op = OpRecord {
+                id: self.next_op_id,
+                at: now_millis(),
+                actor,
+                kind,
+                target,
+                args,
+                event_count: events.len(),
+                applied: true,
+            };
+            self.next_op_id += 1;
             self.history.push(events.clone());
+            self.history_ops.push(op);
             // 新命令会作废已有的重做历史。
             self.redo.clear();
+            self.redo_ops.clear();
         }
         events
     }
@@ -264,6 +292,9 @@ impl Engine {
             None => false,
             Some(batch) => {
                 self.redo.push(batch);
+                if let Some(op) = self.history_ops.pop() {
+                    self.redo_ops.push(op);
+                }
                 self.replay_history();
                 true
             }
@@ -282,6 +313,9 @@ impl Engine {
                     apply(&mut self.project, ev);
                 }
                 self.history.push(batch);
+                if let Some(op) = self.redo_ops.pop() {
+                    self.history_ops.push(op);
+                }
                 self.resync_id_counters();
                 true
             }
@@ -291,6 +325,53 @@ impl Engine {
     /// 可重做的命令次数。
     pub fn redo_depth(&self) -> usize {
         self.redo.len()
+    }
+
+    /// 时间线上的全部操作：先是已应用的（由旧到新），再是被撤销的（由旧到新）。
+    ///
+    /// `applied` 由当前撤销位置实时算出——记录本身不存状态，撤销 / 重做只搬动它们，
+    /// 不会出现「记录和真实历史对不上」。
+    pub fn ops(&self) -> Vec<OpRecord> {
+        let mut out = Vec::with_capacity(self.history_ops.len() + self.redo_ops.len());
+        for op in &self.history_ops {
+            let mut op = op.clone();
+            op.applied = true;
+            out.push(op);
+        }
+        for op in self.redo_ops.iter().rev() {
+            let mut op = op.clone();
+            op.applied = false;
+            out.push(op);
+        }
+        out
+    }
+
+    /// 回撤到某条操作**之前**：该操作及其之后的操作都会变成「已撤销」。
+    ///
+    /// 撤销采用「重放」实现，无法只抽掉中间一条而不影响后续操作，因此语义是
+    /// 「回到这条操作发生前的状态」。找不到该操作（或它已在撤销栈里）返回 false。
+    pub fn revert_to(&mut self, op_id: u64) -> bool {
+        let Some(pos) = self.history_ops.iter().position(|op| op.id == op_id) else {
+            return false;
+        };
+        while self.history_ops.len() > pos {
+            self.undo();
+        }
+        true
+    }
+
+    /// 重做到某条操作（**包含**该操作），让它重新生效。
+    pub fn reapply_to(&mut self, op_id: u64) -> bool {
+        let Some(pos) = self.redo_ops.iter().position(|op| op.id == op_id) else {
+            return false;
+        };
+        let target = self.history_ops.len() + self.redo_ops.len() - pos;
+        while self.history_ops.len() < target {
+            if !self.redo() {
+                break;
+            }
+        }
+        true
     }
 
     /// 从初始工程重放当前历史，重建撤销后的状态。
@@ -1033,6 +1114,14 @@ impl Engine {
     }
 }
 
+/// 当前 Unix 毫秒时间（操作记录的时间戳）。
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// 两个 id 计数器的下一个可用值：轨道 / 片段现有 id 的最大值 + 1（没有任何轨道时是 1）。
 ///
 /// 「不重用已发出的 id」是这里的核心约定：外部（界面选区、AI 代理）拿着的 id 在后续编辑里
@@ -1111,6 +1200,71 @@ mod tests {
         assert!(e.undo());
         assert!(e.project().tracks.is_empty());
         assert!(!e.undo());
+    }
+
+    #[test]
+    fn ops_track_actors_and_replay_position() {
+        let mut e = Engine::new("demo");
+        e.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+        e.execute(Command::SetTempo(140.0), Actor::Agent("chat".into()));
+
+        let ops = e.ops();
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[0].kind, "add_track");
+        assert_eq!(ops[0].target.as_deref(), Some("Bass"), "操作对象要记下当时的轨道名");
+        assert_eq!(ops[0].actor, Actor::Human);
+        assert_eq!(ops[1].actor, Actor::Agent("chat".into()));
+        assert!(ops.iter().all(|op| op.applied));
+
+        // 撤销：最后一条变成「未应用」，但仍在时间线上（可重做）。
+        assert!(e.undo());
+        let ops = e.ops();
+        assert!(!ops[1].applied);
+
+        // 回撤到「加轨道」之前：两条都未应用。
+        assert!(e.revert_to(ops[0].id));
+        assert!(e.project().tracks.is_empty());
+        assert_eq!(e.undo_depth(), 0);
+        assert_eq!(e.redo_depth(), 2);
+
+        // 重做到加轨道：只恢复第一条。
+        assert!(e.reapply_to(ops[0].id));
+        assert_eq!(e.project().tracks.len(), 1);
+        assert_eq!(e.project().transport.tempo, 120.0);
+
+        // 再重做到调速。
+        assert!(e.reapply_to(ops[1].id));
+        assert_eq!(e.project().transport.tempo, 140.0);
+    }
+
+    #[test]
+    fn new_command_clears_redo_ops() {
+        let mut e = Engine::new("demo");
+        e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
+        let ops = e.ops();
+        assert!(e.undo());
+        assert_eq!(e.redo_depth(), 1);
+        e.execute(Command::AddTrack { name: "B".into() }, Actor::Human);
+        assert_eq!(e.redo_depth(), 0);
+        let ops_after = e.ops();
+        assert!(ops_after.iter().all(|op| op.applied));
+        assert!(
+            ops_after.iter().all(|op| op.id != ops[0].id),
+            "被新命令作废的操作不应留在时间线上"
+        );
+    }
+
+    #[test]
+    fn batch_commands_are_one_op() {
+        let mut e = Engine::new("demo");
+        e.execute_all(
+            vec![Command::SetTempo(90.0), Command::SetTempo(100.0)],
+            Actor::Human,
+        );
+        let ops = e.ops();
+        assert_eq!(ops.len(), 1, "一次 execute_all 只产生一条操作记录");
+        assert_eq!(ops[0].kind, "batch");
+        assert_eq!(e.undo_depth(), 1);
     }
 
     #[test]

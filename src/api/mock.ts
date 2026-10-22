@@ -50,6 +50,7 @@ import type {
   NotePatch,
   NoteRange,
   NoteStats,
+  OpRecord,
   OverlapReport,
   PitchExpression,
   PitchRange,
@@ -538,6 +539,20 @@ const undoStack: Project[] = [];
 const redoStack: Project[] = [];
 
 /**
+ * 操作记录（浏览器预览）：与快照栈一一对应。
+ *
+ * 预览里没有命令层，拿不到 `Command` 类型，所以统一记成 `unknown`——界面仍能演示
+ * 时间线、过滤与回撤 / 重做到某一步。
+ */
+interface MockOp {
+  id: number;
+  at: number;
+}
+const opStack: MockOp[] = [];
+const opRedo: MockOp[] = [];
+let nextOpId = 1;
+
+/**
  * 历史工程：浏览器预览用 localStorage 模拟后端的 `history/` 目录。
  *
  * 只保留展示用的元信息 + 完整工程快照；最多 50 份，与后端一致。
@@ -634,11 +649,46 @@ function clone(p: Project): Project {
 /** 先压栈旧状态再执行变更，返回新快照。 */
 function commit(mutate: () => void): Project {
   undoStack.push(clone(state));
-  if (undoStack.length > 200) undoStack.shift();
+  if (undoStack.length > 200) {
+    undoStack.shift();
+    opStack.shift();
+  }
   redoStack.length = 0;
+  opRedo.length = 0;
   mutate();
   dirty = true;
+  opStack.push({ id: nextOpId++, at: Date.now() });
   return clone(state);
+}
+
+/** 撤销一步（快照 + 操作记录一起搬动）。 */
+function undoOnce(): void {
+  const previous = undoStack.pop();
+  if (!previous) return;
+  redoStack.push(clone(state));
+  state = previous;
+  const op = opStack.pop();
+  if (op) opRedo.push(op);
+}
+
+/** 重做一步。 */
+function redoOnce(): void {
+  const next = redoStack.pop();
+  if (!next) return;
+  undoStack.push(clone(state));
+  state = next;
+  const op = opRedo.pop();
+  if (op) opStack.push(op);
+}
+
+/** 快照 + 操作记录 → 预览版撤销状态。 */
+function historySnapshot(): HistoryState {
+  return {
+    project: clone(state),
+    undo_depth: undoStack.length,
+    redo_depth: redoStack.length,
+    dirty,
+  };
 }
 
 function track(id: number) {
@@ -1930,21 +1980,53 @@ export const mockApi = {
   historyDepths: (): HistoryDepths => ({ undo: undoStack.length, redo: redoStack.length, dirty }),
 
   undo: (): HistoryState => {
-    const previous = undoStack.pop();
-    if (previous) {
-      redoStack.push(clone(state));
-      state = previous;
-    }
-    return { project: clone(state), undo_depth: undoStack.length, redo_depth: redoStack.length, dirty };
+    undoOnce();
+    return historySnapshot();
   },
 
   redo: (): HistoryState => {
-    const next = redoStack.pop();
-    if (next) {
-      undoStack.push(clone(state));
-      state = next;
+    redoOnce();
+    return historySnapshot();
+  },
+
+  listOperations: (): OpRecord[] => {
+    const out: OpRecord[] = opStack.map((op) => ({
+      id: op.id,
+      at: op.at,
+      actor: "Human",
+      kind: "unknown",
+      target: null,
+      args: [],
+      event_count: 1,
+      applied: true,
+    }));
+    for (const op of [...opRedo].reverse()) {
+      out.push({
+        id: op.id,
+        at: op.at,
+        actor: "Human",
+        kind: "unknown",
+        target: null,
+        args: [],
+        event_count: 1,
+        applied: false,
+      });
     }
-    return { project: clone(state), undo_depth: undoStack.length, redo_depth: redoStack.length, dirty };
+    return out;
+  },
+
+  revertToOperation: (id: number): HistoryState => {
+    const index = opStack.findIndex((op) => op.id === id);
+    if (index >= 0) while (opStack.length > index) undoOnce();
+    return historySnapshot();
+  },
+
+  reapplyToOperation: (id: number): HistoryState => {
+    const index = opRedo.findIndex((op) => op.id === id);
+    // 栈顶是时间线上最近的一条：重做到第 index 条需要弹掉它和它上面的所有条目。
+    const steps = index < 0 ? 0 : opRedo.length - index;
+    for (let i = 0; i < steps; i += 1) redoOnce();
+    return historySnapshot();
   },
 
   saveProject: (path: string): string => {
@@ -1978,6 +2060,8 @@ export const mockApi = {
       .reduce((max, clip) => Math.max(max, clip.id), 0) + 1;
     undoStack.length = 0;
     redoStack.length = 0;
+    opStack.length = 0;
+    opRedo.length = 0;
     transport.position_frames = 0;
     transport.playing = false;
     emitTransport();
@@ -2002,6 +2086,8 @@ export const mockApi = {
     nextClipId = 4;
     undoStack.length = 0;
     redoStack.length = 0;
+    opStack.length = 0;
+    opRedo.length = 0;
     dirty = false;
     transport.position_frames = 0;
     transport.playing = false;
