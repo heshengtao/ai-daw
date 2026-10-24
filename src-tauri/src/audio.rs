@@ -27,6 +27,7 @@ use ai_daw_engine::scope::ScopeBuffer;
 use ai_daw_engine::transport::TransportCommand;
 use ai_daw_engine::SCOPE_CAPACITY;
 use ai_daw_host_vst3::{CatalogPlugin, EditorHandle};
+use ai_daw_plugin_api::MidiEvent;
 
 use crate::assets::AssetCache;
 use crate::plugins::build_registry;
@@ -263,17 +264,26 @@ impl AudioEngine {
     /// 只影响实时监听的混音预览：不写入工程、不进入撤销历史。
     ///
     /// 拖动推子时以每秒数十次的频率调用；松手时界面才发出一条真正的 `SetGain` 命令。
-    pub fn monitor_track_mix(&self, track: TrackId, gain_db: f32, pan: f32, mute: bool, solo: bool) {
+    pub fn monitor_track_mix(
+        &self,
+        track: TrackId,
+        gain_db: f32,
+        pan: f32,
+        mute: bool,
+        solo: bool,
+    ) {
         if self.unavailable() {
             return;
         }
-        let _ = self.tx.send(AudioMessage::Command(TransportCommand::SetTrackMix {
-            track,
-            gain_db,
-            pan,
-            mute,
-            solo,
-        }));
+        let _ = self
+            .tx
+            .send(AudioMessage::Command(TransportCommand::SetTrackMix {
+                track,
+                gain_db,
+                pan,
+                mute,
+                solo,
+            }));
     }
 
     /// 取最近 `points` 个采样，供界面画实时波形。
@@ -288,12 +298,27 @@ impl AudioEngine {
         if self.unavailable() {
             return;
         }
-        let _ = self.tx.send(AudioMessage::Command(TransportCommand::Audition {
-            track,
-            note,
-            velocity,
-            on,
-        }));
+        let _ = self
+            .tx
+            .send(AudioMessage::Command(TransportCommand::Audition {
+                track,
+                note,
+                velocity,
+                on,
+            }));
+    }
+
+    /// 试听一组 MIDI 事件（奏法切换序列）：不写工程、不进撤销历史、不等传输。
+    pub fn audition_events(&self, track: TrackId, events: Vec<MidiEvent>) {
+        if self.unavailable() {
+            return;
+        }
+        let _ = self
+            .tx
+            .send(AudioMessage::Command(TransportCommand::AuditionEvents {
+                track,
+                events,
+            }));
     }
 
     /// 当前传输状态快照。
@@ -305,13 +330,21 @@ impl AudioEngine {
         TransportSnapshot {
             available,
             playing: available && self.shared.is_playing(),
-            position_frames: if available { self.shared.position_frames() } else { 0 },
+            position_frames: if available {
+                self.shared.position_frames()
+            } else {
+                0
+            },
             sample_rate: self.sample_rate.load(Ordering::Relaxed),
             loop_: available && self.shared.is_looping(),
             // 范围与可用性无关：设备没起来时界面仍要能记住用户划的段（下次重建继续用）。
             loop_start_frames: self.shared.loop_start_frames(),
             loop_end_frames: self.shared.loop_end_frames(),
-            error: if dead { self.status.message() } else { self.error.lock().unwrap().clone() },
+            error: if dead {
+                self.status.message()
+            } else {
+                self.error.lock().unwrap().clone()
+            },
         }
     }
 
@@ -347,7 +380,12 @@ impl AudioEngine {
                 }
                 // 参数变化走实时通道：插件界面上的旋钮会高频产生它们，重建播放器会不断
                 // 重置插件状态并造成音频中断。
-                Event::ParamChanged { track, param, value, .. } => {
+                Event::ParamChanged {
+                    track,
+                    param,
+                    value,
+                    ..
+                } => {
                     self.queue_if_available(TransportCommand::SetParam {
                         track: *track,
                         effect: None,
@@ -355,7 +393,13 @@ impl AudioEngine {
                         value: *value,
                     });
                 }
-                Event::EffectParamChanged { track, index, param, value, .. } => {
+                Event::EffectParamChanged {
+                    track,
+                    index,
+                    param,
+                    value,
+                    ..
+                } => {
                     self.queue_if_available(TransportCommand::SetParam {
                         track: *track,
                         effect: Some(*index),
@@ -365,7 +409,12 @@ impl AudioEngine {
                 }
                 // 自动化是「仅混音」变更：把新曲线直接推给音频线程，逐块求值——不必重建。
                 // 键在这里（控制侧）解析成目标：音频线程拿到的是已经建好的 `ParamId`，只做移动。
-                Event::AutomationChanged { track, param, points, .. } => {
+                Event::AutomationChanged {
+                    track,
+                    param,
+                    points,
+                    ..
+                } => {
                     if let Some(target) = ai_daw_engine::schedule::LaneTarget::from_key(param) {
                         self.queue_if_available(TransportCommand::SetAutomation {
                             track: *track,
@@ -891,7 +940,9 @@ mod tests {
         let Some(engine) = live_engine(&synth_project()) else {
             return;
         };
-        engine.send(TransportCommand::Play).expect("实时可用时应能发命令");
+        engine
+            .send(TransportCommand::Play)
+            .expect("实时可用时应能发命令");
         thread::sleep(std::time::Duration::from_millis(300));
         let playing = peak(&engine);
         let _ = engine.send(TransportCommand::Stop);

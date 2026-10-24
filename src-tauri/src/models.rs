@@ -143,7 +143,7 @@ pub struct ModelStatus {
     pub files: Vec<ModelFileStatus>,
 }
 
-fn statuses(app: &AppHandle) -> Vec<ModelStatus> {
+pub(crate) fn statuses(app: &AppHandle) -> Vec<ModelStatus> {
     catalog::all()
         .iter()
         .map(|entry| {
@@ -236,10 +236,7 @@ pub fn model_remove(app: AppHandle, id: String) -> Result<(), String> {
     let entry = catalog::by_id(&id).ok_or_else(|| format!("未知模型：{id}"))?;
     let dir = entry_dir_path(&app, entry)?;
     for file in entry.files {
-        for name in [
-            file.filename.to_string(),
-            format!("{}.part", file.filename),
-        ] {
+        for name in [file.filename.to_string(), format!("{}.part", file.filename)] {
             let path = dir.join(name);
             if path.exists() {
                 fs::remove_file(&path).map_err(|e| e.to_string())?;
@@ -260,7 +257,9 @@ pub fn model_reveal(app: AppHandle, id: String) -> Result<(), String> {
     // 组条目：整组是一个目录，reveal 目录本身（挑单个文件反而看不全）。
     let target = match entry.dir {
         Some(_) => entry_dir_path(&app, entry)?,
-        None => catalog::installed_path(entry).unwrap_or_else(|| models_dir(&app).unwrap_or_default()),
+        None => {
+            catalog::installed_path(entry).unwrap_or_else(|| models_dir(&app).unwrap_or_default())
+        }
     };
     reveal_in_file_manager(&target)
 }
@@ -406,7 +405,14 @@ fn candidates_for(
     out
 }
 
-fn emit_model(app: &AppHandle, id: &str, state: &str, received: u64, total: u64, message: Option<String>) {
+fn emit_model(
+    app: &AppHandle,
+    id: &str,
+    state: &str,
+    received: u64,
+    total: u64,
+    message: Option<String>,
+) {
     let _ = app.emit(
         EVENT_MODEL,
         ModelProgress {
@@ -595,9 +601,8 @@ mod tests {
         // 每个源都会先给一个套了镜像前缀的候选（第一条即第一个源）。
         assert!(candidates[0].starts_with("https://mirror.example/http"));
         // 官方源仍然在候选里兜底（魔搭 + HF 都在清单里）。
-        assert!(candidates
-            .iter()
-            .any(|u| u == "https://modelscope.cn/models/ailm32442/htdemucs-ort/resolve/master/htdemucs.ort"));
+        assert!(candidates.iter().any(|u| u
+            == "https://modelscope.cn/models/ailm32442/htdemucs-ort/resolve/master/htdemucs.ort"));
         assert!(candidates
             .iter()
             .any(|u| u == "https://huggingface.co/gentij/htdemucs-ort/resolve/main/htdemucs.ort"));

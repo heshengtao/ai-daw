@@ -26,7 +26,7 @@ import GitHubIcon from "@/components/common/icons/GitHubIcon.vue";
 import PianoIcon from "@/components/common/icons/PianoIcon.vue";
 import KeyboardIcon from "@/components/common/icons/KeyboardIcon.vue";
 import type { NavItem } from "@/components/common/nav";
-import { managerOpen } from "@/api/tauri";
+import { openExternal } from "@/utils/external";
 import { useLayoutStore } from "@/stores/layout";
 import { useI18n } from "@/i18n";
 import { useProjectStore } from "@/stores/project";
@@ -86,22 +86,22 @@ function toggleSettings(): void {
 
 /** 在系统浏览器里打开 GitHub 仓库（浏览器调试时退回新标签页）。 */
 async function openRepo(): Promise<void> {
-  if (!isTauri()) {
-    window.open(REPO_URL, "_blank", "noopener,noreferrer");
-    return;
-  }
-  try {
-    await managerOpen(REPO_URL);
-  } catch {
-    window.open(REPO_URL, "_blank", "noopener,noreferrer");
-  }
+  await openExternal(REPO_URL);
 }
+
+/**
+ * 顶栏里这些元素自己处理点击/输入，按下时不能当拖窗口用。
+ * 必须包含非 <button> 的可交互元素（如面板标签的 role="tab"）：
+ * Windows 下 startDragging 会进入原生拖拽循环并吞掉后续 click，标签就点不动了。
+ */
+const NO_DRAG_SELECTOR =
+  'button, a, input, select, textarea, [contenteditable], [role="tab"], [role="button"], [role="menuitem"], [role="switch"], [role="checkbox"]';
 
 function onMouseDown(e: MouseEvent): void {
   if (!isTauri()) return;
   if (e.buttons !== 1) return;
   const target = e.target as HTMLElement;
-  if (target.closest("button, a, input, select")) return;
+  if (target.closest(NO_DRAG_SELECTOR)) return;
   const win = getCurrentWindow();
   if (e.detail === 2) {
     void win.toggleMaximize();
@@ -112,7 +112,7 @@ function onMouseDown(e: MouseEvent): void {
 </script>
 
 <template>
-  <header class="top-bar" :class="{ 'pad-mac': showMacPad }" @mousedown="onMouseDown">
+  <header class="top-bar" :class="{ 'pad-mac': showMacPad, 'is-settings': isSettings }" @mousedown="onMouseDown">
     <!-- 左：工程名 + 工具区 -->
     <div class="bar-main">
       <Tooltip v-if="!isSettings && !layout.showTrackHeaders" :text="i18n.t('topbar.showTracks')">
@@ -256,6 +256,11 @@ function onMouseDown(e: MouseEvent): void {
 /* 音轨栏收起后顶栏顶到窗口最左：macOS 下给红绿灯让位 */
 .top-bar.pad-mac .bar-main {
   padding-left: 78px;
+}
+/* 设置页不渲染右侧标签区，顶栏工具区会顶到窗口右端：
+   同样要让出 Windows / Linux 自绘窗口按钮的位置，避免重叠。 */
+.top-bar.is-settings .bar-main {
+  padding-right: calc(12px + var(--win-reserve));
 }
 
 /* ---- 右侧面板的标签区 ---- */

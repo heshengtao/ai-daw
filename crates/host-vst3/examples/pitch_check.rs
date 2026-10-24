@@ -31,7 +31,9 @@ fn main() {
     // 扫描与加载都必须在主线程（`vst3-host` 的要求），example 的 main 就是。
     ai_daw_host_vst3::mark_main_thread();
 
-    let want = std::env::args().nth(1).unwrap_or_else(|| "JC303".to_string());
+    let want = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "JC303".to_string());
 
     // 插件管理器把插件装在应用数据目录里，扫描要把它带上（系统默认路径之外）。
     let managed: Vec<PathBuf> = std::env::var("HOME")
@@ -51,7 +53,10 @@ fn main() {
         );
         std::process::exit(2);
     };
-    println!("插件：{}（{}）\n写 MIDI 69（A4），期望 440.00 Hz：", entry.name, entry.id);
+    println!(
+        "插件：{}（{}）\n写 MIDI 69（A4），期望 440.00 Hz：",
+        entry.name, entry.id
+    );
 
     let mut failures = 0usize;
     for rate in [44_100.0f64, 48_000.0, 96_000.0] {
@@ -70,7 +75,11 @@ fn main() {
                 let ok = cents.abs() <= TOLERANCE_CENTS;
                 println!(
                     "  {rate:>7.0} Hz：实测 {hz:7.2} Hz（{cents:+6.1} 音分）{}",
-                    if ok { "✓" } else { "✗ 音高被采样率拉伸" }
+                    if ok {
+                        "✓"
+                    } else {
+                        "✗ 音高被采样率拉伸"
+                    }
                 );
                 if !ok {
                     failures += 1;
@@ -93,7 +102,12 @@ fn main() {
 /// 在给定采样率下渲染一个 A4，返回测得的基频（Hz）；没出声则 `None`。
 fn measure_pitch(plugin: &mut dyn Plugin, rate: f64) -> Option<f64> {
     plugin.prepare(rate, BLOCK);
-    let ctx = ProcessContext { sample_rate: rate, block_size: BLOCK, tempo: 120.0, playing: true };
+    let ctx = ProcessContext {
+        sample_rate: rate,
+        block_size: BLOCK,
+        tempo: 120.0,
+        playing: true,
+    };
 
     let mut left = vec![0.0f32; BLOCK];
     let mut right = vec![0.0f32; BLOCK];
@@ -103,7 +117,11 @@ fn measure_pitch(plugin: &mut dyn Plugin, rate: f64) -> Option<f64> {
         let events = if block == 0 {
             vec![TimedMidiEvent {
                 frame: 0,
-                event: MidiEvent::NoteOn { note: 69, velocity: 90 },
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 69,
+                    velocity: 90,
+                },
             }]
         } else {
             Vec::new()

@@ -46,7 +46,14 @@ fn main() {
             tempo: 120.0,
             playing: true,
         };
-        let events = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } }];
+        let events = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 60,
+                velocity: 100,
+            },
+        }];
         // 先跑一块空的（有些插件在首块才初始化内部引擎），再跑一块带音符的。
         plugin.process(&ctx, &mut [&mut left, &mut right], &[]);
         plugin.process(&ctx, &mut [&mut left, &mut right], &events);
@@ -73,8 +80,12 @@ fn print_gui_caps(entry: &ai_daw_host_vst3::CatalogPlugin) {
             return;
         }
     };
-    let Some(id) = entry.id.strip_prefix("clap:") else { return };
-    let Ok(id) = std::ffi::CString::new(id) else { return };
+    let Some(id) = entry.id.strip_prefix("clap:") else {
+        return;
+    };
+    let Ok(id) = std::ffi::CString::new(id) else {
+        return;
+    };
     match ai_daw_host_vst3::clap::probe_gui(&path, &id) {
         Ok(report) => println!("  GUI：{report}"),
         Err(e) => println!("  GUI 探测失败：{e}"),

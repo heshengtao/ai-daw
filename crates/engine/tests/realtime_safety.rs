@@ -60,12 +60,16 @@ fn schedule() -> ScheduledEvents {
         effects: vec![
             PluginInstance {
                 plugin_id: ai_daw_engine::registry::BUILTIN_REVERB.into(),
-                params: [("size".to_string(), 0.8), ("mix".to_string(), 0.5)].into_iter().collect(),
+                params: [("size".to_string(), 0.8), ("mix".to_string(), 0.5)]
+                    .into_iter()
+                    .collect(),
                 state: vec![],
             },
             PluginInstance {
                 plugin_id: ai_daw_engine::registry::BUILTIN_DELAY.into(),
-                params: [("time".to_string(), 0.3), ("mix".to_string(), 0.4)].into_iter().collect(),
+                params: [("time".to_string(), 0.3), ("mix".to_string(), 0.4)]
+                    .into_iter()
+                    .collect(),
                 state: vec![],
             },
         ],
@@ -75,6 +79,8 @@ fn schedule() -> ScheduledEvents {
             length: 4.0,
             notes: vec![Note {
                 id: 0,
+                channel: None,
+                pressure: None,
                 pitch: 69,
                 start: 0.0,
                 duration: 0.5,
@@ -93,21 +99,36 @@ fn schedule() -> ScheduledEvents {
         }],
         mixer: Default::default(),
         // 发送与自动化也要在门禁覆盖范围内：总线路由与逐块自动化求值都跑在音频回调里。
-        sends: vec![ai_daw_engine::model::Send { target: TrackId(2), gain_db: -6.0 }],
+        sends: vec![ai_daw_engine::model::Send {
+            target: TrackId(2),
+            gain_db: -6.0,
+        }],
         automation: vec![
             ai_daw_engine::model::AutomationLane {
                 param: "gain_db".into(),
                 points: vec![
-                    ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.0 },
-                    ai_daw_engine::model::AutomationPoint { beat: 8.0, value: -12.0 },
+                    ai_daw_engine::model::AutomationPoint {
+                        beat: 0.0,
+                        value: 0.0,
+                    },
+                    ai_daw_engine::model::AutomationPoint {
+                        beat: 8.0,
+                        value: -12.0,
+                    },
                 ],
             },
             // 插件参数车道也要在门禁覆盖范围内：`refresh_mix` 会逐块对乐器 `set_param`。
             ai_daw_engine::model::AutomationLane {
                 param: "inst:cutoff".into(),
                 points: vec![
-                    ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.2 },
-                    ai_daw_engine::model::AutomationPoint { beat: 8.0, value: 0.9 },
+                    ai_daw_engine::model::AutomationPoint {
+                        beat: 0.0,
+                        value: 0.2,
+                    },
+                    ai_daw_engine::model::AutomationPoint {
+                        beat: 8.0,
+                        value: 0.9,
+                    },
                 ],
             },
             // 效果器参数车道同样要覆盖：`refresh_mix` 会逐块对 `effects[i]` `set_param`（`fx<i>` 分支）。
@@ -115,16 +136,28 @@ fn schedule() -> ScheduledEvents {
             ai_daw_engine::model::AutomationLane {
                 param: "fx0:mix".into(),
                 points: vec![
-                    ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.2 },
-                    ai_daw_engine::model::AutomationPoint { beat: 8.0, value: 0.7 },
+                    ai_daw_engine::model::AutomationPoint {
+                        beat: 0.0,
+                        value: 0.2,
+                    },
+                    ai_daw_engine::model::AutomationPoint {
+                        beat: 8.0,
+                        value: 0.7,
+                    },
                 ],
             },
             // MIDI CC 车道：逐块求值并推进预分配的事件缓冲（新路径也要在门禁覆盖范围内）。
             ai_daw_engine::model::AutomationLane {
                 param: "cc:64".into(),
                 points: vec![
-                    ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.0 },
-                    ai_daw_engine::model::AutomationPoint { beat: 8.0, value: 127.0 },
+                    ai_daw_engine::model::AutomationPoint {
+                        beat: 0.0,
+                        value: 0.0,
+                    },
+                    ai_daw_engine::model::AutomationPoint {
+                        beat: 8.0,
+                        value: 127.0,
+                    },
                 ],
             },
         ],
@@ -198,8 +231,14 @@ fn realtime_block_path_does_not_allocate() {
         track: TrackId(1),
         target: ai_daw_engine::schedule::LaneTarget::GainDb,
         points: vec![
-            ai_daw_engine::model::AutomationPoint { beat: 0.0, value: -3.0 },
-            ai_daw_engine::model::AutomationPoint { beat: 4.0, value: -6.0 },
+            ai_daw_engine::model::AutomationPoint {
+                beat: 0.0,
+                value: -3.0,
+            },
+            ai_daw_engine::model::AutomationPoint {
+                beat: 4.0,
+                value: -6.0,
+            },
         ],
     };
     ALLOCATIONS.store(0, Ordering::SeqCst);
@@ -217,8 +256,14 @@ fn realtime_block_path_does_not_allocate() {
         track: TrackId(1),
         target: ai_daw_engine::schedule::LaneTarget::from_key("inst:cutoff").expect("键能解析"),
         points: vec![
-            ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.3 },
-            ai_daw_engine::model::AutomationPoint { beat: 4.0, value: 0.8 },
+            ai_daw_engine::model::AutomationPoint {
+                beat: 0.0,
+                value: 0.3,
+            },
+            ai_daw_engine::model::AutomationPoint {
+                beat: 4.0,
+                value: 0.8,
+            },
         ],
     };
     ALLOCATIONS.store(0, Ordering::SeqCst);
@@ -235,8 +280,14 @@ fn realtime_block_path_does_not_allocate() {
         track: TrackId(1),
         target: ai_daw_engine::schedule::LaneTarget::from_key("fx0:mix").expect("键能解析"),
         points: vec![
-            ai_daw_engine::model::AutomationPoint { beat: 0.0, value: 0.25 },
-            ai_daw_engine::model::AutomationPoint { beat: 4.0, value: 0.6 },
+            ai_daw_engine::model::AutomationPoint {
+                beat: 0.0,
+                value: 0.25,
+            },
+            ai_daw_engine::model::AutomationPoint {
+                beat: 4.0,
+                value: 0.6,
+            },
         ],
     };
     ALLOCATIONS.store(0, Ordering::SeqCst);

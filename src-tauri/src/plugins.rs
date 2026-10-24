@@ -67,7 +67,10 @@ fn build_registry_with(
                 Ok((plugin, Some(handle))) => {
                     handles.lock().unwrap().insert(
                         (track.0, slot),
-                        EditorSlot { handle, plugin_id: plugin_id.clone() },
+                        EditorSlot {
+                            handle,
+                            plugin_id: plugin_id.clone(),
+                        },
                     );
                     plugin
                 }
@@ -206,20 +209,24 @@ mod tests {
         };
 
         let mut engine = Engine::new("clap-e2e");
-        let events = engine.execute(
-            Command::AddTrack { name: "KR".into() },
-            Actor::Human,
-        );
+        let events = engine.execute(Command::AddTrack { name: "KR".into() }, Actor::Human);
         let track = match events[0] {
             Event::TrackAdded { id, .. } => id,
             _ => unreachable!("AddTrack 应当产出 TrackAdded"),
         };
         engine.execute(
-            Command::SetTrackInstrument { track, plugin_id: kr106.id.clone() },
+            Command::SetTrackInstrument {
+                track,
+                plugin_id: kr106.id.clone(),
+            },
             Actor::Human,
         );
         let events = engine.execute(
-            Command::AddClip { track, start: 0.0, length: 2.0 },
+            Command::AddClip {
+                track,
+                start: 0.0,
+                length: 2.0,
+            },
             Actor::Human,
         );
         let clip = match events[0] {
@@ -232,13 +239,16 @@ mod tests {
                 clip,
                 note: Note {
                     id: 0,
+                    channel: None,
+                    pressure: None,
                     pitch: 60,
                     start: 0.0,
                     duration: 1.0,
                     velocity: 100,
                     volume: 127,
                     offset: 0.0,
-                    legato: false, expr: ai_daw_engine::model::PitchExpression::NONE,
+                    legato: false,
+                    expr: ai_daw_engine::model::PitchExpression::NONE,
                 },
             },
             Actor::Human,
@@ -247,7 +257,11 @@ mod tests {
 
         let handles = Arc::new(Mutex::new(HashMap::new()));
         let registry = build_registry(&catalog, &project, Arc::clone(&handles));
-        let options = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5, settle_seconds: 0.0 };
+        let options = RenderOptions {
+            sample_rate: 44_100.0,
+            tail_seconds: 0.5,
+            settle_seconds: 0.0,
+        };
         let buffer = render(&project, &registry, &options);
 
         assert!(
@@ -280,6 +294,7 @@ mod tests {
             format: "vst3".into(),
             accepts_midi: true,
             has_editor: true,
+            description: None,
             path: std::path::PathBuf::from("/tmp/CoolSynth.vst3"),
         }];
 
@@ -341,11 +356,18 @@ mod tests {
             _ => unreachable!("AddTrack 应当产出 TrackAdded"),
         };
         engine.execute(
-            Command::SetTrackInstrument { track, plugin_id: entry.id.clone() },
+            Command::SetTrackInstrument {
+                track,
+                plugin_id: entry.id.clone(),
+            },
             Actor::Human,
         );
         let events = engine.execute(
-            Command::AddClip { track, start: 0.0, length: 2.0 },
+            Command::AddClip {
+                track,
+                start: 0.0,
+                length: 2.0,
+            },
             Actor::Human,
         );
         let clip = match events[0] {
@@ -358,13 +380,16 @@ mod tests {
                 clip,
                 note: Note {
                     id: 0,
+                    channel: None,
+                    pressure: None,
                     pitch: 60,
                     start: 0.0,
                     duration: 1.0,
                     velocity: 100,
                     volume: 127,
                     offset: 0.0,
-                    legato: false, expr: ai_daw_engine::model::PitchExpression::NONE,
+                    legato: false,
+                    expr: ai_daw_engine::model::PitchExpression::NONE,
                 },
             },
             Actor::Human,
@@ -373,7 +398,11 @@ mod tests {
 
         let handles = Arc::new(Mutex::new(HashMap::new()));
         let registry = build_registry(&catalog, &project, Arc::clone(&handles));
-        let options = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5, settle_seconds: 0.0 };
+        let options = RenderOptions {
+            sample_rate: 44_100.0,
+            tail_seconds: 0.5,
+            settle_seconds: 0.0,
+        };
         let buffer = render(&project, &registry, &options);
 
         assert!(
@@ -399,29 +428,34 @@ mod tests {
             format: "vst3".into(),
             accepts_midi: true,
             has_editor: false,
+            description: None,
             path: std::path::PathBuf::from("/nonexistent/Broken.vst3"),
         }];
 
         let mut engine = Engine::new("offline-isolation");
-        let events = engine.execute(Command::AddTrack { name: "Broken".into() }, Actor::Human);
+        let events = engine.execute(
+            Command::AddTrack {
+                name: "Broken".into(),
+            },
+            Actor::Human,
+        );
         let track = match events[0] {
             Event::TrackAdded { id, .. } => id,
             _ => unreachable!("AddTrack 应当产出 TrackAdded"),
         };
         engine.execute(
-            Command::SetTrackInstrument { track, plugin_id: id.clone() },
+            Command::SetTrackInstrument {
+                track,
+                plugin_id: id.clone(),
+            },
             Actor::Human,
         );
         let project = engine.project().clone();
 
         let warnings: LoadWarnings = Arc::new(Mutex::new(Vec::new()));
         let handles = Arc::new(Mutex::new(HashMap::new()));
-        let registry = build_registry_for_offline_render(
-            &catalog,
-            &project,
-            handles,
-            Arc::clone(&warnings),
-        );
+        let registry =
+            build_registry_for_offline_render(&catalog, &project, handles, Arc::clone(&warnings));
 
         let plugin = registry
             .create(&id, track, PluginSlot::Instrument)
@@ -448,9 +482,11 @@ mod tests {
     #[test]
     #[ignore = "依赖本机会话与已安装插件"]
     fn manual_offline_render_of_local_session() {
-        let Some(home) = std::env::var_os("HOME") else { return };
-        let app_dir = std::path::PathBuf::from(home)
-            .join("Library/Application Support/com.aidaw.app");
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let app_dir =
+            std::path::PathBuf::from(home).join("Library/Application Support/com.aidaw.app");
         let Some(session) = crate::session::read_session(&app_dir.join("session.json")) else {
             eprintln!("没有本机会话，跳过。");
             return;

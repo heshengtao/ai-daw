@@ -96,8 +96,12 @@ impl SessionStore {
 
     /// 全部会话摘要（按更新时间倒序）。
     pub fn list(&self) -> Vec<SessionSummary> {
-        let Some(dir) = &self.dir else { return Vec::new() };
-        let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+        let Some(dir) = &self.dir else {
+            return Vec::new();
+        };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
         let mut out: Vec<SessionSummary> = entries
             .flatten()
             .filter_map(|e| {
@@ -128,7 +132,9 @@ impl SessionStore {
 
     /// 原子写一个会话。
     pub fn save(&self, session: &Session) -> Result<(), String> {
-        let Some(path) = self.file(&session.id) else { return Ok(()) };
+        let Some(path) = self.file(&session.id) else {
+            return Ok(());
+        };
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -148,13 +154,20 @@ impl SessionStore {
 
 /// 当前毫秒时间戳。
 pub fn now_millis() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// 生成一个文件系统安全的 id。
 pub fn new_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    format!("{}-{}", now_millis(), COUNTER.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "{}-{}",
+        now_millis(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// 由首条用户输入生成会话标题。

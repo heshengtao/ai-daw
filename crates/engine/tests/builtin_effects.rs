@@ -16,7 +16,10 @@ const SR: f64 = 48_000.0;
 fn fx(id: &str, params: &[(&str, f32)]) -> PluginInstance {
     PluginInstance {
         plugin_id: id.into(),
-        params: params.iter().map(|(k, v)| ((*k).to_string(), *v)).collect::<BTreeMap<_, _>>(),
+        params: params
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), *v))
+            .collect::<BTreeMap<_, _>>(),
         state: Vec::new(),
     }
 }
@@ -43,13 +46,16 @@ fn project(effects: Vec<PluginInstance>) -> Project {
             length: 0.5,
             notes: vec![Note {
                 id: 0,
+                channel: None,
+                pressure: None,
                 pitch: 60,
                 start: 0.0,
                 duration: 0.25,
                 velocity: 110,
                 volume: 127,
                 offset: 0.0,
-                legato: false, expr: ai_daw_engine::model::PitchExpression::NONE,
+                legato: false,
+                expr: ai_daw_engine::model::PitchExpression::NONE,
             }],
             audio: None,
         }],
@@ -63,7 +69,11 @@ fn project(effects: Vec<PluginInstance>) -> Project {
 /// 渲染成单声道（左右取平均）：多给 2 s 尾音，才看得到效果器的尾巴。
 fn render_mono(effects: Vec<PluginInstance>) -> Vec<f32> {
     let registry = PluginRegistry::with_builtins();
-    let options = RenderOptions { sample_rate: SR, tail_seconds: 2.0, settle_seconds: 0.0 };
+    let options = RenderOptions {
+        sample_rate: SR,
+        tail_seconds: 2.0,
+        settle_seconds: 0.0,
+    };
     let buffer = render(&project(effects), &registry, &options);
     let data = buffer.data();
     data.chunks(2).map(|c| (c[0] + c[1]) * 0.5).collect()
@@ -82,7 +92,10 @@ fn rms(data: &[f32], from: usize, to: usize) -> f64 {
 #[test]
 fn reverb_extends_the_tail() {
     let dry = render_mono(vec![]);
-    let wet = render_mono(vec![fx(BUILTIN_REVERB, &[("size", 0.9), ("damp", 0.2), ("mix", 0.8)])]);
+    let wet = render_mono(vec![fx(
+        BUILTIN_REVERB,
+        &[("size", 0.9), ("damp", 0.2), ("mix", 0.8)],
+    )]);
 
     // 音符 0.25 s + 0.05 s 释音 ≈ 0.3 s；这里看 0.6..1.6 s 这一段。
     let from = (0.6 * SR) as usize;
@@ -105,7 +118,10 @@ fn reverb_at_zero_mix_matches_the_dry_render() {
 fn delay_echoes_after_the_note() {
     let dry = render_mono(vec![]);
     // 0.51 s 的延迟：音符 0.3 s 就收干净了。
-    let echo = render_mono(vec![fx(BUILTIN_DELAY, &[("time", 0.5), ("feedback", 0.6), ("mix", 0.9)])]);
+    let echo = render_mono(vec![fx(
+        BUILTIN_DELAY,
+        &[("time", 0.5), ("feedback", 0.6), ("mix", 0.9)],
+    )]);
 
     let from = (0.45 * SR) as usize;
     let to = (0.7 * SR) as usize;
@@ -113,7 +129,10 @@ fn delay_echoes_after_the_note() {
     assert!(rms(&echo, from, to) > 1e-3, "这里应当有第一次回声");
 
     // 第二次回声（约 1.02 s）应当比第一次弱，但仍在。
-    let (first, second) = (rms(&echo, from, to), rms(&echo, (0.95 * SR) as usize, (1.1 * SR) as usize));
+    let (first, second) = (
+        rms(&echo, from, to),
+        rms(&echo, (0.95 * SR) as usize, (1.1 * SR) as usize),
+    );
     assert!(second > 1e-4, "应当还有第二次回声：{second}");
     assert!(second < first, "回声应当逐次衰减：{first} -> {second}");
 }

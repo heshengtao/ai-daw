@@ -15,6 +15,7 @@ import ShortcutsDialog from "@/components/common/ShortcutsDialog.vue";
 import UnsavedChangesDialog from "@/components/common/UnsavedChangesDialog.vue";
 import ExportDialog, { type ExportChoice } from "@/components/common/ExportDialog.vue";
 import ParameterBrowser from "@/components/common/ParameterBrowser.vue";
+import UpdateDoneToast from "@/components/common/UpdateDoneToast.vue";
 import { useProjectSync } from "@/composables/useProjectSync";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
@@ -498,6 +499,8 @@ onMounted(async () => {
   // 启动时静默查一次更新（只由主窗口做）：有新版本就提示去设置页更新；查不到（例如还没发过
   // release，端点 404）或连不上都当作「已是最新」，不打扰用户。
   if (isPrimaryWindow) {
+    // 升级后首次打开：提示「更新完成」，并给出本版 GitHub 发布页入口。
+    void updater.detectJustUpdated();
     void updater.check(true).then((has) => {
       if (has) {
         layout.notify(
@@ -629,6 +632,9 @@ onUnmounted(() => {
 
   <!-- 导出：选格式 / 采样率 / 比特率，再去系统保存对话框选路径（扩展名决定最终格式） -->
   <ExportDialog v-model:open="exportOpen" @confirm="onExportConfirm" />
+
+  <!-- 升级后首次打开：底部 toast 提示更新完成，可跳到 GitHub 发布页看更新日志 -->
+  <UpdateDoneToast />
 
   <!-- 参数页（挑参数给自动化用）：挂在根部，车道下拉与检查器两个入口共用 -->
   <ParameterBrowser v-if="paramBrowser.isOpen" />

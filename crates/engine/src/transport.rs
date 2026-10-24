@@ -1,3 +1,5 @@
+use ai_daw_plugin_api::MidiEvent;
+
 use crate::model::TrackId;
 
 /// 运行时传输命令（不属于可撤销的工程编辑）。
@@ -44,6 +46,15 @@ pub enum TransportCommand {
         velocity: u8,
         /// `true` 按下，`false` 松开。
         on: bool,
+    },
+    /// 试听一组 MIDI 事件（奏法切换序列）：下一块开头全部送给目标轨道。
+    ///
+    /// 与 [`Self::Audition`] 同一条路径；调用方负责把需要延后的 NoteOff 拆出去。
+    AuditionEvents {
+        /// 目标轨道。
+        track: TrackId,
+        /// 事件序列（通道由事件自身或轨道决定）。
+        events: Vec<MidiEvent>,
     },
     /// 实时更新某个插件的参数——直接作用于已装载的实例，**不重建播放器**。
     ///

@@ -2,11 +2,13 @@
 
 mod agent;
 mod ai;
-mod audio;
+mod articulation_map;
 mod assets;
+mod audio;
 mod backends;
 mod cli;
 mod commands;
+mod cue_sheet;
 mod factory_presets;
 mod history;
 mod main_thread;
@@ -229,7 +231,10 @@ fn spawn_editor_ticker(app: tauri::AppHandle) {
 ///
 /// 拿不到目录时返回 `None`（预设仍能用，只是重启后不保留），不因此启动失败。
 fn preset_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_config_dir().ok().map(|dir| dir.join("presets.json"))
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("presets.json"))
 }
 
 /// 音色记忆库文件的位置：应用配置目录下的 `sound-memories.json`。
@@ -242,31 +247,46 @@ fn sound_memory_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 
 /// MCP 服务器配置文件的位置：应用配置目录下的 `mcp.json`。
 fn mcp_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_config_dir().ok().map(|dir| dir.join("mcp.json"))
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("mcp.json"))
 }
 
 /// 会话缓存文件的位置：应用配置目录下的 `session.json`。
 ///
 /// 它记录「上次退出时的工作状态」，供下次启动还原；拿不到配置目录时返回 `None`（不缓存）。
 pub(crate) fn session_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_config_dir().ok().map(|dir| dir.join("session.json"))
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("session.json"))
 }
 
 /// 历史工程目录：应用配置目录下的 `history/`。
 ///
 /// 拿不到配置目录时返回 `None`（历史功能不可用，但不影响编辑）。
 pub(crate) fn history_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_config_dir().ok().map(|dir| dir.join("history"))
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("history"))
 }
 
 /// 写歌智能体配置文件的位置：应用配置目录下的 `ai.json`。
 fn agent_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_config_dir().ok().map(|dir| dir.join("ai.json"))
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("ai.json"))
 }
 
 /// 写歌智能体会话目录：应用配置目录下的 `agent/sessions/`。
 fn agent_sessions_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_config_dir().ok().map(|dir| dir.join("agent").join("sessions"))
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("agent").join("sessions"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -316,8 +336,12 @@ pub fn run() {
             mcp.autostart();
             app.manage(mcp);
             // 写歌智能体：OpenAI 兼容端点配置（`ai.json`）+ 会话运行时（`agent/sessions/`）。
-            app.manage(crate::agent::AgentConfigRuntime::load(agent_file(app.handle())));
-            app.manage(crate::agent::AgentRuntime::new(agent_sessions_dir(app.handle())));
+            app.manage(crate::agent::AgentConfigRuntime::load(agent_file(
+                app.handle(),
+            )));
+            app.manage(crate::agent::AgentRuntime::new(agent_sessions_dir(
+                app.handle(),
+            )));
             // 注意：`aidaw` CLI 的挂载**不做任何自动动作**——它是设置页里的一个显式开关
             // （见 `cli.rs`）。启动时碰 PATH 会平白弹一次密码框，体验很差。
             // 但要**登记自己在哪**：别的 AI harness 按 bundle id 推导配置目录、读 `cli-path`
@@ -392,6 +416,14 @@ pub fn run() {
             commands::set_project_harmony,
             commands::set_project_sections,
             commands::set_track_meta,
+            commands::set_mpe,
+            commands::set_midi_events,
+            commands::set_articulations,
+            commands::list_articulation_maps,
+            commands::import_articulation_map,
+            commands::set_note_tag,
+            commands::set_note_tags,
+            commands::track_midi_capabilities,
             commands::set_gain,
             commands::set_pan,
             commands::set_mute,
@@ -447,6 +479,7 @@ pub fn run() {
             commands::set_effect_params,
             commands::scope_data,
             commands::audition_note,
+            commands::audition_midi_events,
             commands::list_presets,
             commands::save_preset,
             commands::update_preset,

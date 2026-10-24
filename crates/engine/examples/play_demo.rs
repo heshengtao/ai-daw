@@ -5,20 +5,57 @@ use ai_daw_engine::bus::Engine;
 use ai_daw_engine::command::Command;
 use ai_daw_engine::event::{Actor, Event};
 use ai_daw_engine::model::Note;
-use ai_daw_engine::registry::PluginRegistry;
 use ai_daw_engine::realtime::{AudioHost, RealtimeOptions, SharedStatus};
+use ai_daw_engine::registry::PluginRegistry;
 use ai_daw_engine::schedule::ScheduledEvents;
 
 fn main() {
     let mut engine = Engine::new("realtime demo");
-    let ev = engine.execute(Command::AddTrack { name: "Lead".into() }, Actor::Human);
-    let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
-    engine.execute(Command::SetTrackInstrument { track, plugin_id: "builtin.synth".into() }, Actor::Human);
-    let ev = engine.execute(Command::AddClip { track, start: 0.0, length: 4.0 }, Actor::Human);
-    let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
+    let ev = engine.execute(
+        Command::AddTrack {
+            name: "Lead".into(),
+        },
+        Actor::Human,
+    );
+    let track = match ev[0] {
+        Event::TrackAdded { id, .. } => id,
+        _ => unreachable!(),
+    };
+    engine.execute(
+        Command::SetTrackInstrument {
+            track,
+            plugin_id: "builtin.synth".into(),
+        },
+        Actor::Human,
+    );
+    let ev = engine.execute(
+        Command::AddClip {
+            track,
+            start: 0.0,
+            length: 4.0,
+        },
+        Actor::Human,
+    );
+    let clip = match ev[0] {
+        Event::ClipAdded { clip, .. } => clip,
+        _ => unreachable!(),
+    };
     for (i, pitch) in [60u8, 64, 67, 72, 67, 64, 60].into_iter().enumerate() {
         engine.execute(
-            Command::AddNote { track, clip, note: Note { id: 0, pitch, start: i as f64 * 0.5, duration: 0.5, velocity: 100, volume: 127 } },
+            Command::AddNote {
+                track,
+                clip,
+                note: Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch,
+                    start: i as f64 * 0.5,
+                    duration: 0.5,
+                    velocity: 100,
+                    volume: 127,
+                },
+            },
             Actor::Human,
         );
     }

@@ -25,8 +25,14 @@ use ai_daw_host_vst3::CatalogPlugin;
 
 use crate::state::{AppState, EVENT_PLUGINS};
 
-/// 注册表地址（GitHub Pages 上的静态 JSON）。可用环境变量覆盖，便于测试 / 镜像。
-const REGISTRY_URL: &str = "https://open-audio-stack.github.io/open-audio-stack-registry/";
+/// 注册表地址：**ai-daw 仓库里的快照**（打包时由 `tools/fetch-plugin-registry.mjs` 更新）。
+///
+/// 客户端不再每次直连上游 Open Audio Stack——上游只在打包时被请求一次。可用环境变量覆盖，
+/// 便于测试 / 镜像。
+const REGISTRY_URL: &str =
+    "https://raw.githubusercontent.com/heshengtao/ai-daw/main/src-tauri/resources/plugin-registry.json";
+/// 随包快照：网络与本地缓存都不可用时的最后兜底（`include_str!` 保证一定有）。
+const BUNDLED_REGISTRY: &str = include_str!("../resources/plugin-registry.json");
 /// 注册表缓存有效期：6 小时。
 const REGISTRY_TTL: Duration = Duration::from_secs(6 * 3600);
 /// 拉取注册表 JSON 的整体超时。
@@ -326,7 +332,11 @@ fn au_managed_dir() -> Option<PathBuf> {
 /// 拿不到应用数据目录时返回空（扫描照常，只是看不到托管的插件）。
 pub fn managed_scan_dirs(app: &AppHandle) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
     match ManagedDirs::resolve(app) {
-        Ok(dirs) => (vec![dirs.vst3.clone()], vec![dirs.clap.clone()], vec![dirs.au.clone()]),
+        Ok(dirs) => (
+            vec![dirs.vst3.clone()],
+            vec![dirs.clap.clone()],
+            vec![dirs.au.clone()],
+        ),
         Err(_) => (Vec::new(), Vec::new(), Vec::new()),
     }
 }
@@ -465,6 +475,288 @@ fn normalize(raw: RawRegistry, plat: &str, arch: &str) -> Vec<RegistryPlugin> {
 }
 
 // ---------------------------------------------------------------------------
+// 可下载插件搜索（MCP：search_plugin_store）
+// ---------------------------------------------------------------------------
+
+/// 注册表搜索结果：一条可下载插件 + 本机状态 + 为什么命中。
+#[derive(Serialize, Clone)]
+pub struct RegistryMatch {
+    pub slug: String,
+    pub name: String,
+    pub author: String,
+    pub description: String,
+    pub license: String,
+    pub kind: String,
+    pub tags: Vec<String>,
+    pub homepage: Option<String>,
+    pub version: String,
+    pub verified: bool,
+    /// 本机是否已经装过这个 slug。
+    pub installed: bool,
+    /// 当前系统是否有可**一键安装**的归档（有 sha256 的 zip/tar 等）。
+    pub installable: bool,
+    /// 当前系统可用的格式（`vst3` / `clap` / `au`），去重。
+    pub formats: Vec<String>,
+    /// 首选归档的体积（字节）。
+    pub size_bytes: u64,
+    /// 匹配分数（只用于排序）。
+    pub score: i64,
+    /// 命中原因。
+    pub why: String,
+}
+
+/// 搜索归一化：小写、只留字母数字（中文按字保留）。
+fn search_norm(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// 查询拆成词；整句都是中文时就是一个词。
+fn search_terms(query: &str) -> Vec<String> {
+    let mut terms: Vec<String> = query
+        .split_whitespace()
+        .map(search_norm)
+        .filter(|term| !term.is_empty())
+        .collect();
+    terms.sort();
+    terms.dedup();
+    if terms.is_empty() {
+        let whole = search_norm(query);
+        if !whole.is_empty() {
+            terms.push(whole);
+        }
+    }
+    terms
+}
+
+/// 归档格式优先级：VST3 通用性最好，其次 CLAP，最后 AU。
+fn format_rank(contains: &[String]) -> i32 {
+    if contains.iter().any(|c| c == "vst3") {
+        3
+    } else if contains.iter().any(|c| c == "clap") {
+        2
+    } else if contains.iter().any(|c| c == "au") {
+        1
+    } else {
+        0
+    }
+}
+
+/// 选当前系统最合适的一个归档（只考虑可一键安装、且带 sha256 的）。
+fn best_installable_file(plugin: &RegistryPlugin) -> Option<&RegistryFile> {
+    plugin
+        .files
+        .iter()
+        .filter(|file| file.compatible && file.kind != "installer" && !file.sha256.is_empty())
+        .max_by_key(|file| (format_rank(&file.contains), file.size))
+}
+
+fn kind_matches(plugin_kind: &str, want: Option<&str>) -> bool {
+    let Some(want) = want.map(str::trim).filter(|want| !want.is_empty()) else {
+        return true;
+    };
+    match want.to_ascii_lowercase().as_str() {
+        "all" | "全部" => true,
+        "instrument" | "instruments" | "乐器" => plugin_kind.eq_ignore_ascii_case("instrument"),
+        "effect" | "effects" | "效果" | "效果器" => plugin_kind.eq_ignore_ascii_case("effect"),
+        other => plugin_kind.eq_ignore_ascii_case(other),
+    }
+}
+
+/// 给一条注册表条目打分；没有任何词命中时返回 `None`。
+fn score_plugin(plugin: &RegistryPlugin, terms: &[String]) -> Option<(i64, String)> {
+    if terms.is_empty() {
+        return Some((0, "按名字列出".into()));
+    }
+    let name = search_norm(&plugin.name);
+    let slug = search_norm(&plugin.slug);
+    let author = search_norm(&plugin.author);
+    let description = search_norm(&plugin.description);
+    let tags: Vec<String> = plugin.tags.iter().map(|tag| search_norm(tag)).collect();
+
+    let mut score = 0i64;
+    let mut why: Vec<String> = Vec::new();
+    for term in terms {
+        let hit = if name == *term {
+            why.push(format!("名字精确命中「{term}」"));
+            120
+        } else if name.starts_with(term) {
+            why.push(format!("名字以「{term}」开头"));
+            90
+        } else if name.contains(term) {
+            why.push(format!("名字含「{term}」"));
+            70
+        } else if slug.contains(term) {
+            why.push(format!("slug 含「{term}」"));
+            55
+        } else if tags.iter().any(|tag| tag == term || tag.contains(term)) {
+            why.push(format!("标签命中「{term}」"));
+            50
+        } else if description.contains(term) {
+            why.push(format!("描述提到「{term}」"));
+            35
+        } else if author.contains(term) {
+            why.push(format!("作者命中「{term}」"));
+            30
+        } else {
+            // 多个词时要求全部命中，避免「electric」把一堆不相关的鼓机带出来。
+            return None;
+        };
+        score += hit;
+    }
+    if plugin
+        .files
+        .iter()
+        .any(|file| file.compatible && file.kind != "installer")
+    {
+        score += 15;
+    }
+    why.dedup();
+    Some((score, why.join("；")))
+}
+
+/// 纯函数版搜索（方便测试）：过滤 + 打分 + 排序 + 截断。
+fn search_registry_entries(
+    plugins: &[RegistryPlugin],
+    query: &str,
+    kind: Option<&str>,
+    limit: usize,
+    installed: &HashSet<String>,
+) -> Vec<RegistryMatch> {
+    let terms = search_terms(query);
+    // query 全是标点、没有可用词时不要退化成「列出全部 563 个插件」。
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    let limit = limit.clamp(1, 50);
+    let mut matches: Vec<RegistryMatch> = plugins
+        .iter()
+        .filter(|plugin| kind_matches(&plugin.kind, kind))
+        .filter_map(|plugin| {
+            let (score, why) = score_plugin(plugin, &terms)?;
+            let mut formats: Vec<String> = plugin
+                .files
+                .iter()
+                .filter(|file| file.compatible)
+                .flat_map(|file| file.contains.iter().cloned())
+                .collect();
+            formats.sort();
+            formats.dedup();
+            let installable = best_installable_file(plugin).is_some();
+            Some(RegistryMatch {
+                slug: plugin.slug.clone(),
+                name: plugin.name.clone(),
+                author: plugin.author.clone(),
+                description: plugin.description.clone(),
+                license: plugin.license.clone(),
+                kind: plugin.kind.clone(),
+                tags: plugin.tags.clone(),
+                homepage: plugin.homepage.clone(),
+                version: plugin.version.clone(),
+                verified: plugin.verified,
+                installed: installed.contains(&plugin.slug),
+                installable,
+                formats,
+                size_bytes: best_installable_file(plugin)
+                    .map(|file| file.size)
+                    .unwrap_or(0),
+                score,
+                why,
+            })
+        })
+        .collect();
+    // 分数高的在前；同分时已安装的排后面（用户更关心「能装什么」）。
+    matches.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.installed.cmp(&b.installed))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    matches.truncate(limit);
+    matches
+}
+
+/// 读取注册表（联网 → 缓存 → 随包快照）并归一化成当前平台的条目。
+fn load_registry_index(app: &AppHandle) -> Result<Vec<RegistryPlugin>, String> {
+    let cache_dir = registry_cache_dir(app)?;
+    let network = app.state::<StoreRuntime>().network();
+    let sources = registry_sources(&network);
+    let resolved = resolve_proxy(&network);
+    let (raw, _) = load_registry(&cache_dir, false, &sources, resolved.proxy.as_ref())?;
+    Ok(normalize(raw, platform(), arch()))
+}
+
+/// 本机已安装的注册表 slug（来自托管库的 `manifest.json`）。
+fn installed_slugs(app: &AppHandle) -> HashSet<String> {
+    let Ok(dirs) = ManagedDirs::resolve(app) else {
+        return HashSet::new();
+    };
+    read_manifest(&dirs)
+        .into_values()
+        .filter_map(|record| record.slug)
+        .collect()
+}
+
+/// 搜索**可下载**插件（不是本机已装的目录）。
+pub fn search_registry(
+    app: &AppHandle,
+    query: &str,
+    kind: Option<&str>,
+    limit: usize,
+) -> Result<Vec<RegistryMatch>, String> {
+    let plugins = load_registry_index(app)?;
+    let installed = installed_slugs(app);
+    Ok(search_registry_entries(
+        &plugins, query, kind, limit, &installed,
+    ))
+}
+
+/// 从注册表安装 / 更新一个插件（MCP：install_plugin）。
+///
+/// **会真的联网下载并解压可执行插件**。调用方必须先拿到用户的明确同意。
+pub fn install_registry_plugin(app: &AppHandle, slug: &str) -> Result<String, String> {
+    let plugins = load_registry_index(app)?;
+    // 只认 slug，不按名字猜：同名插件不止一个，装错东西的代价太大。
+    let plugin = plugins
+        .iter()
+        .find(|plugin| plugin.slug == slug)
+        .ok_or_else(|| {
+            format!("注册表里没有 slug「{slug}」。先用 search_plugin_store 查准确 slug。")
+        })?;
+    let file = best_installable_file(plugin).ok_or_else(|| {
+        format!(
+            "「{}」没有当前系统可一键安装的归档（可能只提供安装器或其它平台构建）。\
+             请在浏览器打开下载页手动安装：{}",
+            plugin.name,
+            plugin.homepage.as_deref().unwrap_or("（无主页）")
+        )
+    })?;
+
+    let request = InstallRequest {
+        slug: plugin.slug.clone(),
+        name: plugin.name.clone(),
+        version: plugin.version.clone(),
+        url: file.url.clone(),
+        sha256: file.sha256.clone(),
+        size: file.size,
+    };
+    install_from_registry(app, &request)?;
+    Ok(format!(
+        "已安装「{}」{}（{}，格式 {}）。rescan_plugins 已自动完成，现在可用 list_plugins 看到它。",
+        plugin.name,
+        plugin.version,
+        plugin.author,
+        if file.contains.is_empty() {
+            "未知".to_string()
+        } else {
+            file.contains.join("/")
+        }
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // 网络配置（镜像 / 代理）
 // ---------------------------------------------------------------------------
 
@@ -522,7 +814,6 @@ impl BackendPreference {
             BackendPreference::DirectMl => BackendKind::DirectMl,
         }
     }
-
 }
 
 /// 插件源的网络配置（存在应用配置目录的 `store.json`）。
@@ -951,7 +1242,8 @@ fn fetch_registry_from(agent: &ureq::Agent, url: &str) -> Result<(RawRegistry, S
 
 /// 拉取注册表 JSON（带磁盘缓存，多源依次尝试）。返回（原始数据，是否来自缓存）。
 ///
-/// 顺序：新鲜的磁盘缓存 → 依次尝试各源 → **全部失败时退回旧缓存**。
+/// 顺序：新鲜的磁盘缓存 → 依次尝试各源（默认只有 ai-daw 快照）→ 旧缓存 → **随包快照**。
+/// 随包快照保证「连不上 GitHub 且本地没缓存」时插件管理器仍然可用，而不是整块报错。
 fn load_registry(
     cache_dir: &Path,
     force: bool,
@@ -991,13 +1283,26 @@ fn load_registry(
         }
     }
 
-    // 所有源都不通：有旧缓存就用旧缓存（过期也比没有强），否则报错。
+    // 所有源都不通：有旧缓存就用旧缓存（过期也比没有强）。
     if let Some(text) = &cached {
         if let Ok(raw) = serde_json::from_str::<RawRegistry>(text) {
             return Ok((raw, true));
         }
     }
-    Err(format!("所有注册表源都失败了：\n{}", errors.join("\n")))
+    // 连旧缓存都没有：退回随包快照。它是打包时从上游抓的，只是可能比线上旧一点。
+    match serde_json::from_str::<RawRegistry>(BUNDLED_REGISTRY) {
+        Ok(raw) => {
+            eprintln!(
+                "[manager] 注册表联网失败且没有本地缓存，改用随包快照：{}",
+                errors.join("；")
+            );
+            Ok((raw, true))
+        }
+        Err(e) => Err(format!(
+            "所有注册表源都失败了，随包快照也无法解析：\n{}\n随包快照：{e}",
+            errors.join("\n")
+        )),
+    }
 }
 
 /// 单个下载进度回调：`(已接收字节, 总字节)`；总字节为 0 表示未知。
@@ -1393,7 +1698,10 @@ fn canon(path: &Path) -> PathBuf {
 ///
 /// 平台选错（例如这个 release 只提供了别的系统的构建）时，文件会静静地躺在托管库里、目录里
 /// 却永远没有它。与其让用户对着「已安装但没有效果」发呆，不如明确报错。
-fn verify_installed_loadable(installed: &[String], catalog: &[CatalogPlugin]) -> Result<(), String> {
+fn verify_installed_loadable(
+    installed: &[String],
+    catalog: &[CatalogPlugin],
+) -> Result<(), String> {
     if installed.is_empty() {
         return Ok(());
     }
@@ -2053,10 +2361,153 @@ mod tests {
         assert!(normalize(raw, "mac", "arm64").is_empty());
     }
 
+    fn registry_file(contains: &[&str], size: u64, compatible: bool, kind: &str) -> RegistryFile {
+        RegistryFile {
+            url: format!("https://x/{}.zip", contains.join("-")),
+            sha256: "deadbeef".into(),
+            size,
+            kind: kind.into(),
+            contains: contains.iter().map(|c| c.to_string()).collect(),
+            platforms: vec!["mac".into()],
+            archs: vec!["arm64".into()],
+            compatible,
+        }
+    }
+
+    fn registry_plugin(
+        slug: &str,
+        name: &str,
+        author: &str,
+        description: &str,
+        tags: &[&str],
+        kind: &str,
+        files: Vec<RegistryFile>,
+    ) -> RegistryPlugin {
+        RegistryPlugin {
+            slug: slug.into(),
+            name: name.into(),
+            author: author.into(),
+            description: description.into(),
+            license: "mit".into(),
+            kind: kind.into(),
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            image: None,
+            homepage: Some("https://example.test".into()),
+            version: "1.0.0".into(),
+            verified: true,
+            files,
+        }
+    }
+
+    /// 随包快照必须能被解析——它现在是客户端最后的兜底，坏了就等于没有。
+    #[test]
+    fn bundled_registry_is_parseable_and_non_empty() {
+        let raw: RawRegistry = serde_json::from_str(BUNDLED_REGISTRY).expect("随包快照是合法 JSON");
+        assert!(!raw.plugins.is_empty(), "随包快照里必须有插件");
+    }
+
+    /// 用真实快照走一遍搜索，确认打分链路对上游数据有效（不是只在小样本上能跑）。
+    #[test]
+    fn bundled_registry_search_finds_a_known_synth() {
+        let raw: RawRegistry = serde_json::from_str(BUNDLED_REGISTRY).expect("随包快照是合法 JSON");
+        let plugins = normalize(raw, platform(), arch());
+        let hits = search_registry_entries(&plugins, "surge", None, 5, &HashSet::new());
+        assert!(
+            hits.iter()
+                .any(|hit| hit.name.to_lowercase().contains("surge")),
+            "搜索 surge 应当命中 Surge XT：{:?}",
+            hits.iter().map(|hit| &hit.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_scores_name_tags_and_description() {
+        let plugins = vec![
+            registry_plugin(
+                "tape-delay",
+                "Tape Delay",
+                "Acme",
+                "Vintage tape echo",
+                &["delay", "tape"],
+                "effect",
+                vec![registry_file(&["vst3"], 100, true, "archive")],
+            ),
+            registry_plugin(
+                "string-ensemble",
+                "String Ensemble",
+                "Acme",
+                "Warm orchestral strings",
+                &["strings"],
+                "instrument",
+                vec![registry_file(&["vst3"], 200, true, "archive")],
+            ),
+        ];
+        let installed: HashSet<String> = ["tape-delay".to_string()].into_iter().collect();
+
+        let hits = search_registry_entries(&plugins, "tape delay", Some("effect"), 8, &installed);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].slug, "tape-delay");
+        assert!(hits[0].installed);
+        assert!(hits[0].installable);
+        assert!(hits[0].why.contains("tape"), "{}", hits[0].why);
+
+        let hits = search_registry_entries(&plugins, "warm strings", None, 8, &HashSet::new());
+        assert_eq!(hits[0].slug, "string-ensemble");
+    }
+
+    /// 多词查询要求全部命中：`electric piano` 不该把 Electric Drums 带出来。
+    #[test]
+    fn search_requires_every_term_to_match() {
+        let plugins = vec![registry_plugin(
+            "electric-drums",
+            "Electric Drums",
+            "Acme",
+            "Punchy drum machine",
+            &["drums"],
+            "instrument",
+            vec![registry_file(&["vst3"], 100, true, "archive")],
+        )];
+        assert!(
+            search_registry_entries(&plugins, "electric piano", None, 8, &HashSet::new())
+                .is_empty()
+        );
+        assert_eq!(
+            search_registry_entries(&plugins, "electric drums", None, 8, &HashSet::new()).len(),
+            1
+        );
+    }
+
+    /// 有多个归档时优先 VST3；安装器 / 无 sha256 的不参与一键安装。
+    #[test]
+    fn install_prefers_vst3_and_skips_installers() {
+        let plugin = registry_plugin(
+            "x",
+            "X",
+            "A",
+            "d",
+            &[],
+            "effect",
+            vec![
+                registry_file(&["au"], 300, true, "archive"),
+                registry_file(&["clap"], 200, true, "archive"),
+                registry_file(&["vst3"], 100, true, "archive"),
+                registry_file(&["vst3"], 999, true, "installer"),
+            ],
+        );
+        let file = best_installable_file(&plugin).expect("有可安装归档");
+        assert_eq!(file.contains, vec!["vst3".to_string()]);
+        assert_eq!(file.size, 100, "安装器不参与自动安装");
+    }
+
     /// AU 现在也是可托管的格式，注册表里只提供 AU 的文件也要留下。
     #[test]
     fn normalize_keeps_au_files_too() {
-        let raw = registry_with(vec![raw_file("https://x/a.zip", &["au"], &["mac"], &["arm64"])]);
+        let raw = registry_with(vec![raw_file(
+            "https://x/a.zip",
+            &["au"],
+            &["mac"],
+            &["arm64"],
+        )]);
         let out = normalize(raw, "mac", "arm64");
         assert_eq!(out.len(), 1, "只提供 AU 的插件应当在列表里");
         assert_eq!(out[0].files[0].contains, vec!["au".to_string()]);
@@ -2078,7 +2529,10 @@ mod tests {
         let user_installed = dirs.au.join("UserOne.component");
         let installed: HashSet<PathBuf> = [ours.clone()].into_iter().collect();
 
-        assert!(path_is_managed(&ours, &dirs, &installed), "管理器导入的 AU 算已安装");
+        assert!(
+            path_is_managed(&ours, &dirs, &installed),
+            "管理器导入的 AU 算已安装"
+        );
         assert!(
             !path_is_managed(&user_installed, &dirs, &installed),
             "用户自己装在同一个目录里的 AU 仍是外部只读"
@@ -2157,7 +2611,11 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         // macOS 的：bundle 目录，含 Contents/MacOS。
         fs::create_dir_all(root.join("mac/JE-201.vst3/Contents/MacOS")).unwrap();
-        fs::write(root.join("mac/JE-201.vst3/Contents/MacOS/JE-201"), b"mach-o").unwrap();
+        fs::write(
+            root.join("mac/JE-201.vst3/Contents/MacOS/JE-201"),
+            b"mach-o",
+        )
+        .unwrap();
         // Windows 的：同名裸文件（DLL）。
         fs::create_dir_all(root.join("win")).unwrap();
         fs::write(root.join("win/JE-201.vst3"), b"MZ").unwrap();
@@ -2167,7 +2625,10 @@ mod tests {
         let (kind, path) = &found[0];
         assert_eq!(kind, "vst3");
         assert!(path.is_dir(), "收下的必须是 bundle 目录，而不是裸文件");
-        assert!(path.to_string_lossy().contains("mac"), "收下的应当是 macOS 那份");
+        assert!(
+            path.to_string_lossy().contains("mac"),
+            "收下的应当是 macOS 那份"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -4,8 +4,8 @@ use ai_daw_plugin_api::{MidiEvent, ParamId};
 
 use crate::audio::{DecodedAudio, SampleProvider};
 use crate::model::{
-    AutomationPoint, MixerChannel, Note, PitchExpression, PluginInstance, Project, TrackId,
-    TrackMeta,
+    note_tag_key, ArticulationSwitch, AutomationPoint, MixerChannel, MpeConfig, Note,
+    PitchExpression, PluginInstance, Project, TrackId, TrackMeta,
 };
 use crate::player::db_to_linear;
 use crate::tempo::TempoMap;
@@ -30,6 +30,8 @@ pub enum LaneTarget {
     Pan,
     /// MIDI 控制变化（0..=127）：逐块发给轨道乐器。延音踏板 / 调制轮 / 表情等走这里。
     ControlChange(u8),
+    /// 通道压力 / 触后（通道 0..=15）：逐块发给轨道乐器。
+    ChannelPressure(u8),
     /// 轨道的乐器参数。
     Instrument(ParamId),
     /// 效果链第 `index` 个效果器的参数。
@@ -48,6 +50,10 @@ impl LaneTarget {
             let controller: u8 = rest.parse().ok()?;
             return (controller <= 127).then_some(LaneTarget::ControlChange(controller));
         }
+        if let Some(rest) = key.strip_prefix("at:") {
+            let channel: u8 = rest.parse().ok()?;
+            return (channel <= 15).then_some(LaneTarget::ChannelPressure(channel));
+        }
         if let Some(rest) = key.strip_prefix("inst:") {
             return (!rest.is_empty()).then(|| LaneTarget::Instrument(ParamId(rest.to_string())));
         }
@@ -56,7 +62,10 @@ impl LaneTarget {
             if param.is_empty() {
                 return None;
             }
-            return Some(LaneTarget::Effect { index: index.parse().ok()?, param: ParamId(param.to_string()) });
+            return Some(LaneTarget::Effect {
+                index: index.parse().ok()?,
+                param: ParamId(param.to_string()),
+            });
         }
         None
     }
@@ -100,6 +109,8 @@ pub struct ScheduledSend {
 pub struct ScheduledMidi {
     /// 自播放起点起的绝对帧位置。
     pub frame: u64,
+    /// MIDI 通道（0..=15）。MPE 开启时逐音分配，否则为 0。
+    pub channel: u8,
     /// 该帧时刻发出的 MIDI 事件。
     pub event: MidiEvent,
 }
@@ -139,6 +150,8 @@ pub struct ScheduledAudioClip {
 pub struct PitchSpan {
     /// MIDI 音高。
     pub note: u8,
+    /// 该音所在的 MIDI 通道（MPE / 显式通道）。
+    pub channel: u8,
     /// 起音绝对帧。
     pub start_frame: u64,
     /// 收音绝对帧。
@@ -147,6 +160,20 @@ pub struct PitchSpan {
     pub start_beat: f64,
     /// 音高表达参数。
     pub expr: PitchExpression,
+}
+
+/// 调度期的一颗音符：先把所有音符的起止算出来，再统一分配通道。
+#[derive(Debug, Clone, Copy)]
+struct NotePlan {
+    note: Note,
+    /// 所属片段（查奏法标签用）。
+    clip: crate::model::ClipId,
+    /// 实际发声位置（拍，含 `offset`）。
+    onset: f64,
+    /// 实际收音位置（拍，含连奏延长与片段裁剪）。
+    off: f64,
+    start_frame: u64,
+    end_frame: u64,
 }
 
 /// 单轨的定帧事件表与播放所需信息（自带插件引用与混音参数，使 `Player` 不依赖 `Project`）。
@@ -264,6 +291,23 @@ impl ScheduledEvents {
     ) -> Self {
         let map = TempoMap::from_transport(&project.transport);
         let to_frame = |beats: f64| (map.beats_to_seconds(beats) * sample_rate) as u64;
+
+        // 把一条奏法切换展开成 MIDI 事件。
+        // 简写字段（keyswitch / CC / program）与导入的消息序列都在 `messages()` 里统一；
+        // keyswitch 会补一个很短的 NoteOn/NoteOff——多数音源在 NoteOn 时切换奏法。
+        let push_articulation = |events: &mut Vec<ScheduledMidi>,
+                                 beat: f64,
+                                 channel: u8,
+                                 switch: &ArticulationSwitch| {
+            for message in switch.messages() {
+                let at = (beat + f64::from(message.offset_beats)).max(0.0);
+                events.push(ScheduledMidi {
+                    frame: to_frame(at),
+                    channel: message.channel.unwrap_or(channel),
+                    event: message.event,
+                });
+            }
+        };
         let mut tempo_points: Vec<(u64, f64)> = vec![(0, map.tempo_at(0.0))];
         for s in map.segments().iter().skip(1) {
             tempo_points.push((to_frame(s.start_beat), s.tempo));
@@ -283,10 +327,13 @@ impl ScheduledEvents {
             let mut events = Vec::new();
             let mut pitch_spans = Vec::new();
             let mut audio_clips = Vec::new();
+            let mut note_plans: Vec<NotePlan> = Vec::new();
             for clip in &track.clips {
                 // 音频片段：接素材、定绝对帧。素材缺失 → 整段静音（跳过）。
                 if let Some(source) = &clip.audio {
-                    let Some(audio) = assets.get(&source.path) else { continue };
+                    let Some(audio) = assets.get(&source.path) else {
+                        continue;
+                    };
                     let total = audio.frames() as u64;
                     let offset = source.offset_frames.min(total);
                     // 素材窗口 = 显式长度（切分/裁剪记录下来的）或「到结尾」；都要夹到可用范围。
@@ -344,86 +391,218 @@ impl ScheduledEvents {
                     } else {
                         (onset + note.duration).min(box_end)
                     };
-                    events.push(ScheduledMidi {
-                        frame: to_frame(onset),
-                        // 只送「演奏强度」。插件各自解释它（音色 / 振幅）——这是设计如此。
-                        event: MidiEvent::NoteOn { note: note.pitch, velocity: note.velocity },
+                    note_plans.push(NotePlan {
+                        note: *note,
+                        clip: clip.id,
+                        onset,
+                        off,
+                        start_frame: to_frame(onset),
+                        end_frame: to_frame(off),
                     });
-                    // 单音音量与力度**分开发**：支持 per-note 音量的插件独立处理它，不改变音色。
-                    // 默认值 127（不衰减）不需要事件。
-                    if note.volume != Note::MAX_VOLUME {
-                        events.push(ScheduledMidi {
-                            frame: to_frame(onset),
-                            event: MidiEvent::NoteVolume { note: note.pitch, value: note.volume },
-                        });
-                    }
-                    // 音高表达：推弦 / 揉弦 / 滑音。展开成逐音事件；不支持逐音的插件由
-                    // `Player` 折叠成通道弯音。
-                    if !note.expr.is_none() {
-                        let start_frame = to_frame(onset);
-                        let end_frame = to_frame(off);
-                        let duration_beats = (off - onset).max(0.0);
-                        pitch_spans.push(PitchSpan {
-                            note: note.pitch,
-                            start_frame,
-                            end_frame,
-                            start_beat: onset,
-                            expr: note.expr,
-                        });
+                }
+            }
 
-                        let mut points: Vec<(u64, i16)> = Vec::new();
-                        // 揉弦、以及「有实际音高变化的推弦」都需要连续采样；否则插件只会
-                        // 收到起止两点，听到的是跳变而不是滑音。
-                        let needs_ramp = note.expr.bend_time > 0.0
-                            && note.expr.bend != note.expr.bend_to;
-                        if note.expr.vibrato != 0 || needs_ramp {
-                            let step = (sample_rate / EXPRESSION_CONTROL_HZ).round().max(1.0) as u64;
-                            let mut frame = start_frame;
-                            while frame < end_frame && points.len() + 1 < MAX_EXPRESSION_EVENTS {
-                                let beat = map.seconds_to_beats(frame as f64 / sample_rate);
-                                let cents = note
-                                    .expr
-                                    .cents_at(beat - onset, duration_beats)
-                                    .round() as i16;
-                                points.push((frame, cents));
-                                frame = frame.saturating_add(step);
-                            }
-                            // 保证起音点一定有值（极短音符 / 采样步长大于时值时）。
-                            if points.first().map(|p| p.0) != Some(start_frame) {
-                                let cents =
-                                    note.expr.cents_at(0.0, duration_beats).round() as i16;
-                                points.insert(0, (start_frame, cents));
-                            }
-                        } else {
-                            // 恒定偏移 / 瞬间到位：只需要起音点。
-                            points.push((
-                                start_frame,
-                                note.expr.cents_at(0.0, duration_beats).round() as i16,
-                            ));
+            // 通道分配：显式 `note.channel` 优先；MPE 开启时给重叠音符分配不同成员通道；
+            // 否则一律主通道 0。全在控制侧一次算完，音频线程不参与。
+            note_plans.sort_by(|a, b| {
+                a.start_frame
+                    .cmp(&b.start_frame)
+                    .then_with(|| a.note.pitch.cmp(&b.note.pitch))
+            });
+            let mpe = track
+                .meta
+                .as_ref()
+                .and_then(|m| m.mpe)
+                .map(MpeConfig::normalized);
+            let mut member_free: Vec<(u8, u64)> = mpe
+                .map(|m| m.member_channels().into_iter().map(|c| (c, 0)).collect())
+                .unwrap_or_default();
+
+            for plan in &note_plans {
+                let note = plan.note;
+                let channel = match note.channel {
+                    Some(c) => {
+                        let c = c.min(15);
+                        if let Some(slot) = member_free.iter_mut().find(|(m, _)| *m == c) {
+                            slot.1 = slot.1.max(plan.end_frame);
                         }
-
-                        // 去掉相邻重复值，减少事件量（推弦保持段只留一条）。
-                        let mut last: Option<i16> = None;
-                        for (frame, cents) in points {
-                            if last == Some(cents) {
-                                continue;
-                            }
-                            last = Some(cents);
-                            events.push(ScheduledMidi {
-                                frame,
-                                event: MidiEvent::NotePitch { note: note.pitch, cents },
+                        c
+                    }
+                    None if mpe.is_some() => {
+                        // 先找已经空出来的通道；都被占就抢最早结束的那条（确定性）。
+                        let index = member_free
+                            .iter()
+                            .position(|(_, at)| *at <= plan.start_frame)
+                            .unwrap_or_else(|| {
+                                member_free
+                                    .iter()
+                                    .enumerate()
+                                    .min_by_key(|(_, (_, at))| *at)
+                                    .map(|(i, _)| i)
+                                    .unwrap_or(0)
                             });
+                        let (ch, at) = &mut member_free[index];
+                        *at = plan.end_frame;
+                        *ch
+                    }
+                    None => 0,
+                };
+
+                // 奏法：在起音前发出切换（提前量默认 1/64 拍）。标签存在工程的 `note_tags` 里。
+                if let Some(meta) = track.meta.as_ref() {
+                    let key = note_tag_key(track.id.0, plan.clip.0, note.id);
+                    if let Some(name) = project
+                        .note_tags
+                        .get(&key)
+                        .and_then(|tag| tag.articulation.as_deref())
+                    {
+                        if let Some(switch) = meta.articulations.get(name) {
+                            let lead = f64::from(switch.effective_lead());
+                            push_articulation(&mut events, plan.onset - lead, channel, switch);
+                            if switch.momentary.unwrap_or(false) {
+                                if let Some(restore) = meta
+                                    .default_articulation
+                                    .as_deref()
+                                    .and_then(|name| meta.articulations.get(name))
+                                {
+                                    push_articulation(&mut events, plan.off, channel, restore);
+                                }
+                            }
                         }
-                        // 收音前把音高归零：下一颗同音音符不会继承上一颗的弯音。
+                    }
+                }
+
+                events.push(ScheduledMidi {
+                    frame: plan.start_frame,
+                    channel,
+                    // 只送「演奏强度」。插件各自解释它（音色 / 振幅）——这是设计如此。
+                    event: MidiEvent::NoteOn {
+                        note: note.pitch,
+                        velocity: note.velocity,
+                    },
+                });
+                // 起音压力：复音压力（逐音触后）。
+                if let Some(pressure) = note.pressure {
+                    events.push(ScheduledMidi {
+                        frame: plan.start_frame,
+                        channel,
+                        event: MidiEvent::PolyPressure {
+                            note: note.pitch,
+                            value: pressure.min(127),
+                        },
+                    });
+                }
+                // 单音音量与力度**分开发**：支持 per-note 音量的插件独立处理它，不改变音色。
+                // 默认值 127（不衰减）不需要事件。
+                if note.volume != Note::MAX_VOLUME {
+                    events.push(ScheduledMidi {
+                        frame: plan.start_frame,
+                        channel,
+                        event: MidiEvent::NoteVolume {
+                            note: note.pitch,
+                            value: note.volume,
+                        },
+                    });
+                }
+                // 音高表达：推弦 / 揉弦 / 滑音。展开成逐音事件；不支持逐音的插件由
+                // `Player` 折叠成通道弯音。
+                if !note.expr.is_none() {
+                    let start_frame = plan.start_frame;
+                    let end_frame = plan.end_frame;
+                    let duration_beats = (plan.off - plan.onset).max(0.0);
+                    pitch_spans.push(PitchSpan {
+                        note: note.pitch,
+                        channel,
+                        start_frame,
+                        end_frame,
+                        start_beat: plan.onset,
+                        expr: note.expr,
+                    });
+
+                    let mut points: Vec<(u64, i16)> = Vec::new();
+                    // 揉弦、以及「有实际音高变化的推弦」都需要连续采样；否则插件只会
+                    // 收到起止两点，听到的是跳变而不是滑音。
+                    let needs_ramp =
+                        note.expr.bend_time > 0.0 && note.expr.bend != note.expr.bend_to;
+                    if note.expr.vibrato != 0 || needs_ramp {
+                        let step = (sample_rate / EXPRESSION_CONTROL_HZ).round().max(1.0) as u64;
+                        let mut frame = start_frame;
+                        while frame < end_frame && points.len() + 1 < MAX_EXPRESSION_EVENTS {
+                            let beat = map.seconds_to_beats(frame as f64 / sample_rate);
+                            let cents = note
+                                .expr
+                                .cents_at(beat - plan.onset, duration_beats)
+                                .round() as i16;
+                            points.push((frame, cents));
+                            frame = frame.saturating_add(step);
+                        }
+                        // 保证起音点一定有值（极短音符 / 采样步长大于时值时）。
+                        if points.first().map(|p| p.0) != Some(start_frame) {
+                            let cents = note.expr.cents_at(0.0, duration_beats).round() as i16;
+                            points.insert(0, (start_frame, cents));
+                        }
+                    } else {
+                        // 恒定偏移 / 瞬间到位：只需要起音点。
+                        points.push((
+                            start_frame,
+                            note.expr.cents_at(0.0, duration_beats).round() as i16,
+                        ));
+                    }
+
+                    // 去掉相邻重复值，减少事件量（推弦保持段只留一条）。
+                    let mut last: Option<i16> = None;
+                    for (frame, cents) in points {
+                        if last == Some(cents) {
+                            continue;
+                        }
+                        last = Some(cents);
                         events.push(ScheduledMidi {
-                            frame: end_frame,
-                            event: MidiEvent::NotePitch { note: note.pitch, cents: 0 },
+                            frame,
+                            channel,
+                            event: MidiEvent::NotePitch {
+                                note: note.pitch,
+                                cents,
+                            },
                         });
                     }
+                    // 收音前把音高归零：下一颗同音音符不会继承上一颗的弯音。
                     events.push(ScheduledMidi {
-                        frame: to_frame(off),
-                        event: MidiEvent::NoteOff { note: note.pitch },
+                        frame: end_frame,
+                        channel,
+                        event: MidiEvent::NotePitch {
+                            note: note.pitch,
+                            cents: 0,
+                        },
                     });
+                }
+                events.push(ScheduledMidi {
+                    frame: plan.end_frame,
+                    channel,
+                    event: MidiEvent::NoteOff { note: note.pitch },
+                });
+            }
+            events.sort_by_key(|e| e.frame);
+            // 通用 MIDI 事件表：绝对拍 → 帧，与音符事件一起排序。
+            if let Some(meta) = track.meta.as_ref() {
+                for item in &meta.midi_events {
+                    events.push(ScheduledMidi {
+                        frame: to_frame(item.beat.max(0.0)),
+                        channel: item.channel.min(15),
+                        event: item.event,
+                    });
+                }
+                // 默认奏法：在轨道起点先切换一次（没有音符时也能生效）。
+                if let Some(switch) = meta
+                    .default_articulation
+                    .as_deref()
+                    .and_then(|name| meta.articulations.get(name))
+                {
+                    push_articulation(
+                        &mut events,
+                        0.0,
+                        mpe.as_ref().map(|m| m.master_channel()).unwrap_or(0),
+                        switch,
+                    );
                 }
             }
             events.sort_by_key(|e| e.frame);
@@ -436,12 +615,18 @@ impl ScheduledEvents {
                     let param = LaneTarget::from_key(&lane.param)?;
                     match &param {
                         LaneTarget::Instrument(_) if track.instrument.is_none() => return None,
-                        LaneTarget::Effect { index, .. } if *index >= track.effects.len() => return None,
+                        LaneTarget::Effect { index, .. } if *index >= track.effects.len() => {
+                            return None
+                        }
                         _ => {}
                     }
                     let points = lane.points.clone();
                     // 静态值快照由播放器在构造时从**活实例**上采集（这里拿不到插件实例）。
-                    Some(ScheduledLane { param, points, static_value: None })
+                    Some(ScheduledLane {
+                        param,
+                        points,
+                        static_value: None,
+                    })
                 })
                 .collect();
             // 发送：目标解析成下标；指向不存在轨道或指向自己的发送丢弃。
@@ -451,8 +636,10 @@ impl ScheduledEvents {
                 .iter()
                 .filter_map(|s| {
                     let target_index = *index_by_id.get(&s.target)?;
-                    (target_index != self_index)
-                        .then_some(ScheduledSend { target_index, gain: db_to_linear(s.gain_db) })
+                    (target_index != self_index).then_some(ScheduledSend {
+                        target_index,
+                        gain: db_to_linear(s.gain_db),
+                    })
                 })
                 .collect();
             edges.push(sends.iter().map(|s| s.target_index).collect());
@@ -492,9 +679,7 @@ impl ScheduledEvents {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{
-        AutomationLane, AutomationPoint, Clip, ClipId, Note, Send, Track, TrackId,
-    };
+    use crate::model::{AutomationLane, AutomationPoint, Clip, ClipId, Note, Send, Track, TrackId};
     use ai_daw_plugin_api::ParamId;
 
     #[test]
@@ -507,7 +692,10 @@ mod tests {
         );
         assert_eq!(
             LaneTarget::from_key("fx2:mix"),
-            Some(LaneTarget::Effect { index: 2, param: ParamId("mix".into()) })
+            Some(LaneTarget::Effect {
+                index: 2,
+                param: ParamId("mix".into())
+            })
         );
         assert_eq!(
             LaneTarget::from_key("cc:64"),
@@ -544,7 +732,19 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 4.0,
-                notes: vec![Note { id: 0, pitch: 60, start: 1.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
+                notes: vec![Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 60,
+                    start: 1.0,
+                    duration: 1.0,
+                    velocity: 100,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -562,7 +762,13 @@ mod tests {
         assert_eq!(ev.len(), 2);
         // 120bpm, 48kHz: 1 beat = 0.5s = 24000 frames.
         assert_eq!(ev[0].frame, 24_000);
-        assert!(matches!(ev[0].event, MidiEvent::NoteOn { note: 60, velocity: 100 }));
+        assert!(matches!(
+            ev[0].event,
+            MidiEvent::NoteOn {
+                note: 60,
+                velocity: 100
+            }
+        ));
         assert_eq!(ev[1].frame, 48_000);
         assert!(matches!(ev[1].event, MidiEvent::NoteOff { note: 60 }));
     }
@@ -574,13 +780,16 @@ mod tests {
         // 片段长 4 拍：再加一个「起点已在框外」的音符（第 5 拍起）。
         p.tracks[0].clips[0].notes.push(Note {
             id: 0,
+            channel: None,
+            pressure: None,
             pitch: 62,
             start: 5.0,
             duration: 1.0,
             velocity: 100,
             volume: 127,
             offset: 0.0,
-            legato: false, expr: crate::model::PitchExpression::NONE,
+            legato: false,
+            expr: crate::model::PitchExpression::NONE,
         });
         // 第 1 拍那个音符拉长到第 6 拍 → 越过框尾，应截断在第 4 拍。
         p.tracks[0].clips[0].notes[0].duration = 5.0;
@@ -611,10 +820,19 @@ mod tests {
         p.tracks[0].clips[0].notes[0].offset = 0.25;
         let s = ScheduledEvents::from_project(&p, 48_000.0);
         let ev = &s.tracks[0].events;
-        let on = ev.iter().find(|e| matches!(e.event, MidiEvent::NoteOn { .. })).unwrap();
+        let on = ev
+            .iter()
+            .find(|e| matches!(e.event, MidiEvent::NoteOn { .. }))
+            .unwrap();
         assert_eq!(on.frame, 30_000, "1.0 + 0.25 拍 = 30000 帧");
-        let off = ev.iter().find(|e| matches!(e.event, MidiEvent::NoteOff { .. })).unwrap();
-        assert_eq!(off.frame, 54_000, "时值仍是 1 拍：1.25 + 1.0 = 2.25 拍 = 54000 帧");
+        let off = ev
+            .iter()
+            .find(|e| matches!(e.event, MidiEvent::NoteOff { .. }))
+            .unwrap();
+        assert_eq!(
+            off.frame, 54_000,
+            "时值仍是 1 拍：1.25 + 1.0 = 2.25 拍 = 54000 帧"
+        );
     }
 
     /// 推弦：起音点、到位点、收音前归零，三条事件都在正确的帧上。
@@ -641,7 +859,9 @@ mod tests {
         assert_eq!(pitches.first(), Some(&(24_000, 0)));
         assert_eq!(pitches.last(), Some(&(48_000, 0)));
         assert!(
-            pitches.iter().any(|(frame, cents)| *frame == 36_000 && (*cents - 200).abs() <= 4),
+            pitches
+                .iter()
+                .any(|(frame, cents)| *frame == 36_000 && (*cents - 200).abs() <= 4),
             "到位点应在 1.5 拍附近达到 200 音分：{pitches:?}"
         );
         let ramp: Vec<i16> = pitches
@@ -649,14 +869,19 @@ mod tests {
             .filter(|(frame, _)| *frame >= 24_000 && *frame <= 36_000)
             .map(|(_, cents)| *cents)
             .collect();
-        assert!(ramp.windows(2).all(|w| w[0] <= w[1]), "推弦过程应单调上升：{ramp:?}");
+        assert!(
+            ramp.windows(2).all(|w| w[0] <= w[1]),
+            "推弦过程应单调上升：{ramp:?}"
+        );
         assert!(pitches.len() > 20, "推弦应按控制率展开：{pitches:?}");
         assert_eq!(s.tracks[0].pitch_spans.len(), 1);
 
         // 同帧时归零必须排在 NoteOff 之前（稳定的 `sort_by_key` 保持 push 顺序）。
         let reset = ev
             .iter()
-            .position(|e| e.frame == 48_000 && matches!(e.event, MidiEvent::NotePitch { cents: 0, .. }))
+            .position(|e| {
+                e.frame == 48_000 && matches!(e.event, MidiEvent::NotePitch { cents: 0, .. })
+            })
             .unwrap();
         let off = ev
             .iter()
@@ -698,13 +923,16 @@ mod tests {
         p.tracks[0].clips[0].notes[0].legato = true;
         p.tracks[0].clips[0].notes.push(Note {
             id: 2,
+            channel: None,
+            pressure: None,
             pitch: 60,
             start: 2.5,
             duration: 1.0,
             velocity: 100,
             volume: 127,
             offset: 0.0,
-            legato: false, expr: crate::model::PitchExpression::NONE,
+            legato: false,
+            expr: crate::model::PitchExpression::NONE,
         });
 
         let s = ScheduledEvents::from_project(&p, 48_000.0);
@@ -728,13 +956,16 @@ mod tests {
         p2.tracks[0].clips[0].notes[0].legato = true;
         p2.tracks[0].clips[0].notes.push(Note {
             id: 2,
+            channel: None,
+            pressure: None,
             pitch: 62,
             start: 2.5,
             duration: 1.0,
             velocity: 100,
             volume: 127,
             offset: 0.0,
-            legato: false, expr: crate::model::PitchExpression::NONE,
+            legato: false,
+            expr: crate::model::PitchExpression::NONE,
         });
         let s2 = ScheduledEvents::from_project(&p2, 48_000.0);
         let first_off = s2.tracks[0]
@@ -783,11 +1014,17 @@ mod tests {
         let s = ScheduledEvents::from_project(&p, 48_000.0);
         assert!(matches!(
             s.tracks[0].events[0].event,
-            MidiEvent::NoteOn { note: 60, velocity: 100 }
+            MidiEvent::NoteOn {
+                note: 60,
+                velocity: 100
+            }
         ));
         assert!(matches!(
             s.tracks[0].events[1].event,
-            MidiEvent::NoteVolume { note: 60, value: 64 }
+            MidiEvent::NoteVolume {
+                note: 60,
+                value: 64
+            }
         ));
 
         // 音量归零：仍要送达（插件据此把该音压到静音）。
@@ -804,7 +1041,12 @@ mod tests {
         use crate::model::{Clip, ClipId, Keyframe, Note, Track, TrackId};
         let mut p = Project::new("p");
         p.transport.tempo = 120.0;
-        p.transport.upsert_keyframe(Keyframe { beat: 2.0, tempo: 240.0, time_sig_num: 4, time_sig_den: 4 });
+        p.transport.upsert_keyframe(Keyframe {
+            beat: 2.0,
+            tempo: 240.0,
+            time_sig_num: 4,
+            time_sig_den: 4,
+        });
         p.tracks.push(Track {
             meta: None,
             id: TrackId(1),
@@ -815,7 +1057,19 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 4.0,
-                notes: vec![Note { id: 0, pitch: 60, start: 3.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
+                notes: vec![Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 60,
+                    start: 3.0,
+                    duration: 0.5,
+                    velocity: 100,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -862,25 +1116,40 @@ mod tests {
             automation: vec![],
         });
         // 轨道 1（下标 0）把信号发送给总线（轨道 2，下标 1）。
-        p.tracks[0].sends = vec![Send { target: TrackId(2), gain_db: 0.0 }];
+        p.tracks[0].sends = vec![Send {
+            target: TrackId(2),
+            gain_db: 0.0,
+        }];
         p.tracks[0].automation = vec![AutomationLane {
             param: "gain_db".into(),
-            points: vec![AutomationPoint { beat: 0.0, value: -3.0 }],
+            points: vec![AutomationPoint {
+                beat: 0.0,
+                value: -3.0,
+            }],
         }];
         let s = ScheduledEvents::from_project(&p, 48_000.0);
         assert_eq!(s.order, vec![0, 1], "发送目标必须排在来源之后");
         assert_eq!(s.tracks[0].sends.len(), 1);
         assert_eq!(s.tracks[0].sends[0].target_index, 1);
-        assert!((s.tracks[0].sends[0].gain - 1.0).abs() < 1e-6, "0 dB → 单位增益");
+        assert!(
+            (s.tracks[0].sends[0].gain - 1.0).abs() < 1e-6,
+            "0 dB → 单位增益"
+        );
         assert_eq!(s.tracks[0].lanes.len(), 1);
         assert_eq!(s.tracks[0].lanes[0].param, LaneTarget::GainDb);
 
         // 未知参数名不入表；指向不存在轨道的发送被丢掉。
         p.tracks[0].automation = vec![AutomationLane {
             param: "nope".into(),
-            points: vec![AutomationPoint { beat: 0.0, value: 1.0 }],
+            points: vec![AutomationPoint {
+                beat: 0.0,
+                value: 1.0,
+            }],
         }];
-        p.tracks[0].sends = vec![Send { target: TrackId(999), gain_db: 0.0 }];
+        p.tracks[0].sends = vec![Send {
+            target: TrackId(999),
+            gain_db: 0.0,
+        }];
         let s = ScheduledEvents::from_project(&p, 48_000.0);
         assert!(s.tracks[0].lanes.is_empty(), "未知参数不生成车道");
         assert!(s.tracks[0].sends.is_empty(), "悬空发送被丢弃");
@@ -891,12 +1160,34 @@ mod tests {
     fn structurally_impossible_lanes_are_dropped() {
         let mut p = project_with_note(); // 该轨 instrument: None、effects: 空
         p.tracks[0].automation = vec![
-            AutomationLane { param: "inst:cutoff".into(), points: vec![AutomationPoint { beat: 0.0, value: 1.0 }] },
-            AutomationLane { param: "fx0:mix".into(), points: vec![AutomationPoint { beat: 0.0, value: 1.0 }] },
-            AutomationLane { param: "gain_db".into(), points: vec![AutomationPoint { beat: 0.0, value: -3.0 }] },
+            AutomationLane {
+                param: "inst:cutoff".into(),
+                points: vec![AutomationPoint {
+                    beat: 0.0,
+                    value: 1.0,
+                }],
+            },
+            AutomationLane {
+                param: "fx0:mix".into(),
+                points: vec![AutomationPoint {
+                    beat: 0.0,
+                    value: 1.0,
+                }],
+            },
+            AutomationLane {
+                param: "gain_db".into(),
+                points: vec![AutomationPoint {
+                    beat: 0.0,
+                    value: -3.0,
+                }],
+            },
         ];
         let s = ScheduledEvents::from_project(&p, 48_000.0);
-        assert_eq!(s.tracks[0].lanes.len(), 1, "没有乐器 / 没有效果器时，插件参数车道要丢掉");
+        assert_eq!(
+            s.tracks[0].lanes.len(),
+            1,
+            "没有乐器 / 没有效果器时，插件参数车道要丢掉"
+        );
         assert_eq!(s.tracks[0].lanes[0].param, LaneTarget::GainDb);
 
         // 装上乐器之后，`inst:` 就该入表。
@@ -906,6 +1197,296 @@ mod tests {
             state: vec![],
         });
         let s = ScheduledEvents::from_project(&p, 48_000.0);
-        assert!(s.tracks[0].lanes.iter().any(|l| matches!(l.param, LaneTarget::Instrument(_))));
+        assert!(s.tracks[0]
+            .lanes
+            .iter()
+            .any(|l| matches!(l.param, LaneTarget::Instrument(_))));
+    }
+
+    #[test]
+    fn channel_pressure_lane_key_parses() {
+        assert_eq!(
+            LaneTarget::from_key("at:0"),
+            Some(LaneTarget::ChannelPressure(0))
+        );
+        assert_eq!(
+            LaneTarget::from_key("at:15"),
+            Some(LaneTarget::ChannelPressure(15))
+        );
+        assert_eq!(LaneTarget::from_key("at:16"), None, "通道最大 15");
+        assert_eq!(LaneTarget::from_key("at:"), None);
+        assert_eq!(LaneTarget::from_key("at:x"), None);
+    }
+
+    /// 没有 MPE 时所有音符走主通道 0；显式 `channel` 永远优先。
+    #[test]
+    fn notes_default_to_channel_zero_and_honor_an_explicit_channel() {
+        let mut p = project_with_note();
+        p.tracks[0].clips[0].notes.push(Note {
+            id: 0,
+            channel: Some(5),
+            pressure: None,
+            pitch: 64,
+            start: 1.0,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: crate::model::PitchExpression::NONE,
+        });
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        let channels: Vec<u8> = s.tracks[0]
+            .events
+            .iter()
+            .filter(|e| matches!(e.event, MidiEvent::NoteOn { .. }))
+            .map(|e| e.channel)
+            .collect();
+        assert_eq!(channels, vec![0, 5]);
+    }
+
+    /// MPE：同一起点重叠的两颗音必须分到不同成员通道；结束后通道可复用。
+    #[test]
+    fn mpe_gives_overlapping_notes_distinct_member_channels() {
+        use crate::model::{MpeConfig, MpeZone};
+
+        let mut p = project_with_note();
+        p.tracks[0].meta = Some(TrackMeta {
+            mpe: Some(MpeConfig {
+                channels: 4,
+                zone: MpeZone::Lower,
+            }),
+            ..TrackMeta::default()
+        });
+        let note = |pitch: u8| Note {
+            id: 0,
+            channel: None,
+            pressure: None,
+            pitch,
+            start: 1.0,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: crate::model::PitchExpression::NONE,
+        };
+        p.tracks[0].clips[0].notes = vec![note(60), note(64), note(67)];
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut channels: Vec<u8> = s.tracks[0]
+            .events
+            .iter()
+            .filter(|e| matches!(e.event, MidiEvent::NoteOn { .. }))
+            .map(|e| e.channel)
+            .collect();
+        channels.sort_unstable();
+        assert_eq!(
+            channels,
+            vec![1, 2, 3],
+            "Lower 区成员通道从 1 起，且互不相同"
+        );
+
+        // 后一个不重叠的音应复用最小空闲通道。
+        p.tracks[0].clips[0].notes.push(Note {
+            start: 3.0,
+            ..note(72)
+        });
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        let reused = s.tracks[0]
+            .events
+            .iter()
+            .filter(|e| matches!(e.event, MidiEvent::NoteOn { note: 72, .. }))
+            .map(|e| e.channel)
+            .next()
+            .unwrap();
+        assert_eq!(reused, 1, "已结束的音符通道会被复用");
+    }
+
+    /// 起音压力生成 PolyPressure 事件，且与 NoteOn 同帧、同通道。
+    #[test]
+    fn note_pressure_expands_into_poly_pressure() {
+        let mut p = project_with_note();
+        p.tracks[0].clips[0].notes[0].pressure = Some(80);
+        p.tracks[0].clips[0].notes[0].channel = Some(2);
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        let ev = &s.tracks[0].events;
+        let on = ev
+            .iter()
+            .position(|e| matches!(e.event, MidiEvent::NoteOn { note: 60, .. }))
+            .unwrap();
+        let pressure = ev
+            .iter()
+            .find(|e| matches!(e.event, MidiEvent::PolyPressure { note: 60, .. }))
+            .unwrap();
+        assert_eq!(
+            pressure.event,
+            MidiEvent::PolyPressure {
+                note: 60,
+                value: 80
+            }
+        );
+        assert_eq!(pressure.frame, ev[on].frame);
+        assert_eq!(pressure.channel, 2);
+    }
+
+    /// 奏法标签 → keyswitch：切换必须发生在起音之前（提前量），momentary 结束后恢复默认。
+    #[test]
+    fn articulation_tags_expand_into_keyswitches_before_the_note() {
+        use crate::model::{ArticulationSwitch, NoteTag};
+
+        let mut p = project_with_note();
+        // project_with_note 的音符 id 是 0（track 1 / clip 1）。
+        p.note_tags.insert(
+            "1:1:0".into(),
+            NoteTag {
+                ornament: None,
+                articulation: Some("harmonics".into()),
+            },
+        );
+        let mut articulations = std::collections::BTreeMap::new();
+        articulations.insert(
+            "harmonics".to_string(),
+            ArticulationSwitch {
+                keyswitch: Some(24),
+                momentary: Some(true),
+                ..Default::default()
+            },
+        );
+        articulations.insert(
+            "normal".to_string(),
+            ArticulationSwitch {
+                keyswitch: Some(25),
+                ..Default::default()
+            },
+        );
+        p.tracks[0].meta = Some(TrackMeta {
+            articulations,
+            default_articulation: Some("normal".into()),
+            ..TrackMeta::default()
+        });
+
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        let ev = &s.tracks[0].events;
+        let on = ev
+            .iter()
+            .find(|e| matches!(e.event, MidiEvent::NoteOn { note: 60, .. }))
+            .unwrap();
+        let switch = ev
+            .iter()
+            .find(|e| matches!(e.event, MidiEvent::NoteOn { note: 24, .. }))
+            .unwrap();
+        assert!(
+            switch.frame < on.frame,
+            "keyswitch 必须在起音之前：{switch:?} vs {on:?}"
+        );
+        // momentrary：音符结束后切回默认奏法（keyswitch 25）。起点还有一条默认切换，跳过它。
+        let restore = ev
+            .iter()
+            .filter(|e| matches!(e.event, MidiEvent::NoteOn { note: 25, .. }))
+            .find(|e| e.frame >= on.frame + 24_000)
+            .unwrap();
+        assert!(
+            restore.frame >= on.frame + 24_000,
+            "恢复应发生在音符结束之后"
+        );
+    }
+
+    /// 导入的多消息奏法：顺序保留、逐事件通道生效、NoteOn 自动配 NoteOff，
+    /// 且同一帧内切换事件必须排在音符起音之前。
+    #[test]
+    fn imported_articulation_messages_keep_order_and_offsets() {
+        use crate::model::{ArticulationEvent, ArticulationSwitch, NoteTag};
+
+        let mut p = project_with_note();
+        p.note_tags.insert(
+            "1:1:0".into(),
+            NoteTag {
+                ornament: None,
+                articulation: Some("slide".into()),
+            },
+        );
+        let mut articulations = std::collections::BTreeMap::new();
+        articulations.insert(
+            "slide".to_string(),
+            ArticulationSwitch {
+                events: vec![
+                    ArticulationEvent {
+                        offset_beats: 0.0,
+                        channel: Some(2),
+                        event: MidiEvent::ControlChange {
+                            controller: 32,
+                            value: 5,
+                        },
+                    },
+                    ArticulationEvent {
+                        offset_beats: 0.0,
+                        channel: None,
+                        event: MidiEvent::NoteOn {
+                            note: 24,
+                            velocity: 1,
+                        },
+                    },
+                ],
+                lead_beats: Some(0.0),
+                ..Default::default()
+            },
+        );
+        p.tracks[0].meta = Some(TrackMeta {
+            articulations,
+            ..TrackMeta::default()
+        });
+
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        let ev = &s.tracks[0].events;
+        let index = |predicate: fn(&ScheduledMidi) -> bool| ev.iter().position(predicate).unwrap();
+        let cc = index(|e| {
+            matches!(
+                e.event,
+                MidiEvent::ControlChange {
+                    controller: 32,
+                    value: 5
+                }
+            )
+        });
+        let switch_on = index(|e| matches!(e.event, MidiEvent::NoteOn { note: 24, .. }));
+        let switch_off = index(|e| matches!(e.event, MidiEvent::NoteOff { note: 24 }));
+        let note_on = index(|e| matches!(e.event, MidiEvent::NoteOn { note: 60, .. }));
+
+        assert_eq!(ev[cc].channel, 2, "逐事件通道覆盖音符通道");
+        assert!(cc < note_on, "CC 必须在起音之前");
+        assert!(switch_on < note_on, "keyswitch 必须在起音之前");
+        assert!(switch_off > switch_on, "自动 NoteOff 必须在 NoteOn 之后");
+        assert!(ev[switch_off].frame > ev[switch_on].frame);
+    }
+
+    /// 通用事件表与音符事件一起排序，通道按条目走。
+    #[test]
+    fn midi_events_are_merged_and_sorted() {
+        use crate::model::MidiEventAt;
+
+        let mut p = project_with_note();
+        p.tracks[0].meta = Some(TrackMeta {
+            midi_events: vec![MidiEventAt {
+                beat: 3.0,
+                channel: 4,
+                event: MidiEvent::ControlChange {
+                    controller: 64,
+                    value: 0,
+                },
+            }],
+            ..TrackMeta::default()
+        });
+        let s = ScheduledEvents::from_project(&p, 48_000.0);
+        let ev = &s.tracks[0].events;
+        let cc = ev
+            .iter()
+            .find(|e| matches!(e.event, MidiEvent::ControlChange { .. }))
+            .unwrap();
+        assert_eq!(cc.frame, 72_000, "第 3 拍 = 72000 帧");
+        assert_eq!(cc.channel, 4);
+        assert!(
+            ev.windows(2).all(|w| w[0].frame <= w[1].frame),
+            "事件必须按帧有序"
+        );
     }
 }

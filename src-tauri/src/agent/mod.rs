@@ -47,7 +47,10 @@ fn chat_actor() -> Actor {
 
 /// 系统提示词：角色 + skills 索引（细则让模型自己调 `aidaw_help` 取，渐进式披露）。
 fn system_prompt() -> String {
-    let index = crate::mcp::SKILL_DOCS.first().map(|(_, text)| *text).unwrap_or("");
+    let index = crate::mcp::SKILL_DOCS
+        .first()
+        .map(|(_, text)| *text)
+        .unwrap_or("");
     format!(
         "你是内嵌在 AI DAW 里的编曲助手，通过工具操纵当前工程（轨道、片段、音符、混音、\
 生成、分析等）。先用 get_project_overview 了解现状（轨道 / 乐器 / 片段 id 与音符数），\
@@ -74,13 +77,28 @@ pub enum AgentEvent {
     /// 思考增量。
     Reasoning { node_id: String, text: String },
     /// 一次工具调用已发出。
-    ToolCall { node_id: String, call_id: String, name: String, args: serde_json::Value },
+    ToolCall {
+        node_id: String,
+        call_id: String,
+        name: String,
+        args: serde_json::Value,
+    },
     /// 工具返回。
-    ToolResult { node_id: String, call_id: String, ok: bool, output: String },
+    ToolResult {
+        node_id: String,
+        call_id: String,
+        ok: bool,
+        output: String,
+    },
     /// 一个节点已定稿（助手 / 工具）。
     NodeAdded { node: Node },
     /// 一轮结束。
-    TurnFinished { session_id: String, head: String, title: String, stopped: bool },
+    TurnFinished {
+        session_id: String,
+        head: String,
+        title: String,
+        stopped: bool,
+    },
     /// 出错（网络 / 端点 / 未配置等）。
     Error { message: String },
 }
@@ -126,19 +144,41 @@ pub fn agent_set_config(
     api_key: String,
     model: String,
 ) -> AgentConfig {
-    runtime.set(AgentConfig { base_url, api_key, model })
+    runtime.set(AgentConfig {
+        base_url,
+        api_key,
+        model,
+    })
 }
 
 /// 拉取模型的 id 列表（用**传入的**配置，不写盘——便于测试尚未保存的值）。
 #[tauri::command]
-pub async fn agent_models(base_url: String, api_key: String, model: String) -> Result<Vec<String>, String> {
-    openai::list_models(&AgentConfig { base_url, api_key, model }).await
+pub async fn agent_models(
+    base_url: String,
+    api_key: String,
+    model: String,
+) -> Result<Vec<String>, String> {
+    openai::list_models(&AgentConfig {
+        base_url,
+        api_key,
+        model,
+    })
+    .await
 }
 
 /// 测试连通性（同样用传入的配置，不写盘）。
 #[tauri::command]
-pub async fn agent_test(base_url: String, api_key: String, model: String) -> Result<openai::AgentProbe, String> {
-    Ok(openai::test_connection(&AgentConfig { base_url, api_key, model }).await)
+pub async fn agent_test(
+    base_url: String,
+    api_key: String,
+    model: String,
+) -> Result<openai::AgentProbe, String> {
+    Ok(openai::test_connection(&AgentConfig {
+        base_url,
+        api_key,
+        model,
+    })
+    .await)
 }
 
 /// 全部会话摘要。
@@ -150,7 +190,10 @@ pub fn agent_sessions(runtime: State<'_, AgentRuntime>) -> Vec<SessionSummary> {
 /// 载入一个会话（含完整节点树）。
 #[tauri::command]
 pub fn agent_session(runtime: State<'_, AgentRuntime>, id: String) -> Result<Session, String> {
-    runtime.sessions.load(&id).ok_or_else(|| format!("会话不存在：{id}"))
+    runtime
+        .sessions
+        .load(&id)
+        .ok_or_else(|| format!("会话不存在：{id}"))
 }
 
 /// 删除一个会话。
@@ -161,8 +204,15 @@ pub fn agent_delete_session(runtime: State<'_, AgentRuntime>, id: String) {
 
 /// 切换某会话的活跃分支（`head`）。
 #[tauri::command]
-pub fn agent_set_head(runtime: State<'_, AgentRuntime>, id: String, node_id: String) -> Result<Session, String> {
-    let mut session = runtime.sessions.load(&id).ok_or_else(|| format!("会话不存在：{id}"))?;
+pub fn agent_set_head(
+    runtime: State<'_, AgentRuntime>,
+    id: String,
+    node_id: String,
+) -> Result<Session, String> {
+    let mut session = runtime
+        .sessions
+        .load(&id)
+        .ok_or_else(|| format!("会话不存在：{id}"))?;
     session.head = Some(node_id);
     session.updated_at = now_millis();
     runtime.sessions.save(&session)?;
@@ -265,29 +315,42 @@ fn build_messages(session: &Session) -> Vec<serde_json::Value> {
     let mut path: Vec<&Node> = Vec::new();
     let mut cursor = session.head.clone();
     while let Some(id) = cursor {
-        let Some(node) = session.nodes.iter().find(|n| n.id == id) else { break };
+        let Some(node) = session.nodes.iter().find(|n| n.id == id) else {
+            break;
+        };
         path.push(node);
         cursor = node.parent.clone();
     }
     path.reverse();
     // 只认「有调用、也有结果」的工具对。取消 / 中断可能在助手节点里留下半截
     // 调用（没有对应的 tool 消息），原样发给模型会被 OpenAI 兼容端点判成非法消息。
-    let called: std::collections::HashSet<&str> =
-        path.iter().filter(|n| n.role == "assistant").flat_map(|n| n.tool_calls.iter().map(|c| c.id.as_str())).collect();
-    let answered: std::collections::HashSet<&str> =
-        path.iter().filter(|n| n.role == "tool").filter_map(|n| n.tool_call_id.as_deref()).collect();
+    let called: std::collections::HashSet<&str> = path
+        .iter()
+        .filter(|n| n.role == "assistant")
+        .flat_map(|n| n.tool_calls.iter().map(|c| c.id.as_str()))
+        .collect();
+    let answered: std::collections::HashSet<&str> = path
+        .iter()
+        .filter(|n| n.role == "tool")
+        .filter_map(|n| n.tool_call_id.as_deref())
+        .collect();
     let paired = |id: &str| called.contains(id) && answered.contains(id);
 
     for node in path {
         match node.role.as_str() {
             "user" => out.push(serde_json::json!({ "role": "user", "content": node.content })),
             "assistant" => {
-                let calls: Vec<&ToolCallRef> =
-                    node.tool_calls.iter().filter(|c| paired(c.id.as_str())).collect();
+                let calls: Vec<&ToolCallRef> = node
+                    .tool_calls
+                    .iter()
+                    .filter(|c| paired(c.id.as_str()))
+                    .collect();
                 if calls.is_empty() {
                     // 没有可用工具调用的节点退化成普通助手消息；连正文都没有就跳过。
                     if !node.content.is_empty() {
-                        out.push(serde_json::json!({ "role": "assistant", "content": node.content }));
+                        out.push(
+                            serde_json::json!({ "role": "assistant", "content": node.content }),
+                        );
                     }
                 } else {
                     let calls: Vec<serde_json::Value> = calls
@@ -312,7 +375,9 @@ fn build_messages(session: &Session) -> Vec<serde_json::Value> {
                 }
             }
             "tool" => {
-                let Some(id) = node.tool_call_id.as_deref() else { continue };
+                let Some(id) = node.tool_call_id.as_deref() else {
+                    continue;
+                };
                 if !paired(id) {
                     continue;
                 }
@@ -370,7 +435,13 @@ async fn run_turn(
     }
     session.head = Some(user_node.id.clone());
     session.updated_at = now_millis();
-    let _ = app.emit(EVENT_AGENT, AgentEvent::TurnStarted { session_id: session.id.clone(), user_node });
+    let _ = app.emit(
+        EVENT_AGENT,
+        AgentEvent::TurnStarted {
+            session_id: session.id.clone(),
+            user_node,
+        },
+    );
     let _ = rt.sessions.save(&session);
 
     let tools = tool_defs_json();
@@ -400,7 +471,10 @@ async fn run_turn(
                     last_emit = Instant::now();
                     let _ = emit_app.emit(
                         EVENT_AGENT,
-                        AgentEvent::Delta { node_id: emit_id.clone(), text: std::mem::take(&mut pending_text) },
+                        AgentEvent::Delta {
+                            node_id: emit_id.clone(),
+                            text: std::mem::take(&mut pending_text),
+                        },
                     );
                 }
             }
@@ -411,7 +485,10 @@ async fn run_turn(
                     last_emit = Instant::now();
                     let _ = emit_app.emit(
                         EVENT_AGENT,
-                        AgentEvent::Reasoning { node_id: emit_id.clone(), text: std::mem::take(&mut pending_reasoning) },
+                        AgentEvent::Reasoning {
+                            node_id: emit_id.clone(),
+                            text: std::mem::take(&mut pending_reasoning),
+                        },
                     );
                 }
             }
@@ -422,13 +499,19 @@ async fn run_turn(
         if !pending_text.is_empty() {
             let _ = app.emit(
                 EVENT_AGENT,
-                AgentEvent::Delta { node_id: asst_id.clone(), text: std::mem::take(&mut pending_text) },
+                AgentEvent::Delta {
+                    node_id: asst_id.clone(),
+                    text: std::mem::take(&mut pending_text),
+                },
             );
         }
         if !pending_reasoning.is_empty() {
             let _ = app.emit(
                 EVENT_AGENT,
-                AgentEvent::Reasoning { node_id: asst_id.clone(), text: std::mem::take(&mut pending_reasoning) },
+                AgentEvent::Reasoning {
+                    node_id: asst_id.clone(),
+                    text: std::mem::take(&mut pending_reasoning),
+                },
             );
         }
 
@@ -457,7 +540,11 @@ async fn run_turn(
         };
         // 用户中途停止时，流里可能只攒到半个工具调用：别把它当成一次真实调用
         // 落盘（否则下一条消息会带着没有结果的 tool_calls，被端点拒绝）。
-        let calls = if token.is_cancelled() { Vec::new() } else { calls };
+        let calls = if token.is_cancelled() {
+            Vec::new()
+        } else {
+            calls
+        };
 
         let node = Node {
             id: asst_id.clone(),
@@ -467,7 +554,11 @@ async fn run_turn(
             reasoning: non_empty(reasoning),
             tool_calls: calls
                 .iter()
-                .map(|c| ToolCallRef { id: c.id.clone(), name: c.name.clone(), arguments: c.arguments.clone() })
+                .map(|c| ToolCallRef {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    arguments: c.arguments.clone(),
+                })
                 .collect(),
             tool_call_id: None,
             name: None,
@@ -617,7 +708,11 @@ mod tests {
     }
 
     fn call(id: &str) -> ToolCallRef {
-        ToolCallRef { id: id.into(), name: "add_note".into(), arguments: "{}".into() }
+        ToolCallRef {
+            id: id.into(),
+            name: "add_note".into(),
+            arguments: "{}".into(),
+        }
     }
 
     fn session(nodes: Vec<Node>, head: &str) -> Session {
@@ -660,7 +755,10 @@ mod tests {
 
         let msgs = build_messages(&s);
         assert_eq!(msgs.len(), 3);
-        assert!(msgs[2].get("tool_calls").is_none(), "no dangling call: {msgs:#?}");
+        assert!(
+            msgs[2].get("tool_calls").is_none(),
+            "no dangling call: {msgs:#?}"
+        );
         assert_eq!(msgs[2]["content"], "我先想一下。");
     }
 
@@ -671,6 +769,10 @@ mod tests {
         let s = session(vec![node("u", None, "user"), asst], "a");
 
         let msgs = build_messages(&s);
-        assert_eq!(msgs.len(), 2, "empty assistant step should disappear: {msgs:#?}");
+        assert_eq!(
+            msgs.len(),
+            2,
+            "empty assistant step should disappear: {msgs:#?}"
+        );
     }
 }

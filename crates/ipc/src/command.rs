@@ -1,7 +1,8 @@
 use crate::model::{
-    AudioSource, AutomationPoint, BeatFilter, ClipId, ClipPlacement, ClipRef, FitMode, HarmonyBar,
-    Note, NoteEdit, NotePatch, NoteRange, NoteTag, PitchRange, Section, Send, StrumDirection,
-    TrackId, VelocityShape,
+    ArticulationSource, ArticulationSwitch, AudioSource, AutomationPoint, BeatFilter, ClipId,
+    ClipPlacement, ClipRef, CueSheetPlan, FitMode, HarmonyBar, MidiEventAt, MpeConfig, Note,
+    NoteEdit, NotePatch, NoteRange, NoteTag, PitchRange, Section, Send, StrumDirection, TrackId,
+    VelocityShape,
 };
 
 /// 命令：期望的状态变更请求。
@@ -15,7 +16,12 @@ pub enum Command {
     /// 设置拍号（分子 / 分母）；越界值会被归一化。
     SetTimeSignature { num: u8, den: u8 },
     /// 在第 `beat` 拍插入/更新一个关键点（同时带 BPM 与拍号）。`beat <= 0` 会被忽略。
-    SetKeyframe { beat: f64, tempo: f64, num: u8, den: u8 },
+    SetKeyframe {
+        beat: f64,
+        tempo: f64,
+        num: u8,
+        den: u8,
+    },
     /// 删除第 `beat` 拍的关键点（容差内匹配）。
     RemoveKeyframe { beat: f64 },
     /// 新增一条轨道。
@@ -51,35 +57,82 @@ pub enum Command {
     /// 为轨道设置乐器插件。
     SetTrackInstrument { track: TrackId, plugin_id: String },
     /// 在轨道上新增一个 MIDI 片段。
-    AddClip { track: TrackId, start: f64, length: f64 },
+    AddClip {
+        track: TrackId,
+        start: f64,
+        length: f64,
+    },
     /// 在轨道上新增一个**音频片段**（素材由 `source.path` 指向）。
     ///
     /// `length`（拍）决定时间轴跨度；素材会**铺满**该跨度（缩放/改速度 → 按比例重采样，会变调）。
-    AddAudioClip { track: TrackId, start: f64, length: f64, source: AudioSource },
+    AddAudioClip {
+        track: TrackId,
+        start: f64,
+        length: f64,
+        source: AudioSource,
+    },
     /// 改写片段的音频素材。`None` 表示把它**变回 MIDI 片段**（同时清空音符）。
-    SetClipAudio { track: TrackId, clip: ClipId, audio: Option<AudioSource> },
+    SetClipAudio {
+        track: TrackId,
+        clip: ClipId,
+        audio: Option<AudioSource>,
+    },
     /// 设置音频片段的**播放速度**（`rate`，1.0 = 原速）与**升降调**（半音，0 = 不变）。
     ///
     /// 只对**音频片段**有效：对 MIDI 片段安静忽略（`translate` 里返回空）。数值会被归一化。
-    SetClipRate { track: TrackId, clip: ClipId, rate: f64, pitch_semitones: f64 },
+    SetClipRate {
+        track: TrackId,
+        clip: ClipId,
+        rate: f64,
+        pitch_semitones: f64,
+    },
     /// 从轨道上删除一个片段。
     RemoveClip { track: TrackId, clip: ClipId },
     /// 把片段移动到新的起始拍。
-    MoveClip { track: TrackId, clip: ClipId, start: f64 },
+    MoveClip {
+        track: TrackId,
+        clip: ClipId,
+        start: f64,
+    },
     /// 批量移动片段（多选拖动，一次提交一条撤销记录）。
     MoveClips { items: Vec<ClipPlacement> },
     /// 改变片段长度（拍）。
-    ResizeClip { track: TrackId, clip: ClipId, length: f64 },
+    ResizeClip {
+        track: TrackId,
+        clip: ClipId,
+        length: f64,
+    },
     /// 在片段的指定位置新增一个音符。
-    AddNote { track: TrackId, clip: ClipId, note: Note },
+    AddNote {
+        track: TrackId,
+        clip: ClipId,
+        note: Note,
+    },
     /// 改写片段内的某个音符（按片段内的索引定位）。
-    SetNote { track: TrackId, clip: ClipId, index: usize, note: Note },
+    SetNote {
+        track: TrackId,
+        clip: ClipId,
+        index: usize,
+        note: Note,
+    },
     /// 批量改写片段内的多个音符（多选拖动、属性面板一次改多个）。
-    SetNotes { track: TrackId, clip: ClipId, entries: Vec<NoteEdit> },
+    SetNotes {
+        track: TrackId,
+        clip: ClipId,
+        entries: Vec<NoteEdit>,
+    },
     /// 删除片段内的某个音符（按片段内的索引定位）。
-    RemoveNote { track: TrackId, clip: ClipId, index: usize },
+    RemoveNote {
+        track: TrackId,
+        clip: ClipId,
+        index: usize,
+    },
     /// 批量删除片段内的多个音符（框选后删除）。
-    RemoveNotes { track: TrackId, clip: ClipId, indices: Vec<usize> },
+    RemoveNotes {
+        track: TrackId,
+        clip: ClipId,
+        indices: Vec<usize>,
+    },
     /// 批量删除片段（可跨轨道）。
     RemoveClips { items: Vec<ClipRef> },
     /// 设置轨道增益（dB）。
@@ -97,44 +150,97 @@ pub enum Command {
     /// 设置一条自动化车道（**整体替换**该参数的曲线；`points` 为空 = 删除该车道）。
     ///
     /// `param` 取名如 `"gain_db"` / `"pan"`；未知名字会被保留但求值时忽略。
-    SetAutomation { track: TrackId, param: String, points: Vec<AutomationPoint> },
+    SetAutomation {
+        track: TrackId,
+        param: String,
+        points: Vec<AutomationPoint>,
+    },
     /// 设置轨道乐器的某个参数。
-    SetParam { track: TrackId, param: String, value: f32 },
+    SetParam {
+        track: TrackId,
+        param: String,
+        value: f32,
+    },
     /// 在轨道效果链末尾追加一个效果器。
     AddEffect { track: TrackId, plugin_id: String },
     /// 从轨道效果链移除一个效果器（按链内序号）。
     RemoveEffect { track: TrackId, index: usize },
     /// 调整效果器在链中的位置（`from` → `to`）。
-    MoveEffect { track: TrackId, from: usize, to: usize },
+    MoveEffect {
+        track: TrackId,
+        from: usize,
+        to: usize,
+    },
     /// 设置轨道效果器的某个参数（按链内序号定位）。
-    SetEffectParam { track: TrackId, index: usize, param: String, value: f32 },
+    SetEffectParam {
+        track: TrackId,
+        index: usize,
+        param: String,
+        value: f32,
+    },
     /// 在第 `beat` 拍切分一个片段（razor）。
     ///
     /// 左半段沿用原 `clip`（id 不变），右半段是新片段。`beat` 必须落在片段内部，否则安静忽略。
     /// 音频片段需要有素材窗口长度（`AudioSource::frames`）才能切分——否则无法确定「左半段到哪里停」。
-    SplitClip { track: TrackId, clip: ClipId, beat: f64 },
+    SplitClip {
+        track: TrackId,
+        clip: ClipId,
+        beat: f64,
+    },
     /// 重命名整个工程。
     RenameProject { name: String },
     /// 新建工程：清空并铺上默认分轨模板（引擎里的 `STARTER_TRACKS`）。
     ///
     /// `track_names` 是**按模板顺序**给出的分轨名（界面按当前语言生成）。
     /// 传 `None` 就用模板自带的默认名（引擎侧不认语言，只有界面知道该写什么）。
-    NewProject { name: String, track_names: Option<Vec<String>> },
+    NewProject {
+        name: String,
+        track_names: Option<Vec<String>>,
+    },
+    /// 新建工程，**只创建给定的轨道**（不铺默认分轨模板）。
+    ///
+    /// 与 `NewProject` 的区别：`NewProject` 是「模板 + 按语言改名」，这里则是「按名字建 N 条」。
+    /// agent 从影片清单起工程时用它，避免建完再删掉三条模板轨。
+    NewProjectWithTracks {
+        name: String,
+        track_names: Vec<String>,
+    },
 
     // ---- 批量音符（编曲主力） ----
     /// 一次新增一组音符（**一次事务** = 一条撤销记录）。
     ///
     /// 编曲通常一次产生几十到几百个音符；逐个 `AddNote` 会让撤销变成灾难。
     /// 音符的 `id` 由引擎发放，调用方给的 id 会被忽略。
-    AddNotes { track: TrackId, clip: ClipId, notes: Vec<Note> },
+    AddNotes {
+        track: TrackId,
+        clip: ClipId,
+        notes: Vec<Note>,
+    },
     /// **原子替换**片段内的全部音符（清空后写入；`notes` 为空 = 清空片段）。
-    ReplaceNotes { track: TrackId, clip: ClipId, notes: Vec<Note> },
+    ReplaceNotes {
+        track: TrackId,
+        clip: ClipId,
+        notes: Vec<Note>,
+    },
     /// 按 **id** 批量改写音符；只改给出的字段。
-    UpdateNotes { track: TrackId, clip: ClipId, updates: Vec<NotePatch> },
+    UpdateNotes {
+        track: TrackId,
+        clip: ClipId,
+        updates: Vec<NotePatch>,
+    },
     /// 按 **id** 批量删除音符。
-    RemoveNotesById { track: TrackId, clip: ClipId, ids: Vec<u64> },
+    RemoveNotesById {
+        track: TrackId,
+        clip: ClipId,
+        ids: Vec<u64>,
+    },
     /// 批量移调（半音）；可选范围限定。
-    TransposeNotes { track: TrackId, clip: ClipId, semitones: i32, range: Option<NoteRange> },
+    TransposeNotes {
+        track: TrackId,
+        clip: ClipId,
+        semitones: i32,
+        range: Option<NoteRange>,
+    },
     /// 批量设置力度（固定值 / 渐变 / 缩放），可按拍位过滤。
     SetNoteVelocity {
         track: TrackId,
@@ -193,7 +299,19 @@ pub enum Command {
         group_by_start: bool,
     },
     /// 写入 / 清除一个音符的标签（装饰音 / 奏法）；`None` = 移除。
-    SetNoteTag { track: TrackId, clip: ClipId, id: u64, tag: Option<NoteTag> },
+    SetNoteTag {
+        track: TrackId,
+        clip: ClipId,
+        id: u64,
+        tag: Option<NoteTag>,
+    },
+    /// 一次给多个音符写同一个标签（多选切换奏法 = 一个撤销步）。
+    SetNoteTags {
+        track: TrackId,
+        clip: ClipId,
+        ids: Vec<u64>,
+        tag: Option<NoteTag>,
+    },
     /// 把音符收进指定音域：`Fold` 做八度折返（不改音级），`Report` 只统计不改动。
     FitNotesToRange {
         track: TrackId,
@@ -231,4 +349,28 @@ pub enum Command {
         pitch_range: Option<PitchRange>,
         pitch_bend_range: Option<f32>,
     },
+    /// 设置轨道的 MPE 配置；`None` = 关闭（所有音符走主通道）。
+    SetMpe {
+        track: TrackId,
+        config: Option<MpeConfig>,
+    },
+    /// 整体替换轨道的通用 MIDI 事件表（空 = 清空）。
+    SetMidiEvents {
+        track: TrackId,
+        events: Vec<MidiEventAt>,
+    },
+    /// 整体替换轨道的奏法映射（空 = 清空）。
+    SetArticulations {
+        track: TrackId,
+        articulations: std::collections::BTreeMap<String, ArticulationSwitch>,
+        default: Option<String>,
+        /// 映射来源（从映射库导入时写入）；`None` = 手工配置。
+        source: Option<ArticulationSource>,
+    },
+
+    /// 按影片清单一次性建立编曲骨架：速度 / 拍号 / 段落 / 和弦 / 轨道 / 乐器 / 片段。
+    ///
+    /// 所有轨道与片段的 id 都在**同一次** `translate` 里分配，因此整份清单只占一个撤销步——
+    /// 这正是 `import_cue_sheet` 需要的语义（agent 不应该为了导入 20 段配乐按 200 次撤销）。
+    ApplyCueSheet { plan: CueSheetPlan },
 }

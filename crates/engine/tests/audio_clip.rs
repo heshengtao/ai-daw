@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use ai_daw_analysis::{analyze, Report};
 use ai_daw_engine::audio::DecodedAudio;
-use ai_daw_engine::model::{AudioSource, Clip, ClipId, Note, PluginInstance, Project, Track, TrackId};
+use ai_daw_engine::model::{
+    AudioSource, Clip, ClipId, Note, PluginInstance, Project, Track, TrackId,
+};
 use ai_daw_engine::player::Player;
 use ai_daw_engine::registry::PluginRegistry;
 use ai_daw_engine::render::{render, render_with_assets, RenderOptions};
@@ -36,7 +38,11 @@ fn sine_at(freq: f64, amp: f64, seconds: f64, sr: f64) -> Arc<DecodedAudio> {
         samples.push(s);
         samples.push(s);
     }
-    Arc::new(DecodedAudio { samples: samples.into(), channels: 2, sample_rate: sr })
+    Arc::new(DecodedAudio {
+        samples: samples.into(),
+        channels: 2,
+        sample_rate: sr,
+    })
 }
 
 /// 生成一段**单声道阶梯**素材：第 `f` 帧的值 = `f / frames`。
@@ -44,7 +50,11 @@ fn sine_at(freq: f64, amp: f64, seconds: f64, sr: f64) -> Arc<DecodedAudio> {
 /// 正弦每周期都长一样，定位错半秒看不出来；阶梯的每个位置都有唯一值，因此能精确断言「从哪一帧开始播」。
 fn ramp(frames: usize) -> Arc<DecodedAudio> {
     let samples: Vec<f32> = (0..frames).map(|f| f as f32 / frames as f32).collect();
-    Arc::new(DecodedAudio { samples: samples.into(), channels: 1, sample_rate: SR })
+    Arc::new(DecodedAudio {
+        samples: samples.into(),
+        channels: 1,
+        sample_rate: SR,
+    })
 }
 
 fn assets(path: &str, audio: Arc<DecodedAudio>) -> Assets {
@@ -68,7 +78,13 @@ fn project_with_audio(path: &str, start_beats: f64, length_beats: f64) -> Projec
             start: start_beats,
             length: length_beats,
             notes: vec![],
-            audio: Some(AudioSource { path: path.into(), offset_frames: 0, frames: None, rate: 1.0, pitch_semitones: 0.0 }),
+            audio: Some(AudioSource {
+                path: path.into(),
+                offset_frames: 0,
+                frames: None,
+                rate: 1.0,
+                pitch_semitones: 0.0,
+            }),
         }],
         mixer: Default::default(),
         sends: vec![],
@@ -78,18 +94,24 @@ fn project_with_audio(path: &str, start_beats: f64, length_beats: f64) -> Projec
 }
 
 fn options() -> RenderOptions {
-    RenderOptions { sample_rate: SR, tail_seconds: 0.0, settle_seconds: 0.0 }
+    RenderOptions {
+        sample_rate: SR,
+        tail_seconds: 0.0,
+        settle_seconds: 0.0,
+    }
 }
 
 fn peak_hz(report: &Report) -> f64 {
-    let (bin, _) = report
-        .spectrum
-        .magnitudes_db
-        .iter()
-        .enumerate()
-        .fold((0usize, f64::NEG_INFINITY), |(bi, bd), (i, d)| {
-            if *d > bd { (i, *d) } else { (bi, bd) }
-        });
+    let (bin, _) = report.spectrum.magnitudes_db.iter().enumerate().fold(
+        (0usize, f64::NEG_INFINITY),
+        |(bi, bd), (i, d)| {
+            if *d > bd {
+                (i, *d)
+            } else {
+                (bi, bd)
+            }
+        },
+    );
     bin as f64 * report.spectrum.bin_hz
 }
 
@@ -102,7 +124,12 @@ fn audio_clip_renders_at_natural_pitch_and_level() {
     // 1 秒素材 = 120 BPM 下的 2 拍 → 比值正好 1（仅采样率换算）。
     let project = project_with_audio("/tmp/a.wav", 0.0, 2.0);
     let audio = assets("/tmp/a.wav", sine(1_000.0, 1.0, 1.0));
-    let buffer = render_with_assets(&project, &PluginRegistry::with_builtins(), &options(), &audio);
+    let buffer = render_with_assets(
+        &project,
+        &PluginRegistry::with_builtins(),
+        &options(),
+        &audio,
+    );
 
     assert_eq!(buffer.frames(), 48_000, "1 秒素材应当渲染成 48000 帧");
 
@@ -127,7 +154,12 @@ fn audio_clip_starts_exactly_at_its_start_beat() {
     // 放在第 4 拍（= 2.0 s = 96000 帧）；前面必须是纯静音。
     let project = project_with_audio("/tmp/a.wav", 4.0, 2.0);
     let audio = assets("/tmp/a.wav", sine(1_000.0, 1.0, 1.0));
-    let buffer = render_with_assets(&project, &PluginRegistry::with_builtins(), &options(), &audio);
+    let buffer = render_with_assets(
+        &project,
+        &PluginRegistry::with_builtins(),
+        &options(),
+        &audio,
+    );
 
     let data = buffer.data();
     let start = (4.0 * FRAMES_PER_BEAT as f64) as usize * 2;
@@ -140,7 +172,12 @@ fn resizing_the_box_does_not_change_pitch() {
     // 「拍长」只决定方框；素材**原速**播放——缩短方框只会**截断**，不改音高（与工程 BPM 解耦）。
     let project = project_with_audio("/tmp/a.wav", 0.0, 1.0);
     let audio = assets("/tmp/a.wav", sine(1_000.0, 1.0, 1.0));
-    let buffer = render_with_assets(&project, &PluginRegistry::with_builtins(), &options(), &audio);
+    let buffer = render_with_assets(
+        &project,
+        &PluginRegistry::with_builtins(),
+        &options(),
+        &audio,
+    );
 
     assert_eq!(buffer.frames(), 24_000, "方框减半 → 总长减半（截断）");
     let report = analyze(buffer.data(), 2, SR).unwrap();
@@ -157,7 +194,12 @@ fn tempo_change_does_not_change_audio_pitch() {
     let mut project = project_with_audio("/tmp/a.wav", 0.0, 2.0);
     project.transport.tempo = 240.0;
     let audio = assets("/tmp/a.wav", sine(1_000.0, 1.0, 1.0));
-    let buffer = render_with_assets(&project, &PluginRegistry::with_builtins(), &options(), &audio);
+    let buffer = render_with_assets(
+        &project,
+        &PluginRegistry::with_builtins(),
+        &options(),
+        &audio,
+    );
     let report = analyze(buffer.data(), 2, SR).unwrap();
     assert!(
         (peak_hz(&report) - 1_000.0).abs() < 2.0 * report.spectrum.bin_hz,
@@ -175,7 +217,12 @@ fn material_at_another_sample_rate_keeps_its_duration_and_pitch() {
     // 1 秒 1 kHz 素材，录在 44.1 kHz；方框 = 120 BPM 下 2 拍 = 1 秒（48 kHz 下 48000 帧）。
     let project = project_with_audio("/tmp/a.wav", 0.0, 2.0);
     let audio = assets("/tmp/a.wav", sine_at(1_000.0, 1.0, 1.0, 44_100.0));
-    let buffer = render_with_assets(&project, &PluginRegistry::with_builtins(), &options(), &audio);
+    let buffer = render_with_assets(
+        &project,
+        &PluginRegistry::with_builtins(),
+        &options(),
+        &audio,
+    );
 
     assert_eq!(buffer.frames(), 48_000, "方框仍是 1 秒");
     let report = analyze(buffer.data(), 2, SR).unwrap();
@@ -212,7 +259,10 @@ fn seek_realigns_the_audio_cursor() {
         "定位后第一帧应当取自素材 0.5 s 处，实际 {}",
         out[0]
     );
-    assert!((out[1] - 0.5).abs() < 1e-3, "单声道素材应当复制到左右两声道");
+    assert!(
+        (out[1] - 0.5).abs() < 1e-3,
+        "单声道素材应当复制到左右两声道"
+    );
 }
 
 #[test]
@@ -232,7 +282,12 @@ fn paused_player_does_not_play_audio_clips() {
 fn missing_asset_is_silent_and_does_not_change_length() {
     let project = project_with_audio("/tmp/gone.wav", 0.0, 2.0);
     let empty = Assets::new();
-    let buffer = render_with_assets(&project, &PluginRegistry::with_builtins(), &options(), &empty);
+    let buffer = render_with_assets(
+        &project,
+        &PluginRegistry::with_builtins(),
+        &options(),
+        &empty,
+    );
     assert_eq!(buffer.frames(), 48_000, "素材缺失不应改变时间轴长度");
     assert_eq!(max_abs(buffer.data()), 0.0, "素材缺失应当静音");
 }
@@ -250,19 +305,42 @@ fn audio_and_instrument_sum_on_the_same_track() {
         id: ClipId(2),
         start: 0.0,
         length: 2.0,
-        notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 1.5, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: ai_daw_engine::model::PitchExpression::NONE }],
+        notes: vec![Note {
+            id: 0,
+            channel: None,
+            pressure: None,
+            pitch: 69,
+            start: 0.0,
+            duration: 1.5,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: ai_daw_engine::model::PitchExpression::NONE,
+        }],
         audio: None,
     });
 
     let audio = assets("/tmp/a.wav", sine(1_000.0, 0.5, 1.0));
-    let with_audio =
-        render_with_assets(&project, &PluginRegistry::with_builtins(), &options(), &audio);
+    let with_audio = render_with_assets(
+        &project,
+        &PluginRegistry::with_builtins(),
+        &options(),
+        &audio,
+    );
     let synth_only = render(&project, &PluginRegistry::with_builtins(), &options());
 
-    assert_eq!(with_audio.frames(), synth_only.frames(), "音频片段不该改变总长度");
+    assert_eq!(
+        with_audio.frames(),
+        synth_only.frames(),
+        "音频片段不该改变总长度"
+    );
     let a = analyze(with_audio.data(), 2, SR).unwrap();
     let b = analyze(synth_only.data(), 2, SR).unwrap();
-    assert!(b.rms_dbfs > f64::NEG_INFINITY, "合成器本身应当出声（否则这条测试没有意义）");
+    assert!(
+        b.rms_dbfs > f64::NEG_INFINITY,
+        "合成器本身应当出声（否则这条测试没有意义）"
+    );
     assert!(
         a.rms_dbfs > b.rms_dbfs + 1.0,
         "叠加音频片段后 RMS 应当明显升高：加音频 {} vs 仅合成器 {}",

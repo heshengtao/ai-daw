@@ -49,6 +49,14 @@ import type {
   NotePatch,
   NoteRange,
   NoteStats,
+  NoteTag,
+  MpeConfig,
+  MidiEventAt,
+  MidiEvent,
+  ArticulationMapSummary,
+  ArticulationSource,
+  ArticulationSwitch,
+  MidiCapabilities,
   OpRecord,
   OverlapReport,
   PitchRange,
@@ -531,10 +539,123 @@ export function setTrackMeta(
   });
 }
 
+/** 设置轨道的 MPE 配置。 */
+export function setMpe(
+  track: number,
+  config: MpeConfig | null,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setMpe(track, config));
+  return invoke<Project>("set_mpe", {
+    track,
+    zone: config?.zone ?? "off",
+    channels: config?.channels ?? null,
+  });
+}
+
+/** 写入 / 清除一个音符的装饰音、奏法标签（`tag = null` 表示清除）。 */
+export function setNoteTag(
+  track: number,
+  clip: number,
+  id: number,
+  tag: NoteTag | null,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setNoteTag(track, clip, id, tag));
+  return invoke<Project>("set_note_tag", {
+    track,
+    clip,
+    id,
+    ornament: tag?.ornament ?? null,
+    articulation: tag?.articulation ?? null,
+  });
+}
+
+/** 一次给多个音符写同一个奏法标签（多选切换 = 一个撤销步）。 */
+export function setNoteTags(
+  track: number,
+  clip: number,
+  ids: number[],
+  tag: NoteTag | null,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setNoteTags(track, clip, ids, tag));
+  return invoke<Project>("set_note_tags", {
+    track,
+    clip,
+    ids,
+    ornament: tag?.ornament ?? null,
+    articulation: tag?.articulation ?? null,
+  });
+}
+
+/** 整体替换轨道的通用 MIDI 事件表。 */
+export function setMidiEvents(track: number, events: MidiEventAt[]): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setMidiEvents(track, events));
+  return invoke<Project>("set_midi_events", { track, events });
+}
+
+/** 整体替换轨道的奏法映射。 */
+export function setArticulations(
+  track: number,
+  articulations: Record<string, ArticulationSwitch>,
+  defaultArticulation?: string,
+  source?: ArticulationSource,
+): Promise<Project> {
+  if (mockEnabled())
+    return Promise.resolve(
+      mockApi.setArticulations(track, articulations, defaultArticulation, source),
+    );
+  return invoke<Project>("set_articulations", {
+    track,
+    articulations,
+    defaultArticulation: defaultArticulation ?? null,
+    source: source ?? null,
+  });
+}
+
+/** 搜索随包奏法映射库（厂商 / 产品 / patch）。 */
+export function listArticulationMaps(
+  query?: string,
+  limit?: number,
+): Promise<ArticulationMapSummary[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.listArticulationMaps(query, limit));
+  return invoke<ArticulationMapSummary[]>("list_articulation_maps", {
+    query: query ?? null,
+    limit: limit ?? null,
+  });
+}
+
+/** 把映射库里的某一份映射导入轨道（替换或合并）。 */
+export function importArticulationMap(
+  track: number,
+  id: string,
+  mode: "replace" | "merge" = "replace",
+  defaultArticulation?: string,
+): Promise<Project> {
+  if (mockEnabled())
+    return Promise.resolve(mockApi.importArticulationMap(track, id, mode, defaultArticulation));
+  return invoke<Project>("import_articulation_map", {
+    track,
+    id,
+    mode,
+    defaultArticulation: defaultArticulation ?? null,
+  });
+}
+
+/** 读取轨道的 MIDI 能力与降级报告（会加载插件，可能需要一点时间）。 */
+export function trackMidiCapabilities(track: number): Promise<MidiCapabilities> {
+  if (mockEnabled())
+    return Promise.resolve({
+      track,
+      plugin: null,
+      transport: null,
+      used: {},
+      degraded: ["mock 模式不加载插件"],
+    });
+  return invoke<MidiCapabilities>("track_midi_capabilities", { track });
+}
+
 // ---------------------------------------------------------------------------
 // 混音
 // ---------------------------------------------------------------------------
-
 /** 设置轨道增益（dB）。 */
 export function setGain(track: number, gainDb: number): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.setGain(track, gainDb));
@@ -1219,6 +1340,12 @@ export function auditionNote(
 ): Promise<void> {
   if (mockEnabled()) return mockApi.auditionNote();
   return invoke<void>("audition_note", { track, note, velocity, on });
+}
+
+/** 试听一组 MIDI 事件（奏法切换序列）。 */
+export function auditionMidiEvents(track: number, events: MidiEvent[]): Promise<void> {
+  if (mockEnabled()) return mockApi.auditionMidiEvents();
+  return invoke<void>("audition_midi_events", { track, events });
 }
 
 // ---------------------------------------------------------------------------

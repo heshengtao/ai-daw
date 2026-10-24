@@ -32,7 +32,11 @@ pub struct RenderOptions {
 /// 与实时播放共用同一条代码路径：先把工程构建为 [`ScheduledEvents`]，再交给
 /// [`Player`] 逐块推进，输出因此与实时播放逐位一致（块大小无关）。输出长度 =
 /// （工程内容时长 + `tail_seconds`）× 采样率。相同工程与选项必然产出逐位相同的结果。
-pub fn render(project: &Project, registry: &PluginRegistry, options: &RenderOptions) -> AudioBuffer {
+pub fn render(
+    project: &Project,
+    registry: &PluginRegistry,
+    options: &RenderOptions,
+) -> AudioBuffer {
     render_with_assets(project, registry, options, &crate::audio::no_assets())
 }
 
@@ -104,13 +108,53 @@ mod tests {
 
     fn demo() -> crate::model::Project {
         let mut e = Engine::new("demo");
-        let ev = e.execute(Command::AddTrack { name: "Lead".into() }, Actor::Human);
-        let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
-        e.execute(Command::SetTrackInstrument { track, plugin_id: "builtin.synth".into() }, Actor::Human);
-        let ev = e.execute(Command::AddClip { track, start: 0.0, length: 2.0 }, Actor::Human);
-        let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
+        let ev = e.execute(
+            Command::AddTrack {
+                name: "Lead".into(),
+            },
+            Actor::Human,
+        );
+        let track = match ev[0] {
+            Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
         e.execute(
-            Command::AddNote { track, clip, note: Note { id: 0, pitch: 69, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE } },
+            Command::SetTrackInstrument {
+                track,
+                plugin_id: "builtin.synth".into(),
+            },
+            Actor::Human,
+        );
+        let ev = e.execute(
+            Command::AddClip {
+                track,
+                start: 0.0,
+                length: 2.0,
+            },
+            Actor::Human,
+        );
+        let clip = match ev[0] {
+            Event::ClipAdded { clip, .. } => clip,
+            _ => unreachable!(),
+        };
+        e.execute(
+            Command::AddNote {
+                track,
+                clip,
+                note: Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 69,
+                    start: 0.0,
+                    duration: 1.0,
+                    velocity: 100,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                },
+            },
             Actor::Human,
         );
         e.project().clone()
@@ -119,9 +163,14 @@ mod tests {
     #[test]
     fn render_duration_matches_project_length_plus_tail() {
         let project = demo();
-        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.5, settle_seconds: 0.0 };
+        let opts = RenderOptions {
+            sample_rate: 48_000.0,
+            tail_seconds: 0.5,
+            settle_seconds: 0.0,
+        };
         let buf = render(&project, &PluginRegistry::with_builtins(), &opts);
-        let expected = (TempoMap::from_transport(&project.transport).beats_to_seconds(project.length_beats())
+        let expected = (TempoMap::from_transport(&project.transport)
+            .beats_to_seconds(project.length_beats())
             * 48_000.0) as usize
             + (0.5 * 48_000.0) as usize;
         assert!((buf.frames() as i64 - expected as i64).abs() <= 1);
@@ -134,10 +183,19 @@ mod tests {
     fn render_length_follows_tempo_keyframes() {
         use crate::model::Keyframe;
         let mut project = demo();
-        project.transport.upsert_keyframe(Keyframe { beat: 1.0, tempo: 240.0, time_sig_num: 4, time_sig_den: 4 });
+        project.transport.upsert_keyframe(Keyframe {
+            beat: 1.0,
+            tempo: 240.0,
+            time_sig_num: 4,
+            time_sig_den: 4,
+        });
         let map = crate::tempo::TempoMap::from_transport(&project.transport);
         let expected_body = map.beats_to_seconds(project.length_beats());
-        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.1, settle_seconds: 0.0 };
+        let opts = RenderOptions {
+            sample_rate: 48_000.0,
+            tail_seconds: 0.1,
+            settle_seconds: 0.0,
+        };
         let buf = render(&project, &PluginRegistry::with_builtins(), &opts);
         let expected = (expected_body * 48_000.0) as usize + (0.1 * 48_000.0) as usize;
         assert!((buf.frames() as i64 - expected as i64).abs() <= 1);
@@ -146,7 +204,11 @@ mod tests {
     #[test]
     fn render_is_deterministic_and_audible() {
         let project = demo();
-        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.2, settle_seconds: 0.0 };
+        let opts = RenderOptions {
+            sample_rate: 48_000.0,
+            tail_seconds: 0.2,
+            settle_seconds: 0.0,
+        };
         let r = PluginRegistry::with_builtins();
         let a = render(&project, &r, &opts);
         let b = render(&project, &r, &opts);
@@ -158,7 +220,11 @@ mod tests {
     #[test]
     fn render_matches_player_at_different_block_size() {
         let project = demo();
-        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.2, settle_seconds: 0.0 };
+        let opts = RenderOptions {
+            sample_rate: 48_000.0,
+            tail_seconds: 0.2,
+            settle_seconds: 0.0,
+        };
         let registry = PluginRegistry::with_builtins();
         let buffer = render(&project, &registry, &opts);
 
@@ -174,7 +240,11 @@ mod tests {
             player.process_block(&mut out[off * 2..(off + frames) * 2], frames);
             off += frames;
         }
-        assert_eq!(buffer.data(), out.as_slice(), "offline render must equal realtime Player output");
+        assert_eq!(
+            buffer.data(),
+            out.as_slice(),
+            "offline render must equal realtime Player output"
+        );
     }
 
     /// 回归测试（Plan 2 审查项 1）：正文很短、音符在正文末尾附近结束时，`render`
@@ -205,7 +275,19 @@ mod tests {
                 id: ClipId(1),
                 start: 0.0,
                 length: 0.05,
-                notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.05, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
+                notes: vec![Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 69,
+                    start: 0.0,
+                    duration: 0.05,
+                    velocity: 100,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -213,7 +295,11 @@ mod tests {
             automation: vec![],
         });
 
-        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.5, settle_seconds: 0.0 };
+        let opts = RenderOptions {
+            sample_rate: 48_000.0,
+            tail_seconds: 0.5,
+            settle_seconds: 0.0,
+        };
         let buffer = render(&p, &PluginRegistry::with_builtins(), &opts);
         let data = buffer.data();
         let frames = buffer.frames();
@@ -240,7 +326,11 @@ mod tests {
     fn progress_reports_monotonically_and_does_not_change_the_output() {
         let project = demo();
         let registry = PluginRegistry::with_builtins();
-        let opts = RenderOptions { sample_rate: 48_000.0, tail_seconds: 0.5, settle_seconds: 0.0 };
+        let opts = RenderOptions {
+            sample_rate: 48_000.0,
+            tail_seconds: 0.5,
+            settle_seconds: 0.0,
+        };
 
         let mut seen: Vec<(usize, usize)> = Vec::new();
         let with = render_with_assets_progress(
@@ -254,7 +344,10 @@ mod tests {
 
         assert_eq!(with.data(), plain.data(), "进度回调不该改变输出");
         assert!(seen.len() >= 2, "至少有中间回报 + 末尾一次：{seen:?}");
-        assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0), "进度必须单调不减：{seen:?}");
+        assert!(
+            seen.windows(2).all(|w| w[0].0 <= w[1].0),
+            "进度必须单调不减：{seen:?}"
+        );
         assert_eq!(
             seen.last().copied(),
             Some((with.frames(), with.frames())),

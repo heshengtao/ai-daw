@@ -60,7 +60,7 @@ fn pan_gains(pan: f32) -> (f32, f32) {
 ///
 /// 试听音走的是和参数一样的实时通道，队列里攒不下就直接丢——宁可丢一个试听音，
 /// 也不能在音频线程里给 `Vec` 扩容。容量在构造时预留好。
-const AUDITION_CAPACITY: usize = 16;
+const AUDITION_CAPACITY: usize = 64;
 
 /// 把「单音音量」折进力度：**仅**用于不支持 per-note 音量的插件。
 ///
@@ -68,27 +68,32 @@ const AUDITION_CAPACITY: usize = 16;
 /// 其余插件只能接受「力度乘法合成」这一兼容表达，否则该音会丢掉音量信息。
 /// 折叠在构造播放器时一次完成——`process_block` 里不做任何分配或变换。
 fn fold_note_volume(events: &mut Vec<ScheduledMidi>) {
-    let mut pending: HashMap<u8, usize> = HashMap::new();
+    // 键是 `(通道, 音高)`：MPE 下同一个音高可能同时出现在多条通道上。
+    let mut pending: HashMap<(u8, u8), usize> = HashMap::new();
     let mut out: Vec<ScheduledMidi> = Vec::with_capacity(events.len());
     for e in events.drain(..) {
+        let channel = e.channel;
         match e.event {
             MidiEvent::NoteOn { note, .. } => {
-                pending.insert(note, out.len());
+                pending.insert((channel, note), out.len());
                 out.push(e);
             }
             MidiEvent::NoteOff { note } => {
-                pending.remove(&note);
+                pending.remove(&(channel, note));
                 out.push(e);
             }
             MidiEvent::NoteVolume { note, value } => {
-                if let Some(&on) = pending.get(&note) {
+                if let Some(&on) = pending.get(&(channel, note)) {
                     if let MidiEvent::NoteOn { velocity, .. } = out[on].event {
                         let folded = if velocity == 0 || value == 0 {
                             0
                         } else {
                             (velocity as u32 * value as u32 / 127).clamp(1, 127) as u8
                         };
-                        out[on].event = MidiEvent::NoteOn { note, velocity: folded };
+                        out[on].event = MidiEvent::NoteOn {
+                            note,
+                            velocity: folded,
+                        };
                     }
                 }
                 // 折叠后不再转发 NoteVolume。
@@ -96,6 +101,11 @@ fn fold_note_volume(events: &mut Vec<ScheduledMidi>) {
             MidiEvent::ControlChange { .. } => out.push(e),
             // 音高事件与音量无关，原样保留；逐音→通道的折叠在 `fold_note_pitch` 里做。
             MidiEvent::PitchBend { .. } | MidiEvent::NotePitch { .. } => out.push(e),
+            // 其余表达与音量无关，原样保留。
+            MidiEvent::ChannelPressure { .. }
+            | MidiEvent::PolyPressure { .. }
+            | MidiEvent::ProgramChange { .. }
+            | MidiEvent::NoteExpression { .. } => out.push(e),
         }
     }
     *events = out;
@@ -116,54 +126,135 @@ fn fold_note_pitch(
         return;
     }
 
-    // 逐音事件已经按控制率展开过；复用它们的帧位置作为通道弯音的采样点。
-    let mut frames: Vec<u64> = Vec::with_capacity(events.len() + spans.len() * 2);
+    // 按通道分组：MPE 下每个成员通道有自己的弯音，不能混在一起。
+    let mut channels: Vec<u8> = spans.iter().map(|span| span.channel).collect();
+    channels.sort_unstable();
+    channels.dedup();
+
+    // 采样点 = 该通道已有的 `NotePitch` 帧 + 该通道每个 span 的起止帧。
+    let mut frames: Vec<Vec<u64>> = vec![Vec::new(); 16];
     for e in events.iter() {
         if matches!(e.event, MidiEvent::NotePitch { .. }) {
-            frames.push(e.frame);
+            if let Some(slot) = frames.get_mut(e.channel as usize) {
+                slot.push(e.frame);
+            }
         }
     }
     for span in spans {
-        frames.push(span.start_frame);
-        frames.push(span.end_frame);
+        if let Some(slot) = frames.get_mut(span.channel as usize) {
+            slot.push(span.start_frame);
+            slot.push(span.end_frame);
+        }
     }
-    frames.sort_unstable();
-    frames.dedup();
 
-    let mut out: Vec<ScheduledMidi> = Vec::with_capacity(events.len() + frames.len());
+    let mut out: Vec<ScheduledMidi> = Vec::with_capacity(events.len() + spans.len() * 2);
     for e in events.drain(..) {
         if !matches!(e.event, MidiEvent::NotePitch { .. }) {
             out.push(e);
         }
     }
 
-    let mut last: Option<i16> = None;
-    for frame in frames {
-        let beat = tempo_map.seconds_to_beats(frame as f64 / sample_rate);
-        // 主导 = 起音最晚；起音相同则音高更高的优先（确定性的平局规则）。
-        let dominant = spans
-            .iter()
-            .filter(|span| span.start_frame <= frame && frame < span.end_frame)
-            .max_by(|a, b| {
-                a.start_frame
-                    .cmp(&b.start_frame)
-                    .then_with(|| a.note.cmp(&b.note))
-            });
-        let cents = dominant
-            .map(|span| {
-                let duration =
-                    tempo_map.seconds_to_beats(span.end_frame as f64 / sample_rate) - span.start_beat;
-                span.expr.cents_at(beat - span.start_beat, duration.max(0.0)).round() as i16
-            })
-            .unwrap_or(0);
-        if last == Some(cents) {
+    for channel in channels {
+        let Some(channel_frames) = frames.get_mut(channel as usize) else {
             continue;
+        };
+        channel_frames.sort_unstable();
+        channel_frames.dedup();
+        let channel_spans: Vec<&PitchSpan> = spans
+            .iter()
+            .filter(|span| span.channel == channel)
+            .collect();
+
+        let mut last: Option<i16> = None;
+        for &frame in channel_frames.iter() {
+            let beat = tempo_map.seconds_to_beats(frame as f64 / sample_rate);
+            // 主导 = 起音最晚；起音相同则音高更高的优先（确定性的平局规则）。
+            let dominant = channel_spans
+                .iter()
+                .copied()
+                .filter(|span| span.start_frame <= frame && frame < span.end_frame)
+                .max_by(|a, b| {
+                    a.start_frame
+                        .cmp(&b.start_frame)
+                        .then_with(|| a.note.cmp(&b.note))
+                });
+            let cents = dominant
+                .map(|span| {
+                    let duration = tempo_map.seconds_to_beats(span.end_frame as f64 / sample_rate)
+                        - span.start_beat;
+                    span.expr
+                        .cents_at(beat - span.start_beat, duration.max(0.0))
+                        .round() as i16
+                })
+                .unwrap_or(0);
+            if last == Some(cents) {
+                continue;
+            }
+            last = Some(cents);
+            out.push(ScheduledMidi {
+                frame,
+                channel,
+                event: MidiEvent::PitchBend { cents },
+            });
         }
-        last = Some(cents);
-        out.push(ScheduledMidi { frame, event: MidiEvent::PitchBend { cents } });
     }
 
     out.sort_by_key(|e| e.frame);
+    *events = out;
+}
+
+/// 把复音压力折叠成通道压力：**仅**用于「不支持复音压力、但支持通道触后」的插件。
+///
+/// 同通道取当前所有按住音符的最大压力；压力变化才发事件。构建期一次算完，实时路径不变换。
+fn fold_poly_pressure(events: &mut Vec<ScheduledMidi>) {
+    use std::collections::HashMap;
+
+    // 每个通道：正在发声的音 → 压力。
+    let mut active: Vec<HashMap<u8, u8>> = vec![HashMap::new(); 16];
+    let mut last: [Option<u8>; 16] = [None; 16];
+    let mut out: Vec<ScheduledMidi> = Vec::with_capacity(events.len());
+    for e in events.drain(..) {
+        let channel = e.channel.min(15);
+        match e.event {
+            MidiEvent::NoteOn { note, .. } => {
+                out.push(e);
+                let slot = &mut active[channel as usize];
+                slot.entry(note).or_insert(0);
+            }
+            MidiEvent::NoteOff { note } => {
+                let slot = &mut active[channel as usize];
+                slot.remove(&note);
+                out.push(e);
+            }
+            MidiEvent::PolyPressure { note, value } => {
+                active[channel as usize].insert(note, value.min(127));
+                // 折叠后不再转发 PolyPressure。
+            }
+            _ => {
+                out.push(e);
+                continue;
+            }
+        }
+        // 每次音符/压力变化后重算该通道的最大压力。
+        let max = active[channel as usize]
+            .values()
+            .copied()
+            .max()
+            .unwrap_or(0);
+        if last[channel as usize] == Some(max) {
+            continue;
+        }
+        // 还没有任何压力、且压力为 0：不用无端发一条 0。
+        if max == 0 && last[channel as usize].is_none() {
+            continue;
+        }
+        last[channel as usize] = Some(max);
+        out.push(ScheduledMidi {
+            frame: e.frame,
+            channel,
+            event: MidiEvent::ChannelPressure { value: max },
+        });
+    }
     *events = out;
 }
 
@@ -182,7 +273,10 @@ impl Plugin for Bypass {
             id: "engine.bypass".into(),
             name: "Bypass".into(),
             kind: PluginKind::Effect,
-            io: IoLayout { inputs: 2, outputs: 2 },
+            io: IoLayout {
+                inputs: 2,
+                outputs: 2,
+            },
             capabilities: Default::default(),
         }
     }
@@ -195,7 +289,12 @@ impl Plugin for Bypass {
     fn set_param(&mut self, _id: &ParamId, _value: f32) {}
     fn prepare(&mut self, _sample_rate: f64, _block_size: usize) {}
     fn reset(&mut self) {}
-    fn process(&mut self, _ctx: &ProcessContext, _audio: &mut [&mut [f32]], _events: &[TimedMidiEvent]) {
+    fn process(
+        &mut self,
+        _ctx: &ProcessContext,
+        _audio: &mut [&mut [f32]],
+        _events: &[TimedMidiEvent],
+    ) {
         // 透传：链上占个位，不碰音频。
     }
     fn save_state(&self) -> Vec<u8> {
@@ -380,6 +479,10 @@ struct TrackVoice {
     ///
     /// 插件被 `reset()`（seek / 静音）后要清回 -1，否则恢复播放时 CC 状态会丢。
     cc_last: [i16; 128],
+    /// 每条通道上一次发出的压力值（-1 = 尚未发过）。
+    at_last: [i16; 16],
+    /// 插件是否能接收通道触后；不支持时 `at:` 车道直接跳过。
+    supports_channel_pressure: bool,
 }
 
 /// 实时安全的逐块播放器：构造后 `process_block` 不再分配内存。
@@ -435,14 +538,19 @@ impl Player {
     ///
     /// 走的是和参数同一条实时通道。队列满就丢——试听音不值得让音频线程扩容。
     fn push_audition(&mut self, track: crate::model::TrackId, note: u8, velocity: u8, on: bool) {
-        if self.audition.len() >= AUDITION_CAPACITY {
-            return;
-        }
         let event = if on {
             MidiEvent::NoteOn { note, velocity }
         } else {
             MidiEvent::NoteOff { note }
         };
+        self.push_audition_event(track, event);
+    }
+
+    /// 试听事件统一入口：队列满就丢，试听不值得让音频线程扩容。
+    fn push_audition_event(&mut self, track: crate::model::TrackId, event: MidiEvent) {
+        if self.audition.len() >= AUDITION_CAPACITY {
+            return;
+        }
         self.audition.push((track, event));
     }
 
@@ -498,7 +606,7 @@ impl Player {
             .map(|t| t.events.len() + 1)
             .max()
             .unwrap_or(0);
-        // 每块最多给每条 CC 车道发一个事件；实时 `SetAutomation` 还能再加 4 条车道
+        // 每块最多给每条 CC / 通道压力车道发一个事件；实时 `SetAutomation` 还能再加 4 条车道
         // （见下面的 `lanes.reserve(4)`），预留时要一起算上，音频线程才不会扩容。
         let max_cc_lanes = schedule
             .tracks
@@ -506,7 +614,12 @@ impl Player {
             .map(|t| {
                 t.lanes
                     .iter()
-                    .filter(|lane| matches!(lane.param, LaneTarget::ControlChange(_)))
+                    .filter(|lane| {
+                        matches!(
+                            lane.param,
+                            LaneTarget::ControlChange(_) | LaneTarget::ChannelPressure(_)
+                        )
+                    })
                     .count()
             })
             .max()
@@ -520,7 +633,8 @@ impl Player {
                 if let Some(existing) = carried.instruments.remove(&st.track_id) {
                     // 占位不复用：目录扫描完成后再重建时，真插件已经到位，复用占位会把它挡在
                     // 门外（实例建不出来 → 界面句柄登记不上 → 打开界面报「没有可打开的插件界面」）。
-                    if !existing.is_placeholder() && existing.descriptor().id == instance.plugin_id {
+                    if !existing.is_placeholder() && existing.descriptor().id == instance.plugin_id
+                    {
                         return Some(existing);
                     }
                     // 占位、或 id 不匹配的旧实例在**控制侧**释放，不带进新播放器。
@@ -540,18 +654,33 @@ impl Player {
                 for (id, value) in &instance.params {
                     p.set_param(&id.clone().into(), *value);
                 }
-                if !p.descriptor().capabilities.per_note_volume {
-                    fold_note_volume(&mut events);
-                }
+            }
+            // 能力探测一次，后面所有折叠/降级都用这一份。
+            let capabilities = plugin
+                .as_ref()
+                .map(|p| p.descriptor().capabilities)
+                .unwrap_or_default();
+            if !capabilities.per_note_volume() {
+                fold_note_volume(&mut events);
             }
             // 音高表达：插件支持逐音（VST3 Tuning / 内置合成器）就保留 `NotePitch`；
-            // 否则折叠成通道弯音。折叠在控制侧一次完成，实时路径不再变换。
-            let per_note_pitch = plugin
-                .as_ref()
-                .map(|p| p.descriptor().capabilities.per_note_pitch)
-                .unwrap_or(false);
-            if !per_note_pitch && !st.pitch_spans.is_empty() {
+            // 否则按通道折叠成弯音。折叠在控制侧一次完成，实时路径不再变换。
+            if !capabilities.per_note_pitch() && !st.pitch_spans.is_empty() {
                 fold_note_pitch(&mut events, &st.pitch_spans, &tempo_map, sample_rate);
+            }
+            // 复音压力：插件不支持时退化成通道压力（同通道取最大），两者都不支持就丢弃。
+            if !capabilities.poly_pressure {
+                if capabilities.channel_pressure {
+                    fold_poly_pressure(&mut events);
+                } else {
+                    events.retain(|e| !matches!(e.event, MidiEvent::PolyPressure { .. }));
+                }
+            }
+            if !capabilities.channel_pressure {
+                events.retain(|e| !matches!(e.event, MidiEvent::ChannelPressure { .. }));
+            }
+            if !capabilities.program_change {
+                events.retain(|e| !matches!(e.event, MidiEvent::ProgramChange { .. }));
             }
             // 效果链：只收「效果」类插件。缺失或类型不符的条目**用占位顶住**，不能丢——
             // `fx<i>` 自动化按**声明链下标**寻址，跳过任何一个都会让后面的下标前移。占位是
@@ -625,7 +754,10 @@ impl Player {
                     LaneTarget::Effect { index, param } => {
                         lane.static_value = effects.get(*index).and_then(|fx| fx.get_param(param));
                     }
-                    LaneTarget::GainDb | LaneTarget::Pan | LaneTarget::ControlChange(_) => {}
+                    LaneTarget::GainDb
+                    | LaneTarget::Pan
+                    | LaneTarget::ControlChange(_)
+                    | LaneTarget::ChannelPressure(_) => {}
                 }
             }
             tracks.push(TrackVoice {
@@ -647,6 +779,8 @@ impl Player {
                 right_gain: 0.0,
                 pitch_dirty: false,
                 cc_last: [-1; 128],
+                at_last: [-1; 16],
+                supports_channel_pressure: capabilities.channel_pressure,
             });
         }
         let mut player = Player {
@@ -671,7 +805,8 @@ impl Player {
             scratch_left: vec![0.0; max_block],
             scratch_right: vec![0.0; max_block],
             scratch_events: Vec::with_capacity(
-                max_track_events.max(64) + AUDITION_CAPACITY + max_cc_lanes + 4,
+                // +16：seek / 静音后要给 16 条通道各补一条弯音归零。
+                max_track_events.max(64) + AUDITION_CAPACITY + max_cc_lanes + 16,
             ),
             audition: Vec::with_capacity(AUDITION_CAPACITY),
             yield_sink,
@@ -758,6 +893,7 @@ impl Player {
             // 插件内部可能保留旧的弯音 / CC 状态；下一块开头补一条归零并重发 CC。
             track.pitch_dirty = true;
             track.cc_last = [-1; 128];
+            track.at_last = [-1; 16];
             // 音频片段的游标同样要跟着播放头重算，否则定位后片段会错位。
             for playback in track.audio.iter_mut() {
                 playback.cursor = audio_cursor(&playback.clip, frame);
@@ -776,7 +912,9 @@ impl Player {
     /// 实时安全：只做算术与字段写入，不分配内存。
     fn refresh_mix(&mut self) {
         // 自动化按「拍」求值：把当前帧位置换算成拍（速度表支持分段速度）。
-        let beats = self.tempo_map.seconds_to_beats(self.position as f64 / self.sample_rate);
+        let beats = self
+            .tempo_map
+            .seconds_to_beats(self.position as f64 / self.sample_rate);
         let any_solo = self.tracks.iter().any(|t| t.solo);
         for track in self.tracks.iter_mut() {
             let want = !track.mute && (!any_solo || track.solo);
@@ -786,6 +924,7 @@ impl Player {
                 }
                 track.pitch_dirty = true;
                 track.cc_last = [-1; 128];
+                track.at_last = [-1; 16];
             }
             track.audible = want;
             // 自动化**覆盖**推子值（读取模式）：有曲线的参数以曲线为准。
@@ -794,13 +933,24 @@ impl Player {
             // 覆盖只作用于**本次混音计算**：`gain_db` / `pan` 字段本身绝不能被写回——那条车道
             // 被移除（或曲线求值失败）后必须回到用户的推子值，写回会把推子值永久吃掉。
             let (mix_gain_db, mix_pan) = {
-                let TrackVoice { lanes, plugin, effects, gain_db, pan, .. } = track;
+                let TrackVoice {
+                    lanes,
+                    plugin,
+                    effects,
+                    gain_db,
+                    pan,
+                    ..
+                } = track;
                 let (mut mix_gain_db, mut mix_pan) = (*gain_db, *pan);
                 for lane in lanes.iter() {
-                    let Some(value) = lane.value_at(beats) else { continue };
+                    let Some(value) = lane.value_at(beats) else {
+                        continue;
+                    };
                     match &lane.param {
                         LaneTarget::GainDb => mix_gain_db = MixerChannel::normalize_gain_db(value),
                         LaneTarget::Pan => mix_pan = MixerChannel::normalize_pan(value),
+                        // CC / 通道压力是 MIDI 事件，不走混音计算；由 `process_block` 逐块送给乐器。
+                        LaneTarget::ControlChange(_) | LaneTarget::ChannelPressure(_) => {}
                         LaneTarget::Instrument(param) => {
                             if let Some(p) = plugin.as_mut() {
                                 p.set_param(param, value);
@@ -811,8 +961,6 @@ impl Player {
                                 fx.set_param(param, value);
                             }
                         }
-                        // CC 是 MIDI 事件，不走混音计算；由 `process_block` 逐块送给乐器。
-                        LaneTarget::ControlChange(_) => {}
                     }
                 }
                 (mix_gain_db, mix_pan)
@@ -845,6 +993,7 @@ impl Player {
             }
             track.pitch_dirty = true;
             track.cc_last = [-1; 128];
+            track.at_last = [-1; 16];
         }
         self.audition.clear();
     }
@@ -879,7 +1028,13 @@ impl Player {
                 self.silence();
             }
             TransportCommand::Seek { frame } => self.seek(frame),
-            TransportCommand::SetTrackMix { track, gain_db, pan, mute, solo } => {
+            TransportCommand::SetTrackMix {
+                track,
+                gain_db,
+                pan,
+                mute,
+                solo,
+            } => {
                 let mut touched = false;
                 for voice in self.tracks.iter_mut() {
                     if voice.track_id == track {
@@ -898,7 +1053,11 @@ impl Player {
                 self.master_gain_db = MixerChannel::normalize_gain_db(gain_db);
                 self.refresh_mix();
             }
-            TransportCommand::SetAutomation { track, target, points } => {
+            TransportCommand::SetAutomation {
+                track,
+                target,
+                points,
+            } => {
                 // 目标已在控制侧解析好；这里就地过滤 + 排序（`retain` / `sort_unstable_by`
                 // 都不分配），再整体替换该目标的车道——音频线程因此不必扩容。
                 //
@@ -909,7 +1068,9 @@ impl Player {
                 let mut points = points;
                 points.retain(|p| p.beat.is_finite() && p.value.is_finite());
                 points.sort_unstable_by(|a, b| {
-                    a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal)
+                    a.beat
+                        .partial_cmp(&b.beat)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 });
                 let empty = points.is_empty();
                 for voice in self.tracks.iter_mut() {
@@ -917,14 +1078,21 @@ impl Player {
                         continue;
                     }
                     // 拆字段借用：车道只读 / 只 retain，插件实例可变，两者是不同字段，可同时借。
-                    let TrackVoice { lanes, plugin, effects, .. } = voice;
+                    let TrackVoice {
+                        lanes,
+                        plugin,
+                        effects,
+                        ..
+                    } = voice;
                     if empty {
                         // 移除：先按快照把静态值写回活实例，再丢弃车道。
                         for lane in lanes.iter() {
                             if lane.param != target {
                                 continue;
                             }
-                            let Some(value) = lane.static_value else { continue };
+                            let Some(value) = lane.static_value else {
+                                continue;
+                            };
                             match &lane.param {
                                 LaneTarget::Instrument(param) => {
                                     if let Some(p) = plugin.as_mut() {
@@ -936,7 +1104,10 @@ impl Player {
                                         fx.set_param(param, value);
                                     }
                                 }
-                                LaneTarget::GainDb | LaneTarget::Pan | LaneTarget::ControlChange(_) => {}
+                                LaneTarget::GainDb
+                                | LaneTarget::Pan
+                                | LaneTarget::ControlChange(_)
+                                | LaneTarget::ChannelPressure(_) => {}
                             }
                         }
                         lanes.retain(|lane| lane.param != target);
@@ -955,9 +1126,10 @@ impl Player {
                                 LaneTarget::Effect { index, param } => {
                                     effects.get(*index).and_then(|fx| fx.get_param(param))
                                 }
-                                LaneTarget::GainDb | LaneTarget::Pan | LaneTarget::ControlChange(_) => {
-                                    None
-                                }
+                                LaneTarget::GainDb
+                                | LaneTarget::Pan
+                                | LaneTarget::ControlChange(_)
+                                | LaneTarget::ChannelPressure(_) => None,
                             };
                         }
                         lanes.retain(|lane| lane.param != target);
@@ -972,8 +1144,18 @@ impl Player {
                 self.has_automation = self.tracks.iter().any(|t| !t.lanes.is_empty());
                 self.refresh_mix();
             }
-            TransportCommand::Audition { track, note, velocity, on } => {
+            TransportCommand::Audition {
+                track,
+                note,
+                velocity,
+                on,
+            } => {
                 self.push_audition(track, note, velocity, on);
+            }
+            TransportCommand::AuditionEvents { track, events } => {
+                for event in events {
+                    self.push_audition_event(track, event);
+                }
             }
             TransportCommand::SetLoop(on) => self.looping = on,
             TransportCommand::SetLoopRange { start, end } => {
@@ -991,7 +1173,12 @@ impl Player {
                 self.reset_next_beat();
             }
             TransportCommand::YieldInstances => self.yield_instances(),
-            TransportCommand::SetParam { track, effect, param, value } => {
+            TransportCommand::SetParam {
+                track,
+                effect,
+                param,
+                value,
+            } => {
                 // 非有限值会让插件内部出现 NaN，直接拒绝。
                 if !value.is_finite() {
                     return;
@@ -1070,8 +1257,9 @@ impl Player {
         let block_start = self.position;
         let block_end = block_start + frames as u64;
         // CC 自动化按块求值：先把本块起点换算成拍（速度表支持分段速度）。
-        let block_beats =
-            self.tempo_map.seconds_to_beats(block_start as f64 / self.sample_rate);
+        let block_beats = self
+            .tempo_map
+            .seconds_to_beats(block_start as f64 / self.sample_rate);
 
         while self.tempo_cursor + 1 < self.tempo_points.len()
             && self.tempo_points[self.tempo_cursor + 1].0 <= block_start
@@ -1091,7 +1279,16 @@ impl Player {
             playing,
         };
 
-        let Player { tracks, bus_in, order, scratch_left, scratch_right, scratch_events, audition, .. } = self;
+        let Player {
+            tracks,
+            bus_in,
+            order,
+            scratch_left,
+            scratch_right,
+            scratch_events,
+            audition,
+            ..
+        } = self;
 
         // 立体声长度：总线输入缓冲按它切片。
         let stereo = frames * 2;
@@ -1108,34 +1305,58 @@ impl Player {
             // 不可听时先记着，等真正开始处理这一轨的那一块再发（否则事件被 continue 丢掉）。
             if track.audible && track.pitch_dirty {
                 track.pitch_dirty = false;
-                scratch_events.push(TimedMidiEvent {
-                    frame: 0,
-                    event: MidiEvent::PitchBend { cents: 0 },
-                });
+                // MPE 下每条成员通道都有自己的弯音，归零要覆盖全部通道。
+                for channel in 0..16u8 {
+                    scratch_events.push(TimedMidiEvent {
+                        frame: 0,
+                        channel,
+                        event: MidiEvent::PitchBend { cents: 0 },
+                    });
+                }
             }
-            // MIDI CC 自动化：逐块采样（约块率），只发**变化**的值。
+            // MIDI CC / 通道压力自动化：逐块采样（约块率），只发**变化**的值。
             // 它必须作为 MIDI 事件送进乐器，而不是混音参数——延音踏板、调制轮、
-            // 表情、明亮度这些都由音源自己在内部解释；标准 MIDI，无需插件改造。
+            // 表情、明亮度、触后这些都由音源自己在内部解释；标准 MIDI，无需插件改造。
             if playing && track.audible {
                 for lane in track.lanes.iter() {
-                    let LaneTarget::ControlChange(controller) = &lane.param else { continue };
-                    let Some(value) = lane.value_at(block_beats) else { continue };
+                    let Some(value) = lane.value_at(block_beats) else {
+                        continue;
+                    };
                     if !value.is_finite() {
                         continue;
                     }
                     let value = value.round().clamp(0.0, 127.0) as i16;
-                    let slot = &mut track.cc_last[*controller as usize];
-                    if *slot == value {
-                        continue;
+                    match &lane.param {
+                        LaneTarget::ControlChange(controller) => {
+                            let slot = &mut track.cc_last[*controller as usize];
+                            if *slot == value {
+                                continue;
+                            }
+                            *slot = value;
+                            scratch_events.push(TimedMidiEvent {
+                                frame: 0,
+                                channel: 0,
+                                event: MidiEvent::ControlChange {
+                                    controller: *controller,
+                                    value: value as u8,
+                                },
+                            });
+                        }
+                        LaneTarget::ChannelPressure(channel) if track.supports_channel_pressure => {
+                            let channel = (*channel).min(15);
+                            let slot = &mut track.at_last[channel as usize];
+                            if *slot == value {
+                                continue;
+                            }
+                            *slot = value;
+                            scratch_events.push(TimedMidiEvent {
+                                frame: 0,
+                                channel,
+                                event: MidiEvent::ChannelPressure { value: value as u8 },
+                            });
+                        }
+                        _ => {}
                     }
-                    *slot = value;
-                    scratch_events.push(TimedMidiEvent {
-                        frame: 0,
-                        event: MidiEvent::ControlChange {
-                            controller: *controller,
-                            value: value as u8,
-                        },
-                    });
                 }
             }
             if playing {
@@ -1146,6 +1367,7 @@ impl Player {
                     if ev.frame >= block_start {
                         scratch_events.push(TimedMidiEvent {
                             frame: (ev.frame - block_start) as u32,
+                            channel: ev.channel,
                             event: ev.event,
                         });
                     }
@@ -1156,7 +1378,11 @@ impl Player {
             // 试听音（界面上的键盘）与传输无关：停了也能弹。
             for (id, event) in audition.iter() {
                 if *id == track.track_id {
-                    scratch_events.push(TimedMidiEvent { frame: 0, event: *event });
+                    scratch_events.push(TimedMidiEvent {
+                        frame: 0,
+                        channel: 0,
+                        event: *event,
+                    });
                 }
             }
 
@@ -1245,7 +1471,9 @@ impl Player {
                 if frame >= block_end as i64 {
                     break;
                 }
-                let off = frame.max(block_start as i64).saturating_sub(block_start as i64) as usize;
+                let off = frame
+                    .max(block_start as i64)
+                    .saturating_sub(block_start as i64) as usize;
                 let num = self.tempo_map.meter_at(self.next_beat as f64).0.max(1) as i64;
                 add_click(out, off, click_len, sr, self.next_beat.rem_euclid(num) == 0);
                 self.next_beat += 1;
@@ -1290,7 +1518,11 @@ mod tests {
                 kind: self.kind,
                 // 音源没有输入总线，效果器有。
                 io: IoLayout {
-                    inputs: if self.kind == PluginKind::Effect { 2 } else { 0 },
+                    inputs: if self.kind == PluginKind::Effect {
+                        2
+                    } else {
+                        0
+                    },
                     outputs: 2,
                 },
                 capabilities: Default::default(),
@@ -1316,7 +1548,12 @@ mod tests {
         }
         fn prepare(&mut self, _sample_rate: f64, _block_size: usize) {}
         fn reset(&mut self) {}
-        fn process(&mut self, _ctx: &ProcessContext, audio: &mut [&mut [f32]], _events: &[TimedMidiEvent]) {
+        fn process(
+            &mut self,
+            _ctx: &ProcessContext,
+            audio: &mut [&mut [f32]],
+            _events: &[TimedMidiEvent],
+        ) {
             for channel in audio.iter_mut() {
                 match self.kind {
                     // 音源：把缓冲直接写成参数值。
@@ -1347,7 +1584,10 @@ mod tests {
                 id: "test.half".into(),
                 name: "Half".into(),
                 kind: PluginKind::Effect,
-                io: IoLayout { inputs: 2, outputs: 2 },
+                io: IoLayout {
+                    inputs: 2,
+                    outputs: 2,
+                },
                 capabilities: Default::default(),
             }
         }
@@ -1360,7 +1600,12 @@ mod tests {
         fn set_param(&mut self, _id: &ParamId, _value: f32) {}
         fn prepare(&mut self, _sample_rate: f64, _block_size: usize) {}
         fn reset(&mut self) {}
-        fn process(&mut self, _ctx: &ProcessContext, audio: &mut [&mut [f32]], _events: &[TimedMidiEvent]) {
+        fn process(
+            &mut self,
+            _ctx: &ProcessContext,
+            audio: &mut [&mut [f32]],
+            _events: &[TimedMidiEvent],
+        ) {
             for channel in audio.iter_mut() {
                 for sample in channel.iter_mut() {
                     *sample *= 0.5;
@@ -1386,7 +1631,10 @@ mod tests {
                 id: "test.stateful".into(),
                 name: "Stateful".into(),
                 kind: PluginKind::Instrument,
-                io: IoLayout { inputs: 0, outputs: 2 },
+                io: IoLayout {
+                    inputs: 0,
+                    outputs: 2,
+                },
                 capabilities: Default::default(),
             }
         }
@@ -1399,7 +1647,12 @@ mod tests {
         fn set_param(&mut self, _id: &ParamId, _value: f32) {}
         fn prepare(&mut self, _sample_rate: f64, _block_size: usize) {}
         fn reset(&mut self) {}
-        fn process(&mut self, _ctx: &ProcessContext, audio: &mut [&mut [f32]], _events: &[TimedMidiEvent]) {
+        fn process(
+            &mut self,
+            _ctx: &ProcessContext,
+            audio: &mut [&mut [f32]],
+            _events: &[TimedMidiEvent],
+        ) {
             for channel in audio.iter_mut() {
                 channel.fill(self.level);
             }
@@ -1420,13 +1673,29 @@ mod tests {
             meta: None,
             id: TrackId(1),
             name: "Lead".into(),
-            instrument: Some(PluginInstance { plugin_id: "builtin.synth".into(), params: Default::default(), state: vec![] }),
+            instrument: Some(PluginInstance {
+                plugin_id: "builtin.synth".into(),
+                params: Default::default(),
+                state: vec![],
+            }),
             effects: vec![],
             clips: vec![Clip {
                 id: ClipId(1),
                 start: 0.0,
                 length: 1.0,
-                notes: vec![Note { id: 0, pitch: 69, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
+                notes: vec![Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 69,
+                    start: 0.0,
+                    duration: 0.5,
+                    velocity: 100,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -1447,14 +1716,38 @@ mod tests {
     #[test]
     fn fold_note_volume_merges_volume_into_the_note_on_and_drops_the_event() {
         let mut events = vec![
-            ScheduledMidi { frame: 10, event: MidiEvent::NoteOn { note: 60, velocity: 100 } },
-            ScheduledMidi { frame: 10, event: MidiEvent::NoteVolume { note: 60, value: 64 } },
-            ScheduledMidi { frame: 20, event: MidiEvent::NoteOff { note: 60 } },
+            ScheduledMidi {
+                frame: 10,
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 60,
+                    velocity: 100,
+                },
+            },
+            ScheduledMidi {
+                frame: 10,
+                channel: 0,
+                event: MidiEvent::NoteVolume {
+                    note: 60,
+                    value: 64,
+                },
+            },
+            ScheduledMidi {
+                frame: 20,
+                channel: 0,
+                event: MidiEvent::NoteOff { note: 60 },
+            },
         ];
         fold_note_volume(&mut events);
         assert_eq!(events.len(), 2, "NoteVolume 必须被折叠掉");
         // 100 × 64 / 127 ≈ 50。
-        assert!(matches!(events[0].event, MidiEvent::NoteOn { note: 60, velocity: 50 }));
+        assert!(matches!(
+            events[0].event,
+            MidiEvent::NoteOn {
+                note: 60,
+                velocity: 50
+            }
+        ));
         assert!(matches!(events[1].event, MidiEvent::NoteOff { note: 60 }));
     }
 
@@ -1463,13 +1756,40 @@ mod tests {
         let project = crate::model::Project::new("p");
         let map = TempoMap::from_transport(&project.transport);
         let mut events = vec![
-            ScheduledMidi { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } },
-            ScheduledMidi { frame: 0, event: MidiEvent::NotePitch { note: 60, cents: 0 } },
-            ScheduledMidi { frame: 10, event: MidiEvent::NotePitch { note: 60, cents: 100 } },
-            ScheduledMidi { frame: 20, event: MidiEvent::NotePitch { note: 60, cents: 0 } },
-            ScheduledMidi { frame: 20, event: MidiEvent::NoteOff { note: 60 } },
+            ScheduledMidi {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 60,
+                    velocity: 100,
+                },
+            },
+            ScheduledMidi {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::NotePitch { note: 60, cents: 0 },
+            },
+            ScheduledMidi {
+                frame: 10,
+                channel: 0,
+                event: MidiEvent::NotePitch {
+                    note: 60,
+                    cents: 100,
+                },
+            },
+            ScheduledMidi {
+                frame: 20,
+                channel: 0,
+                event: MidiEvent::NotePitch { note: 60, cents: 0 },
+            },
+            ScheduledMidi {
+                frame: 20,
+                channel: 0,
+                event: MidiEvent::NoteOff { note: 60 },
+            },
         ];
         let spans = vec![PitchSpan {
+            channel: 0,
             note: 60,
             start_frame: 0,
             end_frame: 20,
@@ -1483,7 +1803,9 @@ mod tests {
         fold_note_pitch(&mut events, &spans, &map, 48_000.0);
 
         assert!(
-            !events.iter().any(|e| matches!(e.event, MidiEvent::NotePitch { .. })),
+            !events
+                .iter()
+                .any(|e| matches!(e.event, MidiEvent::NotePitch { .. })),
             "逐音事件应被折叠掉"
         );
         let bends: Vec<(u64, i16)> = events
@@ -1501,13 +1823,36 @@ mod tests {
         let project = crate::model::Project::new("p");
         let map = TempoMap::from_transport(&project.transport);
         let mut events = vec![
-            ScheduledMidi { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } },
-            ScheduledMidi { frame: 10, event: MidiEvent::NoteOn { note: 64, velocity: 100 } },
-            ScheduledMidi { frame: 30, event: MidiEvent::NoteOff { note: 64 } },
-            ScheduledMidi { frame: 20, event: MidiEvent::NoteOff { note: 60 } },
+            ScheduledMidi {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 60,
+                    velocity: 100,
+                },
+            },
+            ScheduledMidi {
+                frame: 10,
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 64,
+                    velocity: 100,
+                },
+            },
+            ScheduledMidi {
+                frame: 30,
+                channel: 0,
+                event: MidiEvent::NoteOff { note: 64 },
+            },
+            ScheduledMidi {
+                frame: 20,
+                channel: 0,
+                event: MidiEvent::NoteOff { note: 60 },
+            },
         ];
         let spans = vec![
             PitchSpan {
+                channel: 0,
                 note: 60,
                 start_frame: 0,
                 end_frame: 20,
@@ -1518,6 +1863,7 @@ mod tests {
                 },
             },
             PitchSpan {
+                channel: 0,
                 note: 64,
                 start_frame: 10,
                 end_frame: 30,
@@ -1563,7 +1909,10 @@ mod tests {
             state: vec![],
         }]);
         assert!(dry > 0.01, "baseline must be audible: {dry}");
-        assert!(wet < dry * 0.75, "效果链必须作用在乐器输出上：{dry} -> {wet}");
+        assert!(
+            wet < dry * 0.75,
+            "效果链必须作用在乐器输出上：{dry} -> {wet}"
+        );
     }
 
     /// 工程里记的 `PluginInstance::state` 必须在新实例创建时还原。
@@ -1573,7 +1922,9 @@ mod tests {
     #[test]
     fn instrument_state_is_restored_when_the_instance_is_created() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| {
+            Box::new(StateTone { level: 0.0 })
+        });
 
         let mut p = project();
         p.tracks[0].instrument = Some(PluginInstance {
@@ -1600,11 +1951,15 @@ mod tests {
     #[test]
     fn carried_instrument_is_reused_instead_of_recreated() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| {
+            Box::new(StateTone { level: 0.0 })
+        });
 
         // 旧实例带着**只存在于实例里**的状态（level = 0.8）；工程并没有记它。
         let mut carried = ReusableInstances::default();
-        carried.instruments.insert(TrackId(1), Box::new(StateTone { level: 0.8 }));
+        carried
+            .instruments
+            .insert(TrackId(1), Box::new(StateTone { level: 0.8 }));
 
         let mut p = project();
         p.tracks[0].instrument = Some(PluginInstance {
@@ -1636,11 +1991,17 @@ mod tests {
     #[test]
     fn carried_instrument_is_dropped_when_the_plugin_id_changed() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
-        registry.register("test.other", |_track, _slot| Box::new(StateTone { level: 0.25 }));
+        registry.register("test.stateful", |_track, _slot| {
+            Box::new(StateTone { level: 0.0 })
+        });
+        registry.register("test.other", |_track, _slot| {
+            Box::new(StateTone { level: 0.25 })
+        });
 
         let mut carried = ReusableInstances::default();
-        carried.instruments.insert(TrackId(1), Box::new(StateTone { level: 0.8 }));
+        carried
+            .instruments
+            .insert(TrackId(1), Box::new(StateTone { level: 0.8 }));
 
         let mut p = project();
         p.tracks[0].instrument = Some(PluginInstance {
@@ -1673,7 +2034,9 @@ mod tests {
     #[test]
     fn missing_placeholder_is_not_reused_once_the_real_plugin_is_available() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| {
+            Box::new(StateTone { level: 0.0 })
+        });
 
         // 旧实例是「插件缺失」的静音占位：descriptor id 与真插件相同，但不是真插件。
         let mut carried = ReusableInstances::default();
@@ -1712,7 +2075,9 @@ mod tests {
     #[test]
     fn yield_instances_hands_the_live_instances_back() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.5 }));
+        registry.register("test.stateful", |_track, _slot| {
+            Box::new(StateTone { level: 0.5 })
+        });
 
         let mut p = project();
         p.tracks[0].instrument = Some(PluginInstance {
@@ -1765,9 +2130,14 @@ mod tests {
     fn a_missing_effect_keeps_the_following_effects_index_stable() {
         // 声明链：[装不上的效果器, test.param.effect]——`fx1:level` 必须落到**第二个**（有效的）那个。
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| {
+            Box::new(StateTone { level: 0.0 })
+        });
         registry.register("test.param.effect", |_track, _slot| {
-            Box::new(ParamLevel { level: 1.0, kind: PluginKind::Effect })
+            Box::new(ParamLevel {
+                level: 1.0,
+                kind: PluginKind::Effect,
+            })
         });
         // 刻意不注册 "test.missing.effect"。
 
@@ -1775,7 +2145,11 @@ mod tests {
         p.transport.tempo = 120.0;
         let mut t = tone_track(1, "T", 255); // 乐器满幅 1.0
         t.effects = vec![
-            PluginInstance { plugin_id: "test.missing.effect".into(), params: Default::default(), state: vec![] },
+            PluginInstance {
+                plugin_id: "test.missing.effect".into(),
+                params: Default::default(),
+                state: vec![],
+            },
             PluginInstance {
                 plugin_id: "test.param.effect".into(),
                 params: [("level".to_string(), 0.25)].into_iter().collect(),
@@ -1784,7 +2158,10 @@ mod tests {
         ];
         t.automation = vec![AutomationLane {
             param: "fx1:level".into(),
-            points: vec![AutomationPoint { beat: 0.0, value: 0.5 }],
+            points: vec![AutomationPoint {
+                beat: 0.0,
+                value: 0.5,
+            }],
         }];
         p.tracks.push(t);
 
@@ -1796,7 +2173,11 @@ mod tests {
         let mut out = vec![0.0f32; 512 * 2];
         player.process_block(&mut out, 512);
         // 1.0 经过第二个效果器的 level（自动化 0.5 覆盖静态 0.25）。
-        assert!((peak(&out) - 0.5).abs() < 0.05, "缺失效果器不得让后面的下标前移（峰值 {}）", peak(&out));
+        assert!(
+            (peak(&out) - 0.5).abs() < 0.05,
+            "缺失效果器不得让后面的下标前移（峰值 {}）",
+            peak(&out)
+        );
     }
 
     /// 实时参数变更直接作用于已装载的实例，不重建播放器。
@@ -1866,6 +2247,24 @@ mod tests {
         assert!(peak(&out) < 0.001, "松开后要停下来");
     }
 
+    /// 奏法切换序列走同一条试听通道：下一块就能听到结果。
+    #[test]
+    fn audition_events_are_delivered() {
+        let registry = PluginRegistry::with_builtins();
+        let mut player = Player::new(schedule(), &registry, 48_000.0, 24_000);
+        let mut out = vec![0.0f32; 512 * 2];
+
+        player.apply_command(TransportCommand::AuditionEvents {
+            track: TrackId(1),
+            events: vec![MidiEvent::NoteOn {
+                note: 69,
+                velocity: 120,
+            }],
+        });
+        player.process_block(&mut out, 512);
+        assert!(peak(&out) > 0.01);
+    }
+
     /// 节拍器：每拍一声，重音在小节头；拍中间安静；不写进工程。
     #[test]
     fn metronome_clicks_every_beat_with_downbeat_accent() {
@@ -1886,7 +2285,10 @@ mod tests {
             off += n;
         }
         let peak_at = |f: usize| {
-            out[f * 2..(f + 1_000) * 2].iter().map(|v| v.abs()).fold(0.0f32, f32::max)
+            out[f * 2..(f + 1_000) * 2]
+                .iter()
+                .map(|v| v.abs())
+                .fold(0.0f32, f32::max)
         };
         assert!(peak_at(0) > 0.05, "第 1 拍应有咔哒");
         assert!(peak_at(24_000) > 0.05, "第 2 拍应有咔哒");
@@ -1918,18 +2320,35 @@ mod tests {
         assert!(project_end > 0, "工程结尾应当由片段长度推出");
 
         assert_eq!(player.loop_range(), None, "默认没有范围");
-        assert_eq!(player.playback_end_frame(), project_end, "没范围时边界就是工程结尾");
+        assert_eq!(
+            player.playback_end_frame(),
+            project_end,
+            "没范围时边界就是工程结尾"
+        );
 
         // 无效范围（end <= start）→ 视同没设，而不是「一个空区间」。
-        player.apply_command(TransportCommand::SetLoopRange { start: 9600, end: 9600 });
+        player.apply_command(TransportCommand::SetLoopRange {
+            start: 9600,
+            end: 9600,
+        });
         assert_eq!(player.loop_range(), None);
-        player.apply_command(TransportCommand::SetLoopRange { start: 9600, end: 100 });
+        player.apply_command(TransportCommand::SetLoopRange {
+            start: 9600,
+            end: 100,
+        });
         assert_eq!(player.loop_range(), None);
 
         // 有效范围：开循环时边界被范围终点顶替。
-        player.apply_command(TransportCommand::SetLoopRange { start: 4800, end: 9600 });
+        player.apply_command(TransportCommand::SetLoopRange {
+            start: 4800,
+            end: 9600,
+        });
         assert_eq!(player.loop_range(), Some((4800, 9600)));
-        assert_eq!(player.playback_end_frame(), project_end, "没开循环时范围不生效");
+        assert_eq!(
+            player.playback_end_frame(),
+            project_end,
+            "没开循环时范围不生效"
+        );
         player.apply_command(TransportCommand::SetLoop(true));
         assert_eq!(player.playback_end_frame(), 9600, "开循环后边界是范围终点");
 
@@ -1944,7 +2363,10 @@ mod tests {
     fn play_after_stopping_at_the_range_end_restarts_from_the_range_start() {
         let mut player = Player::new(schedule(), &PluginRegistry::with_builtins(), 48_000.0, 512);
         player.apply_command(TransportCommand::SetLoop(true));
-        player.apply_command(TransportCommand::SetLoopRange { start: 4800, end: 9600 });
+        player.apply_command(TransportCommand::SetLoopRange {
+            start: 4800,
+            end: 9600,
+        });
 
         // 模拟宿主：播到边界即暂停（位置留在边界）。
         player.apply_command(TransportCommand::Seek { frame: 9600 });
@@ -1980,7 +2402,10 @@ mod tests {
                     id: "test.drone".into(),
                     name: "Drone".into(),
                     kind: PluginKind::Instrument,
-                    io: IoLayout { inputs: 0, outputs: 2 },
+                    io: IoLayout {
+                        inputs: 0,
+                        outputs: 2,
+                    },
                     capabilities: Default::default(),
                 }
             }
@@ -2014,8 +2439,11 @@ mod tests {
         let mut registry = PluginRegistry::new();
         registry.register("test.drone", |_track, _slot| Box::new(Drone));
         let mut p = project();
-        p.tracks[0].instrument =
-            Some(PluginInstance { plugin_id: "test.drone".into(), params: Default::default(), state: vec![] });
+        p.tracks[0].instrument = Some(PluginInstance {
+            plugin_id: "test.drone".into(),
+            params: Default::default(),
+            state: vec![],
+        });
         let schedule = ScheduledEvents::from_project(&p, 48_000.0);
         let mut player = Player::new(schedule, &registry, 48_000.0, 24_000);
 
@@ -2149,10 +2577,26 @@ mod tests {
         let registry = PluginRegistry::with_builtins();
         let player = Player::new(schedule(), &registry, 48_000.0, 512);
         let track = &player.tracks[0];
-        assert!((track.left_gain - 1.0).abs() < 1e-6, "左增益应为 1，实际 {}", track.left_gain);
-        assert!((track.right_gain - 1.0).abs() < 1e-6, "右增益应为 1，实际 {}", track.right_gain);
-        assert!((player.master_left - 1.0).abs() < 1e-6, "master 左应为 1，实际 {}", player.master_left);
-        assert!((player.master_right - 1.0).abs() < 1e-6, "master 右应为 1，实际 {}", player.master_right);
+        assert!(
+            (track.left_gain - 1.0).abs() < 1e-6,
+            "左增益应为 1，实际 {}",
+            track.left_gain
+        );
+        assert!(
+            (track.right_gain - 1.0).abs() < 1e-6,
+            "右增益应为 1，实际 {}",
+            track.right_gain
+        );
+        assert!(
+            (player.master_left - 1.0).abs() < 1e-6,
+            "master 左应为 1，实际 {}",
+            player.master_left
+        );
+        assert!(
+            (player.master_right - 1.0).abs() < 1e-6,
+            "master 右应为 1，实际 {}",
+            player.master_right
+        );
     }
 
     /// 声像硬偏（线性 balance）：一侧保留、另一侧归零。
@@ -2194,7 +2638,10 @@ mod tests {
         let quieter = peak(&quiet);
 
         // -20 dB ≈ 0.1 倍。允许一定裕度（首块包络尚未到达稳态）。
-        assert!(quieter < baseline * 0.5, "gain must drop: {baseline} -> {quieter}");
+        assert!(
+            quieter < baseline * 0.5,
+            "gain must drop: {baseline} -> {quieter}"
+        );
     }
 
     #[test]
@@ -2204,13 +2651,29 @@ mod tests {
             meta: None,
             id: TrackId(2),
             name: "Bass".into(),
-            instrument: Some(PluginInstance { plugin_id: "builtin.synth".into(), params: Default::default(), state: vec![] }),
+            instrument: Some(PluginInstance {
+                plugin_id: "builtin.synth".into(),
+                params: Default::default(),
+                state: vec![],
+            }),
             effects: vec![],
             clips: vec![Clip {
                 id: ClipId(2),
                 start: 0.0,
                 length: 1.0,
-                notes: vec![Note { id: 0, pitch: 40, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
+                notes: vec![Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 40,
+                    start: 0.0,
+                    duration: 0.5,
+                    velocity: 100,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -2296,7 +2759,8 @@ mod tests {
     }
 
     #[test]
-    fn unknown_track_in_mix_command_is_ignored() {        let registry = PluginRegistry::with_builtins();
+    fn unknown_track_in_mix_command_is_ignored() {
+        let registry = PluginRegistry::with_builtins();
         let mut player = Player::new(schedule(), &registry, 48_000.0, 512);
         player.apply_command(TransportCommand::Play);
         player.apply_command(TransportCommand::SetTrackMix {
@@ -2334,12 +2798,17 @@ mod tests {
     #[test]
     fn a_send_copies_the_post_fader_signal_into_the_bus() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| {
+            Box::new(StateTone { level: 0.0 })
+        });
 
         let mut p = Project::new("p");
         p.transport.tempo = 120.0;
         let mut src = tone_track(1, "Src", 128); // ≈ 0.5
-        src.sends = vec![Send { target: TrackId(2), gain_db: 0.0 }];
+        src.sends = vec![Send {
+            target: TrackId(2),
+            gain_db: 0.0,
+        }];
         let bus = tone_track(2, "Bus", 0);
         let mut bus = bus;
         bus.instrument = None; // 总线本身不出声，只汇总
@@ -2364,14 +2833,19 @@ mod tests {
     #[test]
     fn gain_automation_overrides_the_track_fader() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| {
+            Box::new(StateTone { level: 0.0 })
+        });
 
         let mut p = Project::new("p");
         p.transport.tempo = 120.0;
         let mut t = tone_track(1, "T", 255); // 满幅
         t.automation = vec![AutomationLane {
             param: "gain_db".into(),
-            points: vec![AutomationPoint { beat: 0.0, value: -60.0 }],
+            points: vec![AutomationPoint {
+                beat: 0.0,
+                value: -60.0,
+            }],
         }];
         p.tracks.push(t);
 
@@ -2400,7 +2874,10 @@ mod tests {
                     id: "test.cc".into(),
                     name: "CC Recorder".into(),
                     kind: PluginKind::Instrument,
-                    io: IoLayout { inputs: 0, outputs: 2 },
+                    io: IoLayout {
+                        inputs: 0,
+                        outputs: 2,
+                    },
                     capabilities: Default::default(),
                 }
             }
@@ -2438,7 +2915,9 @@ mod tests {
         let sink = Arc::clone(&log);
         let mut registry = PluginRegistry::new();
         registry.register("test.cc", move |_track, _slot| {
-            Box::new(CcRecorder { log: Arc::clone(&sink) })
+            Box::new(CcRecorder {
+                log: Arc::clone(&sink),
+            })
         });
 
         let mut p = Project::new("p");
@@ -2451,7 +2930,10 @@ mod tests {
         });
         track.automation = vec![AutomationLane {
             param: "cc:64".into(),
-            points: vec![AutomationPoint { beat: 0.0, value: 127.0 }],
+            points: vec![AutomationPoint {
+                beat: 0.0,
+                value: 127.0,
+            }],
         }];
         p.tracks.push(track);
 
@@ -2466,7 +2948,10 @@ mod tests {
         player.process_block(&mut out, 512);
         assert_eq!(
             log.lock().unwrap().as_slice(),
-            &[MidiEvent::ControlChange { controller: 64, value: 127 }]
+            &[MidiEvent::ControlChange {
+                controller: 64,
+                value: 127
+            }]
         );
 
         // 值没变就不该每块重复送。
@@ -2483,7 +2968,9 @@ mod tests {
     #[test]
     fn set_automation_applies_live_without_a_rebuild() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| {
+            Box::new(StateTone { level: 0.0 })
+        });
 
         let mut p = Project::new("p");
         p.transport.tempo = 120.0;
@@ -2494,15 +2981,26 @@ mod tests {
         player.apply_command(TransportCommand::Play);
         let mut out = vec![0.0f32; 512 * 2];
         player.process_block(&mut out, 512);
-        assert!(peak(&out) > 0.9, "没有自动化时应满幅（峰值 {}）", peak(&out));
+        assert!(
+            peak(&out) > 0.9,
+            "没有自动化时应满幅（峰值 {}）",
+            peak(&out)
+        );
 
         player.apply_command(TransportCommand::SetAutomation {
             track: TrackId(1),
             target: LaneTarget::GainDb,
-            points: vec![AutomationPoint { beat: 0.0, value: -60.0 }],
+            points: vec![AutomationPoint {
+                beat: 0.0,
+                value: -60.0,
+            }],
         });
         player.process_block(&mut out, 512);
-        assert!(peak(&out) < 0.01, "推入 -60 dB 曲线后应几乎无声（峰值 {}）", peak(&out));
+        assert!(
+            peak(&out) < 0.01,
+            "推入 -60 dB 曲线后应几乎无声（峰值 {}）",
+            peak(&out)
+        );
 
         // 空曲线 = 删除该车道 → 回到推子值。
         player.apply_command(TransportCommand::SetAutomation {
@@ -2511,14 +3009,21 @@ mod tests {
             points: vec![],
         });
         player.process_block(&mut out, 512);
-        assert!(peak(&out) > 0.9, "移除曲线后应恢复满幅（峰值 {}）", peak(&out));
+        assert!(
+            peak(&out) > 0.9,
+            "移除曲线后应恢复满幅（峰值 {}）",
+            peak(&out)
+        );
     }
 
     #[test]
     fn instrument_param_automation_overrides_the_static_value() {
         let mut registry = PluginRegistry::new();
         registry.register("test.param.instrument", |_track, _slot| {
-            Box::new(ParamLevel { level: 0.0, kind: PluginKind::Instrument })
+            Box::new(ParamLevel {
+                level: 0.0,
+                kind: PluginKind::Instrument,
+            })
         });
 
         let mut p = Project::new("p");
@@ -2539,7 +3044,10 @@ mod tests {
             sends: vec![],
             automation: vec![AutomationLane {
                 param: "inst:level".into(),
-                points: vec![AutomationPoint { beat: 0.0, value: 0.8 }],
+                points: vec![AutomationPoint {
+                    beat: 0.0,
+                    value: 0.8,
+                }],
             }],
         });
 
@@ -2549,15 +3057,24 @@ mod tests {
         player.apply_command(TransportCommand::Play);
         let mut out = vec![0.0f32; 512 * 2];
         player.process_block(&mut out, 512);
-        assert!((peak(&out) - 0.8).abs() < 0.05, "乐器参数自动化应覆盖静态值（峰值 {}）", peak(&out));
+        assert!(
+            (peak(&out) - 0.8).abs() < 0.05,
+            "乐器参数自动化应覆盖静态值（峰值 {}）",
+            peak(&out)
+        );
     }
 
     #[test]
     fn effect_param_automation_overrides_the_static_value() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| {
+            Box::new(StateTone { level: 0.0 })
+        });
         registry.register("test.param.effect", |_track, _slot| {
-            Box::new(ParamLevel { level: 1.0, kind: PluginKind::Effect })
+            Box::new(ParamLevel {
+                level: 1.0,
+                kind: PluginKind::Effect,
+            })
         });
 
         let mut p = Project::new("p");
@@ -2571,7 +3088,10 @@ mod tests {
         }];
         t.automation = vec![AutomationLane {
             param: "fx0:level".into(),
-            points: vec![AutomationPoint { beat: 0.0, value: 0.5 }],
+            points: vec![AutomationPoint {
+                beat: 0.0,
+                value: 0.5,
+            }],
         }];
         p.tracks.push(t);
 
@@ -2581,7 +3101,11 @@ mod tests {
         player.apply_command(TransportCommand::Play);
         let mut out = vec![0.0f32; 512 * 2];
         player.process_block(&mut out, 512);
-        assert!((peak(&out) - 0.5).abs() < 0.05, "效果器参数自动化应覆盖静态值（峰值 {}）", peak(&out));
+        assert!(
+            (peak(&out) - 0.5).abs() < 0.05,
+            "效果器参数自动化应覆盖静态值（峰值 {}）",
+            peak(&out)
+        );
     }
 
     /// 移除插件参数曲线必须把参数**写回静态值**（读取模式）：`gain_db` / `pan` 的自动化值只活在
@@ -2590,7 +3114,10 @@ mod tests {
     fn removing_a_plugin_param_lane_restores_the_static_value() {
         let mut registry = PluginRegistry::new();
         registry.register("test.param.instrument", |_track, _slot| {
-            Box::new(ParamLevel { level: 0.0, kind: PluginKind::Instrument })
+            Box::new(ParamLevel {
+                level: 0.0,
+                kind: PluginKind::Instrument,
+            })
         });
 
         let mut p = Project::new("p");
@@ -2619,17 +3146,28 @@ mod tests {
 
         // 静态值 0.2：没有曲线时插件的电平就是它。
         player.process_block(&mut out, 512);
-        assert!((peak(&out) - 0.2).abs() < 0.05, "无曲线时应为静态值 0.2（峰值 {}）", peak(&out));
+        assert!(
+            (peak(&out) - 0.2).abs() < 0.05,
+            "无曲线时应为静态值 0.2（峰值 {}）",
+            peak(&out)
+        );
 
         // 实时推入 inst:level = 0.8 → 覆盖静态值。
         let target = LaneTarget::from_key("inst:level").expect("键能解析");
         player.apply_command(TransportCommand::SetAutomation {
             track: TrackId(1),
             target: target.clone(),
-            points: vec![AutomationPoint { beat: 0.0, value: 0.8 }],
+            points: vec![AutomationPoint {
+                beat: 0.0,
+                value: 0.8,
+            }],
         });
         player.process_block(&mut out, 512);
-        assert!((peak(&out) - 0.8).abs() < 0.05, "曲线 0.8 应覆盖静态值（峰值 {}）", peak(&out));
+        assert!(
+            (peak(&out) - 0.8).abs() < 0.05,
+            "曲线 0.8 应覆盖静态值（峰值 {}）",
+            peak(&out)
+        );
 
         // 空 points = 删除该车道 → 必须写回静态值 0.2，而不是停在 0.8。
         player.apply_command(TransportCommand::SetAutomation {
@@ -2649,9 +3187,14 @@ mod tests {
     #[test]
     fn removing_an_effect_param_lane_restores_the_static_value() {
         let mut registry = PluginRegistry::new();
-        registry.register("test.stateful", |_track, _slot| Box::new(StateTone { level: 0.0 }));
+        registry.register("test.stateful", |_track, _slot| {
+            Box::new(StateTone { level: 0.0 })
+        });
         registry.register("test.param.effect", |_track, _slot| {
-            Box::new(ParamLevel { level: 1.0, kind: PluginKind::Effect })
+            Box::new(ParamLevel {
+                level: 1.0,
+                kind: PluginKind::Effect,
+            })
         });
 
         let mut p = Project::new("p");
@@ -2671,16 +3214,27 @@ mod tests {
         let mut out = vec![0.0f32; 512 * 2];
 
         player.process_block(&mut out, 512);
-        assert!((peak(&out) - 0.25).abs() < 0.05, "无曲线时应为静态值 0.25（峰值 {}）", peak(&out));
+        assert!(
+            (peak(&out) - 0.25).abs() < 0.05,
+            "无曲线时应为静态值 0.25（峰值 {}）",
+            peak(&out)
+        );
 
         let target = LaneTarget::from_key("fx0:level").expect("键能解析");
         player.apply_command(TransportCommand::SetAutomation {
             track: TrackId(1),
             target: target.clone(),
-            points: vec![AutomationPoint { beat: 0.0, value: 0.5 }],
+            points: vec![AutomationPoint {
+                beat: 0.0,
+                value: 0.5,
+            }],
         });
         player.process_block(&mut out, 512);
-        assert!((peak(&out) - 0.5).abs() < 0.05, "曲线 0.5 应覆盖静态值（峰值 {}）", peak(&out));
+        assert!(
+            (peak(&out) - 0.5).abs() < 0.05,
+            "曲线 0.5 应覆盖静态值（峰值 {}）",
+            peak(&out)
+        );
 
         player.apply_command(TransportCommand::SetAutomation {
             track: TrackId(1),
@@ -2693,5 +3247,252 @@ mod tests {
             "移除效果器参数曲线后应回到静态值 0.25（峰值 {}）",
             peak(&out)
         );
+    }
+
+    /// 复音压力 → 通道压力：同通道取按住音符的最大值，音符松开后回落。
+    #[test]
+    fn poly_pressure_folds_to_the_max_channel_pressure() {
+        let mut events = vec![
+            ScheduledMidi {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 60,
+                    velocity: 100,
+                },
+            },
+            ScheduledMidi {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::PolyPressure {
+                    note: 60,
+                    value: 40,
+                },
+            },
+            ScheduledMidi {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 64,
+                    velocity: 100,
+                },
+            },
+            ScheduledMidi {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::PolyPressure {
+                    note: 64,
+                    value: 90,
+                },
+            },
+            ScheduledMidi {
+                frame: 10,
+                channel: 0,
+                event: MidiEvent::NoteOff { note: 64 },
+            },
+            ScheduledMidi {
+                frame: 20,
+                channel: 0,
+                event: MidiEvent::NoteOff { note: 60 },
+            },
+        ];
+        fold_poly_pressure(&mut events);
+        let values: Vec<u8> = events
+            .iter()
+            .filter_map(|e| match e.event {
+                MidiEvent::ChannelPressure { value } => Some(value),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(values, vec![40, 90, 40, 0], "压力取最大，松开后回落");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.event, MidiEvent::PolyPressure { .. })),
+            "折叠后不再转发 PolyPressure"
+        );
+    }
+
+    /// 逐音弯音的折叠必须按通道分组：MPE 下两条通道互不抢弯音。
+    #[test]
+    fn pitch_folding_is_per_channel() {
+        let expr = crate::model::PitchExpression {
+            bend_to: 100,
+            ..crate::model::PitchExpression::NONE
+        };
+        let spans = vec![
+            PitchSpan {
+                note: 60,
+                channel: 1,
+                start_frame: 0,
+                end_frame: 20,
+                start_beat: 0.0,
+                expr,
+            },
+            PitchSpan {
+                note: 64,
+                channel: 2,
+                start_frame: 0,
+                end_frame: 20,
+                start_beat: 0.0,
+                expr,
+            },
+        ];
+        let mut events = vec![
+            ScheduledMidi {
+                frame: 0,
+                channel: 1,
+                event: MidiEvent::NoteOn {
+                    note: 60,
+                    velocity: 100,
+                },
+            },
+            ScheduledMidi {
+                frame: 0,
+                channel: 1,
+                event: MidiEvent::NotePitch {
+                    note: 60,
+                    cents: 100,
+                },
+            },
+            ScheduledMidi {
+                frame: 0,
+                channel: 2,
+                event: MidiEvent::NoteOn {
+                    note: 64,
+                    velocity: 100,
+                },
+            },
+            ScheduledMidi {
+                frame: 0,
+                channel: 2,
+                event: MidiEvent::NotePitch {
+                    note: 64,
+                    cents: 100,
+                },
+            },
+            ScheduledMidi {
+                frame: 20,
+                channel: 1,
+                event: MidiEvent::NoteOff { note: 60 },
+            },
+            ScheduledMidi {
+                frame: 20,
+                channel: 2,
+                event: MidiEvent::NoteOff { note: 64 },
+            },
+        ];
+        let transport = Project::new("p").transport;
+        let map = TempoMap::from_transport(&transport);
+        fold_note_pitch(&mut events, &spans, &map, 48_000.0);
+        let bends: Vec<(u8, i16)> = events
+            .iter()
+            .filter_map(|e| match e.event {
+                MidiEvent::PitchBend { cents } => Some((e.channel, cents)),
+                _ => None,
+            })
+            .collect();
+        assert!(bends.contains(&(1, 100)), "通道 1 自己弯：{bends:?}");
+        assert!(bends.contains(&(2, 100)), "通道 2 自己弯：{bends:?}");
+        assert!(bends.contains(&(1, 0)), "通道 1 收音归零：{bends:?}");
+        assert!(bends.contains(&(2, 0)), "通道 2 收音归零：{bends:?}");
+    }
+
+    /// `at:<通道>` 车道逐块发通道压力，值不变不重发，seek 后重发。
+    #[test]
+    fn channel_pressure_lanes_emit_pressure_events() {
+        struct PressureRecorder {
+            log: Arc<Mutex<Vec<(u8, u8)>>>,
+        }
+
+        impl Plugin for PressureRecorder {
+            fn descriptor(&self) -> PluginDescriptor {
+                PluginDescriptor {
+                    id: "test.pressure".into(),
+                    name: "Pressure Recorder".into(),
+                    kind: PluginKind::Instrument,
+                    io: IoLayout {
+                        inputs: 0,
+                        outputs: 2,
+                    },
+                    capabilities: ai_daw_plugin_api::PluginCapabilities {
+                        channel_pressure: true,
+                        ..Default::default()
+                    },
+                }
+            }
+            fn params(&self) -> Vec<ParamInfo> {
+                Vec::new()
+            }
+            fn get_param(&self, _id: &ParamId) -> Option<f32> {
+                None
+            }
+            fn set_param(&mut self, _id: &ParamId, _value: f32) {}
+            fn prepare(&mut self, _sample_rate: f64, _block_size: usize) {}
+            fn reset(&mut self) {}
+            fn process(
+                &mut self,
+                _ctx: &ProcessContext,
+                _audio: &mut [&mut [f32]],
+                events: &[TimedMidiEvent],
+            ) {
+                let mut log = self.log.lock().unwrap();
+                for event in events {
+                    if let MidiEvent::ChannelPressure { value } = event.event {
+                        log.push((event.channel, value));
+                    }
+                }
+            }
+            fn save_state(&self) -> Vec<u8> {
+                Vec::new()
+            }
+            fn load_state(&mut self, _state: &[u8]) -> Result<(), PluginError> {
+                Ok(())
+            }
+        }
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&log);
+        let mut registry = PluginRegistry::new();
+        registry.register("test.pressure", move |_track, _slot| {
+            Box::new(PressureRecorder {
+                log: Arc::clone(&sink),
+            })
+        });
+
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        let mut track = tone_track(1, "T", 255);
+        track.instrument = Some(PluginInstance {
+            plugin_id: "test.pressure".into(),
+            params: Default::default(),
+            state: vec![],
+        });
+        track.automation = vec![AutomationLane {
+            param: "at:2".into(),
+            points: vec![AutomationPoint {
+                beat: 0.0,
+                value: 77.0,
+            }],
+        }];
+        p.tracks.push(track);
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        let mut out = vec![0.0f32; 512 * 2];
+
+        player.process_block(&mut out, 512);
+        assert!(log.lock().unwrap().is_empty(), "停止时不发压力");
+
+        player.apply_command(TransportCommand::Play);
+        player.process_block(&mut out, 512);
+        assert_eq!(log.lock().unwrap().as_slice(), &[(2, 77)]);
+
+        player.process_block(&mut out, 512);
+        assert_eq!(log.lock().unwrap().len(), 1, "值没变不重发");
+
+        player.apply_command(TransportCommand::Seek { frame: 0 });
+        player.process_block(&mut out, 512);
+        assert_eq!(log.lock().unwrap().len(), 2, "seek 后重发");
     }
 }

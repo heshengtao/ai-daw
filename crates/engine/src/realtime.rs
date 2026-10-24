@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use thiserror::Error;
 
-use crate::command_queue::{command_queue, CommandSender};
 use crate::audio::DecodedAudio;
+use crate::command_queue::{command_queue, CommandSender};
 use crate::player::{Player, ReusableInstances, YieldSink};
 use crate::recorder::Recorder;
 use crate::registry::PluginRegistry;
@@ -87,7 +87,10 @@ impl OutputFormatRange {
     /// `Ord::clamp`——`clamp` 在 `min > max` 时会 panic，反向区间绝不能让它崩。反向时按
     /// 交换后的合法区间处理（与 [`OutputFormatRange::covers`] 保持一致）。
     pub fn nearest_rate(&self, rate: u32) -> u32 {
-        let (min, max) = (self.min_rate.min(self.max_rate), self.min_rate.max(self.max_rate));
+        let (min, max) = (
+            self.min_rate.min(self.max_rate),
+            self.min_rate.max(self.max_rate),
+        );
         rate.clamp(min, max)
     }
 
@@ -96,7 +99,10 @@ impl OutputFormatRange {
     /// 与 [`OutputFormatRange::nearest_rate`] 用同一套归一化：反向区间按交换后的区间判定，
     /// 二者对畸形输入的解释因此始终一致。
     pub fn covers(&self, rate: u32) -> bool {
-        let (min, max) = (self.min_rate.min(self.max_rate), self.min_rate.max(self.max_rate));
+        let (min, max) = (
+            self.min_rate.min(self.max_rate),
+            self.min_rate.max(self.max_rate),
+        );
         min <= rate && rate <= max
     }
 }
@@ -701,7 +707,9 @@ impl AudioHost {
 
     /// 结束录制并取走采集内容（未录制 / 空则 `None`）。输入流保持打开。
     pub fn stop_recording(&mut self) -> Option<DecodedAudio> {
-        self.recorder.as_mut().and_then(|recorder| recorder.finish())
+        self.recorder
+            .as_mut()
+            .and_then(|recorder| recorder.finish())
     }
 
     /// 让音频回调把当前**活着的**插件实例交出来（重建宿主前调用）。
@@ -812,6 +820,8 @@ mod tests {
             length: 1.0,
             notes: vec![Note {
                 id: 0,
+                channel: None,
+                pressure: None,
                 pitch: 69,
                 start: 0.0,
                 duration: 0.5,
@@ -904,7 +914,10 @@ mod tests {
     /// 到达边界的动作：开循环回到起点，关循环暂停。
     #[test]
     fn end_of_project_action_wraps_or_pauses() {
-        assert_eq!(end_of_project_action(true, None), TransportCommand::Seek { frame: 0 });
+        assert_eq!(
+            end_of_project_action(true, None),
+            TransportCommand::Seek { frame: 0 }
+        );
         assert_eq!(end_of_project_action(false, None), TransportCommand::Pause);
     }
 
@@ -915,7 +928,10 @@ mod tests {
             end_of_project_action(true, Some((4800, 9600))),
             TransportCommand::Seek { frame: 4800 }
         );
-        assert_eq!(end_of_project_action(false, Some((4800, 9600))), TransportCommand::Pause);
+        assert_eq!(
+            end_of_project_action(false, Some((4800, 9600))),
+            TransportCommand::Pause
+        );
     }
 
     /// 共享状态的循环开关初始为关，且克隆共享同一份。
@@ -973,7 +989,8 @@ mod tests {
             scope: Arc::new(ScopeBuffer::new(crate::SCOPE_CAPACITY)),
             status: Arc::clone(&status),
         };
-        let Ok(host) = AudioHost::start(schedule(), &PluginRegistry::with_builtins(), options) else {
+        let Ok(host) = AudioHost::start(schedule(), &PluginRegistry::with_builtins(), options)
+        else {
             // 无可用设备（无头 CI）：这条测试无从验证，跳过而不是失败。
             return;
         };

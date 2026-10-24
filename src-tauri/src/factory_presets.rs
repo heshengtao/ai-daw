@@ -32,9 +32,8 @@ const RAW: &str = include_str!("../../src/data/synth-factory-presets.json");
 pub(crate) fn all() -> &'static [FactoryPreset] {
     static PRESETS: OnceLock<Vec<FactoryPreset>> = OnceLock::new();
     PRESETS.get_or_init(|| {
-        serde_json::from_str(RAW).expect(
-            "内置合成器出厂预设 JSON 必须可解析：src/data/synth-factory-presets.json",
-        )
+        serde_json::from_str(RAW)
+            .expect("内置合成器出厂预设 JSON 必须可解析：src/data/synth-factory-presets.json")
     })
 }
 
@@ -63,7 +62,11 @@ mod tests {
         assert_eq!(categories().len(), 9, "类别：{:?}", categories());
         for preset in all() {
             assert!(!preset.label.trim().is_empty(), "{} 缺中文名", preset.id);
-            assert!(!preset.description.trim().is_empty(), "{} 缺描述", preset.id);
+            assert!(
+                !preset.description.trim().is_empty(),
+                "{} 缺描述",
+                preset.id
+            );
             assert!(!preset.params.is_empty(), "{} 没有参数", preset.id);
         }
     }

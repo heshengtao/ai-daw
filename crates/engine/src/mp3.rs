@@ -35,8 +35,9 @@ const FLUSH_CAPACITY: usize = 7200;
 pub const DEFAULT_BITRATE_KBPS: u32 = 320;
 
 /// MP3 可选的比特率（kbps，MPEG-1 的全部合法档位，由高到低）。界面直接照它列选项。
-pub const BITRATES_KBPS: [u32; 16] =
-    [320, 256, 224, 192, 160, 128, 112, 96, 80, 64, 48, 40, 32, 24, 16, 8];
+pub const BITRATES_KBPS: [u32; 16] = [
+    320, 256, 224, 192, 160, 128, 112, 96, 80, 64, 48, 40, 32, 24, 16, 8,
+];
 
 /// MP3 支持的采样率（Hz）：MPEG-1 的三个值（见模块文档）。
 pub const SAMPLE_RATES: [u32; 3] = [48_000, 44_100, 32_000];
@@ -167,16 +168,31 @@ mod tests {
     /// 最小的 demo 工程：一条轨道 + 合成器 + 一个含单音的音符（与 `wav.rs` 的用例同形）。
     fn demo() -> crate::model::Project {
         let mut e = Engine::new("mp3-demo");
-        let ev = e.execute(Command::AddTrack { name: "Lead".into() }, Actor::Human);
+        let ev = e.execute(
+            Command::AddTrack {
+                name: "Lead".into(),
+            },
+            Actor::Human,
+        );
         let track = match ev[0] {
             Event::TrackAdded { id, .. } => id,
             _ => unreachable!(),
         };
         e.execute(
-            Command::SetTrackInstrument { track, plugin_id: "builtin.synth".into() },
+            Command::SetTrackInstrument {
+                track,
+                plugin_id: "builtin.synth".into(),
+            },
             Actor::Human,
         );
-        let ev = e.execute(Command::AddClip { track, start: 0.0, length: 4.0 }, Actor::Human);
+        let ev = e.execute(
+            Command::AddClip {
+                track,
+                start: 0.0,
+                length: 4.0,
+            },
+            Actor::Human,
+        );
         let clip = match ev[0] {
             Event::ClipAdded { clip, .. } => clip,
             _ => unreachable!(),
@@ -185,7 +201,19 @@ mod tests {
             Command::AddNote {
                 track,
                 clip,
-                note: Note { id: 0, pitch: 69, start: 0.0, duration: 2.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+                note: Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 69,
+                    start: 0.0,
+                    duration: 2.0,
+                    velocity: 100,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                },
             },
             Actor::Human,
         );
@@ -193,7 +221,11 @@ mod tests {
     }
 
     fn rendered() -> AudioBuffer {
-        let opts = RenderOptions { sample_rate: 44_100.0, tail_seconds: 0.5, settle_seconds: 0.0 };
+        let opts = RenderOptions {
+            sample_rate: 44_100.0,
+            tail_seconds: 0.5,
+            settle_seconds: 0.0,
+        };
         render(&demo(), &PluginRegistry::with_builtins(), &opts)
     }
 
@@ -207,7 +239,11 @@ mod tests {
         let buffer = rendered();
         let bytes = mp3_bytes(&buffer, 44_100, DEFAULT_BITRATE_KBPS).expect("应当编码成功");
 
-        assert!(starts_with_frame_sync(&bytes), "开头应当是 MPEG 帧同步头：{:02X?}", &bytes[..4]);
+        assert!(
+            starts_with_frame_sync(&bytes),
+            "开头应当是 MPEG 帧同步头：{:02X?}",
+            &bytes[..4]
+        );
         // 时长 2 拍 @120bpm = 1s 正文 + 0.5s 尾音 ≈ 1.5s；320 kbps → ≈ 60 kB。
         let seconds = buffer.frames() as f64 / 44_100.0;
         let expected = DEFAULT_BITRATE_KBPS as f64 * 1000.0 / 8.0 * seconds;
@@ -241,7 +277,10 @@ mod tests {
         ));
         // 单声道缓冲：本模块只负责立体声（引擎渲染出来的一直是立体声）。
         let mono = AudioBuffer::silence(1, 128);
-        assert!(matches!(mp3_bytes(&mono, 44_100, 320), Err(Mp3Error::UnsupportedChannels(1))));
+        assert!(matches!(
+            mp3_bytes(&mono, 44_100, 320),
+            Err(Mp3Error::UnsupportedChannels(1))
+        ));
     }
 
     #[test]

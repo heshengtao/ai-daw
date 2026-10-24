@@ -3,6 +3,16 @@
 - 更新：2026-10-10
 - 定位：本文件是**项目进度与后续计划的唯一索引**。设计意图见 `specs/2026-10-07-ai-daw-design.md`；逐步实现步骤见 `plans/` 下的分计划。
 - 背景：本文档修正了设计文档与分计划中已经与现实不符的若干陈述（见 §2），并给出剩余工作的统一路线（见 §5）。
+- **影片配乐接入（2026-10-22）**：新增 `film.json` 消费链路 —— `import_cue_sheet`（一次事务建
+  BPM/拍号/段落/和弦/轨道/片段）、`find_instrument`（语义音色映射，内置缺失时诚实给近似）、
+  `export_stems`（逐轨 WAV + `stems.json` 的 startFrame/LUFS/真峰值）、`what_changed`（增量读操作记录）。
+  引擎新增 `Command::ApplyCueSheet`，整份清单只占一个撤销步。MCP 工具数 99 → **103**；
+  新增能力域 `references/film.md`。AI CUT 侧对应 `docs/film-manifest.md`。
+  同批修正 smoke 报告里的三个低层摩擦：`new_project(exact_tracks:true)` 只建给定轨道、
+  `analyze_track_overlap` 省略 `tracks` 默认全轨、`find_instrument` **已安装插件优先**并支持
+  中英别名（guqin ↔ 古琴、pipa ↔ 琵琶）。插件目录现在还会读**插件自述**（VST3
+  `moduleinfo.json` 的 `Description` / CLAP descriptor 的 `description`），名字是代号也能按
+  描述里的 guqin/古琴 搜到；旧目录缓存需要 `rescan_plugins` 一次才会补上该字段。
 - **本次修订（2026-10-10）**：① 把已完成但仍标「待评审 / 未开始」的文档翻正（设计文档 §3/§5 状态、多份 spec 横幅、两份老 plan 横幅）；② 修正 §5 D2 的 MCP 工具数（27 → 30）；③ 记录一批**近期已提交、尚无设计文档的改动**（§1 末尾）；④ 新增 **Stage F（skills + `aidaw` CLI）** 与 **Stage G（本地 AI 能力）** 两个方向。
 - **第二次修订（2026-10-10，同日）**：完成 **C2 录音**、**C3 发送/总线/自动化（引擎 + API + 编辑器 UI）**、
   **F3/D3 skills 文档包 + `aidaw_help` 网关**、**G3 AI 面板**、**G0–G2 真模型（Basic Pitch / LocalVQE ONNX）**；
@@ -662,5 +672,5 @@ M3（Stage C：可录音、有音频片段）→ M4（Stage D：可被 AI 驱动
   - `plans/2026-10-10-plugin-manager.md`（E1：插件管理器 —— 安装 / 导入 / 更新 / 删除，✅ 完成）
 - 调研（research）：
   - `research/2026-10-10-open-source-survey.md`（录音 / 混音 / MIDI 输入 / 插件商店：可直接用的库与只能参考的项目，含许可结论）
-- skills 文档包（渐进式披露，AI harness 用）：`skills/aidaw/`（`SKILL.md` + `references/` 14 个能力域，含乐理 / 节奏鼓谱 / 曲风 / 编曲流程；由 MCP 的 `aidaw_help` 提供）
+- skills 文档包（渐进式披露，AI harness 用）：`skills/aidaw/`（`SKILL.md` + `references/` 能力域，含乐理 / 节奏鼓谱 / 曲风 / 编曲流程 / **影片配乐 film**；由 MCP 的 `aidaw_help` 提供）
 - 进度与后续计划的唯一索引：**本文件**。

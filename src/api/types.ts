@@ -41,6 +41,10 @@ export interface Note {
   offset?: number;
   /** 连奏：NoteOff 延到同音高的下一个音起点（同片段内）；缺省 false。 */
   legato?: boolean;
+  /** 逐音 MIDI 通道（0..=15）；缺省 = 跟随轨道（MPE 开启时由调度器分配）。 */
+  channel?: number;
+  /** 起音时的复音压力（0..=127）；缺省 = 不发。 */
+  pressure?: number;
   /** 音高表达（推弦 / 揉弦 / 滑音）；缺省 = 无。 */
   expr?: PitchExpression;
 }
@@ -56,6 +60,10 @@ export interface NotePatch {
   /** 起始偏移（拍）；`0` = 回到「同时发声」。 */
   offset?: number;
   legato?: boolean;
+  /** 逐音 MIDI 通道（0..=15）；缺省 = 保持原值。 */
+  channel?: number;
+  /** 起音压力（0..=127）；缺省 = 保持原值。 */
+  pressure?: number;
   /** 音高表达；给了就整体替换，`{}` = 清除。 */
   expr?: PitchExpression;
 }
@@ -195,6 +203,26 @@ export interface TrackMeta {
   pitch_range?: PitchRange;
   /** MIDI 弯音范围（半音，默认 2）。 */
   pitch_bend_range?: number;
+  /** MPE 配置；缺省 = 关闭。 */
+  mpe?: MpeConfig;
+  /** 奏法名 → keyswitch / CC / program 映射；空时后端不写这个键。 */
+  articulations?: Record<string, ArticulationSwitch>;
+  /** 默认奏法（`momentary` 切换在音符结束后回到它）。 */
+  default_articulation?: string;
+  /** 奏法映射的来源（从映射库导入时写入）。 */
+  articulation_source?: ArticulationSource;
+  /** 通用 MIDI 事件表（keyswitch / 一次性 CC / program change…）。 */
+  midi_events?: MidiEventAt[];
+}
+
+/** MPE 区域。 */
+export type MpeZone = "lower" | "upper";
+
+/** MPE 配置：宿主按成员通道逐音发弯音 / 压力。 */
+export interface MpeConfig {
+  /** 成员通道数（1..=15）。 */
+  channels: number;
+  zone: MpeZone;
 }
 
 /** 一个小节的和弦标记（工程元数据）。 */
@@ -248,10 +276,131 @@ export interface Project {
   note_tags?: Record<string, NoteTag>;
 }
 
-/** 音符级标签：装饰音 / 奏法。不改变播放。 */
+/** 音符级标签：装饰音 / 奏法。 */
 export interface NoteTag {
   ornament?: string;
   articulation?: string;
+}
+
+// ---------------------------------------------------------------------------
+// MIDI 表达（与 Rust `MidiEvent` / `Track.midi_events` 一致）
+// ---------------------------------------------------------------------------
+
+/** 逐音表达维度。 */
+export type NoteExpressionKind =
+  | "pan"
+  | "tuning"
+  | "vibrato"
+  | "expression"
+  | "brightness"
+  | { custom: number };
+
+/**
+ * 单个 MIDI 事件（Rust 侧是外部标记枚举，变体名保持 PascalCase）。
+ *
+ * 通道不在这里：它由 `TimedMidiEvent.channel` / `MidiEventAt.channel` 承载。
+ */
+export type MidiEvent =
+  | { NoteOn: { note: number; velocity: number } }
+  | { NoteOff: { note: number } }
+  | { NoteVolume: { note: number; value: number } }
+  | { ControlChange: { controller: number; value: number } }
+  | { PitchBend: { cents: number } }
+  | { NotePitch: { note: number; cents: number } }
+  | { ChannelPressure: { value: number } }
+  | { PolyPressure: { note: number; value: number } }
+  | { ProgramChange: { program: number } }
+  | { NoteExpression: { note: number; kind: NoteExpressionKind; value: number } };
+
+/** 通用 MIDI 事件表里的一条（绝对拍 + 通道 + 事件）。 */
+export interface MidiEventAt {
+  beat: number;
+  /** 0..=15；缺省 0。 */
+  channel?: number;
+  event: MidiEvent;
+}
+
+/** 插件声明的逐音表达维度。 */
+export interface NoteExpressionSupport {
+  volume: boolean;
+  pan: boolean;
+  tuning: boolean;
+  vibrato: boolean;
+  expression: boolean;
+  brightness: boolean;
+}
+
+/** MIDI 能力与投递报告（`track_midi_capabilities` 的输出）。 */
+export interface MidiCapabilities {
+  track: number;
+  plugin: { id: string; name: string; kind: string } | null;
+  transport: {
+    midi_input: boolean;
+    channel_pitch_bend: boolean;
+    channel_pressure: boolean;
+    poly_pressure: boolean;
+    program_change: boolean;
+    per_note_channel: boolean;
+    note_expression: NoteExpressionSupport;
+  } | null;
+  used: {
+    notes?: number;
+    pressure_notes?: number;
+    expr_notes?: number;
+    articulation_notes?: number;
+    mpe?: MpeConfig | null;
+    midi_events?: number;
+    articulations?: number;
+    articulation_source?: ArticulationSource;
+  };
+  degraded: string[];
+  note?: string;
+}
+
+/** 奏法切换方式：keyswitch 音符 / CC / program change。 */
+export interface CcSwitch {
+  controller: number;
+  value: number;
+}
+
+/** 奏法切换里的一条 MIDI 消息（相对拍 + 可选通道）。 */
+export interface ArticulationEvent {
+  /** 相对切换时刻的偏移（拍）；缺省 0。 */
+  offset_beats?: number;
+  /** MIDI 通道（0..=15）；缺省 = 跟随音符通道。 */
+  channel?: number;
+  event: MidiEvent;
+}
+
+/** 一条奏法映射。 */
+export interface ArticulationSwitch {
+  keyswitch?: number;
+  cc?: CcSwitch;
+  program?: number;
+  /** 任意 MIDI 消息序列（导入映射用）；非空时优先于 keyswitch / cc / program。 */
+  events?: ArticulationEvent[];
+  /** 提前量（拍）；缺省 1/64 拍。 */
+  lead_beats?: number;
+  /** true = 音符结束后切回默认奏法。 */
+  momentary?: boolean;
+}
+
+/** 奏法映射的来源。 */
+export interface ArticulationSource {
+  manufacturer?: string;
+  product?: string;
+  patch?: string;
+  map_id?: string;
+}
+
+/** 映射库里的一份奏法映射（仅用于搜索 / 选择）。 */
+export interface ArticulationMapSummary {
+  id: string;
+  manufacturer: string;
+  product: string;
+  patch: string;
+  description: string;
+  articulation_count: number;
 }
 
 // ---------------------------------------------------------------------------

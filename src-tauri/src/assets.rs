@@ -19,7 +19,9 @@ pub struct AssetCache {
 impl AssetCache {
     /// 空缓存。
     pub fn new() -> Self {
-        Self { map: Mutex::new(HashMap::new()) }
+        Self {
+            map: Mutex::new(HashMap::new()),
+        }
     }
 
     /// 取素材（带缓存）。失败返回可读原因，且**失败结果也会被缓存**。
@@ -52,7 +54,9 @@ impl AssetCache {
             }
         };
         let mut map = self.map.lock().unwrap();
-        let stored = map.entry(path.to_string()).or_insert_with(|| outcome.clone());
+        let stored = map
+            .entry(path.to_string())
+            .or_insert_with(|| outcome.clone());
         match stored.as_ref() {
             Some(audio) => Ok(Arc::clone(audio)),
             None => Err(format!("音频素材加载失败：{path}")),
@@ -89,13 +93,22 @@ impl AssetCache {
         frames: Option<u64>,
     ) -> Result<Vec<f32>, String> {
         let audio = self.load(path)?;
-        let window = frames.unwrap_or_else(|| (audio.frames() as u64).saturating_sub(offset_frames));
-        Ok(ai_daw_asset::peaks_range(&audio, offset_frames, window, buckets))
+        let window =
+            frames.unwrap_or_else(|| (audio.frames() as u64).saturating_sub(offset_frames));
+        Ok(ai_daw_asset::peaks_range(
+            &audio,
+            offset_frames,
+            window,
+            buckets,
+        ))
     }
 
     /// 插入一份已解码素材（录音刚落盘时用：免去立刻重解码）。
     pub fn insert(&self, path: &str, audio: Arc<DecodedAudio>) {
-        self.map.lock().unwrap().insert(path.to_string(), Some(audio));
+        self.map
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), Some(audio));
     }
 }
 
@@ -112,7 +125,9 @@ mod tests {
             sample_rate: 48_000.0,
         });
         cache.insert("/nonexistent/rec.wav", Arc::clone(&audio));
-        let got = cache.load("/nonexistent/rec.wav").expect("插入过的路径必须直接命中");
+        let got = cache
+            .load("/nonexistent/rec.wav")
+            .expect("插入过的路径必须直接命中");
         assert_eq!(got.samples.len(), 2);
         assert_eq!(got.sample_rate, 48_000.0);
     }

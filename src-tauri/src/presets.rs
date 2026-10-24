@@ -113,12 +113,14 @@ impl PresetStore {
 
     /// 写回文件（内存模式下什么也不做）。
     fn flush(&self) -> Result<(), String> {
-        let Some(path) = &self.path else { return Ok(()) };
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).map_err(|e| format!("创建预设目录失败：{e}"))?;
         }
-        let text =
-            serde_json::to_string_pretty(&self.presets).map_err(|e| format!("序列化预设失败：{e}"))?;
+        let text = serde_json::to_string_pretty(&self.presets)
+            .map_err(|e| format!("序列化预设失败：{e}"))?;
         fs::write(path, text).map_err(|e| format!("写入预设失败：{e}"))
     }
 }
@@ -156,7 +158,11 @@ mod tests {
 
         let mut store = PresetStore::load(Some(path.clone()));
         let saved = store
-            .create("亮主音", "builtin.synth", params(&[("attack", 0.01), ("release", 0.2)]))
+            .create(
+                "亮主音",
+                "builtin.synth",
+                params(&[("attack", 0.01), ("release", 0.2)]),
+            )
             .unwrap();
 
         // 重新加载：内容必须原样回来。
@@ -172,7 +178,9 @@ mod tests {
     #[test]
     fn rejects_empty_names_and_deletes_by_id() {
         let mut store = PresetStore::load(None);
-        assert!(store.create("   ", "builtin.synth", HashMap::new()).is_err());
+        assert!(store
+            .create("   ", "builtin.synth", HashMap::new())
+            .is_err());
 
         let saved = store.create("a", "builtin.synth", HashMap::new()).unwrap();
         assert_eq!(store.all().len(), 1);

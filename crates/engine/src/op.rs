@@ -235,6 +235,11 @@ fn describe_one(project: &Project, command: &Command) -> (String, Option<String>
         ),
         Command::RenameProject { name } => ("rename_project", Some(name.clone()), vec![]),
         Command::NewProject { name, .. } => ("new_project", Some(name.clone()), vec![]),
+        Command::NewProjectWithTracks { name, track_names } => (
+            "new_project",
+            Some(name.clone()),
+            vec![num("tracks", track_names.len() as f64)],
+        ),
 
         Command::AddNotes { track, notes, .. } => (
             "add_notes",
@@ -299,6 +304,11 @@ fn describe_one(project: &Project, command: &Command) -> (String, Option<String>
         Command::HumanizeNotes { track, .. } => {
             ("humanize_notes", track_name(project, *track), vec![])
         }
+        Command::SetNoteTags { track, ids, .. } => (
+            "set_note_tags",
+            track_name(project, *track),
+            vec![num("count", ids.len() as f64)],
+        ),
         Command::SetNoteTag { track, .. } => ("set_note_tag", track_name(project, *track), vec![]),
         Command::FitNotesToRange {
             track,
@@ -329,6 +339,52 @@ fn describe_one(project: &Project, command: &Command) -> (String, Option<String>
             None,
             vec![num("count", sections.len() as f64)],
         ),
+        Command::ApplyCueSheet { plan } => {
+            let clips: usize = plan.tracks.iter().map(|track| track.clips.len()).sum();
+            let notes: usize = plan
+                .tracks
+                .iter()
+                .flat_map(|track| track.clips.iter())
+                .map(|clip| clip.notes.len())
+                .sum();
+            (
+                "import_cue_sheet",
+                plan.name.clone(),
+                vec![
+                    num("tracks", plan.tracks.len() as f64),
+                    num("sections", plan.sections.len() as f64),
+                    num("clips", clips as f64),
+                    num("notes", notes as f64),
+                ],
+            )
+        }
+        Command::SetMpe { track, config } => {
+            let args = match config {
+                Some(config) => vec![
+                    text("zone", format!("{:?}", config.zone).to_lowercase()),
+                    num("channels", f64::from(config.channels)),
+                ],
+                None => vec![text("zone", "off")],
+            };
+            ("set_mpe", track_name(project, *track), args)
+        }
+        Command::SetMidiEvents { track, events } => (
+            "set_midi_events",
+            track_name(project, *track),
+            vec![num("count", events.len() as f64)],
+        ),
+        Command::SetArticulations {
+            track,
+            articulations,
+            default,
+            ..
+        } => {
+            let mut args = vec![num("count", articulations.len() as f64)];
+            if let Some(default) = default {
+                args.push(text("default", default.clone()));
+            }
+            ("set_articulations", track_name(project, *track), args)
+        }
         Command::SetTrackMeta { track, role, .. } => {
             let mut args = vec![];
             if let Some(role) = role {
@@ -349,7 +405,12 @@ mod tests {
     #[test]
     fn single_command_resolves_target_at_describe_time() {
         let mut engine = Engine::new("demo");
-        engine.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+        engine.execute(
+            Command::AddTrack {
+                name: "Bass".into(),
+            },
+            Actor::Human,
+        );
         let track = engine.project().tracks[0].id;
 
         // 删除之后轨道名就查不到了——描述必须在应用命令之前生成。

@@ -7,13 +7,15 @@
 | `update_notes` | `track`,`clip`,`updates[]` | 按**稳定 id** 改写。 |
 | `remove_notes` | `track`,`clip`,`ids[]` | 按**稳定 id** 删除。 |
 | `replace_notes` | `track`,`clip`,`notes[]` | 原子替换整段音符。 |
-| `set_note_tag` | `track`,`clip`,`id`,`ornament?`,`articulation?` | 给单个音符写/清除装饰音与奏法标签（工程级 `note_tags`，不改播放）。 |
+| `set_note_tag` | `track`,`clip`,`id`,`ornament?`,`articulation?` | 给单个音符写/清除装饰音与奏法标签。**`articulation` 现在会发声**：需要轨道先有 `set_articulations` 映射（见 `expression.md`）。 |
 | `strum_notes` | `track`,`clip`,`step_ms`,`direction?`,`range?` | 扫弦：同一起点的一组音按音高依次错开。 |
 
 字段：`id`（片段内稳定标识，由引擎发放）、`pitch`（0..127）、`start`/`duration`（拍，片段内相对）、
 `velocity`（0..127，演奏强度）、`volume`（0..127，127 = 不衰减）、
 `offset`（**起始偏移**，拍，**负 = 提前、正 = 延后**，范围 ±4 拍；缺省 0 = 与 `start` 同时发声）、
 `legato`（**连奏**：NoteOff 延到**同音高**的下一个音；缺省 false）、
+`channel`（逐音 MIDI 通道 0..15；缺省 = 跟随轨道 / MPE 自动分配）、
+`pressure`（起音时的复音压力 0..127；缺省 = 不发）、
 `expr`（**音高表达**：推弦 / 揉弦 / 滑音；缺省无，见下节）。
 
 **最短时值**是 **0.03125 拍（1/32 拍）**，4/4 下相当于 **1/128 音符**；76 BPM 时约 **25 ms**。
@@ -89,12 +91,25 @@
 
 - 支持逐音表达的插件（VST3 声明了 Tuning note expression / 内置合成器）：每颗音符独立弯曲。
 - 只有通道弯音的插件（CLAP / AU / 内置采样乐器 / 多数 VST3）：引擎把逐音表达折叠成通道弯音；
-  **重叠音符以「最晚起音」为主**，和弦里同时揉多个音不保证独立。
+  **重叠音符以「最晚起音」为主**，和弦里同时揉多个音不保证独立。想让和弦里各自弯：
+  `set_track_meta(track, mpe_zone="lower", mpe_channels=15)` 开启 MPE（插件也要开 MPE）。
 - 弯音范围默认 ±2 个半音；音源不是这个范围时，用
   `set_track_meta(track, pitch_bend_range=<半音>)` 改。
 - `quantize_notes` / `apply_swing` / `humanize_notes` / `strum_notes` **不改** `expr`；
   `transpose_notes` 只改 `pitch`，音分偏移保持不变。
 - 与倚音一起用时：先写主音与 `expr`，再加倚音，之后不要再量化 / humanize。
+- **先 `get_midi_capabilities(track)`**：它会告诉你插件的逐音表达会不会被降级。
+
+## MIDI 通道 / 压力 / 奏法
+
+- `channel` / `pressure` 是音符字段，`add_notes` / `update_notes` 都能写。
+- 连续触后（揉弦 / 渐强）用自动化车道 `at:<通道>`（0..15）。
+- 奏法：优先 `list_articulation_maps` + `import_articulation_map` 导入库里的映射；没有时再用
+  `set_articulations` 定义「奏法名 → keyswitch / CC / program / events」，然后用
+  `set_note_tag(track, clip, id, articulation="harmonics")` 给音符打标签。
+  界面里：检查器最下方「演奏技巧 → 映射库」导入一次，之后选中音符在音符组的「演奏技巧」下拉里直接切换。
+- 通用一次性事件（keyswitch、program change、逐音表达）用 `set_midi_events` / `add_midi_events`。
+- 详细写法与限制见 `expression.md`（`aidaw_help("expression")`）。
 
 ## 倚音 / 装饰音（没有独立字段，但可以正确表达）
 
@@ -124,7 +139,7 @@
 **让分析知道这是装饰音**：
 - 持久写法：`set_note_tag(track, clip, id, ornament="grace")`。标签存在工程的 `note_tags`
   里（键 `track:clip:id`），会随工程保存；`analyze_harmony` 自动读取，命中时无论时值长短
-  都记成 `ornament` / `info`。`articulation` 也可以写（`staccato` / `accent` / `legato`…），
-  当前只作为元数据，不改变播放。
+  都记成 `ornament` / `info`。`articulation` 也可以写（`staccato` / `accent` / `legato`…）；
+  轨道有对应奏法映射（导入或手写）时会改变播放。
 - 一次性写法：`analyze_harmony(ornaments=[{track, clip, id}])`，不写回工程。
 - 都不传时，分析用「≤ 1/16 拍 + 后接相邻和弦音」的启发式。

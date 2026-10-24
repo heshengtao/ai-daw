@@ -12,8 +12,9 @@ use std::io::Cursor;
 use std::sync::{Arc, OnceLock};
 
 use ai_daw_plugin_api::{
-    pitch_bend_midi_bytes, IoLayout, MidiEvent, ParamId, ParamInfo, Plugin, PluginCapabilities,
-    PluginDescriptor, PluginError, PluginKind, ProcessContext, TimedMidiEvent,
+    pitch_bend_midi_bytes_on, IoLayout, MidiEvent, NoteExpressionSupport, ParamId, ParamInfo,
+    Plugin, PluginCapabilities, PluginDescriptor, PluginError, PluginKind, ProcessContext,
+    TimedMidiEvent,
 };
 use rustysynth_ext::{SoundFont, Synthesizer, SynthesizerSettings};
 
@@ -335,34 +336,40 @@ impl SoundFontPlugin {
         Box::new(Self::new(kind))
     }
 
-    fn apply_event(&mut self, event: MidiEvent) {
+    fn apply_event(&mut self, event: MidiEvent, channel: u8) {
         let Some(synth) = self.synth.as_mut() else {
             return;
         };
+        let ch = i32::from(channel & 0x0F);
         match event {
             MidiEvent::NoteOn { note, velocity } => {
                 if velocity == 0 {
-                    synth.note_off(0, note as i32);
+                    synth.note_off(ch, note as i32);
                 } else {
-                    synth.note_on(0, note as i32, velocity as i32);
+                    synth.note_on(ch, note as i32, velocity as i32);
                 }
             }
-            MidiEvent::NoteOff { note } => synth.note_off(0, note as i32),
-            // 采样器没有逐声部变调接口；`per_note_pitch` 报 false，逐音事件由引擎折叠成通道弯音。
+            MidiEvent::NoteOff { note } => synth.note_off(ch, note as i32),
+            // 采样器没有逐声部变调接口；`note_expression.tuning` 报 false，逐音事件由引擎折叠成通道弯音。
             // 这里仍防御性地处理，避免漏掉。
             MidiEvent::PitchBend { cents } => {
-                let bytes = pitch_bend_midi_bytes(cents, self.pitch_bend_range);
-                synth.process_midi_message(0, 0xE0, bytes[1] as i32, bytes[2] as i32);
+                let bytes = pitch_bend_midi_bytes_on(cents, self.pitch_bend_range, channel);
+                synth.process_midi_message(ch, 0xE0, bytes[1] as i32, bytes[2] as i32);
             }
             MidiEvent::NotePitch { cents, .. } => {
-                let bytes = pitch_bend_midi_bytes(cents, self.pitch_bend_range);
-                synth.process_midi_message(0, 0xE0, bytes[1] as i32, bytes[2] as i32);
+                let bytes = pitch_bend_midi_bytes_on(cents, self.pitch_bend_range, channel);
+                synth.process_midi_message(ch, 0xE0, bytes[1] as i32, bytes[2] as i32);
             }
             MidiEvent::ControlChange { controller, value } => {
-                synth.process_midi_message(0, 0xB0, controller as i32, value as i32);
+                synth.process_midi_message(ch, 0xB0, controller as i32, value as i32);
             }
-            // 采样器没有逐声部增益接口；`per_note_volume` 报 false，忽略该事件。
+            // 采样器没有逐声部增益接口；`note_expression.volume` 报 false，忽略该事件。
             MidiEvent::NoteVolume { .. } => {}
+            // 能力位如实报否：不做任何假装。
+            MidiEvent::ChannelPressure { .. }
+            | MidiEvent::PolyPressure { .. }
+            | MidiEvent::ProgramChange { .. }
+            | MidiEvent::NoteExpression { .. } => {}
         }
     }
 
@@ -418,12 +425,20 @@ impl Plugin for SoundFontPlugin {
             id: self.kind.id().into(),
             name: self.kind.name().into(),
             kind: PluginKind::Instrument,
-            io: IoLayout { inputs: 0, outputs: 2 },
+            io: IoLayout {
+                inputs: 0,
+                outputs: 2,
+            },
             capabilities: PluginCapabilities {
-                per_note_volume: false,
+                midi_input: true,
                 has_editor: false,
-                per_note_pitch: false,
                 channel_pitch_bend: true,
+                // rustysynth 没有触后 / 复音压力 / program change 的统一入口。
+                channel_pressure: false,
+                poly_pressure: false,
+                program_change: false,
+                per_note_channel: true,
+                note_expression: NoteExpressionSupport::default(),
             },
         }
     }
@@ -526,7 +541,7 @@ impl Plugin for SoundFontPlugin {
         // 试听事件会被引擎追加到块尾、frame = 0；先统一应用 frame 0 的事件，
         // 再把其余（引擎按 frame 排好序的）事件按段渲染。
         for ev in events.iter().filter(|e| e.frame == 0) {
-            self.apply_event(ev.event);
+            self.apply_event(ev.event, ev.channel);
         }
 
         let mut cursor = 0usize;
@@ -536,7 +551,7 @@ impl Plugin for SoundFontPlugin {
                 self.render_range(audio, cursor, frame);
                 cursor = frame;
             }
-            self.apply_event(ev.event);
+            self.apply_event(ev.event, ev.channel);
         }
         if cursor < frames {
             self.render_range(audio, cursor, frames);
@@ -563,10 +578,14 @@ impl Plugin for SoundFontPlugin {
         let gain = f32::from_le_bytes(state[..4].try_into().unwrap());
         let tone = f32::from_le_bytes(state[4..8].try_into().unwrap());
         if !gain.is_finite() || !(0.0..=4.0).contains(&gain) {
-            return Err(PluginError::InvalidState(format!("gain={gain} 不在 [0, 4] 内")));
+            return Err(PluginError::InvalidState(format!(
+                "gain={gain} 不在 [0, 4] 内"
+            )));
         }
         if !tone.is_finite() || !(0.0..=1.0).contains(&tone) {
-            return Err(PluginError::InvalidState(format!("tone={tone} 不在 [0, 1] 内")));
+            return Err(PluginError::InvalidState(format!(
+                "tone={tone} 不在 [0, 1] 内"
+            )));
         }
         self.gain = gain;
         self.tone = tone;
@@ -591,6 +610,7 @@ mod tests {
         let mut right = vec![0.0f32; 2048];
         let events = [TimedMidiEvent {
             frame: 0,
+            channel: 0,
             event: MidiEvent::NoteOn { note, velocity },
         }];
         plugin.process(&ctx, &mut [&mut left, &mut right], &events);
@@ -661,11 +681,26 @@ mod tests {
         };
         let base = render(&[TimedMidiEvent {
             frame: 0,
-            event: MidiEvent::NoteOn { note: 60, velocity: 100 },
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 60,
+                velocity: 100,
+            },
         }]);
         let bent = render(&[
-            TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } },
-            TimedMidiEvent { frame: 0, event: MidiEvent::PitchBend { cents: 200 } },
+            TimedMidiEvent {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 60,
+                    velocity: 100,
+                },
+            },
+            TimedMidiEvent {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::PitchBend { cents: 200 },
+            },
         ]);
         let diff: f32 = base.iter().zip(&bent).map(|(a, b)| (a - b).abs()).sum();
         assert!(diff > 1.0, "弯音应当改变波形（diff={diff}）");
@@ -694,7 +729,11 @@ mod tests {
         let peak = |v: &[f32]| v.iter().fold(0.0f32, |a, b| a.max(b.abs()));
         assert!(peak(&kick) > 1e-3);
         assert!(peak(&hat) > 1e-3);
-        let diff = kick.iter().zip(hat.iter()).map(|(a, b)| (a - b).abs()).sum::<f32>();
+        let diff = kick
+            .iter()
+            .zip(hat.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f32>();
         assert!(diff > 1e-2, "36 与 42 应该是不同的鼓件");
     }
 
@@ -705,7 +744,10 @@ mod tests {
         assert_eq!(d.id, PIANO_ID);
         assert_eq!(d.kind, PluginKind::Instrument);
         assert_eq!(d.io.outputs, 2);
-        assert_eq!(p.get_param(&"gain".into()), Some(Kind::Piano.default_gain()));
+        assert_eq!(
+            p.get_param(&"gain".into()),
+            Some(Kind::Piano.default_gain())
+        );
         assert_eq!(p.get_param(&"tone".into()), Some(1.0));
         assert_eq!(p.params().len(), 2);
     }

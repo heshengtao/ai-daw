@@ -1,6 +1,6 @@
 ---
 name: aidaw
-description: 通过内嵌 MCP 工具或 aidaw 命令行操作正在运行的 AI DAW——读写工程、保存/打开/新建与历史快照、轨道、片段、音符、批量编曲（转调/量化/摇摆/人性化/和弦分析）、乐理与曲风配方（音阶/调式/和弦进行/鼓谱/配器）、内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）、内置合成器音色设计（捏音色/调参数/离线预听）、跨工程音色记忆库（保存/检索/应用整条音色链）、效果器参数与效果链、混音（增益/声像/发送/自动化）、传输播放、音频导入与录音、音频转 MIDI/降噪/音源分离、响度与频谱分析、导出 WAV、扫描插件；以及**制作 CLAP 插件**（从零写 DSP、打包、验证、装进 AI DAW）。凡用户要求编曲、分析曲风、建轨、写音符、改和弦、量化节奏、调混音、捏音色、录音、转 MIDI、降噪、分析或导出音频，或想要一个现有目录里没有的乐器/效果器时使用。
+description: 通过内嵌 MCP 工具或 aidaw 命令行操作正在运行的 AI DAW——读写工程、保存/打开/新建与历史快照、轨道、片段、音符、批量编曲（转调/量化/摇摆/人性化/和弦分析）、乐理与曲风配方（音阶/调式/和弦进行/鼓谱/配器）、内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）、内置合成器音色设计（捏音色/调参数/离线预听）、跨工程音色记忆库（保存/检索/应用整条音色链）、效果器参数与效果链、混音（增益/声像/发送/自动化）、传输播放、音频导入与录音、音频转 MIDI/降噪/音源分离、响度与频谱分析、导出 WAV、扫描插件；**搜索可下载插件与本地模型（含高风险安装/下载，必须先征得用户同意）**；以及**从 film.json 导入配乐骨架、按语义名找音色、按轨导出对齐 stems** 和**制作 CLAP 插件**（从零写 DSP、打包、验证、装进 AI DAW）。凡用户要求编曲、分析曲风、建轨、写音符、改和弦、量化节奏、调混音、捏音色、录音、转 MIDI、降噪、分析或导出音频、给影片配乐/对时间码、导出分轨，或想要一个现有目录里没有的乐器/效果器时使用。
 license: Apache-2.0
 ---
 
@@ -74,13 +74,14 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 | 工程 | `references/project.md` | 读工程（全量）、**分页读片段音符**、**保存 / 打开 / 新建 / 重命名、历史快照恢复**、速度/拍号/**速度关键点**、撤销/重做、**工程元数据（和弦表 / 段落 / 轨道分工与音域）** |
 | 轨道 | `references/track.md` | 增删改轨道、挂/换乐器、效果链 |
 | 片段 | `references/clip.md` | MIDI / 音频片段的增删改、**移动、裁剪、变速/升降调、缩放、切分、复制、合并** |
-| 音符 | `references/note.md` | 钢琴卷帘里的音符与力度 / 音量、**音高表达（推弦 / 揉弦 / 滑音）** |
+| 音符 | `references/note.md` | 钢琴卷帘里的音符与力度 / 音量、**音高表达（推弦 / 揉弦 / 滑音）**、**通道 / 压力 / 奏法标签** |
+| MIDI 表达 | `references/expression.md` | **能力检测（`get_midi_capabilities`）**、触后 / 复音压力、**MPE 逐音通道**、**奏法映射库（`list_articulation_maps` / `import_articulation_map`）与手写 keyswitch / CC / program / 消息序列**、**通用 MIDI 事件表** |
 | 编曲 | `references/composition.md` | **批量改音符（一个撤销步）、量化 / 摇摆 / 人性化、音域折叠、节奏统计、半音冲突、和弦分析** |
 | 混音 | `references/mix.md` | 增益/声像/静音/独奏/总输出、**发送 → 总线**、**自动化** |
-| 音频 | `references/audio.md` | 导入音频、波形、**录音（开始 / 结束 / 选输入设备）**、**音频转 MIDI、降噪、音源分离** |
+| 音频 | `references/audio.md` | 导入音频、波形、**录音（开始 / 结束 / 选输入设备）**、**音频转 MIDI、降噪、音源分离**、**本地模型状态（`list_models`）与高风险下载（`download_model`）** |
 | 传输 | `references/transport.md` | 播放 / 暂停 / 停止 / 定位 / 循环 |
 | 分析导出 | `references/analysis.md` | 渲染预览、响度 / 频谱分析、导出 WAV |
-| 插件 | `references/plugin.md` | **按分类与音色描述挑乐器/效果器**、**重扫插件**、**内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）**、参数表、**效果器参数与顺序**、**用户预设（列表 / 新增 / 覆盖 / 删除）** |
+| 插件 | `references/plugin.md` | **按分类与音色描述挑乐器/效果器**、**搜索可下载插件（`search_plugin_store`）与高风险安装（`install_plugin`）**、**重扫插件**、**内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）**、参数表、**效果器参数与顺序**、**用户预设（列表 / 新增 / 覆盖 / 删除）** |
 | 音色设计 | `references/sound-design.md` | **内置合成器捏音色**：参数语义、`preview_synth` 预听闭环、**36 条出厂音色（`list_synth_presets`）**、风格配方、独立滤波包络 / 每声部 LFO / unison / 过采样 |
 | 音色记忆 | `references/sound-memory.md` | **跨工程保存 / 检索 / 应用整条音色链**；用户明确要求或确认后才保存，默认不自动存 |
 | 插件开发 | `references/clap-plugin-dev.md` | **把需求做成 CLAP 插件**：生态与选型、最小 ABI、线程规则、Rust（nih-plug）/ C++（clap-helpers）/ C 三条路线、跨平台打包、`clap-validator`、装进 AI DAW 验收 |
@@ -88,16 +89,25 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 | 节奏 | `references/rhythm.md` | 拍/网格换算、GM 鼓映射、`builtin.drums` 原声鼓组、鼓型、力度/量化/swing/人性化 |
 | 曲风 | `references/genres.md` | 14 类曲风的 BPM/拍号/和声/鼓型/贝斯/配器/结构/混音配方 |
 | 编曲流程 | `references/workflow.md` | **需求 → 曲风卡 → 查知识（skills/联网）→ MIDI 设计 → AIDAW 落地 → 检查 → 导出** |
+| 影片配乐 | `references/film.md` | **导入 film.json（`import_cue_sheet`）一次建段落/和弦/轨道/片段**、**语义音色映射（`find_instrument`）**、**按轨导出对齐 stems + LUFS 清单（`export_stems`）**、`what_changed` 增量读改动 |
 
-### 目录里没有想要的插件？可以做一个 CLAP
+### 目录里没有想要的插件？先搜「可下载」，再考虑做一个 CLAP
 
 不要因为找不到音色就硬凑，也不要凭名字猜一个插件。顺序是：
 
-1. `list_plugins(query=...)` 确认本机与内置确实没有合适的。
-2. 告诉用户「可以为你做一个 CLAP 插件」，说明能做到什么、做不到什么；**得到同意再开工**。
-3. 按 `references/clap-plugin-dev.md` 施工。CLAP 是 MIT 开源格式，AI DAW 原生托管；
-   Rust + nih-plug 最快出可用产物，C++ 用官方 `clap-helpers`，零依赖场景才走纯 C。
-4. 交付前必须过 `clap-validator`，再装到 AI DAW 的扫描目录、`rescan_plugins`，
+1. `list_plugins(query=...)` / `find_instrument(query=...)` 确认本机与内置确实没有合适的。
+2. `search_plugin_store(query=..., kind=...)` 搜**插件管理器**里的可下载插件。它返回：
+   - `matches`：slug / 名称 / 作者 / 介绍 / 是否已安装 / 可用格式 / 体积 / 匹配理由；
+   - `alternatives`：**不下载也能用**的本机或内置方案。
+3. **把「可以装什么」和「不装能用什么」一起告诉用户**，然后问要不要装。
+   **不要自行下载或安装**——`search_plugin_store` 是只读的。
+4. 只有用户在当前对话中明确同意后，才可调用 `install_plugin(slug, confirm=true)`（高风险，
+   会真的下载并解压可执行插件；Harness 可能再弹一次审批）。也可以让用户打开
+   「插件管理器 → 可下载」自己点。装完会自动重扫，再用 `list_plugins` / `describe_plugin`。
+5. 用户不想装、替代方案也不够用时，再提议「可以为你做一个 CLAP 插件」，说明能做到什么、
+   做不到什么；**得到同意再开工**。按 `references/clap-plugin-dev.md` 施工。CLAP 是 MIT 开源格式，
+   AI DAW 原生托管；Rust + nih-plug 最快出可用产物，C++ 用官方 `clap-helpers`，零依赖场景才走纯 C。
+6. 交付前必须过 `clap-validator`，再装到 AI DAW 的扫描目录、`rescan_plugins`，
    用 `list_plugins` / `describe_plugin` / `export_wav` 走一遍真实链路。
 
 ## 接到编曲需求：先分析曲风，再动手
@@ -111,9 +121,11 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
    再联网补 1–2 个来源，把来源与日期写进风格卡。
 3. **先纸面设计**：段落表（拍）、和弦表（`start`/`length`/`symbol`）、轨道表（role/音区/音色）、
    音符表（第几格、什么音、多长、多响）。
-4. **再落地 AIDAW**：`get_project_overview` → `set_tempo` / `set_time_signature` →
-   `set_project_harmony` / `set_project_sections` → `add_track` → `list_plugins` /
-   `set_track_instrument` → `set_track_meta` → `add_clip` → `add_notes`（批量）→
+4. **再落地 AIDAW**：`get_project_overview` →
+   **有 `film.json` 时先 `import_cue_sheet`**（一次建 BPM/拍号/段落/和弦/轨道/片段），没有就
+   `set_tempo` / `set_time_signature` → `set_project_harmony` / `set_project_sections` →
+   `add_track` → `list_plugins` / `find_instrument` / `set_track_instrument` → `set_track_meta` →
+   `add_clip` → `add_notes`（批量）→
    `quantize_notes` / `apply_swing` / `strum_notes` / `humanize_notes` →
    `analyze_harmony` / `analyze_track_overlap` / `get_track_note_stats` → `analyze_project` → `export_wav`。
 5. **检查后再交付**：和声 `error`、轨道打架、音域越界、响度/峰值、鼓的路线是否混用（GM / 内置单件）。
@@ -130,7 +142,8 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
    → `quantize_notes` / `apply_swing` 定节奏 → `set_project_harmony` 写和弦 → `analyze_harmony` 查错音。
 6. `references/mix.md`：`set_gain` / `set_pan` 调平衡；要总线就再建一条轨 + `set_sends`。
 7. `references/analysis.md`：`analyze_project` 看响度 / 频谱 → 回头微调。
-8. `references/analysis.md`：`export_wav` 导出。
+8. `references/analysis.md`：`export_wav` 导出；给影片交付时用 `export_stems` 一次拿到
+   每轨 WAV + `stems.json`（startFrame / LUFS / 真峰值），见 `references/film.md`。
 
 ## 约定与坑
 
@@ -142,6 +155,11 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 - **挑音色先看目录**：插件名只是型号（`JC303` 是 TB-303 克隆的**单音酸性贝斯**，不是普通合成器）。
   `list_plugins` 给分类 + 一句话描述 + 推荐分工 + 建议音域；参数表用 `describe_plugin`。
   `set_track_instrument` / `add_effect` 也接受名字，但**别凭名字猜音色**——认不出的条目会自己说明「未收录」。
+- **可下载 ≠ 已安装，绝不自行下载**：缺音色先用 `search_plugin_store` 搜索，把 `matches` 与
+  `alternatives`（不下载的替代方案）一起交给用户，问要不要装。只有用户在当前对话中明确同意后，
+  才能调用 `install_plugin(slug, confirm=true)`；否则让用户在「插件管理器 → 可下载」里自己装。
+  模型同理：先 `list_models`，用户同意后才 `download_model(id, confirm=true)`。
+  这两个工具都标了高风险注解，但要记住：**没调用工具就是没装，不要假报完成**。
 - **批量优先，别一条条加**：写一个乐句用 `add_notes`（一次事务 = 一个撤销步），不要循环 `add_note`；
   改一批音符用 `update_notes` / `transpose_notes`，别删了重加（删了 id 就变了）。
 - **捏音色先预听、再批量落地**：先 `list_synth_presets` 看 36 条出厂音色（或按类别/关键词筛），
@@ -159,6 +177,22 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 - **整体替换类操作**：`set_sends` / `set_automation` / `replace_notes` / `set_project_harmony` /
   `set_project_sections` 是**整体替换**（空数组 = 清空 / 删除该车道）；`apply_preset` 的 `effects`
   是**替换**整条效果链，不是叠加。
+- **`new_project` 默认铺 5 轨模板**：只想按名字建 N 条时传 `exact_tracks:true`，
+  否则会多出三条模板轨再让你删。
+- **`analyze_track_overlap` 省略 `tracks` = 全工程**；至少要两条轨道才有意义。
+- **`import_cue_sheet` 会替换段落 / 和弦表**：它把 film.json 当作真相；重复导入会**再建一套轨道**，
+  不会覆盖旧轨。导入前先 `get_project_overview`，确认当前工程是空的或确实要追加。
+- **film.json 的时间是秒**：引擎按 `beat = (t - offset) * bpm / 60` 换算；`music.offset` 是拍 0
+  对应的影片时间。片段再按 beat 走，所以改 BPM 会改变与画面的对齐——先定 BPM 再导。
+- **`find_instrument` 先找已安装插件，再给内置近似**：本机装的 `Guqin`/`古琴`/`Pipa` 会排在
+  尼龙吉他/pizzicato 近似之前；查询带中英别名（guqin ↔ 古琴）。内置没有古琴/甘美兰/三味线时，
+  它会给出真实存在的近似（古琴→尼龙吉他+混响、甘美兰→FM tine、二胡→小提琴），并把理由写进
+  `why`。**插件自述也参与匹配**（VST3 moduleinfo / CLAP description）：名字是代号、描述里写了
+  guqin/古琴 也能搜到。完全无意义、又没标签/自述的插件名搜不到——这时用
+  `list_plugins`/`describe_plugin`，不要硬猜。要专用音色就按 `references/clap-plugin-dev.md`
+  做一个 CLAP，别假装有。
+- **分轨用 `export_stems`，别逐轨 `export_wav` 再手算时间**：它写 `stems.json`，每轨带
+  `startFrame` / `frames` / LUFS / 真峰值；对齐直接用清单，不要用文件名猜。串行渲染，轨道多时慢。
 - **自动化的 `param` 命名空间**：`gain_db` / `pan` / `cc:<0..=127>`（MIDI 控制变化），或
   `inst:<参数id>`（轨道乐器）、
   `fx<i>:<参数id>`（效果链第 i 个，i 从 0 起）。

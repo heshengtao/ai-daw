@@ -166,7 +166,10 @@ impl Project {
             .iter()
             .filter(|(key, _)| key.starts_with(&from_prefix))
             .map(|(key, tag)| {
-                (format!("{to_prefix}{}", &key[from_prefix.len()..]), tag.clone())
+                (
+                    format!("{to_prefix}{}", &key[from_prefix.len()..]),
+                    tag.clone(),
+                )
             })
             .collect();
         let old_keys: Vec<String> = self
@@ -297,10 +300,14 @@ mod tests {
             TrackId(1),
             ClipId(2),
             3,
-            Some(NoteTag { ornament: Some("grace".into()), articulation: None }),
+            Some(NoteTag {
+                ornament: Some("grace".into()),
+                articulation: None,
+            }),
         );
         assert_eq!(
-            p.note_tag(TrackId(1), ClipId(2), 3).and_then(|t| t.ornament.as_deref()),
+            p.note_tag(TrackId(1), ClipId(2), 3)
+                .and_then(|t| t.ornament.as_deref()),
             Some("grace")
         );
         let json = serde_json::to_string(&p).unwrap();
@@ -331,7 +338,13 @@ mod tests {
             name: "Lead".into(),
             instrument: None,
             effects: vec![],
-            clips: vec![Clip { id: crate::model::ClipId(1), start: 2.0, length: 3.0, notes: vec![], audio: None }],
+            clips: vec![Clip {
+                id: crate::model::ClipId(1),
+                start: 2.0,
+                length: 3.0,
+                notes: vec![],
+                audio: None,
+            }],
             mixer: MixerChannel::default(),
             sends: vec![],
             automation: vec![],
@@ -354,7 +367,19 @@ mod tests {
                 id: ClipId(3),
                 start: 0.0,
                 length: 1.0,
-                notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
+                notes: vec![Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 60,
+                    start: 0.0,
+                    duration: 1.0,
+                    velocity: 100,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                }],
                 audio: None,
             }],
             mixer: MixerChannel::default(),
@@ -362,13 +387,25 @@ mod tests {
             automation: vec![],
         });
         let v = serde_json::to_value(&p).unwrap();
-        assert!(v["tracks"][0]["id"].is_u64(), "TrackId must serialize as a bare number");
-        assert!(v["tracks"][0]["clips"][0]["id"].is_u64(), "ClipId must serialize as a bare number");
-        assert!(v["transport"]["time_sig_num"].is_u64(), "fields must be snake_case");
+        assert!(
+            v["tracks"][0]["id"].is_u64(),
+            "TrackId must serialize as a bare number"
+        );
+        assert!(
+            v["tracks"][0]["clips"][0]["id"].is_u64(),
+            "ClipId must serialize as a bare number"
+        );
+        assert!(
+            v["transport"]["time_sig_num"].is_u64(),
+            "fields must be snake_case"
+        );
         assert!(v["tracks"][0]["mixer"]["gain_db"].is_f64());
         // 空的发送 / 自动化**不写进 JSON**：老工程形状逐字不变。
         assert!(v["tracks"][0].get("sends").is_none(), "空发送不该出现");
-        assert!(v["tracks"][0].get("automation").is_none(), "空自动化不该出现");
+        assert!(
+            v["tracks"][0].get("automation").is_none(),
+            "空自动化不该出现"
+        );
     }
 
     #[test]
@@ -383,10 +420,16 @@ mod tests {
             effects: vec![],
             clips: vec![],
             mixer: MixerChannel::default(),
-            sends: vec![Send { target: TrackId(2), gain_db: -6.0 }],
+            sends: vec![Send {
+                target: TrackId(2),
+                gain_db: -6.0,
+            }],
             automation: vec![AutomationLane {
                 param: "gain_db".into(),
-                points: vec![AutomationPoint { beat: 0.0, value: 0.0 }],
+                points: vec![AutomationPoint {
+                    beat: 0.0,
+                    value: 0.0,
+                }],
             }],
         });
         let json = serde_json::to_string(&p).unwrap();

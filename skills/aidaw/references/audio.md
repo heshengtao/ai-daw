@@ -13,6 +13,20 @@
 | `transcribe_audio` | `track` | 音频转 MIDI：结果写成**源轨道下面的新 MIDI 轨**（一次撤销）。有 Basic Pitch 模型就用，否则内置 DSP。 |
 | `enhance_audio` | `track`,`mode?` | 降噪：结果写成**源轨道下面的新音频轨**（原轨不动）。`mode=voice`（缺省，人声/去混响，优先 LocalVQE）或 `music`（乐器底噪，内置 DSP）。 |
 | `separate_stems` | `track`,`model?` | 音源分离：把该轨第一段音频拆成**鼓 / 贝斯 / 其他 / 人声**四条分轨，插到源轨道下面（一次事务，可整体撤销）。需要已安装 HTDemucs 模型（约 209 MB，在「管理器 → 模型」下载）；没有权重会报错，**没有内置兜底**。 |
+| `list_models` | — | 列出本地 AI 模型：id / 用途 / 体积 / 是否随包 / 是否已安装 / 可下载源。 |
+| `download_model` | `id`,`confirm` | **高风险**：下载模型权重（可能数百 MB）。必须用户明确同意且 `confirm=true`；否则会被拒绝。 |
+
+**模型下载（高风险，必须先问用户）**
+
+`transcribe_audio` / `enhance_audio` / `separate_stems` / `detect_tempo` 依赖本地模型。
+Basic Pitch / LocalVQE 随包；HTDemucs、Beat This 等大模型要按需下载：
+
+1. 先 `list_models` 看 `installed` / `downloadable` / `approx_bytes`。
+2. 没装时**先把「需要哪个模型、多大、下载后能做什么、不下载能用什么内置兜底」告诉用户**。
+3. 只有用户明确同意后，才调用 `download_model(id, confirm=true)`。下载在后台进行，
+   之后用 `list_models` 看 `installed`；不要假报「已下载完成」。
+4. 用户不想下载就退回内置方案：转 MIDI / 降噪都有 DSP 兜底；音源分离**没有兜底**，
+   只能等模型或换做法（如手工分轨）。
 
 **要点**
 - 片段的拍长按素材**自然时长**换算（导入时不变调）；之后拖宽窄或改速度会按比例重采样（**变调**）。

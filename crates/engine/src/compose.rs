@@ -91,10 +91,14 @@ pub fn transpose(clip: &Clip, semitones: i32, range: Option<NoteRange>) -> Trans
     }
     collect(
         clip,
-        clip.notes.iter().enumerate().filter(|(_, n)| in_range(n, range)).map(|(i, n)| {
-            let pitch = (n.pitch as i32 + semitones).clamp(0, 127) as u8;
-            (i, Note { pitch, ..*n })
-        }),
+        clip.notes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| in_range(n, range))
+            .map(|(i, n)| {
+                let pitch = (n.pitch as i32 + semitones).clamp(0, 127) as u8;
+                (i, Note { pitch, ..*n })
+            }),
     )
 }
 
@@ -136,8 +140,14 @@ pub fn set_velocity(
     let (lo, hi) = match (shape, range.map(|r| r.normalize())) {
         (VelocityShape::Ramp { .. }, Some(r)) => (r.start, r.end),
         (VelocityShape::Ramp { .. }, None) => {
-            let lo = selected.iter().map(|i| clip.notes[*i].start).fold(f64::INFINITY, f64::min);
-            let hi = selected.iter().map(|i| clip.notes[*i].start).fold(f64::NEG_INFINITY, f64::max);
+            let lo = selected
+                .iter()
+                .map(|i| clip.notes[*i].start)
+                .fold(f64::INFINITY, f64::min);
+            let hi = selected
+                .iter()
+                .map(|i| clip.notes[*i].start)
+                .fold(f64::NEG_INFINITY, f64::max);
             (lo, hi)
         }
         _ => (0.0, 1.0),
@@ -151,11 +161,21 @@ pub fn set_velocity(
                 VelocityShape::Scale(f) => note.velocity as f64 * f,
                 VelocityShape::Ramp { from, to } => {
                     let span = hi - lo;
-                    let t = if span > 0.0 { ((note.start - lo) / span).clamp(0.0, 1.0) } else { 0.0 };
+                    let t = if span > 0.0 {
+                        ((note.start - lo) / span).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
                     from as f64 + (to as f64 - from as f64) * t
                 }
             };
-            (i, Note { velocity: clamp_velocity(velocity), ..note })
+            (
+                i,
+                Note {
+                    velocity: clamp_velocity(velocity),
+                    ..note
+                },
+            )
         }),
     )
 }
@@ -179,24 +199,43 @@ pub fn quantize(
     range: Option<NoteRange>,
     quantize_duration: bool,
 ) -> Transform {
-    let grid = if grid.is_finite() { grid.clamp(MIN_GRID, MAX_GRID) } else { MIN_GRID };
-    let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { 0.0 };
+    let grid = if grid.is_finite() {
+        grid.clamp(MIN_GRID, MAX_GRID)
+    } else {
+        MIN_GRID
+    };
+    let strength = if strength.is_finite() {
+        strength.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     if strength <= 0.0 {
         return Transform::default();
     }
     collect(
         clip,
-        clip.notes.iter().enumerate().filter(|(_, n)| in_range(n, range)).map(|(i, n)| {
-            let target = (n.start / grid).round() * grid;
-            let start = n.start + (target - n.start) * strength;
-            let duration = if quantize_duration {
-                let target = (n.duration / grid).round() * grid;
-                (n.duration + (target - n.duration) * strength).max(Note::MIN_DURATION_BEATS)
-            } else {
-                n.duration
-            };
-            (i, Note { start, duration, ..*n })
-        }),
+        clip.notes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| in_range(n, range))
+            .map(|(i, n)| {
+                let target = (n.start / grid).round() * grid;
+                let start = n.start + (target - n.start) * strength;
+                let duration = if quantize_duration {
+                    let target = (n.duration / grid).round() * grid;
+                    (n.duration + (target - n.duration) * strength).max(Note::MIN_DURATION_BEATS)
+                } else {
+                    n.duration
+                };
+                (
+                    i,
+                    Note {
+                        start,
+                        duration,
+                        ..*n
+                    },
+                )
+            }),
     )
 }
 
@@ -214,7 +253,11 @@ pub fn strum(
     map: &crate::tempo::TempoMap,
     range: Option<NoteRange>,
 ) -> Transform {
-    let step_ms = if step_ms.is_finite() { step_ms.max(0.0) } else { 0.0 };
+    let step_ms = if step_ms.is_finite() {
+        step_ms.max(0.0)
+    } else {
+        0.0
+    };
 
     // 1) 按起点分组（1e-6 拍以内算同一格；保持片段内顺序，结果才确定）。
     let key = |note: &Note| (note.start * 1e6).round() as i64;
@@ -246,7 +289,13 @@ pub fn strum(
         });
         for (rank, index) in ordered.iter().enumerate() {
             let note = clip.notes[*index];
-            updates.push((*index, Note { offset: rank as f64 * beats, ..note }));
+            updates.push((
+                *index,
+                Note {
+                    offset: rank as f64 * beats,
+                    ..note
+                },
+            ));
         }
     }
     collect(clip, updates)
@@ -268,30 +317,45 @@ pub fn swing(
     strength: f64,
     range: Option<NoteRange>,
 ) -> Transform {
-    let subdivision =
-        if subdivision.is_finite() { subdivision.clamp(MIN_GRID, MAX_GRID) } else { 0.5 };
-    let ratio = if ratio.is_finite() { ratio.clamp(0.2, 0.8) } else { 0.5 };
-    let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { 0.0 };
+    let subdivision = if subdivision.is_finite() {
+        subdivision.clamp(MIN_GRID, MAX_GRID)
+    } else {
+        0.5
+    };
+    let ratio = if ratio.is_finite() {
+        ratio.clamp(0.2, 0.8)
+    } else {
+        0.5
+    };
+    let strength = if strength.is_finite() {
+        strength.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     if strength <= 0.0 || (ratio - 0.5).abs() < 1e-9 {
         return Transform::default();
     }
     let pair = 2.0 * subdivision;
     collect(
         clip,
-        clip.notes.iter().enumerate().filter(|(_, n)| in_range(n, range)).map(|(i, n)| {
-            if n.start < 0.0 {
-                return (i, *n);
-            }
-            // 落在第几个子拍；偶数位（第一个子拍）不动。
-            let slot = (n.start / subdivision).floor() as i64;
-            if slot % 2 == 0 {
-                return (i, *n);
-            }
-            let pair_start = (slot - 1) as f64 * subdivision;
-            let target = pair_start + ratio * pair;
-            let start = n.start + (target - n.start) * strength;
-            (i, Note { start, ..*n })
-        }),
+        clip.notes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| in_range(n, range))
+            .map(|(i, n)| {
+                if n.start < 0.0 {
+                    return (i, *n);
+                }
+                // 落在第几个子拍；偶数位（第一个子拍）不动。
+                let slot = (n.start / subdivision).floor() as i64;
+                if slot % 2 == 0 {
+                    return (i, *n);
+                }
+                let pair_start = (slot - 1) as f64 * subdivision;
+                let target = pair_start + ratio * pair;
+                let start = n.start + (target - n.start) * strength;
+                (i, Note { start, ..*n })
+            }),
     )
 }
 
@@ -333,9 +397,21 @@ pub fn humanize(
     min_duration: f64,
     group_by_start: bool,
 ) -> Transform {
-    let timing = if timing.is_finite() { timing.clamp(0.0, 0.5) } else { 0.0 };
-    let velocity = if velocity.is_finite() { velocity.clamp(0.0, 127.0) } else { 0.0 };
-    let min_duration = if min_duration.is_finite() { min_duration.max(0.0) } else { 0.0 };
+    let timing = if timing.is_finite() {
+        timing.clamp(0.0, 0.5)
+    } else {
+        0.0
+    };
+    let velocity = if velocity.is_finite() {
+        velocity.clamp(0.0, 127.0)
+    } else {
+        0.0
+    };
+    let min_duration = if min_duration.is_finite() {
+        min_duration.max(0.0)
+    } else {
+        0.0
+    };
     if timing <= 0.0 && velocity <= 0.0 {
         return Transform::default();
     }
@@ -362,16 +438,19 @@ pub fn humanize(
             group_protected = protected.contains(&key);
             dt = *grouped.entry(key).or_insert(dt);
         }
-        if group_protected
-            || !in_range(n, range)
-            || n.start < 0.0
-            || n.duration < min_duration
-        {
+        if group_protected || !in_range(n, range) || n.start < 0.0 || n.duration < min_duration {
             continue;
         }
         let start = n.start + dt;
         let vel = clamp_velocity(n.velocity as f64 + dv);
-        updates.push((i, Note { start, velocity: vel, ..*n }));
+        updates.push((
+            i,
+            Note {
+                start,
+                velocity: vel,
+                ..*n
+            },
+        ));
     }
     collect(clip, updates)
 }
@@ -400,12 +479,22 @@ pub fn fit_to_range(
     } else {
         (max_pitch.min(127), min_pitch.min(127))
     };
-    let selected: Vec<usize> =
-        clip.notes.iter().enumerate().filter(|(_, n)| in_range(n, range)).map(|(i, _)| i).collect();
-    let out_of_range =
-        selected.iter().filter(|i| !(lo..=hi).contains(&clip.notes[**i].pitch)).count();
+    let selected: Vec<usize> = clip
+        .notes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| in_range(n, range))
+        .map(|(i, _)| i)
+        .collect();
+    let out_of_range = selected
+        .iter()
+        .filter(|i| !(lo..=hi).contains(&clip.notes[**i].pitch))
+        .count();
     if mode == crate::model::FitMode::Report || out_of_range == 0 {
-        return FitReport { transform: Transform::default(), out_of_range };
+        return FitReport {
+            transform: Transform::default(),
+            out_of_range,
+        };
     }
     let mut transform = Transform::default();
     for index in selected {
@@ -425,10 +514,16 @@ pub fn fit_to_range(
         let pitch = pitch.clamp(lo as i32, hi as i32) as u8;
         let edited = Note { pitch, ..note };
         if edited != note {
-            transform.edits.push(NoteEdit { index, note: edited });
+            transform.edits.push(NoteEdit {
+                index,
+                note: edited,
+            });
         }
     }
-    FitReport { transform, out_of_range }
+    FitReport {
+        transform,
+        out_of_range,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -443,15 +538,19 @@ fn absolute(note: &Note, clip_start: f64) -> (f64, f64) {
 
 /// 取出参与统计的片段。
 fn clips_of<'a>(track: &'a Track, clip: Option<ClipId>) -> impl Iterator<Item = &'a Clip> {
-    track.clips.iter().filter(move |c| clip.map_or(true, |id| c.id == id))
+    track
+        .clips
+        .iter()
+        .filter(move |c| clip.map_or(true, |id| c.id == id))
 }
 
 /// 每小节的音符密度。
-fn bar_density(
-    intervals: &[(f64, f64)],
-    bar_beats: f64,
-) -> (Vec<crate::report::BarDensity>, f64) {
-    let bar_beats = if bar_beats.is_finite() && bar_beats > 0.0 { bar_beats } else { 4.0 };
+fn bar_density(intervals: &[(f64, f64)], bar_beats: f64) -> (Vec<crate::report::BarDensity>, f64) {
+    let bar_beats = if bar_beats.is_finite() && bar_beats > 0.0 {
+        bar_beats
+    } else {
+        4.0
+    };
     let mut counts: Vec<usize> = Vec::new();
     for (start, _) in intervals {
         if *start < 0.0 {
@@ -542,7 +641,11 @@ pub fn note_stats(track: &Track, clip: Option<ClipId>, bar_beats: f64) -> crate:
         .map(|(_, e)| *e)
         .fold(f64::NEG_INFINITY, f64::max)
         .max(0.0)
-        - intervals.iter().map(|(s, _)| *s).fold(f64::INFINITY, f64::min).min(0.0);
+        - intervals
+            .iter()
+            .map(|(s, _)| *s)
+            .fold(f64::INFINITY, f64::min)
+            .min(0.0);
 
     crate::report::NoteStats {
         track: track.id.0,
@@ -604,8 +707,7 @@ fn intersection_len(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
 /// 用起点扫描 + 活跃集：每个音符只和「已经响着」的音符比，所以每对只计一次。
 /// 判据是 `abs(p1 - p2) % 12 == 1`，同时覆盖小二度（1）与小九度（13）。
 fn semitone_clash_summary(spans: &[(f64, f64, u8)]) -> (usize, f64) {
-    let mut sorted: Vec<(f64, f64, u8)> =
-        spans.iter().copied().filter(|(s, e, _)| e > s).collect();
+    let mut sorted: Vec<(f64, f64, u8)> = spans.iter().copied().filter(|(s, e, _)| e > s).collect();
     sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut active: Vec<(f64, u8)> = Vec::new();
@@ -621,7 +723,10 @@ fn semitone_clash_summary(spans: &[(f64, f64, u8)]) -> (usize, f64) {
         }
         active.push((end, pitch));
     }
-    let beats: f64 = merge(&clash_intervals).iter().map(|(s, e)| (e - s).max(0.0)).sum();
+    let beats: f64 = merge(&clash_intervals)
+        .iter()
+        .map(|(s, e)| (e - s).max(0.0))
+        .sum();
     (pairs, (beats * 1000.0).round() / 1000.0)
 }
 
@@ -640,9 +745,8 @@ pub fn track_overlap(a: &Track, b: &Track, clip: Option<ClipId>) -> crate::repor
     let sa = spans(a);
     let sb = spans(b);
 
-    let intervals = |v: &[(f64, f64, u8)]| -> Vec<(f64, f64)> {
-        v.iter().map(|(s, e, _)| (*s, *e)).collect()
-    };
+    let intervals =
+        |v: &[(f64, f64, u8)]| -> Vec<(f64, f64)> { v.iter().map(|(s, e, _)| (*s, *e)).collect() };
     let overlap_beats = intersection_len(&intervals(&sa), &intervals(&sb));
 
     // 完全同音、且同时发声：最容易糊在一起的那种重叠。
@@ -664,8 +768,10 @@ pub fn track_overlap(a: &Track, b: &Track, clip: Option<ClipId>) -> crate::repor
             }
         }
     }
-    let semitone_clash_beats: f64 =
-        merge(&clash_intervals).iter().map(|(s, e)| (e - s).max(0.0)).sum();
+    let semitone_clash_beats: f64 = merge(&clash_intervals)
+        .iter()
+        .map(|(s, e)| (e - s).max(0.0))
+        .sum();
     let semitone_clash_beats = (semitone_clash_beats * 1000.0).round() / 1000.0;
 
     let pcs = |v: &[(f64, f64, u8)]| -> Vec<u8> {
@@ -716,7 +822,11 @@ pub fn track_overlap(a: &Track, b: &Track, clip: Option<ClipId>) -> crate::repor
              优先让其中一个声部换音、先解决或错开。",
             semitone_clashes, semitone_clash_beats
         );
-        suggestion = if suggestion.is_empty() { extra } else { format!("{suggestion} {extra}") };
+        suggestion = if suggestion.is_empty() {
+            extra
+        } else {
+            format!("{suggestion} {extra}")
+        };
     }
 
     crate::report::TrackOverlap {
@@ -739,11 +849,29 @@ mod tests {
     use crate::model::{ClipId, FitMode, TrackId, TrackMeta};
 
     fn clip(notes: Vec<Note>, length: f64) -> Clip {
-        Clip { id: ClipId(1), start: 0.0, length, notes, audio: None }
+        Clip {
+            id: ClipId(1),
+            start: 0.0,
+            length,
+            notes,
+            audio: None,
+        }
     }
 
     fn note(id: u64, pitch: u8, start: f64) -> Note {
-        Note { id, pitch, start, duration: 0.25, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }
+        Note {
+            id,
+            channel: None,
+            pressure: None,
+            pitch,
+            start,
+            duration: 0.25,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: crate::model::PitchExpression::NONE,
+        }
     }
 
     fn track(notes: Vec<Note>) -> Track {
@@ -774,19 +902,33 @@ mod tests {
 
     #[test]
     fn swing_moves_only_the_second_subdivision() {
-        let c = clip(vec![note(1, 60, 0.0), note(2, 62, 0.5), note(3, 64, 1.0)], 4.0);
+        let c = clip(
+            vec![note(1, 60, 0.0), note(2, 62, 0.5), note(3, 64, 1.0)],
+            4.0,
+        );
         let t = swing(&c, 0.5, 0.66, 1.0, None);
         // 第一个子拍（0.0 / 1.0）不动。
-        assert!(t.edits.iter().all(|e| e.index != 0 && e.index != 2), "{:?}", t.edits);
+        assert!(
+            t.edits.iter().all(|e| e.index != 0 && e.index != 2),
+            "{:?}",
+            t.edits
+        );
         // 第二个子拍落到约 2/3 拍。
-        assert!((t.edits[0].note.start - 0.66).abs() < 1e-9, "{:?}", t.edits[0].note.start);
+        assert!(
+            (t.edits[0].note.start - 0.66).abs() < 1e-9,
+            "{:?}",
+            t.edits[0].note.start
+        );
     }
 
     #[test]
     fn swing_can_also_push_the_second_subdivision_earlier() {
         let c = clip(vec![note(1, 60, 0.5)], 4.0);
         let t = swing(&c, 0.5, 0.4, 1.0, None);
-        assert!((t.edits[0].note.start - 0.4).abs() < 1e-9, "ratio < 0.5 应当是抢拍");
+        assert!(
+            (t.edits[0].note.start - 0.4).abs() < 1e-9,
+            "ratio < 0.5 应当是抢拍"
+        );
     }
 
     #[test]
@@ -802,13 +944,20 @@ mod tests {
     /// 120 BPM 下 30 ms = 0.03 × 120/60 = 0.06 拍。
     #[test]
     fn strum_offsets_a_chord_in_pitch_order() {
-        let c = clip(vec![note(1, 67, 0.0), note(2, 60, 0.0), note(3, 64, 0.0)], 4.0);
+        let c = clip(
+            vec![note(1, 67, 0.0), note(2, 60, 0.0), note(3, 64, 0.0)],
+            4.0,
+        );
         let map = crate::tempo::TempoMap::from_transport(&crate::model::Transport::default());
         let t = strum(&c, 30.0, StrumDirection::Down, &map, None);
 
         // 没出现在 edits 里的音符 = 偏移本来就是 0（排序第一的那个不会产生改写）。
         let offset_of = |pitch: u8| {
-            t.edits.iter().find(|e| e.note.pitch == pitch).map(|e| e.note.offset).unwrap_or(0.0)
+            t.edits
+                .iter()
+                .find(|e| e.note.pitch == pitch)
+                .map(|e| e.note.offset)
+                .unwrap_or(0.0)
         };
         assert!((offset_of(60) - 0.0).abs() < 1e-9, "低音先响");
         assert!((offset_of(64) - 0.06).abs() < 1e-9);
@@ -824,7 +973,11 @@ mod tests {
 
         let up = strum(&c, 30.0, StrumDirection::Up, &map, None);
         let offset_of = |t: &Transform, pitch: u8| {
-            t.edits.iter().find(|e| e.note.pitch == pitch).map(|e| e.note.offset).unwrap_or(0.0)
+            t.edits
+                .iter()
+                .find(|e| e.note.pitch == pitch)
+                .map(|e| e.note.offset)
+                .unwrap_or(0.0)
         };
         assert!((offset_of(&up, 67) - 0.0).abs() < 1e-9, "上扫：高音先响");
         assert!((offset_of(&up, 60) - 0.06).abs() < 1e-9);
@@ -834,18 +987,30 @@ mod tests {
         swept.notes[0].offset = 0.0;
         swept.notes[1].offset = 0.06;
         let cleared = strum(&swept, 0.0, StrumDirection::Down, &map, None);
-        assert_eq!(cleared.edits.len(), 1, "只有偏移非零的那个需要写回：{:?}", cleared.edits);
+        assert_eq!(
+            cleared.edits.len(),
+            1,
+            "只有偏移非零的那个需要写回：{:?}",
+            cleared.edits
+        );
         assert_eq!(cleared.edits[0].note.offset, 0.0);
     }
 
     /// 不同起点各自成组：一组的扫弦不影响另一组，也不会把两组合成一组。
     #[test]
     fn strum_groups_by_start() {
-        let c = clip(vec![note(1, 60, 0.0), note(2, 64, 0.0), note(3, 62, 2.0)], 4.0);
+        let c = clip(
+            vec![note(1, 60, 0.0), note(2, 64, 0.0), note(3, 62, 2.0)],
+            4.0,
+        );
         let map = crate::tempo::TempoMap::from_transport(&crate::model::Transport::default());
         let t = strum(&c, 30.0, StrumDirection::Down, &map, None);
         // 单独一个音的那一组：排名 0 → 偏移 0（原本就是 0，因此不写回）。
-        assert!(t.edits.iter().all(|e| e.note.pitch != 62), "孤音不该被写回：{:?}", t.edits);
+        assert!(
+            t.edits.iter().all(|e| e.note.pitch != 62),
+            "孤音不该被写回：{:?}",
+            t.edits
+        );
     }
 
     #[test]
@@ -857,16 +1022,32 @@ mod tests {
         for e in &a.edits {
             assert!((e.note.start - c.notes[e.index].start).abs() <= 0.05 + 1e-9);
         }
-        assert_ne!(humanize(&c, 0.05, 10.0, None, Some(8), 0.0, false), a, "换 seed 应该不一样");
+        assert_ne!(
+            humanize(&c, 0.05, 10.0, None, Some(8), 0.0, false),
+            a,
+            "换 seed 应该不一样"
+        );
     }
 
     #[test]
     fn fit_to_range_folds_by_octaves_without_changing_pitch_class() {
-        let c = clip(vec![note(1, 80, 0.0), note(2, 30, 1.0), note(3, 60, 2.0)], 4.0);
+        let c = clip(
+            vec![note(1, 80, 0.0), note(2, 30, 1.0), note(3, 60, 2.0)],
+            4.0,
+        );
         let report = fit_to_range(&c, 55, 72, FitMode::Fold, None);
         assert_eq!(report.out_of_range, 2);
-        let pitches: Vec<u8> = report.transform.edits.iter().map(|e| e.note.pitch).collect();
-        assert_eq!(pitches, vec![68, 66], "80→68、30→66（+12 直到落进音域），音级不变");
+        let pitches: Vec<u8> = report
+            .transform
+            .edits
+            .iter()
+            .map(|e| e.note.pitch)
+            .collect();
+        assert_eq!(
+            pitches,
+            vec![68, 66],
+            "80→68、30→66（+12 直到落进音域），音级不变"
+        );
         assert_eq!(68 % 12, 80 % 12);
         assert_eq!(66 % 12, 30 % 12);
     }
@@ -882,7 +1063,22 @@ mod tests {
     #[test]
     fn transforms_clamp_into_the_clip() {
         // 起点 3.9 的 1 拍音符在 4 拍的片段里放不下：时值会被夹到 0.1。
-        let c = clip(vec![Note { id: 1, pitch: 60, start: 3.9, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }], 4.0);
+        let c = clip(
+            vec![Note {
+                id: 1,
+                channel: None,
+                pressure: None,
+                pitch: 60,
+                start: 3.9,
+                duration: 1.0,
+                velocity: 100,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+                expr: crate::model::PitchExpression::NONE,
+            }],
+            4.0,
+        );
         let t = quantize(&c, 1.0, 1.0, None, false);
         assert_eq!(t.clamped, 1);
         let n = t.edits[0].note;
@@ -901,7 +1097,14 @@ mod tests {
     #[test]
     fn range_limits_which_notes_move() {
         let c = clip(vec![note(1, 60, 0.0), note(2, 62, 2.0)], 4.0);
-        let t = transpose(&c, 12, Some(NoteRange { start: 1.0, end: 4.0 }));
+        let t = transpose(
+            &c,
+            12,
+            Some(NoteRange {
+                start: 1.0,
+                end: 4.0,
+            }),
+        );
         assert_eq!(t.edits.len(), 1);
         assert_eq!(t.edits[0].index, 1);
     }
@@ -918,7 +1121,10 @@ mod tests {
         let ramp = set_velocity(
             &c,
             VelocityShape::Ramp { from: 20, to: 100 },
-            Some(NoteRange { start: 0.0, end: 2.0 }),
+            Some(NoteRange {
+                start: 0.0,
+                end: 2.0,
+            }),
             None,
         );
         // 范围 0..2 拍：0 拍处 = from，1 拍处 = 中点 60。
@@ -931,13 +1137,16 @@ mod tests {
         let c = clip(
             vec![Note {
                 id: 1,
+                channel: None,
+                pressure: None,
                 pitch: 60,
                 start: 0.1,
                 duration: 0.3,
                 velocity: 100,
                 volume: 127,
                 offset: 0.0,
-                legato: false, expr: crate::model::PitchExpression::NONE,
+                legato: false,
+                expr: crate::model::PitchExpression::NONE,
             }],
             4.0,
         );
@@ -952,14 +1161,22 @@ mod tests {
     #[test]
     fn velocity_filter_targets_offbeats() {
         let c = clip(
-            vec![note(1, 60, 0.0), note(2, 62, 0.5), note(3, 64, 1.0), note(4, 65, 1.5)],
+            vec![
+                note(1, 60, 0.0),
+                note(2, 62, 0.5),
+                note(3, 64, 1.0),
+                note(4, 65, 1.5),
+            ],
             4.0,
         );
         let t = set_velocity(
             &c,
             VelocityShape::Fixed(99),
             None,
-            Some(BeatFilter { grid: 1.0, beat: 0.5 }),
+            Some(BeatFilter {
+                grid: 1.0,
+                beat: 0.5,
+            }),
         );
         let indices: Vec<usize> = t.edits.iter().map(|e| e.index).collect();
         assert_eq!(indices, vec![1, 3], "只改每拍反拍");
@@ -972,57 +1189,157 @@ mod tests {
             vec![
                 Note {
                     id: 1,
+                    channel: None,
+                    pressure: None,
                     pitch: 60,
                     start: 1.0,
                     duration: 0.04,
                     velocity: 100,
                     volume: 127,
                     offset: -0.04,
-                    legato: false, expr: crate::model::PitchExpression::NONE,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
                 },
                 note(2, 64, 1.0),
             ],
             4.0,
         );
         let t = humanize(&c, 0.1, 0.0, None, Some(7), 0.1, false);
-        assert!(t.edits.iter().all(|e| e.index != 0), "短倚音应被 min_duration 跳过");
+        assert!(
+            t.edits.iter().all(|e| e.index != 0),
+            "短倚音应被 min_duration 跳过"
+        );
 
         // 同起点组里只要有短音，整组都不动：倚音 + 主音的相对位置不能被拆开。
         let protected = humanize(&c, 0.1, 0.0, None, Some(7), 0.1, true);
         assert!(protected.is_empty(), "同组有短音时整组都不该抖动");
 
-        let chord = clip(vec![note(1, 60, 1.0), note(2, 64, 1.0), note(3, 67, 1.0)], 4.0);
+        let chord = clip(
+            vec![note(1, 60, 1.0), note(2, 64, 1.0), note(3, 67, 1.0)],
+            4.0,
+        );
         let grouped = humanize(&chord, 0.1, 0.0, None, Some(7), 0.0, true);
         let starts: Vec<f64> = grouped.edits.iter().map(|e| e.note.start).collect();
         assert_eq!(starts.len(), 3);
-        assert!(starts.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-12), "同起点必须共用抖动");
+        assert!(
+            starts.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-12),
+            "同起点必须共用抖动"
+        );
     }
 
     #[test]
     fn semitone_clashes_are_counted_in_stats_and_overlap() {
         let t = track(vec![
-            Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
-            Note { id: 2, pitch: 61, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+            Note {
+                id: 1,
+                channel: None,
+                pressure: None,
+                pitch: 60,
+                start: 0.0,
+                duration: 1.0,
+                velocity: 100,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+                expr: crate::model::PitchExpression::NONE,
+            },
+            Note {
+                id: 2,
+                channel: None,
+                pressure: None,
+                pitch: 61,
+                start: 0.0,
+                duration: 1.0,
+                velocity: 100,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+                expr: crate::model::PitchExpression::NONE,
+            },
         ]);
         let stats = note_stats(&t, None, 4.0);
         assert_eq!(stats.semitone_clashes, 1);
         assert!((stats.semitone_clash_beats - 1.0).abs() < 1e-9);
 
-        let a = track(vec![Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }]);
-        let mut b = track(vec![Note { id: 1, pitch: 61, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }]);
+        let a = track(vec![Note {
+            id: 1,
+            channel: None,
+            pressure: None,
+            pitch: 60,
+            start: 0.0,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: crate::model::PitchExpression::NONE,
+        }]);
+        let mut b = track(vec![Note {
+            id: 1,
+            channel: None,
+            pressure: None,
+            pitch: 61,
+            start: 0.0,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: crate::model::PitchExpression::NONE,
+        }]);
         b.id = TrackId(2);
         let overlap = track_overlap(&a, &b, None);
         assert_eq!(overlap.semitone_clashes, 1);
         assert!((overlap.semitone_clash_beats - 1.0).abs() < 1e-9);
-        assert!(overlap.suggestion.contains("小二度"), "{}", overlap.suggestion);
+        assert!(
+            overlap.suggestion.contains("小二度"),
+            "{}",
+            overlap.suggestion
+        );
     }
 
     #[test]
     fn stats_report_range_density_and_overlap() {
         let t = track(vec![
-            Note { id: 1, pitch: 60, start: 0.0, duration: 2.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
-            Note { id: 2, pitch: 60, start: 1.0, duration: 1.0, velocity: 80, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
-            Note { id: 3, pitch: 72, start: 5.0, duration: 1.0, velocity: 90, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+            Note {
+                id: 1,
+                channel: None,
+                pressure: None,
+                pitch: 60,
+                start: 0.0,
+                duration: 2.0,
+                velocity: 100,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+                expr: crate::model::PitchExpression::NONE,
+            },
+            Note {
+                id: 2,
+                channel: None,
+                pressure: None,
+                pitch: 60,
+                start: 1.0,
+                duration: 1.0,
+                velocity: 80,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+                expr: crate::model::PitchExpression::NONE,
+            },
+            Note {
+                id: 3,
+                channel: None,
+                pressure: None,
+                pitch: 72,
+                start: 5.0,
+                duration: 1.0,
+                velocity: 90,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+                expr: crate::model::PitchExpression::NONE,
+            },
         ]);
         let s = note_stats(&t, None, 4.0);
         assert_eq!(s.note_count, 3);
@@ -1037,10 +1354,43 @@ mod tests {
 
     #[test]
     fn overlap_flags_two_tracks_in_the_same_register() {
-        let a = track(vec![Note { id: 1, pitch: 60, start: 0.0, duration: 8.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }]);
-        let mut b = track(vec![Note { id: 1, pitch: 64, start: 0.0, duration: 8.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }]);
+        let a = track(vec![Note {
+            id: 1,
+            channel: None,
+            pressure: None,
+            pitch: 60,
+            start: 0.0,
+            duration: 8.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: crate::model::PitchExpression::NONE,
+        }]);
+        let mut b = track(vec![Note {
+            id: 1,
+            channel: None,
+            pressure: None,
+            pitch: 64,
+            start: 0.0,
+            duration: 8.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: crate::model::PitchExpression::NONE,
+        }]);
         b.id = TrackId(2);
-        b.meta = Some(TrackMeta { role: Some("chords".into()), pitch_range: None, pitch_bend_range: None });
+        b.meta = Some(TrackMeta {
+            role: Some("chords".into()),
+            pitch_range: None,
+            pitch_bend_range: None,
+            mpe: None,
+            articulations: Default::default(),
+            default_articulation: None,
+            articulation_source: None,
+            midi_events: vec![],
+        });
         let o = track_overlap(&a, &b, None);
         assert!((o.overlap_beats - 8.0).abs() < 1e-9);
         assert!(o.conflict, "同音区同时发声 8 拍应当判为冲突：{o:?}");

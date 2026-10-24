@@ -1,8 +1,8 @@
 use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 
-use clack_host::prelude::*;
 use ai_daw_plugin_api::{Plugin, PluginKind};
+use clack_host::prelude::*;
 use serde::{Deserialize, Serialize};
 use vst3_host::Vst3Host;
 
@@ -30,6 +30,8 @@ pub struct ScannedPlugin {
     pub accepts_midi: bool,
     /// 是否自带原生编辑器（CLAP 扫描阶段不可靠，加载后才准）。
     pub has_editor: bool,
+    /// 插件自述（VST3 moduleinfo 的 `Description` / CLAP descriptor 的 description）。
+    pub description: Option<String>,
     /// 插件包路径。
     pub path: PathBuf,
 }
@@ -48,6 +50,9 @@ pub struct CatalogPlugin {
     pub format: String,
     pub accepts_midi: bool,
     pub has_editor: bool,
+    /// 插件自述；旧版目录 JSON 没有这个字段，读成 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub path: PathBuf,
 }
 
@@ -62,6 +67,7 @@ impl ScannedPlugin {
             format: self.format.to_string(),
             accepts_midi: self.accepts_midi,
             has_editor: self.has_editor,
+            description: self.description.clone(),
             path: self.path.clone(),
         }
     }
@@ -77,7 +83,10 @@ impl ScannedPlugin {
         match self.format {
             "vst3" => {
                 let plugin = load_vst3_plugin(&self.path, false)?;
-                Ok(Box::new(Vst3HostedPlugin::from_loaded(self.id.clone(), plugin)))
+                Ok(Box::new(Vst3HostedPlugin::from_loaded(
+                    self.id.clone(),
+                    plugin,
+                )))
             }
             "clap" => {
                 let plugin_id = clap_plugin_id(&self.id)?;
@@ -140,7 +149,11 @@ pub fn scan() -> Vec<ScannedPlugin> {
 /// 不在系统标准目录下，所以必须显式传进来。
 ///
 /// `au_extra` 只在 macOS 上有意义（AU 的托管目录是用户级 Components 目录）。
-pub fn scan_with(vst3_extra: &[PathBuf], clap_extra: &[PathBuf], au_extra: &[PathBuf]) -> Vec<ScannedPlugin> {
+pub fn scan_with(
+    vst3_extra: &[PathBuf],
+    clap_extra: &[PathBuf],
+    au_extra: &[PathBuf],
+) -> Vec<ScannedPlugin> {
     let mut out = scan_vst3(vst3_extra);
     out.extend(scan_clap(clap_extra));
     out.extend(crate::au::scan(au_extra));
@@ -227,7 +240,8 @@ fn load_vst3_plugin(path: &Path, isolate: bool) -> Result<vst3_host::Plugin, Hos
         .with_process_isolation(isolate)
         .build()
         .map_err(|e| HostError::Load(e.to_string()))?;
-    host.load_plugin(path).map_err(|e| HostError::Load(e.to_string()))
+    host.load_plugin(path)
+        .map_err(|e| HostError::Load(e.to_string()))
 }
 
 fn scan_vst3(extra: &[PathBuf]) -> Vec<ScannedPlugin> {
@@ -255,9 +269,28 @@ fn scan_vst3(extra: &[PathBuf]) -> Vec<ScannedPlugin> {
             format: "vst3",
             accepts_midi: i.has_midi_input,
             has_editor: i.has_gui,
+            description: vst3_native_description(&i.path),
             path: i.path.clone(),
         })
         .collect()
+}
+
+/// 读 VST3 包里的 `moduleinfo.json`，取插件自述。
+///
+/// 这个文件可能是**带尾随逗号的非法 JSON**（生成器很随意），所以不严格解析：
+/// 找到第一个 `"Description"`，取它后面的字符串就够了。读不到就返回 `None`。
+fn vst3_native_description(path: &Path) -> Option<String> {
+    let file = path.join("Contents/Resources/moduleinfo.json");
+    let text = std::fs::read_to_string(file).ok()?;
+    let at = text.find("\"Description\"")?;
+    let rest = &text[at + "\"Description\"".len()..];
+    let colon = rest.find(':')?;
+    let rest = &rest[colon + 1..];
+    let start = rest.find('"')?;
+    let rest = &rest[start + 1..];
+    let end = rest.find('"')?;
+    let value = rest[..end].trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -296,7 +329,9 @@ fn scan_clap(extra: &[PathBuf]) -> Vec<ScannedPlugin> {
         }
     }
     for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("clap") {
@@ -354,6 +389,10 @@ fn read_clap_bundle_here(path: &Path) -> Vec<ScannedPlugin> {
             accepts_midi: true,
             // GUI 支持要实例化一次才知道（与 VST3 的扫描口径一致）。
             has_editor: crate::clap::has_gui(&entry, id),
+            description: descriptor
+                .description()
+                .map(|value| value.to_string_lossy().into_owned())
+                .filter(|value| !value.trim().is_empty()),
             path: path.to_path_buf(),
         });
     }

@@ -7,9 +7,9 @@
 use std::sync::{Arc, Mutex};
 
 use ai_daw_plugin_api::{
-    cents_to_note_expression, cents_to_pitch_bend, IoLayout, MidiEvent as HostEvent, ParamId,
-    ParamInfo, Plugin, PluginCapabilities, PluginDescriptor, PluginError, PluginKind,
-    ProcessContext, TimedMidiEvent,
+    cents_to_note_expression, cents_to_pitch_bend, IoLayout, MidiEvent as HostEvent,
+    NoteExpressionKind, NoteExpressionSupport, ParamId, ParamInfo, Plugin, PluginCapabilities,
+    PluginDescriptor, PluginError, PluginKind, ProcessContext, TimedMidiEvent,
 };
 use vst3_host::midi::{MidiChannel, MidiEvent as Vst3Midi, NoteExpressionType};
 use vst3_host::plugin::PluginInfo;
@@ -56,12 +56,10 @@ pub struct Vst3HostedPlugin {
     pending_param_changes: Vec<(ParamId, f32)>,
     /// 处理音频失败只记一次日志：隔离模式下插件崩了会**每块**都返回错误，不能刷屏。
     process_error_logged: bool,
-    /// 插件是否支持逐音 Tuning note expression。
-    per_note_pitch: bool,
-    /// 正在发声的 NoteId（音高 → 最近一次 NoteOn）。用于把逐音弯音定位到具体声部。
+    /// 正在发声的 NoteId（通道 + 音高 → 最近一次 NoteOn）。用于把逐音表达定位到具体声部。
     ///
     /// 容量在构造时预留；`process` 里绝不扩容（音频线程不分配）。
-    note_ids: Vec<(u8, NoteId)>,
+    note_ids: Vec<(u8, u8, NoteId)>,
     /// 通道弯音范围（半音）。
     pitch_bend_range: f32,
 }
@@ -76,18 +74,32 @@ impl Vst3HostedPlugin {
         } else {
             PluginKind::Effect
         };
-        let inputs = if kind == PluginKind::Effect { ENGINE_CHANNELS } else { 0 };
-        let io = IoLayout { inputs: inputs as u16, outputs: ENGINE_CHANNELS as u16 };
-        // 只有插件自己声明了 Tuning 维度才走逐音表达；否则一律通道弯音。
-        let per_note_pitch = plugin
+        let inputs = if kind == PluginKind::Effect {
+            ENGINE_CHANNELS
+        } else {
+            0
+        };
+        let io = IoLayout {
+            inputs: inputs as u16,
+            outputs: ENGINE_CHANNELS as u16,
+        };
+        // 逐音表达维度由插件自己声明（INoteExpressionController）。
+        let note_expression = plugin
             .note_expressions()
-            .map(|list| list.iter().any(|e| e.kind == NoteExpressionType::Tuning))
-            .unwrap_or(false);
+            .map(|list| note_expression_support(&list))
+            .unwrap_or_default();
         let capabilities = PluginCapabilities {
-            per_note_volume: false,
+            midi_input: kind == PluginKind::Instrument,
             has_editor: info.has_gui,
-            per_note_pitch,
             channel_pitch_bend: kind == PluginKind::Instrument,
+            // VST3 原生有 kPolyPressureEvent；通道触后走 kAfterTouch legacy CC，
+            // 需要插件实现 IMidiMapping，送得到但不保证响应。
+            channel_pressure: true,
+            poly_pressure: true,
+            program_change: true,
+            // VST3 note id / note expression 让每颗音都能独立寻址。
+            per_note_channel: true,
+            note_expression,
         };
 
         let params = plugin
@@ -124,7 +136,6 @@ impl Vst3HostedPlugin {
             buffers: AudioBuffers::new(inputs, ENGINE_CHANNELS, loaded_block, loaded_rate),
             pending_param_changes: Vec::new(),
             process_error_logged: false,
-            per_note_pitch,
             note_ids: Vec::with_capacity(MAX_PENDING_NOTE_IDS),
             pitch_bend_range: 2.0,
         }
@@ -244,34 +255,56 @@ impl Plugin for Vst3HostedPlugin {
         //   隔壁 CLAP 后端早先就是这套写法而中招，`clap.rs::reset` 里留着那段记录。
         //
         // 所以用 `try_lock`：拿不到就这一块先不清（下一块再来），绝不阻塞实时线程。
-        let Ok(mut plugin) = self.inner.try_lock() else { return };
+        let Ok(mut plugin) = self.inner.try_lock() else {
+            return;
+        };
         self.note_ids.clear();
         let _ = plugin.midi_panic();
     }
 
-    fn process(&mut self, _ctx: &ProcessContext, audio: &mut [&mut [f32]], events: &[TimedMidiEvent]) {
+    fn process(
+        &mut self,
+        _ctx: &ProcessContext,
+        audio: &mut [&mut [f32]],
+        events: &[TimedMidiEvent],
+    ) {
         let frames = audio.first().map_or(0, |c| c.len());
         if !self.started || frames == 0 || audio.len() < ENGINE_CHANNELS {
             return;
         }
 
         // 界面线程可能正持有实例（开原生窗口、查询尺寸）：这一块先静音，下一块继续。
-        let Ok(mut plugin) = self.inner.try_lock() else { return };
+        let Ok(mut plugin) = self.inner.try_lock() else {
+            return;
+        };
 
         // 先把本块事件排进队列（`send_midi_event_at` 作用于「下一个处理块」）。
         let last = frames.saturating_sub(1);
+        let per_note_pitch = self.capabilities.per_note_pitch();
+        let per_note_volume = self.capabilities.per_note_volume();
+        // 只要插件支持任意 note-expression 维度，就需要 NoteId 来定位声部
+        //（Volume 表达同样依赖它，不只是 Tuning）。
+        let note_expressions = self.capabilities.note_expression;
+        let use_note_ids = note_expressions.volume
+            || note_expressions.pan
+            || note_expressions.tuning
+            || note_expressions.vibrato
+            || note_expressions.expression
+            || note_expressions.brightness;
         for e in events {
             let offset = (e.frame as usize).min(last) as i32;
+            let ch = e.channel & 0x0F;
+            let channel = MidiChannel::from_index(ch).unwrap_or(MidiChannel::Ch1);
             match e.event {
                 HostEvent::NoteOn { note, velocity } => {
-                    if self.per_note_pitch && self.note_ids.len() < MAX_PENDING_NOTE_IDS {
-                        match plugin.note_on_at(MidiChannel::Ch1, note, velocity, offset) {
-                            Ok(id) => self.note_ids.push((note, id)),
+                    if use_note_ids && self.note_ids.len() < MAX_PENDING_NOTE_IDS {
+                        match plugin.note_on_at(channel, note, velocity, offset) {
+                            Ok(id) => self.note_ids.push((ch, note, id)),
                             // 插件拒绝：退回普通 NoteOn，至少不丢音。
                             Err(_) => {
                                 let _ = plugin.send_midi_event_at(
                                     Vst3Midi::NoteOn {
-                                        channel: MidiChannel::Ch1,
+                                        channel,
                                         note,
                                         velocity,
                                     },
@@ -281,24 +314,30 @@ impl Plugin for Vst3HostedPlugin {
                         }
                     } else {
                         let _ = plugin.send_midi_event_at(
-                            Vst3Midi::NoteOn { channel: MidiChannel::Ch1, note, velocity },
+                            Vst3Midi::NoteOn {
+                                channel,
+                                note,
+                                velocity,
+                            },
                             offset,
                         );
                     }
                 }
                 HostEvent::NoteOff { note } => {
-                    if self.per_note_pitch {
-                        if let Some(index) =
-                            self.note_ids.iter().rposition(|(n, _)| *n == note)
+                    if use_note_ids {
+                        if let Some(index) = self
+                            .note_ids
+                            .iter()
+                            .rposition(|(c, n, _)| *c == ch && *n == note)
                         {
-                            let (_, id) = self.note_ids.swap_remove(index);
+                            let (_, _, id) = self.note_ids.swap_remove(index);
                             let _ = plugin.note_off_at(id, offset);
                             continue;
                         }
                     }
                     let _ = plugin.send_midi_event_at(
                         Vst3Midi::NoteOff {
-                            channel: MidiChannel::Ch1,
+                            channel,
                             note,
                             velocity: 0,
                         },
@@ -307,15 +346,16 @@ impl Plugin for Vst3HostedPlugin {
                 }
                 HostEvent::PitchBend { cents } => {
                     let value = cents_to_pitch_bend(cents, self.pitch_bend_range);
-                    let _ = plugin.send_midi_event_at(
-                        Vst3Midi::PitchBend { channel: MidiChannel::Ch1, value },
-                        offset,
-                    );
+                    let _ =
+                        plugin.send_midi_event_at(Vst3Midi::PitchBend { channel, value }, offset);
                 }
                 HostEvent::NotePitch { note, cents } => {
-                    if self.per_note_pitch {
-                        if let Some((_, id)) =
-                            self.note_ids.iter().rev().find(|(n, _)| *n == note)
+                    if per_note_pitch {
+                        if let Some((_, _, id)) = self
+                            .note_ids
+                            .iter()
+                            .rev()
+                            .find(|(c, n, _)| *c == ch && *n == note)
                         {
                             let value = cents_to_note_expression(cents, self.pitch_bend_range);
                             let _ = plugin.send_note_expression_at(
@@ -329,23 +369,85 @@ impl Plugin for Vst3HostedPlugin {
                     }
                     // 插件不支持逐音 / 音符已经结束：退化成通道弯音。
                     let value = cents_to_pitch_bend(cents, self.pitch_bend_range);
-                    let _ = plugin.send_midi_event_at(
-                        Vst3Midi::PitchBend { channel: MidiChannel::Ch1, value },
-                        offset,
-                    );
+                    let _ =
+                        plugin.send_midi_event_at(Vst3Midi::PitchBend { channel, value }, offset);
                 }
                 HostEvent::ControlChange { controller, value } => {
                     let _ = plugin.send_midi_event_at(
                         Vst3Midi::ControlChange {
-                            channel: MidiChannel::Ch1,
+                            channel,
                             controller,
                             value,
                         },
                         offset,
                     );
                 }
-                // 折叠路径已在 `Player` 里完成；本适配器声明不支持 per-note 音量。
-                HostEvent::NoteVolume { .. } => continue,
+                HostEvent::ChannelPressure { value } => {
+                    let _ = plugin.send_midi_event_at(
+                        Vst3Midi::ChannelAftertouch {
+                            channel,
+                            pressure: value.min(127),
+                        },
+                        offset,
+                    );
+                }
+                HostEvent::PolyPressure { note, value } => {
+                    let _ = plugin.send_midi_event_at(
+                        Vst3Midi::PolyAftertouch {
+                            channel,
+                            note,
+                            pressure: value.min(127),
+                        },
+                        offset,
+                    );
+                }
+                HostEvent::ProgramChange { program } => {
+                    let _ = plugin.send_midi_event_at(
+                        Vst3Midi::ProgramChange {
+                            channel,
+                            program: program.min(127),
+                        },
+                        offset,
+                    );
+                }
+                HostEvent::NoteExpression { note, kind, value } => {
+                    let Some((_, _, id)) = self
+                        .note_ids
+                        .iter()
+                        .rev()
+                        .find(|(c, n, _)| *c == ch && *n == note)
+                    else {
+                        continue;
+                    };
+                    let id = *id;
+                    let value = f64::from(value.clamp(0.0, 1.0));
+                    let _ = plugin.send_note_expression_at(
+                        id,
+                        note_expression_type(kind),
+                        value,
+                        offset,
+                    );
+                }
+                // 插件支持逐音音量时走 Volume note expression；否则 Player 已把它折进力度。
+                HostEvent::NoteVolume { note, value } => {
+                    if !per_note_volume {
+                        continue;
+                    }
+                    let Some((_, _, id)) = self
+                        .note_ids
+                        .iter()
+                        .rev()
+                        .find(|(c, n, _)| *c == ch && *n == note)
+                    else {
+                        continue;
+                    };
+                    let _ = plugin.send_note_expression_at(
+                        *id,
+                        NoteExpressionType::Volume,
+                        f64::from(value.min(127)) / 127.0,
+                        offset,
+                    );
+                }
             }
         }
 
@@ -374,7 +476,10 @@ impl Plugin for Vst3HostedPlugin {
             // 隔离模式下这是插件子进程崩溃后的固定结果；记一次就够，别每个块刷一行。
             if !self.process_error_logged {
                 self.process_error_logged = true;
-                eprintln!("VST3 插件「{}」处理音频失败，该轨道后续输出静音：{err}", self.id);
+                eprintln!(
+                    "VST3 插件「{}」处理音频失败，该轨道后续输出静音：{err}",
+                    self.id
+                );
             }
             for ch in audio.iter_mut() {
                 ch[..frames].fill(0.0);
@@ -391,7 +496,8 @@ impl Plugin for Vst3HostedPlugin {
         self.pending_param_changes.clear();
         for (raw_id, value) in plugin.get_parameter_changes() {
             if let Some(meta) = self.params.iter().find(|p| p.rack_id == raw_id) {
-                self.pending_param_changes.push((meta.id.clone(), value as f32));
+                self.pending_param_changes
+                    .push((meta.id.clone(), value as f32));
             }
         }
     }
@@ -424,5 +530,37 @@ pub fn kind_of(info: &PluginInfo) -> PluginKind {
         PluginKind::Instrument
     } else {
         PluginKind::Effect
+    }
+}
+
+/// 把插件自述的逐音表达维度折成能力位。
+fn note_expression_support(list: &[vst3_host::midi::NoteExpressionInfo]) -> NoteExpressionSupport {
+    let mut support = NoteExpressionSupport::default();
+    for item in list {
+        match item.kind {
+            NoteExpressionType::Volume => support.volume = true,
+            NoteExpressionType::Pan => support.pan = true,
+            NoteExpressionType::Tuning => support.tuning = true,
+            NoteExpressionType::Vibrato => support.vibrato = true,
+            NoteExpressionType::Expression => support.expression = true,
+            NoteExpressionType::Brightness => support.brightness = true,
+            // 自定义维度没有通用语义，能力位不猜。
+            NoteExpressionType::Custom(_) => {}
+            // 枚举是 `#[non_exhaustive]`：未来新增维度按「不支持」处理。
+            _ => {}
+        }
+    }
+    support
+}
+
+/// 本项目的表达维度 → VST3 维度。
+fn note_expression_type(kind: NoteExpressionKind) -> NoteExpressionType {
+    match kind {
+        NoteExpressionKind::Pan => NoteExpressionType::Pan,
+        NoteExpressionKind::Tuning => NoteExpressionType::Tuning,
+        NoteExpressionKind::Vibrato => NoteExpressionType::Vibrato,
+        NoteExpressionKind::Expression => NoteExpressionType::Expression,
+        NoteExpressionKind::Brightness => NoteExpressionType::Brightness,
+        NoteExpressionKind::Custom(id) => NoteExpressionType::Custom(id),
     }
 }

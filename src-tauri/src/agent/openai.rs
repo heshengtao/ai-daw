@@ -53,7 +53,10 @@ fn normalize_base(base_url: &str) -> String {
 }
 
 fn client(timeout: Duration) -> Result<reqwest::Client, String> {
-    reqwest::Client::builder().timeout(timeout).build().map_err(|e| e.to_string())
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| e.to_string())
 }
 
 /// 截断过长的响应体，避免把整页 HTML 塞进错误信息。
@@ -92,8 +95,8 @@ pub async fn list_models(cfg: &AgentConfig) -> Result<Vec<String>, String> {
     struct ModelEntry {
         id: String,
     }
-    let parsed: Models =
-        serde_json::from_str(&text).map_err(|e| format!("解析模型列表失败：{e}；响应：{}", brief(&text)))?;
+    let parsed: Models = serde_json::from_str(&text)
+        .map_err(|e| format!("解析模型列表失败：{e}；响应：{}", brief(&text)))?;
     let mut ids: Vec<String> = parsed.data.into_iter().map(|m| m.id).collect();
     ids.sort();
     ids.dedup();
@@ -113,7 +116,11 @@ pub async fn test_connection(cfg: &AgentConfig) -> AgentProbe {
             ms: started.elapsed().as_millis() as u64,
         },
         Err(list_err) => match ping_chat(cfg).await {
-            Ok(detail) => AgentProbe { ok: true, detail, ms: started.elapsed().as_millis() as u64 },
+            Ok(detail) => AgentProbe {
+                ok: true,
+                detail,
+                ms: started.elapsed().as_millis() as u64,
+            },
             Err(chat_err) => AgentProbe {
                 ok: false,
                 detail: format!("模型列表：{list_err}；对话接口：{chat_err}"),
@@ -260,7 +267,9 @@ where
     F: FnMut(StreamEvent),
 {
     for line in frame.lines() {
-        let Some(data) = line.strip_prefix("data:") else { continue };
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
         let data = data.trim();
         if data.is_empty() || data == "[DONE]" {
             continue;
@@ -269,7 +278,9 @@ where
             Ok(c) => c,
             Err(_) => continue,
         };
-        let Some(choice) = parsed.choices.into_iter().next() else { continue };
+        let Some(choice) = parsed.choices.into_iter().next() else {
+            continue;
+        };
         let delta = choice.delta;
         if let Some(text) = delta.reasoning_content.or(delta.reasoning) {
             if !text.is_empty() {
@@ -284,7 +295,11 @@ where
         if let Some(parts) = delta.tool_calls {
             for part in parts {
                 while calls.len() <= part.index {
-                    calls.push(ToolCall { id: String::new(), name: String::new(), arguments: String::new() });
+                    calls.push(ToolCall {
+                        id: String::new(),
+                        name: String::new(),
+                        arguments: String::new(),
+                    });
                 }
                 let slot = &mut calls[part.index];
                 if let Some(id) = part.id {

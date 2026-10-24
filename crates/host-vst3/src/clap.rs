@@ -41,17 +41,30 @@ use clack_extensions::params::{
 use clack_extensions::state::{HostState, HostStateImpl, PluginState};
 use clack_extensions::thread_check::{HostThreadCheck, HostThreadCheckImpl};
 use clack_host::events::event_types::{
-    MidiEvent as ClapMidiEvent, NoteOffEvent, NoteOnEvent, ParamValueEvent,
+    MidiEvent as ClapMidiEvent, NoteExpressionEvent, NoteExpressionType, NoteOffEvent, NoteOnEvent,
+    ParamValueEvent,
 };
 use clack_host::prelude::*;
 
 use ai_daw_plugin_api::{
-    pitch_bend_midi_bytes, IoLayout, MidiEvent as HostEvent, ParamId, ParamInfo, Plugin,
-    PluginCapabilities, PluginDescriptor, PluginError, PluginKind, ProcessContext,
-    TimedMidiEvent,
+    pitch_bend_midi_bytes_on, IoLayout, MidiEvent as HostEvent, NoteExpressionKind,
+    NoteExpressionSupport, ParamId, ParamInfo, Plugin, PluginCapabilities, PluginDescriptor,
+    PluginError, PluginKind, ProcessContext, TimedMidiEvent,
 };
 
 use crate::error::HostError;
+
+/// 本项目的表达维度 → CLAP 维度。CLAP 没有自定义维度，`Custom` 返回 `None`。
+fn clap_note_expression(kind: NoteExpressionKind) -> Option<NoteExpressionType> {
+    match kind {
+        NoteExpressionKind::Pan => Some(NoteExpressionType::Pan),
+        NoteExpressionKind::Tuning => Some(NoteExpressionType::Tuning),
+        NoteExpressionKind::Vibrato => Some(NoteExpressionType::Vibrato),
+        NoteExpressionKind::Expression => Some(NoteExpressionType::Expression),
+        NoteExpressionKind::Brightness => Some(NoteExpressionType::Brightness),
+        NoteExpressionKind::Custom(_) => None,
+    }
+}
 
 /// 线程令牌发号器（从 1 开始；0 表示「还没认领音频线程」）。
 static NEXT_THREAD_TOKEN: AtomicU64 = AtomicU64::new(1);
@@ -91,7 +104,10 @@ fn probe_embedded_size(instance: &mut PluginInstance<ClapHost>, hint: (u32, u32)
     let Some(gui) = handle.get_extension::<PluginGui>() else {
         return hint;
     };
-    let config = GuiConfiguration { api_type: default_api_type(), is_floating: false };
+    let config = GuiConfiguration {
+        api_type: default_api_type(),
+        is_floating: false,
+    };
     if gui.create(&handle, config).is_err() {
         return hint;
     }
@@ -232,8 +248,13 @@ impl HostHandlers for ClapHost {
 
 fn host_info() -> HostInfo {
     // 失败只可能是字符串里有 NUL，这里全是常量。
-    HostInfo::new("AI DAW", "AI DAW", "https://example.com", env!("CARGO_PKG_VERSION"))
-        .expect("host info 常量应当合法")
+    HostInfo::new(
+        "AI DAW",
+        "AI DAW",
+        "https://example.com",
+        env!("CARGO_PKG_VERSION"),
+    )
+    .expect("host info 常量应当合法")
 }
 
 /// CLAP 的界面有两种托管方式。
@@ -266,10 +287,22 @@ pub fn gui_mode(entry: &PluginEntry, plugin_id: &CStr) -> Option<GuiMode> {
     let handle = instance.plugin_handle();
     let gui = handle.get_extension::<PluginGui>()?;
     let api_type = default_api_type();
-    if gui.is_api_supported(&handle, GuiConfiguration { api_type, is_floating: true }) {
+    if gui.is_api_supported(
+        &handle,
+        GuiConfiguration {
+            api_type,
+            is_floating: true,
+        },
+    ) {
         return Some(GuiMode::Floating);
     }
-    if gui.is_api_supported(&handle, GuiConfiguration { api_type, is_floating: false }) {
+    if gui.is_api_supported(
+        &handle,
+        GuiConfiguration {
+            api_type,
+            is_floating: false,
+        },
+    ) {
         return Some(GuiMode::Embedded);
     }
     None
@@ -324,19 +357,30 @@ pub fn probe_gui(entry: &PluginEntry, plugin_id: &CStr) -> Result<String, HostEr
     ];
     for (name, api_type) in apis {
         for is_floating in [true, false] {
-            let ok = gui.is_api_supported(&handle, GuiConfiguration { api_type, is_floating });
+            let ok = gui.is_api_supported(
+                &handle,
+                GuiConfiguration {
+                    api_type,
+                    is_floating,
+                },
+            );
             report.push_str(&format!("{name}/floating={is_floating}:{ok} "));
         }
     }
 
     // 嵌入模式下插件**自报的窗口尺寸**：宿主就是照它开窗口的。
     // 尺寸只有在 `create()` 之后才合法，所以这里真建一次再问。
-    let embedded = GuiConfiguration { api_type: default_api_type(), is_floating: false };
+    let embedded = GuiConfiguration {
+        api_type: default_api_type(),
+        is_floating: false,
+    };
     if gui.is_api_supported(&handle, embedded) {
         match gui.create(&handle, embedded) {
             Ok(()) => {
                 match gui.get_size(&handle) {
-                    Some(size) => report.push_str(&format!("| 嵌入尺寸 {}x{}", size.width, size.height)),
+                    Some(size) => {
+                        report.push_str(&format!("| 嵌入尺寸 {}x{}", size.width, size.height))
+                    }
                     None => report.push_str("| 嵌入尺寸：插件没给"),
                 }
                 gui.destroy(&handle);
@@ -399,7 +443,9 @@ impl ClapEditorHandle {
 /// ——两者都只能在主线程调，所以最后一份引用要搬到主线程去丢。
 impl Drop for ClapEditorHandle {
     fn drop(&mut self) {
-        let Some(instance) = self.instance.take() else { return };
+        let Some(instance) = self.instance.take() else {
+            return;
+        };
         // 还有别的持有者（map、ticker 的临时克隆…）时释放不会发生在这里，
         // 就不必白跑一趟主线程。
         if Arc::strong_count(&instance) > 1 {
@@ -489,7 +535,11 @@ impl ClapHostedPlugin {
     ///
     /// **必须在进程主线程上调用**：`clap_plugin.init()` 与参数枚举都是主线程专属。
     /// `crate::scan` 里的加载入口都经 [`crate::dispatch::on_main_thread`] 派发。
-    pub fn from_loaded(id: String, entry: &PluginEntry, plugin_id: &CStr) -> Result<Self, HostError> {
+    pub fn from_loaded(
+        id: String,
+        entry: &PluginEntry,
+        plugin_id: &CStr,
+    ) -> Result<Self, HostError> {
         let factory = entry
             .get_plugin_factory()
             .ok_or_else(|| HostError::Load("该 .clap 没有插件工厂".into()))?;
@@ -508,7 +558,11 @@ impl ClapHostedPlugin {
         } else {
             PluginKind::Effect
         };
-        let inputs = if kind == PluginKind::Effect { ENGINE_CHANNELS } else { 0 };
+        let inputs = if kind == PluginKind::Effect {
+            ENGINE_CHANNELS
+        } else {
+            0
+        };
 
         let gui_closed = Arc::new(AtomicBool::new(false));
         let shared_flag = Arc::clone(&gui_closed);
@@ -545,7 +599,10 @@ impl ClapHostedPlugin {
             id,
             name,
             kind,
-            io: IoLayout { inputs: inputs as u16, outputs: ENGINE_CHANNELS as u16 },
+            io: IoLayout {
+                inputs: inputs as u16,
+                outputs: ENGINE_CHANNELS as u16,
+            },
             params,
             has_editor,
             instance: ManuallyDrop::new(Arc::new(Mutex::new(instance))),
@@ -594,7 +651,9 @@ impl ClapHostedPlugin {
 
     /// 测试用：是否已经在 `start_processing`（即真的在音频线程上跑起来了）。
     pub fn is_processing(&self) -> bool {
-        self.processor.as_ref().is_some_and(PluginAudioProcessor::is_started)
+        self.processor
+            .as_ref()
+            .is_some_and(PluginAudioProcessor::is_started)
     }
 
     /// 把实例交给 `activate` 用的音频配置。
@@ -689,10 +748,22 @@ impl ClapEditorHandle {
             let gui = handle.get_extension::<PluginGui>()?;
             let api_type = default_api_type();
             // 支持浮动就不用宿主操心窗口。
-            if gui.is_api_supported(&handle, GuiConfiguration { api_type, is_floating: true }) {
+            if gui.is_api_supported(
+                &handle,
+                GuiConfiguration {
+                    api_type,
+                    is_floating: true,
+                },
+            ) {
                 return None;
             }
-            if !gui.is_api_supported(&handle, GuiConfiguration { api_type, is_floating: false }) {
+            if !gui.is_api_supported(
+                &handle,
+                GuiConfiguration {
+                    api_type,
+                    is_floating: false,
+                },
+            ) {
                 return None;
             }
         }
@@ -725,11 +796,19 @@ impl ClapEditorHandle {
             .lock()
             .map_err(|_| HostError::Editor("插件实例锁中毒".into()))?;
         let handle = instance.plugin_handle();
-        let gui = handle.get_extension::<PluginGui>().ok_or(HostError::NoEditor)?;
+        let gui = handle
+            .get_extension::<PluginGui>()
+            .ok_or(HostError::NoEditor)?;
 
         let api_type = default_api_type();
-        let floating = GuiConfiguration { api_type, is_floating: true };
-        let embedded = GuiConfiguration { api_type, is_floating: false };
+        let floating = GuiConfiguration {
+            api_type,
+            is_floating: true,
+        };
+        let embedded = GuiConfiguration {
+            api_type,
+            is_floating: false,
+        };
         // 优先浮动（宿主少管一层窗口）；不行再走嵌入。
         let config = if gui.is_api_supported(&handle, floating) {
             floating
@@ -782,7 +861,10 @@ impl ClapEditorHandle {
             .map_err(|e: GuiError| HostError::Editor(e.to_string()))?;
 
         drop(instance);
-        Ok(ClapGuiWindow { handle: self.clone(), gui })
+        Ok(ClapGuiWindow {
+            handle: self.clone(),
+            gui,
+        })
     }
 }
 
@@ -866,7 +948,9 @@ fn collect_params(instance: &mut PluginInstance<ClapHost>) -> Vec<ClapParamMeta>
 
 /// 在**当前线程**上读插件状态。**必须在主线程调用。**
 fn save_state_here(instance: &SharedInstance) -> Vec<u8> {
-    let Ok(mut instance) = instance.0.lock() else { return Vec::new() };
+    let Ok(mut instance) = instance.0.lock() else {
+        return Vec::new();
+    };
     let handle = instance.plugin_handle();
     let Some(state) = handle.get_extension::<PluginState>() else {
         return Vec::new();
@@ -901,10 +985,18 @@ impl Plugin for ClapHostedPlugin {
             kind: self.kind,
             io: self.io,
             capabilities: PluginCapabilities {
-                per_note_volume: false,
+                midi_input: self.kind == PluginKind::Instrument,
                 has_editor: self.has_editor,
-                per_note_pitch: false,
                 channel_pitch_bend: self.kind == PluginKind::Instrument,
+                // CLAP 的原始 MIDI 事件通道 0xD0 / 0xA0 / 0xC0 都能送。
+                channel_pressure: true,
+                poly_pressure: true,
+                program_change: true,
+                // Pckn 的 channel 字段可以逐音寻址。
+                per_note_channel: true,
+                // clack-host 0.2 没有 host 侧的 note-expression 扩展探测；保守报不支持，
+                // 需要时可由 `midi_events` 显式发送。
+                note_expression: NoteExpressionSupport::default(),
             },
         }
     }
@@ -929,7 +1021,11 @@ impl Plugin for ClapHostedPlugin {
         let handle = instance.plugin_handle();
         let params = handle.get_extension::<PluginParams>()?;
         // 已入队但还没送达的变更优先（否则界面会「弹回去」）。
-        if let Some((_, v)) = self.param_queue.iter().find(|(cid, _)| *cid == meta.clap_id) {
+        if let Some((_, v)) = self
+            .param_queue
+            .iter()
+            .find(|(cid, _)| *cid == meta.clap_id)
+        {
             return Some(*v as f32);
         }
         params.get_value(&handle, meta.clap_id).map(|v| v as f32)
@@ -962,20 +1058,23 @@ impl Plugin for ClapHostedPlugin {
         // 实例可能是**复用**来的（重建 Player 时从旧播放器搬过来）：那它仍处于已激活状态，
         // 必须先 deactivate 再 activate。处理器此时应是 `Stopped`——回调在交出实例前已
         // `release_processing()`（见该方法）。
-        let previous = self.processor.take().map(|processor| processor.into_stopped());
+        let previous = self
+            .processor
+            .take()
+            .map(|processor| processor.into_stopped());
         // 令牌作废：重建后 `process` 可能跑在**另一条**回调线程上，让它重新认领。
         self.audio_thread.store(0, Ordering::Relaxed);
 
         let config = self.audio_config();
         let instance = SharedInstance(Arc::clone(&*self.instance));
         let fallback = SharedInstance(Arc::clone(&*self.instance));
-        let activated =
-            match crate::dispatch::on_main_thread(move || reactivate_here(&instance, previous, config))
-            {
-                Ok(result) => result,
-                // 主线程已退出：退回就地激活。线程不理想，但总比插件整条加载不出来强。
-                Err(_) => activate_here(&fallback, config),
-            };
+        let activated = match crate::dispatch::on_main_thread(move || {
+            reactivate_here(&instance, previous, config)
+        }) {
+            Ok(result) => result,
+            // 主线程已退出：退回就地激活。线程不理想，但总比插件整条加载不出来强。
+            Err(_) => activate_here(&fallback, config),
+        };
         match activated {
             Ok(stopped) => self.processor = Some(PluginAudioProcessor::Stopped(stopped)),
             // 只在这里报一次（非实时线程）；失败意味着这条轨会静音。
@@ -1011,7 +1110,12 @@ impl Plugin for ClapHostedPlugin {
         }
     }
 
-    fn process(&mut self, _ctx: &ProcessContext, audio: &mut [&mut [f32]], events: &[TimedMidiEvent]) {
+    fn process(
+        &mut self,
+        _ctx: &ProcessContext,
+        audio: &mut [&mut [f32]],
+        events: &[TimedMidiEvent],
+    ) {
         let frames = audio.first().map_or(0, |c| c.len());
         if frames == 0 || audio.len() < ENGINE_CHANNELS {
             return;
@@ -1025,7 +1129,9 @@ impl Plugin for ClapHostedPlugin {
             .audio_thread
             .compare_exchange(0, token, Ordering::Relaxed, Ordering::Relaxed);
 
-        let Some(processor) = self.processor.as_mut() else { return };
+        let Some(processor) = self.processor.as_mut() else {
+            return;
+        };
 
         // 插件用 `request_restart` 要求重开处理：stop/start processing 都只能在音频
         // 线程调，而这里正是那条线程。
@@ -1039,7 +1145,9 @@ impl Plugin for ClapHostedPlugin {
         if processor.ensure_processing_started().is_err() {
             return;
         }
-        let Ok(started) = processor.as_started_mut() else { return };
+        let Ok(started) = processor.as_started_mut() else {
+            return;
+        };
 
         // ---- 输入事件 ----
         self.in_events.clear();
@@ -1049,9 +1157,10 @@ impl Plugin for ClapHostedPlugin {
                 .push(&ParamValueEvent::new(0, id, Pckn::match_all(), value));
         }
         for e in events {
+            let ch = u16::from(e.channel & 0x0F);
             match e.event {
                 HostEvent::NoteOn { note, velocity } => {
-                    let pckn = Pckn::new(0u16, 0u16, u16::from(note), 0u32);
+                    let pckn = Pckn::new(0u16, ch, u16::from(note), 0u32);
                     self.in_events.push(&NoteOnEvent::new(
                         e.frame,
                         pckn,
@@ -1059,23 +1168,56 @@ impl Plugin for ClapHostedPlugin {
                     ));
                 }
                 HostEvent::NoteOff { note } => {
-                    let pckn = Pckn::new(0u16, 0u16, u16::from(note), 0u32);
+                    let pckn = Pckn::new(0u16, ch, u16::from(note), 0u32);
                     self.in_events.push(&NoteOffEvent::new(e.frame, pckn, 0.0));
                 }
-                // CLAP 后端 v1 走通道弯音（clack-host 0.2 没有 host 侧的
-                // note-expression 扩展探测）。原始 MIDI 是所有 CLAP 音源都认的路径。
+                // CLAP 后端走通道弯音（clack-host 0.2 没有 host 侧的 note-expression 扩展探测）。
+                // 原始 MIDI 是所有 CLAP 音源都认的路径。
                 HostEvent::PitchBend { cents } | HostEvent::NotePitch { cents, .. } => {
                     self.in_events.push(&ClapMidiEvent::new(
                         e.frame,
                         0,
-                        pitch_bend_midi_bytes(cents, self.pitch_bend_range),
+                        pitch_bend_midi_bytes_on(cents, self.pitch_bend_range, e.channel),
                     ));
                 }
                 HostEvent::ControlChange { controller, value } => {
                     self.in_events.push(&ClapMidiEvent::new(
                         e.frame,
                         0,
-                        [0xB0, controller, value.min(127)],
+                        [0xB0 | (e.channel & 0x0F), controller, value.min(127)],
+                    ));
+                }
+                HostEvent::ChannelPressure { value } => {
+                    self.in_events.push(&ClapMidiEvent::new(
+                        e.frame,
+                        0,
+                        [0xD0 | (e.channel & 0x0F), value.min(127), 0],
+                    ));
+                }
+                HostEvent::PolyPressure { note, value } => {
+                    self.in_events.push(&ClapMidiEvent::new(
+                        e.frame,
+                        0,
+                        [0xA0 | (e.channel & 0x0F), note, value.min(127)],
+                    ));
+                }
+                HostEvent::ProgramChange { program } => {
+                    self.in_events.push(&ClapMidiEvent::new(
+                        e.frame,
+                        0,
+                        [0xC0 | (e.channel & 0x0F), program.min(127), 0],
+                    ));
+                }
+                HostEvent::NoteExpression { note, kind, value } => {
+                    let Some(kind) = clap_note_expression(kind) else {
+                        continue;
+                    };
+                    let pckn = Pckn::new(0u16, ch, u16::from(note), 0u32);
+                    self.in_events.push(&NoteExpressionEvent::new(
+                        e.frame,
+                        pckn,
+                        kind,
+                        f64::from(value.clamp(0.0, 1.0)),
                     ));
                 }
                 // 折叠路径已在 `Player` 里完成；本适配器声明不支持 per-note 音量。
@@ -1107,8 +1249,17 @@ impl Plugin for ClapHostedPlugin {
         self.out_events.clear();
 
         // ---- 处理（字段级借位拆分，避免与 `self` 整体借用的冲突）----
-        let Self { in_ports, out_ports, in_buf, out_buf, in_events, out_events, pending, params, .. } =
-            self;
+        let Self {
+            in_ports,
+            out_ports,
+            in_buf,
+            out_buf,
+            in_events,
+            out_events,
+            pending,
+            params,
+            ..
+        } = self;
 
         let in_audio = in_ports.with_input_buffers([AudioPortBuffer {
             latency: 0,
@@ -1150,8 +1301,12 @@ impl Plugin for ClapHostedPlugin {
         // ---- 插件侧参数变化（界面拧旋钮）----
         pending.clear();
         for event in out_events.iter() {
-            let Some(e) = event.as_event::<ParamValueEvent>() else { continue };
-            let Some(clap_id) = e.param_id() else { continue };
+            let Some(e) = event.as_event::<ParamValueEvent>() else {
+                continue;
+            };
+            let Some(clap_id) = e.param_id() else {
+                continue;
+            };
             if let Some(meta) = params.iter().find(|p| p.clap_id == clap_id) {
                 pending.push((meta.id.clone(), e.value() as f32));
             }

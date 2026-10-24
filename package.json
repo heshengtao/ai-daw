@@ -1,14 +1,17 @@
 {
   "name": "ai-daw",
   "private": true,
-  "version": "1.5.2",
+  "version": "1.5.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
+    "fetch:registry": "node tools/fetch-plugin-registry.mjs",
+    "fetch:articulation-maps": "node tools/fetch-articulation-maps.mjs",
     "build:aidaw": "bash tools/build-aidaw.sh",
     "build:vst3-helper": "bash tools/build-vst3-helper.sh",
     "build:sidecars": "npm run build:aidaw && npm run build:vst3-helper",
+    "release:notes": "node tools/release-notes.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

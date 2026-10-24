@@ -148,7 +148,9 @@ pub fn uninstall() -> Result<CliStatus, String> {
 
 /// 把 `bundled` 写进 `dir/cli-path`；`None`（没有 sidecar 的构建）什么都不做。
 fn write_path_file(dir: &Path, bundled: Option<&Path>) -> std::io::Result<()> {
-    let Some(bundled) = bundled else { return Ok(()) };
+    let Some(bundled) = bundled else {
+        return Ok(());
+    };
     std::fs::create_dir_all(dir)?;
     std::fs::write(dir.join(PATH_FILE), bundled.display().to_string())
 }
@@ -189,7 +191,11 @@ struct Probe {
 /// 包内 `aidaw` 的位置 = **主程序旁边**的同名文件（Tauri sidecar 就是这么放的）。
 fn bundled_binary() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let name = if cfg!(windows) { format!("{COMMAND}.exe") } else { COMMAND.to_owned() };
+    let name = if cfg!(windows) {
+        format!("{COMMAND}.exe")
+    } else {
+        COMMAND.to_owned()
+    };
     let candidate = exe.parent()?.join(name);
     candidate.is_file().then_some(candidate)
 }
@@ -197,7 +203,10 @@ fn bundled_binary() -> Option<PathBuf> {
 /// 主程序所在目录（Windows 上要把它加进用户 PATH）。
 #[cfg(windows)]
 fn install_dir() -> Option<PathBuf> {
-    std::env::current_exe().ok()?.parent().map(Path::to_path_buf)
+    std::env::current_exe()
+        .ok()?
+        .parent()
+        .map(Path::to_path_buf)
 }
 
 /// 判据（按序）：
@@ -218,16 +227,23 @@ fn looks_like_dev_build(exe: &Path) -> bool {
         return false;
     }
     let text = exe.to_string_lossy();
-    let names: Vec<&str> = text.split(['/', '\\']).filter(|part| !part.is_empty()).collect();
+    let names: Vec<&str> = text
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect();
     match names.iter().rposition(|name| *name == "target") {
-        Some(index) => names[index + 1..].iter().any(|name| *name == "debug" || *name == "release"),
+        Some(index) => names[index + 1..]
+            .iter()
+            .any(|name| *name == "debug" || *name == "release"),
         None => false,
     }
 }
 
 /// 拿不到自身路径时保守当作开发构建：宁可不挂，也不要误改用户环境。
 fn is_dev_build() -> bool {
-    std::env::current_exe().map(|exe| looks_like_dev_build(&exe)).unwrap_or(true)
+    std::env::current_exe()
+        .map(|exe| looks_like_dev_build(&exe))
+        .unwrap_or(true)
 }
 
 /// 状态判定：**纯函数**（只依赖探测到的事实），便于单测。
@@ -250,15 +266,29 @@ fn classify(probe: &Probe) -> CliStatus {
         return status;
     }
     if probe.link_exists {
-        if probe.bundled.as_ref().is_some_and(|bundled| path_points_at(probe, bundled)) {
+        if probe
+            .bundled
+            .as_ref()
+            .is_some_and(|bundled| path_points_at(probe, bundled))
+        {
             status.state = CliState::Installed;
             status.target = Some(
-                probe.link_target.clone().unwrap_or_else(|| probe.link.clone()).display().to_string(),
+                probe
+                    .link_target
+                    .clone()
+                    .unwrap_or_else(|| probe.link.clone())
+                    .display()
+                    .to_string(),
             );
         } else {
             status.state = CliState::Conflict;
             status.conflict = Some(
-                probe.link_target.clone().unwrap_or_else(|| probe.link.clone()).display().to_string(),
+                probe
+                    .link_target
+                    .clone()
+                    .unwrap_or_else(|| probe.link.clone())
+                    .display()
+                    .to_string(),
             );
         }
         return status;
@@ -309,7 +339,8 @@ fn probe() -> Probe {
     let link = PathBuf::from(LINK_DIR).join(COMMAND);
     let link_exists = std::fs::symlink_metadata(&link).is_ok();
     let link_target = std::fs::read_link(&link).ok();
-    let system_present = bundled.as_deref().and_then(Path::parent) == Some(Path::new(SYSTEM_BIN_DIR));
+    let system_present =
+        bundled.as_deref().and_then(Path::parent) == Some(Path::new(SYSTEM_BIN_DIR));
     // 开发构建不碰用户环境；AppImage 的二进制在临时挂载点，软链必然失效。
     let unsupported = if is_dev_build() {
         Some(CliHint::DevBuild)
@@ -325,7 +356,15 @@ fn probe() -> Probe {
             src = sh_quote(&bundled.display().to_string()),
         )
     });
-    Probe { bundled, link, link_target, link_exists, system_present, unsupported, manual_command }
+    Probe {
+        bundled,
+        link,
+        link_target,
+        link_exists,
+        system_present,
+        unsupported,
+        manual_command,
+    }
 }
 
 #[cfg(windows)]
@@ -374,7 +413,9 @@ fn install_command(bundled: &Path, probe: &Probe) -> Result<(), InstallError> {
 fn install_command(_bundled: &Path, _probe: &Probe) -> Result<(), InstallError> {
     // Linux 的常态是 deb/rpm（走 System 分支，根本到不了这里）；真到了需要软链的情况，
     // 提权得靠 pkexec，留给后续——先老实给出手工命令。
-    Err(InstallError::Failed("需要 root 权限，请按提示的命令手工挂载".to_owned()))
+    Err(InstallError::Failed(
+        "需要 root 权限，请按提示的命令手工挂载".to_owned(),
+    ))
 }
 
 #[cfg(windows)]
@@ -393,7 +434,10 @@ fn install_command(_bundled: &Path, _probe: &Probe) -> Result<(), InstallError> 
 
 #[cfg(target_os = "macos")]
 fn uninstall_command(probe: &Probe) -> Result<(), InstallError> {
-    let shell = format!("/bin/rm -f {link}", link = sh_quote(&probe.link.display().to_string()));
+    let shell = format!(
+        "/bin/rm -f {link}",
+        link = sh_quote(&probe.link.display().to_string())
+    );
     run_privileged(&shell)
 }
 
@@ -464,7 +508,7 @@ fn osascript_script(shell_command: &str) -> String {
 /// 读 `HKCU\Environment` 的 `Path`（连同它的类型，写回时保持原类型）。
 #[cfg(windows)]
 fn read_user_path() -> Result<(String, winreg::enums::RegType), String> {
-    use winreg::enums::{HKEY_CURRENT_USER, RegType};
+    use winreg::enums::{RegType, HKEY_CURRENT_USER};
     use winreg::RegKey;
 
     let key = RegKey::predef(HKEY_CURRENT_USER)
@@ -472,9 +516,14 @@ fn read_user_path() -> Result<(String, winreg::enums::RegType), String> {
         .map_err(|e| format!("打开注册表 Environment 失败：{e}"))?;
     match key.get_raw_value("Path") {
         Ok(raw) => {
-            let units: Vec<u16> =
-                raw.bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
-            let text = String::from_utf16_lossy(&units).trim_end_matches('\0').to_owned();
+            let units: Vec<u16> = raw
+                .bytes
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            let text = String::from_utf16_lossy(&units)
+                .trim_end_matches('\0')
+                .to_owned();
             Ok((text, raw.vtype))
         }
         // 没有就按 REG_EXPAND_SZ 新建（PATH 里常有 %USERPROFILE% 这类变量）。
@@ -493,22 +542,33 @@ fn write_user_path(value: &str, vtype: winreg::enums::RegType) -> Result<(), Str
         .map_err(|e| format!("打开注册表 Environment 失败：{e}"))?;
     let mut bytes: Vec<u8> = value.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
     bytes.extend([0, 0]); // 结尾 NUL
-    key.set_raw_value("Path", &RegValue { bytes: bytes.into(), vtype })
-        .map_err(|e| format!("写入用户 PATH 失败：{e}"))
+    key.set_raw_value(
+        "Path",
+        &RegValue {
+            bytes: bytes.into(),
+            vtype,
+        },
+    )
+    .map_err(|e| format!("写入用户 PATH 失败：{e}"))
 }
 
 #[cfg(windows)]
 fn user_path_contains(dir: &Path) -> Result<bool, String> {
     let (path, _) = read_user_path()?;
     let want = normalize_path(dir);
-    Ok(path.split(';').any(|entry| normalize_path(Path::new(entry.trim())) == want))
+    Ok(path
+        .split(';')
+        .any(|entry| normalize_path(Path::new(entry.trim())) == want))
 }
 
 #[cfg(windows)]
 fn add_to_user_path(dir: &Path) -> Result<(), String> {
     let (path, vtype) = read_user_path()?;
     let want = normalize_path(dir);
-    if path.split(';').any(|entry| normalize_path(Path::new(entry.trim())) == want) {
+    if path
+        .split(';')
+        .any(|entry| normalize_path(Path::new(entry.trim())) == want)
+    {
         return Ok(());
     }
     let joined = if path.trim().is_empty() {
@@ -535,7 +595,10 @@ fn remove_from_user_path(dir: &Path) -> Result<(), String> {
 /// Windows 路径比较用：去掉尾部分隔符、统一小写。
 #[cfg(windows)]
 fn normalize_path(path: &Path) -> String {
-    path.display().to_string().trim_end_matches(['\\', '/']).to_ascii_lowercase()
+    path.display()
+        .to_string()
+        .trim_end_matches(['\\', '/'])
+        .to_ascii_lowercase()
 }
 
 // ---------------------------------------------------------------------------
@@ -603,21 +666,30 @@ mod tests {
 
     #[test]
     fn shell_quote_survives_spaces_and_quotes() {
-        assert_eq!(sh_quote("/Applications/AI DAW.app/aidaw"), "'/Applications/AI DAW.app/aidaw'");
+        assert_eq!(
+            sh_quote("/Applications/AI DAW.app/aidaw"),
+            "'/Applications/AI DAW.app/aidaw'"
+        );
         // 单引号要被拆出来转义，否则整条命令会被截断。
         assert_eq!(sh_quote("it's"), r"'it'\''s'");
     }
 
     #[test]
     fn applescript_escape_doubles_backslash_and_quote() {
-        assert_eq!(applescript_escape(r#"/bin/ln -sfn "a""#), r#"/bin/ln -sfn \"a\""#);
+        assert_eq!(
+            applescript_escape(r#"/bin/ln -sfn "a""#),
+            r#"/bin/ln -sfn \"a\""#
+        );
         assert_eq!(applescript_escape(r"a\b"), r"a\\b");
     }
 
     #[test]
     fn osascript_script_wraps_the_shell_command() {
         let script = osascript_script("/bin/ln -sfn '/a' '/b'");
-        assert_eq!(script, "do shell script \"/bin/ln -sfn '/a' '/b'\" with administrator privileges");
+        assert_eq!(
+            script,
+            "do shell script \"/bin/ln -sfn '/a' '/b'\" with administrator privileges"
+        );
     }
 
     #[test]
@@ -686,7 +758,9 @@ mod tests {
             "/Applications/AI DAW.app/Contents/MacOS/ai-daw-app"
         )));
         assert!(!looks_like_dev_build(Path::new("/usr/bin/ai-daw-app")));
-        assert!(!looks_like_dev_build(Path::new(r"C:\Program Files\AI DAW\ai-daw-app.exe")));
+        assert!(!looks_like_dev_build(Path::new(
+            r"C:\Program Files\AI DAW\ai-daw-app.exe"
+        )));
     }
 
     #[test]

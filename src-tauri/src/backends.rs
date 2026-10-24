@@ -13,8 +13,8 @@
 
 use tauri::{AppHandle, Manager};
 
-use ai_daw_local_ai::backend::{self as rt, BackendKind};
 use crate::manager::{BackendPreference, StoreRuntime};
+use ai_daw_local_ai::backend::{self as rt, BackendKind};
 
 /// 一个可选后端（给设置页渲染）。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -47,7 +47,12 @@ pub struct BackendInfo {
 /// CoreML EP 默认**每次建会话都重编译模型**（实测 LocalVQE 一次 36 s）。给一个持久目录后
 /// 第二次起只读缓存。只有选了 CoreML 才会用到。
 pub fn coreml_cache_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
-    let dir = app.path().app_config_dir().ok()?.join("backend-cache").join("coreml");
+    let dir = app
+        .path()
+        .app_config_dir()
+        .ok()?
+        .join("backend-cache")
+        .join("coreml");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }
@@ -70,7 +75,10 @@ pub fn ai_backend_info(app: AppHandle) -> BackendInfo {
 
 /// 保存执行后端偏好并立即应用（返回最新状态）。
 #[tauri::command]
-pub fn ai_set_backend(app: AppHandle, preference: BackendPreference) -> Result<BackendInfo, String> {
+pub fn ai_set_backend(
+    app: AppHandle,
+    preference: BackendPreference,
+) -> Result<BackendInfo, String> {
     let store = app.state::<StoreRuntime>();
     let mut network = store.network();
     network.backend_preference = preference;
@@ -140,7 +148,10 @@ mod tests {
     /// serde 名要和前端 / store.json 一致（`coreml` 不是一个词）。
     #[test]
     fn preference_serde_names_are_stable() {
-        assert_eq!(serde_json::to_string(&BackendPreference::Cpu).unwrap(), "\"cpu\"");
+        assert_eq!(
+            serde_json::to_string(&BackendPreference::Cpu).unwrap(),
+            "\"cpu\""
+        );
         assert_eq!(
             serde_json::to_string(&BackendPreference::CoreMl).unwrap(),
             "\"coreml\""

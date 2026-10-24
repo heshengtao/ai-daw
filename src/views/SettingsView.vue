@@ -3,7 +3,7 @@
  * 设置页：自带一条侧栏（进入设置时应用侧栏隐藏，避免出现两条侧栏）。
  * 内容为居中列 + 分组卡片；全部控件自绘，不使用原生表单控件。
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeftIcon } from "@heroicons/vue/24/outline";
 import {
@@ -70,7 +70,7 @@ const SOURCE_PREFS: { id: ModelSourcePreference; labelKey: string }[] = [
   { id: "domestic", labelKey: "settings.store.sourceCn" },
 ];
 
-const APP_VERSION = "1.5.2";
+const APP_VERSION = "1.5.3";
 
 const router = useRouter();
 const active = ref<Section>("general");
@@ -83,6 +83,10 @@ const updater = useUpdaterStore();
 const i18n = useI18n();
 
 const activeMeta = computed(() => SECTIONS.find((s) => s.id === active.value) ?? SECTIONS[0]);
+
+/** 内容滚动容器：切换子页时回到顶部，避免沿用上一页（可能很长）的滚动位置。 */
+const contentScroll = ref<HTMLElement | null>(null);
+watch(active, () => contentScroll.value?.scrollTo({ top: 0 }));
 
 const projectName = computed(() => {
   const name = project.project?.name;
@@ -505,7 +509,7 @@ onMounted(() => {
     </aside>
 
     <!-- 内容：居中列 -->
-    <section class="settings-body">
+    <section ref="contentScroll" class="settings-body">
       <div class="settings-content">
         <h1 class="page-title">{{ i18n.t(activeMeta.labelKey) }}</h1>
         <p class="page-sub">{{ i18n.t(activeMeta.captionKey) }}</p>
@@ -1227,6 +1231,7 @@ onMounted(() => {
   border-right: 1px solid rgb(var(--md-outline-variant) / 0.3);
   background-color: transparent;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 .back {
   display: flex;
@@ -1324,6 +1329,8 @@ onMounted(() => {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
+  /* Windows 的滚动条占布局宽度：预留给它，切换长短不同的子页时内容不会横向跳动 */
+  scrollbar-gutter: stable;
   display: flex;
   justify-content: center;
 }

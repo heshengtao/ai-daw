@@ -35,6 +35,8 @@ pub struct Entry {
     pub builtin: bool,
     /// 外部插件的包路径（读 `moduleinfo.json` 用）；内置为 `None`。
     pub path: Option<std::path::PathBuf>,
+    /// 插件自述（VST3 moduleinfo / CLAP descriptor 的 description）；内置为 `None`。
+    pub description: Option<String>,
 }
 
 /// 给模型看的插件卡片。
@@ -50,6 +52,9 @@ pub struct Brief {
     pub category: &'static str,
     /// 一句话描述：是什么、什么性格、怎么用。
     pub description: String,
+    /// 插件自己声明的描述（VST3 moduleinfo / CLAP descriptor）；收录表里可能没有这个词。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_description: Option<String>,
     /// 适合的编曲分工（与 `set_track_meta` 的 `role` 同一套词）。
     pub roles: Vec<&'static str>,
     /// 建议写作音域（MIDI 音高，闭区间）；`None` = 没有明确建议。
@@ -849,7 +854,9 @@ fn vst3_subcategories(path: &std::path::Path) -> Vec<String> {
         return Vec::new();
     };
     let rest = &text[at..];
-    let Some(open) = rest.find('[') else { return Vec::new() };
+    let Some(open) = rest.find('[') else {
+        return Vec::new();
+    };
     let Some(close) = rest[open..].find(']').map(|i| i + open) else {
         return Vec::new();
     };
@@ -888,6 +895,7 @@ pub fn entries(catalog: &[CatalogPlugin]) -> Vec<Entry> {
             format: "builtin".to_string(),
             builtin: true,
             path: None,
+            description: None,
         })
         .collect();
     for item in catalog {
@@ -903,6 +911,7 @@ pub fn entries(catalog: &[CatalogPlugin]) -> Vec<Entry> {
             format: item.format.clone(),
             builtin: false,
             path: Some(item.path.clone()),
+            description: item.description.clone(),
         });
     }
     out
@@ -921,6 +930,7 @@ pub fn brief(entry: &Entry) -> Brief {
                 builtin: true,
                 category: b.category,
                 description: b.description.to_string(),
+                native_description: None,
                 roles: b.roles.to_vec(),
                 pitch_range: b.pitch_range,
                 mono: b.mono,
@@ -941,6 +951,7 @@ pub fn brief(entry: &Entry) -> Brief {
             builtin: false,
             category: k.category,
             description: k.description.to_string(),
+            native_description: entry.description.clone(),
             roles: k.roles.to_vec(),
             pitch_range: k.pitch_range,
             mono: k.mono,
@@ -969,7 +980,8 @@ pub fn brief(entry: &Entry) -> Brief {
         format: entry.format.clone(),
         builtin: false,
         category,
-        description: unknown_description(entry, category, &subs),
+        description: unknown_description(entry, category, &subs, entry.description.as_deref()),
+        native_description: entry.description.clone(),
         roles: roles_for(category),
         pitch_range: None,
         mono: false,
@@ -998,7 +1010,12 @@ fn best_known(norm_name: &str) -> Option<&'static Known> {
 }
 
 /// 未收录型号的诚实描述：说清「是什么类别」+ 为什么没更多信息 + 下一步该干什么。
-fn unknown_description(entry: &Entry, category: &str, subs: &[String]) -> String {
+fn unknown_description(
+    entry: &Entry,
+    category: &str,
+    subs: &[String],
+    native: Option<&str>,
+) -> String {
     let kind = match entry.kind {
         PluginKind::Instrument => "乐器",
         PluginKind::Effect => "效果器",
@@ -1006,11 +1023,18 @@ fn unknown_description(entry: &Entry, category: &str, subs: &[String]) -> String
     let mut text = format!(
         "外部 {kind}（{}，厂商 {}），未收录具体型号。按名称与插件自报信息判断属于「{}」。",
         entry.format.to_uppercase(),
-        if entry.vendor.trim().is_empty() { "未知" } else { entry.vendor.as_str() },
+        if entry.vendor.trim().is_empty() {
+            "未知"
+        } else {
+            entry.vendor.as_str()
+        },
         category_label(category),
     );
     if !subs.is_empty() {
         text.push_str(&format!("插件自报分类：{}。", subs.join(" / ")));
+    }
+    if let Some(native) = native.map(str::trim).filter(|value| !value.is_empty()) {
+        text.push_str(&format!("插件自述：{native}。"));
     }
     text.push_str("要判断实际音色/效果，用 describe_plugin 看参数表，或挂上后 analyze_project 确认听感——不要凭名字猜。");
     text
@@ -1040,39 +1064,60 @@ pub fn resolve(entries: &[Entry], query: &str) -> Result<Entry, String> {
             1 => Ok(Some(hits[0].clone())),
             _ => {
                 let ids: Vec<&str> = hits.iter().map(|e| e.id.as_str()).collect();
-                Err(format!("「{raw}」匹配到多个插件：{}。请用完整 id。", ids.join(" / ")))
+                Err(format!(
+                    "「{raw}」匹配到多个插件：{}。请用完整 id。",
+                    ids.join(" / ")
+                ))
             }
         }
     };
     let lower = raw.to_lowercase();
     // 2. 名字精确（大小写不敏感）
-    if let Some(hit) = pick(entries.iter().filter(|e| e.name.to_lowercase() == lower).collect())? {
+    if let Some(hit) = pick(
+        entries
+            .iter()
+            .filter(|e| e.name.to_lowercase() == lower)
+            .collect(),
+    )? {
         return Ok(hit);
     }
     // 3. 归一化相等：`jc-303` / `JC 303` / `jc303` 都算同一个
     let norm = normalize(raw);
     if !norm.is_empty() {
-        if let Some(hit) =
-            pick(entries.iter().filter(|e| normalize(&e.name) == norm).collect())?
-        {
+        if let Some(hit) = pick(
+            entries
+                .iter()
+                .filter(|e| normalize(&e.name) == norm)
+                .collect(),
+        )? {
             return Ok(hit);
         }
         // 4. 唯一子串（名字或厂商）：`KR-106` 能命中 `Ultramaster KR-106`
         if let Some(hit) = pick(
             entries
                 .iter()
-                .filter(|e| normalize(&e.name).contains(&norm) || normalize(&e.vendor).contains(&norm))
+                .filter(|e| {
+                    normalize(&e.name).contains(&norm) || normalize(&e.vendor).contains(&norm)
+                })
                 .collect(),
         )? {
             return Ok(hit);
         }
     }
     // 5. 中文名等非 ASCII 的原始子串匹配
-    if let Some(hit) = pick(entries.iter().filter(|e| e.name.to_lowercase().contains(&lower)).collect())? {
+    if let Some(hit) = pick(
+        entries
+            .iter()
+            .filter(|e| e.name.to_lowercase().contains(&lower))
+            .collect(),
+    )? {
         return Ok(hit);
     }
 
-    let available: Vec<String> = entries.iter().map(|e| format!("{}（{}）", e.name, e.id)).collect();
+    let available: Vec<String> = entries
+        .iter()
+        .map(|e| format!("{}（{}）", e.name, e.id))
+        .collect();
     Err(format!(
         "没有插件「{raw}」。当前可用：{}。用 list_plugins 看完整清单与音色描述。",
         available.join("、")
@@ -1094,6 +1139,7 @@ mod tests {
             builtin: false,
             // 指向不存在的路径：读不到 moduleinfo 就走关键词兜底，正是要测的路径。
             path: Some(PathBuf::from("/nonexistent")),
+            description: None,
         }
     }
 
@@ -1106,7 +1152,11 @@ mod tests {
         assert!(brief.mono, "TB-303 是单音乐器，不能叠和弦");
         assert_eq!(brief.roles, vec!["bass"]);
         assert_eq!(brief.pitch_range, Some([28, 64]));
-        assert!(brief.description.contains("TB-303"), "描述要说清血统：{}", brief.description);
+        assert!(
+            brief.description.contains("TB-303"),
+            "描述要说清血统：{}",
+            brief.description
+        );
     }
 
     /// 名字里的空格/连字符/大小写都不影响识别。
@@ -1120,11 +1170,20 @@ mod tests {
 
     #[test]
     fn juno_clone_is_a_poly_synth() {
-        let entry = external("vst3:k", "Ultramaster KR-106", "Kayrock", PluginKind::Instrument);
+        let entry = external(
+            "vst3:k",
+            "Ultramaster KR-106",
+            "Kayrock",
+            PluginKind::Instrument,
+        );
         let brief = brief(&entry);
         assert_eq!(brief.category, "synth");
         assert!(!brief.mono, "Juno-106 是复音乐器");
-        assert!(brief.roles.contains(&"pad"), "应当建议铺底：{:?}", brief.roles);
+        assert!(
+            brief.roles.contains(&"pad"),
+            "应当建议铺底：{:?}",
+            brief.roles
+        );
     }
 
     #[test]
@@ -1135,7 +1194,12 @@ mod tests {
 
     #[test]
     fn drum_machine_is_drums() {
-        let entry = external("vst3:d", "jdrummer", "Justin Ehrlichman", PluginKind::Instrument);
+        let entry = external(
+            "vst3:d",
+            "jdrummer",
+            "Justin Ehrlichman",
+            PluginKind::Instrument,
+        );
         assert_eq!(brief(&entry).category, "drums");
     }
 
@@ -1144,8 +1208,16 @@ mod tests {
     fn unknown_plugin_says_so_instead_of_inventing_a_timbre() {
         let entry = external("vst3:zz", "Zebra9000", "Acme", PluginKind::Effect);
         let brief = brief(&entry);
-        assert!(brief.description.contains("未收录"), "{}", brief.description);
-        assert!(brief.description.contains("describe_plugin"), "{}", brief.description);
+        assert!(
+            brief.description.contains("未收录"),
+            "{}",
+            brief.description
+        );
+        assert!(
+            brief.description.contains("describe_plugin"),
+            "{}",
+            brief.description
+        );
     }
 
     #[test]
@@ -1160,9 +1232,17 @@ mod tests {
     fn builtin_catalog_is_complete_and_resolvable() {
         let entries = entries(&[]);
         // 内置合成器 + 5 条老预设 + 18 件采样乐器 + 5 个内置效果器。
-        assert_eq!(entries.len(), 29, "{:?}", entries.iter().map(|e| &e.id).collect::<Vec<_>>());
         assert_eq!(
-            entries.iter().filter(|e| e.kind == PluginKind::Instrument).count(),
+            entries.len(),
+            29,
+            "{:?}",
+            entries.iter().map(|e| &e.id).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|e| e.kind == PluginKind::Instrument)
+                .count(),
             24
         );
         assert!(entries.iter().all(|e| brief(e).description.len() > 10));
@@ -1201,7 +1281,12 @@ mod tests {
     fn resolve_accepts_names_ids_and_fragments() {
         let entries = vec![
             external("vst3:1", "JC303", "midilab", PluginKind::Instrument),
-            external("vst3:2", "Ultramaster KR-106", "Kayrock", PluginKind::Instrument),
+            external(
+                "vst3:2",
+                "Ultramaster KR-106",
+                "Kayrock",
+                PluginKind::Instrument,
+            ),
         ];
         assert_eq!(resolve(&entries, "vst3:1").unwrap().name, "JC303");
         assert_eq!(resolve(&entries, "JC303").unwrap().id, "vst3:1");
@@ -1212,7 +1297,12 @@ mod tests {
 
     #[test]
     fn resolve_reports_what_is_available_when_it_fails() {
-        let entries = vec![external("vst3:1", "JC303", "midilab", PluginKind::Instrument)];
+        let entries = vec![external(
+            "vst3:1",
+            "JC303",
+            "midilab",
+            PluginKind::Instrument,
+        )];
         let err = resolve(&entries, "Serum").unwrap_err();
         assert!(err.contains("JC303"), "报错要列出可用插件：{err}");
         assert!(err.contains("list_plugins"), "{err}");

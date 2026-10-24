@@ -150,22 +150,53 @@ export function automationTargetsFor(
       automatable: true,
     });
   }
-  // MCP 可能写了常用表之外的 CC：把它补进列表，否则车道下拉里选不到已存在的曲线。
+  // 触后只有一条默认车道（通道 0），和常规 DAW 的 Aftertouch 一致。
+  // MPE 的成员通道车道（`at:1`…`at:15`）如果工程里已经有，会在下面自动补进下拉。
+  out.push({
+    key: "at:0",
+    label: t("auto.at.aftertouch"),
+    group: t("auto.group.midi"),
+    min: 0,
+    max: 127,
+    step: 1,
+    digits: 0,
+    hint: t("auto.at.hint"),
+    automatable: true,
+  });
+  // MCP 可能写了常用表之外的 CC / 触后通道：把它补进列表，否则车道下拉里选不到已存在的曲线。
   for (const lane of track.automation ?? []) {
     const match = /^cc:(\d+)$/.exec(lane.param);
-    if (!match) continue;
-    const n = Number(match[1]);
-    if (n > 127 || out.some((target) => target.key === lane.param)) continue;
-    out.push({
-      key: lane.param,
-      label: t("auto.cc.generic", { n }),
-      group: t("auto.group.midi"),
-      min: 0,
-      max: 127,
-      step: 1,
-      digits: 0,
-      automatable: true,
-    });
+    if (match) {
+      const n = Number(match[1]);
+      if (n > 127 || out.some((target) => target.key === lane.param)) continue;
+      out.push({
+        key: lane.param,
+        label: t("auto.cc.generic", { n }),
+        group: t("auto.group.midi"),
+        min: 0,
+        max: 127,
+        step: 1,
+        digits: 0,
+        automatable: true,
+      });
+      continue;
+    }
+    const at = /^at:(\d+)$/.exec(lane.param);
+    if (at) {
+      const n = Number(at[1]);
+      if (n > 15 || out.some((target) => target.key === lane.param)) continue;
+      out.push({
+        key: lane.param,
+        label: t("auto.at.channel", { n: n + 1 }),
+        group: t("auto.group.midi"),
+        min: 0,
+        max: 127,
+        step: 1,
+        digits: 0,
+        hint: t("auto.at.hint"),
+        automatable: true,
+      });
+    }
   }
 
   const instrumentId = track.instrument?.plugin_id;
@@ -260,7 +291,12 @@ export function curateTargets(
   };
 
   for (const target of all) {
-    if (target.key === "gain_db" || target.key === "pan" || target.key.startsWith("cc:")) {
+    if (
+      target.key === "gain_db" ||
+      target.key === "pan" ||
+      target.key.startsWith("cc:") ||
+      target.key.startsWith("at:")
+    ) {
       push(target.key);
     }
   }

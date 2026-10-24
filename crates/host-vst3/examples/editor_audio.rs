@@ -23,7 +23,9 @@ const BLOCK: usize = 512;
 const SECONDS: f64 = 6.0;
 
 fn main() {
-    let format = std::env::args().nth(1).unwrap_or_else(|| "vst3".to_string());
+    let format = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "vst3".to_string());
     ai_daw_host_vst3::mark_main_thread();
 
     let Some(scanned) = ai_daw_host_vst3::scan()
@@ -46,7 +48,10 @@ fn main() {
         eprintln!("{format} 没能拿到编辑器句柄");
         std::process::exit(2);
     };
-    eprintln!("{format}: 已加载，界面 {} ", if entry.has_editor { "有" } else { "无" });
+    eprintln!(
+        "{format}: 已加载，界面 {} ",
+        if entry.has_editor { "有" } else { "无" }
+    );
 
     // 音频线程：先按「没开界面」跑一段，再在界面打开后跑一段。
     let audio_plugin = Arc::new(Mutex::new(plugin));
@@ -64,7 +69,12 @@ fn main() {
         std::thread::Builder::new()
             .name("audio".into())
             .spawn(move || {
-                let ctx = ProcessContext { sample_rate: SR, block_size: BLOCK, tempo: 120.0, playing: true };
+                let ctx = ProcessContext {
+                    sample_rate: SR,
+                    block_size: BLOCK,
+                    tempo: 120.0,
+                    playing: true,
+                };
                 let mut left = vec![0.0f32; BLOCK];
                 let mut right = vec![0.0f32; BLOCK];
                 let mut blocks = 0u32;
@@ -86,18 +96,22 @@ fn main() {
                     if in_note == 0 {
                         evs.push(TimedMidiEvent {
                             frame: 0,
-                            event: MidiEvent::NoteOn { note: 60, velocity: 100 },
+                            channel: 0,
+                            event: MidiEvent::NoteOn {
+                                note: 60,
+                                velocity: 100,
+                            },
                         });
                     } else if in_note == hold {
                         evs.push(TimedMidiEvent {
                             frame: 0,
+                            channel: 0,
                             event: MidiEvent::NoteOff { note: 60 },
                         });
                     }
                     // 等这一块的真实时长过去（**放在最前面**：`continue` 也要按时间走，
                     // 否则拿不到锁时空转会一路把整段跑完，测出来的东西全是假的）。
-                    let due = started
-                        + Duration::from_secs_f64(blocks as f64 * BLOCK as f64 / SR);
+                    let due = started + Duration::from_secs_f64(blocks as f64 * BLOCK as f64 / SR);
                     if let Some(rest) = due.checked_duration_since(std::time::Instant::now()) {
                         std::thread::sleep(rest);
                     }
@@ -173,11 +187,13 @@ fn main() {
     }
     match first_silent {
         None => eprintln!("\n✅ 每个音都出声（界面开着）"),
-        Some(n) => eprintln!("\n❌ 第 {n} 个音开始没声（开界面在第 {} 个音之后）", before.len()),
+        Some(n) => eprintln!(
+            "\n❌ 第 {n} 个音开始没声（开界面在第 {} 个音之后）",
+            before.len()
+        ),
     }
 
     stop.store(true, Ordering::Relaxed);
     std::thread::sleep(Duration::from_millis(200));
     window.close();
-
 }

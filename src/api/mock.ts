@@ -45,11 +45,17 @@ import type {
   ProxyStatus,
   McpConfig,
   McpStatus,
+  MpeConfig,
+  MidiEventAt,
+  ArticulationMapSummary,
+  ArticulationSource,
+  ArticulationSwitch,
   Note,
   NoteEdit,
   NotePatch,
   NoteRange,
   NoteStats,
+  NoteTag,
   OpRecord,
   OverlapReport,
   PitchExpression,
@@ -76,6 +82,41 @@ const mockSessions = new Map<string, AgentSession>();
 let mcpConfig: McpConfig = { enabled: true, port: 0 };
 /** 端口填 0（自动）时，预览里假装分配到的端口。 */
 const MCP_FALLBACK_PORT = 8787;
+
+/** 浏览器预览里的假映射库：只用来演示导入流程。 */
+const MOCK_ARTICULATION_MAPS: ArticulationMapSummary[] = [
+  {
+    id: "Demo/Orchestral Strings/Basoon",
+    manufacturer: "Demo",
+    product: "Orchestral Strings",
+    patch: "Basoon",
+    description: "演示映射：Long / Staccato / Pizzicato",
+    articulation_count: 3,
+  },
+  {
+    id: "Demo/Electric Guitar/Lead",
+    manufacturer: "Demo",
+    product: "Electric Guitar",
+    patch: "Lead",
+    description: "演示映射：Sustain / Palm Mute / Harmonics",
+    articulation_count: 3,
+  },
+];
+
+function mockArticulationMap(id: string): Record<string, ArticulationSwitch> {
+  if (id.includes("Guitar")) {
+    return {
+      Sustain: { events: [{ event: { NoteOn: { note: 24, velocity: 1 } } }] },
+      "Palm Mute": { events: [{ event: { NoteOn: { note: 25, velocity: 1 } } }] },
+      Harmonics: { events: [{ event: { NoteOn: { note: 26, velocity: 1 } } }] },
+    };
+  }
+  return {
+    Long: { events: [{ event: { NoteOn: { note: 24, velocity: 1 } } }] },
+    Staccato: { events: [{ event: { NoteOn: { note: 25, velocity: 1 } } }] },
+    Pizzicato: { events: [{ event: { NoteOn: { note: 26, velocity: 1 } } }] },
+  };
+}
 
 /** 预览版的 MCP 状态：开启即视为「正在监听」。 */
 function mockMcpStatus(): McpStatus {
@@ -643,7 +684,14 @@ function recordHistory(): void {
 }
 
 function clone(p: Project): Project {
-  return structuredClone(p);
+  // 工程本身就是 JSON 数据；用 JSON 往返还能剥掉 Vue 的响应式代理，
+  // 否则把界面里的对象直接写进 state 后，下一次 structuredClone 会抛 DataCloneError。
+  return JSON.parse(JSON.stringify(p)) as Project;
+}
+
+/** 剥掉响应式代理，只留下可克隆的普通对象。 */
+function plain<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 /** 先压栈旧状态再执行变更，返回新快照。 */
@@ -772,6 +820,18 @@ function clampNote(n: Note, length: number): Note {
   const MIN = 1 / 32;
   const expr = normalizeExpr(n.expr);
   const base: Note = expr ? { ...n, expr } : { ...n };
+  if (
+    n.channel != null &&
+    Number.isFinite(n.channel)
+  ) {
+    base.channel = Math.max(0, Math.min(15, Math.round(n.channel)));
+  }
+  if (
+    n.pressure != null &&
+    Number.isFinite(n.pressure)
+  ) {
+    base.pressure = Math.max(0, Math.min(127, Math.round(n.pressure)));
+  }
   if (!expr) delete base.expr;
   if (n.start < 0) return { ...base, duration: Math.max(MIN, n.duration) };
   const start = Math.min(Math.max(0, n.start), Math.max(0, length - MIN));
@@ -1253,6 +1313,8 @@ export const mockApi = {
 
   auditionNote: (): Promise<void> => Promise.resolve(),
 
+  auditionMidiEvents: (): Promise<void> => Promise.resolve(),
+
   // ---- 用户预设（浏览器预览用 localStorage 顶替 presets.json） ----
 
   setParams: (trackId: number, params: Record<string, number>): Project =>
@@ -1470,7 +1532,8 @@ export const mockApi = {
   addNote: (trackId: number, clipId: number, note: Note): Project =>
     commit(() => {
       const c = clip(trackId, clipId);
-      if (c) c.notes.push({ ...note });
+      // 与引擎一致：新音符拿到片段内稳定 id，检查器 / 批量改写都靠它定位。
+      if (c) c.notes.push({ ...note, id: nextNoteId(c) });
     }),
 
   setNote: (trackId: number, clipId: number, index: number, note: Note): Project =>
@@ -1923,8 +1986,180 @@ export const mockApi = {
       if (pitchRange) meta.pitch_range = pitchRange;
       if (pitchBendRange != null && Number.isFinite(pitchBendRange))
         meta.pitch_bend_range = Math.max(0.01, Math.min(24, pitchBendRange));
+      // MPE 由独立命令维护；改分工/音域不能顺手清掉它。
+      if (t.meta?.mpe) meta.mpe = t.meta.mpe;
       if (Object.keys(meta).length === 0) delete t.meta;
       else t.meta = meta;
+    }),
+
+  setMpe: (trackId: number, config: MpeConfig | null): Project =>
+    commit(() => {
+      const t = track(trackId);
+      if (!t) return;
+      const meta: TrackMeta = { ...(t.meta ?? {}) };
+      if (config) {
+        meta.mpe = {
+          zone: config.zone,
+          channels: Math.max(1, Math.min(15, Math.round(config.channels))),
+        };
+      } else {
+        delete meta.mpe;
+      }
+      if (Object.keys(meta).length === 0) delete t.meta;
+      else t.meta = meta;
+    }),
+
+  setNoteTag: (trackId: number, clipId: number, id: number, tag: NoteTag | null): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c || !c.notes.some((n) => n.id === id)) return;
+      const key = `${trackId}:${clipId}:${id}`;
+      state.note_tags ??= {};
+      const clean: NoteTag = {};
+      if (tag?.ornament?.trim()) clean.ornament = tag.ornament.trim();
+      if (tag?.articulation?.trim()) clean.articulation = tag.articulation.trim();
+      if (Object.keys(clean).length === 0) delete state.note_tags[key];
+      else state.note_tags[key] = clean;
+      if (Object.keys(state.note_tags).length === 0) delete state.note_tags;
+    }),
+
+  setNoteTags: (
+    trackId: number,
+    clipId: number,
+    ids: number[],
+    tag: NoteTag | null,
+  ): Project =>
+    commit(() => {
+      const c = clip(trackId, clipId);
+      if (!c) return;
+      const existing = new Set(c.notes.map((n) => n.id ?? 0));
+      const clean: NoteTag = {};
+      if (tag?.ornament?.trim()) clean.ornament = tag.ornament.trim();
+      if (tag?.articulation?.trim()) clean.articulation = tag.articulation.trim();
+      state.note_tags ??= {};
+      for (const id of ids) {
+        if (!existing.has(id)) continue;
+        const key = `${trackId}:${clipId}:${id}`;
+        if (Object.keys(clean).length === 0) delete state.note_tags[key];
+        else state.note_tags[key] = clean;
+      }
+      if (Object.keys(state.note_tags).length === 0) delete state.note_tags;
+    }),
+
+  setMidiEvents: (trackId: number, events: MidiEventAt[]): Project =>
+    commit(() => {
+      const t = track(trackId);
+      if (!t) return;
+      const meta: TrackMeta = { ...(t.meta ?? {}) };
+      const clean = events
+        .map((item) => ({
+          beat: Number.isFinite(item.beat) ? Math.max(0, item.beat) : 0,
+          channel: Math.max(0, Math.min(15, Math.round(item.channel ?? 0))),
+          event: item.event,
+        }))
+        .sort((a, b) => a.beat - b.beat)
+        .slice(0, 8192);
+      if (clean.length === 0) delete meta.midi_events;
+      else meta.midi_events = plain(clean);
+      if (Object.keys(meta).length === 0) delete t.meta;
+      else t.meta = meta;
+    }),
+
+  setArticulations: (
+    trackId: number,
+    articulations: Record<string, ArticulationSwitch>,
+    defaultArticulation?: string,
+    source?: ArticulationSource,
+  ): Project =>
+    commit(() => {
+      const t = track(trackId);
+      if (!t) return;
+      const meta: TrackMeta = { ...(t.meta ?? {}) };
+      const clean: Record<string, ArticulationSwitch> = {};
+      for (const [name, value] of Object.entries(articulations)) {
+        const key = name.trim();
+        if (!key) continue;
+        const hasEvents = (value.events?.length ?? 0) > 0;
+        if (value.keyswitch == null && value.cc == null && value.program == null && !hasEvents) {
+          continue;
+        }
+        clean[key] = {
+          ...(value.keyswitch != null
+            ? { keyswitch: Math.max(0, Math.min(127, Math.round(value.keyswitch))) }
+            : {}),
+          ...(value.cc
+            ? {
+                cc: {
+                  controller: Math.max(0, Math.min(127, Math.round(value.cc.controller))),
+                  value: Math.max(0, Math.min(127, Math.round(value.cc.value))),
+                },
+              }
+            : {}),
+          ...(value.program != null
+            ? { program: Math.max(0, Math.min(127, Math.round(value.program))) }
+            : {}),
+          ...(hasEvents
+            ? {
+                events: value.events!.slice(0, 16).map((item) => ({
+                  ...(item.offset_beats != null
+                    ? { offset_beats: Math.max(0, item.offset_beats) }
+                    : {}),
+                  ...(item.channel != null
+                    ? { channel: Math.max(0, Math.min(15, Math.round(item.channel))) }
+                    : {}),
+                  event: item.event,
+                })),
+              }
+            : {}),
+          ...(value.lead_beats != null ? { lead_beats: value.lead_beats } : {}),
+          ...(value.momentary != null ? { momentary: value.momentary } : {}),
+        };
+      }
+      if (Object.keys(clean).length === 0) delete meta.articulations;
+      else meta.articulations = plain(clean);
+      const def = defaultArticulation?.trim();
+      if (def) meta.default_articulation = def;
+      else delete meta.default_articulation;
+      if (source) meta.articulation_source = plain(source);
+      else delete meta.articulation_source;
+      if (Object.keys(meta).length === 0) delete t.meta;
+      else t.meta = meta;
+    }),
+
+  listArticulationMaps: (query?: string, limit?: number): ArticulationMapSummary[] => {
+    const needle = query?.trim().toLowerCase();
+    const filtered = needle
+      ? MOCK_ARTICULATION_MAPS.filter((item) =>
+          `${item.manufacturer} ${item.product} ${item.patch} ${item.id}`
+            .toLowerCase()
+            .includes(needle),
+        )
+      : MOCK_ARTICULATION_MAPS;
+    return filtered.slice(0, Math.max(1, limit ?? 200));
+  },
+
+  importArticulationMap: (
+    trackId: number,
+    id: string,
+    mode: "replace" | "merge" = "replace",
+    defaultArticulation?: string,
+  ): Project =>
+    commit(() => {
+      const t = track(trackId);
+      if (!t) return;
+      const meta: TrackMeta = { ...(t.meta ?? {}) };
+      const merged: Record<string, ArticulationSwitch> =
+        mode === "merge" ? { ...(meta.articulations ?? {}) } : {};
+      Object.assign(merged, mockArticulationMap(id));
+      meta.articulations = merged;
+      if (defaultArticulation?.trim()) meta.default_articulation = defaultArticulation.trim();
+      meta.articulation_source = {
+        manufacturer: "Demo",
+        product: id.split("/")[1] ?? "Demo",
+        patch: id.split("/")[2] ?? id,
+        map_id: id,
+      };
+      t.meta = meta;
     }),
 
   setGain: (id: number, gainDb: number): Project =>

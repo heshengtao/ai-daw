@@ -73,7 +73,9 @@ fn parse_presets(json: &str) -> Vec<Preset> {
         let mut params = Vec::new();
         for pair in body.split(',') {
             let mut kv = pair.splitn(2, ':');
-            let (Some(k), Some(v)) = (kv.next(), kv.next()) else { continue };
+            let (Some(k), Some(v)) = (kv.next(), kv.next()) else {
+                continue;
+            };
             let key = k.trim().trim_matches('"');
             if key.is_empty() {
                 continue;
@@ -105,10 +107,26 @@ fn render(preset: &Preset, note: u8) -> Vec<f32> {
     let tail_blocks = (TAIL_SECS * SR / BLOCK as f64).round() as usize;
     let mut out = Vec::with_capacity((hold_blocks + tail_blocks) * BLOCK);
 
-    let on = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note, velocity: 100 } }];
-    let off = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOff { note } }];
+    let on = [TimedMidiEvent {
+        frame: 0,
+        channel: 0,
+        event: MidiEvent::NoteOn {
+            note,
+            velocity: 100,
+        },
+    }];
+    let off = [TimedMidiEvent {
+        frame: 0,
+        channel: 0,
+        event: MidiEvent::NoteOff { note },
+    }];
 
-    let ctx = ProcessContext { sample_rate: SR, block_size: BLOCK, tempo: 120.0, playing: true };
+    let ctx = ProcessContext {
+        sample_rate: SR,
+        block_size: BLOCK,
+        tempo: 120.0,
+        playing: true,
+    };
     for block in 0..(hold_blocks + tail_blocks) {
         let mut l = [0.0f32; BLOCK];
         let mut r = [0.0f32; BLOCK];

@@ -22,7 +22,13 @@ pub enum Event {
     /// 拍号改变（已归一化）。
     TimeSignatureChanged { actor: Actor, num: u8, den: u8 },
     /// 关键点被设置（已归一化）。
-    KeyframeSet { actor: Actor, beat: f64, tempo: f64, num: u8, den: u8 },
+    KeyframeSet {
+        actor: Actor,
+        beat: f64,
+        tempo: f64,
+        num: u8,
+        den: u8,
+    },
     /// 关键点被删除。
     KeyframeRemoved { actor: Actor, beat: f64 },
     /// 轨道新增。
@@ -39,21 +45,57 @@ pub enum Event {
     /// 轨道删除。
     TrackRemoved { actor: Actor, id: TrackId },
     /// 轨道被重命名。
-    TrackRenamed { actor: Actor, track: TrackId, name: String },
+    TrackRenamed {
+        actor: Actor,
+        track: TrackId,
+        name: String,
+    },
     /// 轨道乐器被设置。
-    TrackInstrumentSet { actor: Actor, track: TrackId, plugin_id: String },
+    TrackInstrumentSet {
+        actor: Actor,
+        track: TrackId,
+        plugin_id: String,
+    },
     /// 轨道乐器被卸载。
     TrackInstrumentCleared { actor: Actor, track: TrackId },
     /// 片段新增。
-    ClipAdded { actor: Actor, track: TrackId, clip: ClipId, start: f64, length: f64 },
+    ClipAdded {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        start: f64,
+        length: f64,
+    },
     /// 音频片段新增（事件自带素材引用，重放无需另查）。
-    AudioClipAdded { actor: Actor, track: TrackId, clip: ClipId, start: f64, length: f64, source: AudioSource },
+    AudioClipAdded {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        start: f64,
+        length: f64,
+        source: AudioSource,
+    },
     /// 片段的音频素材被改写；`audio` 为 `None` 表示变回 MIDI 片段。
-    ClipAudioChanged { actor: Actor, track: TrackId, clip: ClipId, audio: Option<AudioSource> },
+    ClipAudioChanged {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        audio: Option<AudioSource>,
+    },
     /// 音频片段的播放速度 / 升降调被改写（已归一化）。
-    ClipRateChanged { actor: Actor, track: TrackId, clip: ClipId, rate: f64, pitch_semitones: f64 },
+    ClipRateChanged {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        rate: f64,
+        pitch_semitones: f64,
+    },
     /// 片段删除。
-    ClipRemoved { actor: Actor, track: TrackId, clip: ClipId },
+    ClipRemoved {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+    },
     /// 片段被切分：左半段沿用原 `clip`，右半段是 `new_clip`（自 `at_beat` 起）。
     ///
     /// 两半段的内容（音符 / 音频窗口）直接带在事件里，重放无需再算——切分是确定性的，
@@ -70,53 +112,151 @@ pub enum Event {
         right_audio: Option<AudioSource>,
     },
     /// 片段被移动到新的起始拍。
-    ClipMoved { actor: Actor, track: TrackId, clip: ClipId, start: f64 },
+    ClipMoved {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        start: f64,
+    },
     /// 多个片段被移动（多选拖动）。
-    ClipsMoved { actor: Actor, items: Vec<ClipPlacement> },
+    ClipsMoved {
+        actor: Actor,
+        items: Vec<ClipPlacement>,
+    },
     /// 片段长度被改变。
-    ClipResized { actor: Actor, track: TrackId, clip: ClipId, length: f64 },
+    ClipResized {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        length: f64,
+    },
     /// 音符新增。
-    NoteAdded { actor: Actor, track: TrackId, clip: ClipId, note: Note },
+    NoteAdded {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        note: Note,
+    },
     /// 一批音符新增（**一次事务**：整批只占一条撤销记录）。
     ///
     /// 音符自带稳定 `id`，因此重放不需要引擎再发号——撤销/重做得到完全一样的 id。
-    NotesAdded { actor: Actor, track: TrackId, clip: ClipId, notes: Vec<Note> },
+    NotesAdded {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        notes: Vec<Note>,
+    },
     /// 片段内的音符被**整体替换**（原子替换；空数组 = 清空）。
-    NotesReplaced { actor: Actor, track: TrackId, clip: ClipId, notes: Vec<Note> },
+    NotesReplaced {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        notes: Vec<Note>,
+    },
     /// 音符被改写（`index` 为片段内的序号）。
-    NoteChanged { actor: Actor, track: TrackId, clip: ClipId, index: usize, note: Note },
+    NoteChanged {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        index: usize,
+        note: Note,
+    },
     /// 多个音符被改写（多选拖动 / 属性面板）。
-    NotesChanged { actor: Actor, track: TrackId, clip: ClipId, entries: Vec<NoteEdit> },
+    NotesChanged {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        entries: Vec<NoteEdit>,
+    },
     /// 音符被删除（`index` 为片段内的序号）。
-    NoteRemoved { actor: Actor, track: TrackId, clip: ClipId, index: usize },
+    NoteRemoved {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        index: usize,
+    },
     /// 多个音符被删除（框选后删除）。
-    NotesRemoved { actor: Actor, track: TrackId, clip: ClipId, indices: Vec<usize> },
+    NotesRemoved {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        indices: Vec<usize>,
+    },
     /// 多个片段被删除（可跨轨道）。
     ClipsRemoved { actor: Actor, items: Vec<ClipRef> },
     /// 增益改变（dB）。
-    GainChanged { actor: Actor, track: TrackId, gain_db: f32 },
+    GainChanged {
+        actor: Actor,
+        track: TrackId,
+        gain_db: f32,
+    },
     /// 声像改变。
-    PanChanged { actor: Actor, track: TrackId, pan: f32 },
+    PanChanged {
+        actor: Actor,
+        track: TrackId,
+        pan: f32,
+    },
     /// 静音改变。
-    MuteChanged { actor: Actor, track: TrackId, mute: bool },
+    MuteChanged {
+        actor: Actor,
+        track: TrackId,
+        mute: bool,
+    },
     /// 独奏改变。
-    SoloChanged { actor: Actor, track: TrackId, solo: bool },
+    SoloChanged {
+        actor: Actor,
+        track: TrackId,
+        solo: bool,
+    },
     /// 总输出增益改变（dB）。
     MasterGainChanged { actor: Actor, gain_db: f32 },
     /// 轨道发送被改写（整体替换；空 = 清空）。
-    TrackSendsChanged { actor: Actor, track: TrackId, sends: Vec<Send> },
+    TrackSendsChanged {
+        actor: Actor,
+        track: TrackId,
+        sends: Vec<Send>,
+    },
     /// 轨道自动化被改写（整体替换某参数的曲线；`points` 为空 = 删除该车道）。
-    AutomationChanged { actor: Actor, track: TrackId, param: String, points: Vec<AutomationPoint> },
+    AutomationChanged {
+        actor: Actor,
+        track: TrackId,
+        param: String,
+        points: Vec<AutomationPoint>,
+    },
     /// 乐器参数改变。
-    ParamChanged { actor: Actor, track: TrackId, param: String, value: f32 },
+    ParamChanged {
+        actor: Actor,
+        track: TrackId,
+        param: String,
+        value: f32,
+    },
     /// 效果器被追加到轨道效果链末尾。
-    EffectAdded { actor: Actor, track: TrackId, plugin_id: String },
+    EffectAdded {
+        actor: Actor,
+        track: TrackId,
+        plugin_id: String,
+    },
     /// 效果器被移除（按链内序号）。
-    EffectRemoved { actor: Actor, track: TrackId, index: usize },
+    EffectRemoved {
+        actor: Actor,
+        track: TrackId,
+        index: usize,
+    },
     /// 效果器在链中换了位置。
-    EffectMoved { actor: Actor, track: TrackId, from: usize, to: usize },
+    EffectMoved {
+        actor: Actor,
+        track: TrackId,
+        from: usize,
+        to: usize,
+    },
     /// 效果器参数改变（按链内序号定位）。
-    EffectParamChanged { actor: Actor, track: TrackId, index: usize, param: String, value: f32 },
+    EffectParamChanged {
+        actor: Actor,
+        track: TrackId,
+        index: usize,
+        param: String,
+        value: f32,
+    },
     /// 工程被重命名。
     ProjectRenamed { actor: Actor, name: String },
     /// 工程被重置为空。`actor` 为发起者。
@@ -130,6 +270,27 @@ pub enum Event {
         /// MIDI 弯音范围（半音）；`None` = 使用默认 2。
         pitch_bend_range: Option<f32>,
     },
+    /// 轨道的 MPE 配置被改写（`None` = 关闭）。
+    MpeChanged {
+        actor: Actor,
+        track: TrackId,
+        config: Option<crate::model::MpeConfig>,
+    },
+    /// 轨道的通用 MIDI 事件表被整体替换（空 = 清空）。
+    MidiEventsChanged {
+        actor: Actor,
+        track: TrackId,
+        events: Vec<crate::model::MidiEventAt>,
+    },
+    /// 轨道的奏法映射被整体替换（空 = 清空）。
+    ArticulationsChanged {
+        actor: Actor,
+        track: TrackId,
+        articulations: std::collections::BTreeMap<String, crate::model::ArticulationSwitch>,
+        default: Option<String>,
+        #[serde(default)]
+        source: Option<crate::model::ArticulationSource>,
+    },
     /// 一个音符的标签被改写（`None` = 清除）。
     NoteTagChanged {
         actor: Actor,
@@ -138,10 +299,21 @@ pub enum Event {
         id: u64,
         tag: Option<crate::model::NoteTag>,
     },
+    /// 多个音符的标签被一次性改写（同一个标签；`None` = 清除）。
+    NoteTagsChanged {
+        actor: Actor,
+        track: TrackId,
+        clip: ClipId,
+        ids: Vec<u64>,
+        tag: Option<crate::model::NoteTag>,
+    },
     /// 工程的小节和弦表被整体替换（空 = 清除）。
     ProjectHarmonyChanged { actor: Actor, bars: Vec<HarmonyBar> },
     /// 工程的段落表被整体替换（空 = 清除）。
-    ProjectSectionsChanged { actor: Actor, sections: Vec<Section> },
+    ProjectSectionsChanged {
+        actor: Actor,
+        sections: Vec<Section>,
+    },
 }
 
 impl Event {
@@ -189,7 +361,11 @@ impl Event {
             | Event::ProjectRenamed { actor, .. }
             | Event::ProjectCleared { actor, .. }
             | Event::TrackMetaChanged { actor, .. }
+            | Event::MpeChanged { actor, .. }
+            | Event::MidiEventsChanged { actor, .. }
+            | Event::ArticulationsChanged { actor, .. }
             | Event::NoteTagChanged { actor, .. }
+            | Event::NoteTagsChanged { actor, .. }
             | Event::ProjectHarmonyChanged { actor, .. }
             | Event::ProjectSectionsChanged { actor, .. } => actor,
         }
@@ -220,7 +396,12 @@ mod tests {
 
     #[test]
     fn event_roundtrips_through_json() {
-        let e = Event::TrackAdded { actor: Actor::Agent("claude".into()), id: crate::model::TrackId(3), name: "Bass".into(), at: None };
+        let e = Event::TrackAdded {
+            actor: Actor::Agent("claude".into()),
+            id: crate::model::TrackId(3),
+            name: "Bass".into(),
+            at: None,
+        };
         let json = serde_json::to_string(&e).unwrap();
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(e, back);
@@ -228,7 +409,10 @@ mod tests {
 
     #[test]
     fn project_cleared_roundtrips_through_json() {
-        let e = Event::ProjectCleared { actor: Actor::Agent("claude".into()), name: "x".into() };
+        let e = Event::ProjectCleared {
+            actor: Actor::Agent("claude".into()),
+            name: "x".into(),
+        };
         let json = serde_json::to_string(&e).unwrap();
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(e, back);
@@ -238,24 +422,67 @@ mod tests {
     #[test]
     fn new_events_roundtrip_through_json() {
         let events = vec![
-            Event::TrackRenamed { actor: Actor::Human, track: crate::model::TrackId(1), name: "Lead".into() },
-            Event::ClipMoved { actor: Actor::Human, track: crate::model::TrackId(1), clip: crate::model::ClipId(2), start: 3.5 },
-            Event::ClipResized { actor: Actor::Human, track: crate::model::TrackId(1), clip: crate::model::ClipId(2), length: 6.0 },
+            Event::TrackRenamed {
+                actor: Actor::Human,
+                track: crate::model::TrackId(1),
+                name: "Lead".into(),
+            },
+            Event::ClipMoved {
+                actor: Actor::Human,
+                track: crate::model::TrackId(1),
+                clip: crate::model::ClipId(2),
+                start: 3.5,
+            },
+            Event::ClipResized {
+                actor: Actor::Human,
+                track: crate::model::TrackId(1),
+                clip: crate::model::ClipId(2),
+                length: 6.0,
+            },
             Event::NoteChanged {
                 actor: Actor::Human,
                 track: crate::model::TrackId(1),
                 clip: crate::model::ClipId(2),
                 index: 0,
-                note: crate::model::Note { id: 0, pitch: 64, start: 1.0, duration: 0.5, velocity: 90, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+                note: crate::model::Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 64,
+                    start: 1.0,
+                    duration: 0.5,
+                    velocity: 90,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                },
             },
-            Event::NoteRemoved { actor: Actor::Human, track: crate::model::TrackId(1), clip: crate::model::ClipId(2), index: 1 },
+            Event::NoteRemoved {
+                actor: Actor::Human,
+                track: crate::model::TrackId(1),
+                clip: crate::model::ClipId(2),
+                index: 1,
+            },
             Event::NotesChanged {
                 actor: Actor::Human,
                 track: crate::model::TrackId(1),
                 clip: crate::model::ClipId(2),
                 entries: vec![crate::model::NoteEdit {
                     index: 0,
-                    note: crate::model::Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 64, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+                    note: crate::model::Note {
+                        id: 0,
+                        channel: None,
+                        pressure: None,
+                        pitch: 60,
+                        start: 0.0,
+                        duration: 1.0,
+                        velocity: 64,
+                        volume: 127,
+                        offset: 0.0,
+                        legato: false,
+                        expr: crate::model::PitchExpression::NONE,
+                    },
                 }],
             },
             Event::NotesRemoved {
@@ -271,12 +498,37 @@ mod tests {
                     clip: crate::model::ClipId(2),
                 }],
             },
-            Event::MuteChanged { actor: Actor::Human, track: crate::model::TrackId(1), mute: true },
-            Event::SoloChanged { actor: Actor::Human, track: crate::model::TrackId(1), solo: true },
-            Event::MasterGainChanged { actor: Actor::Human, gain_db: -3.0 },
-            Event::ParamChanged { actor: Actor::Human, track: crate::model::TrackId(1), param: "gain".into(), value: 0.5 },
-            Event::KeyframeSet { actor: Actor::Human, beat: 2.0, tempo: 90.0, num: 3, den: 4 },
-            Event::KeyframeRemoved { actor: Actor::Human, beat: 2.0 },
+            Event::MuteChanged {
+                actor: Actor::Human,
+                track: crate::model::TrackId(1),
+                mute: true,
+            },
+            Event::SoloChanged {
+                actor: Actor::Human,
+                track: crate::model::TrackId(1),
+                solo: true,
+            },
+            Event::MasterGainChanged {
+                actor: Actor::Human,
+                gain_db: -3.0,
+            },
+            Event::ParamChanged {
+                actor: Actor::Human,
+                track: crate::model::TrackId(1),
+                param: "gain".into(),
+                value: 0.5,
+            },
+            Event::KeyframeSet {
+                actor: Actor::Human,
+                beat: 2.0,
+                tempo: 90.0,
+                num: 3,
+                den: 4,
+            },
+            Event::KeyframeRemoved {
+                actor: Actor::Human,
+                beat: 2.0,
+            },
         ];
         for e in events {
             let json = serde_json::to_string(&e).unwrap();
@@ -288,26 +540,80 @@ mod tests {
 
     #[test]
     fn only_mixer_events_are_mix_only() {
-        assert!(Event::GainChanged { actor: Actor::Human, track: crate::model::TrackId(1), gain_db: -6.0 }.is_mix_only());
-        assert!(Event::PanChanged { actor: Actor::Human, track: crate::model::TrackId(1), pan: 0.5 }.is_mix_only());
-        assert!(Event::MuteChanged { actor: Actor::Human, track: crate::model::TrackId(1), mute: true }.is_mix_only());
-        assert!(Event::SoloChanged { actor: Actor::Human, track: crate::model::TrackId(1), solo: true }.is_mix_only());
-        assert!(Event::MasterGainChanged { actor: Actor::Human, gain_db: 0.0 }.is_mix_only());
+        assert!(Event::GainChanged {
+            actor: Actor::Human,
+            track: crate::model::TrackId(1),
+            gain_db: -6.0
+        }
+        .is_mix_only());
+        assert!(Event::PanChanged {
+            actor: Actor::Human,
+            track: crate::model::TrackId(1),
+            pan: 0.5
+        }
+        .is_mix_only());
+        assert!(Event::MuteChanged {
+            actor: Actor::Human,
+            track: crate::model::TrackId(1),
+            mute: true
+        }
+        .is_mix_only());
+        assert!(Event::SoloChanged {
+            actor: Actor::Human,
+            track: crate::model::TrackId(1),
+            solo: true
+        }
+        .is_mix_only());
+        assert!(Event::MasterGainChanged {
+            actor: Actor::Human,
+            gain_db: 0.0
+        }
+        .is_mix_only());
         // 结构性变更不能走"仅混音"通道。
-        assert!(!Event::TrackAdded { actor: Actor::Human, id: crate::model::TrackId(1), name: "A".into(), at: None }.is_mix_only());
-        assert!(!Event::ClipMoved { actor: Actor::Human, track: crate::model::TrackId(1), clip: crate::model::ClipId(1), start: 1.0 }.is_mix_only());
-        assert!(!Event::TempoChanged { actor: Actor::Human, tempo: 90.0 }.is_mix_only());
+        assert!(!Event::TrackAdded {
+            actor: Actor::Human,
+            id: crate::model::TrackId(1),
+            name: "A".into(),
+            at: None
+        }
+        .is_mix_only());
+        assert!(!Event::ClipMoved {
+            actor: Actor::Human,
+            track: crate::model::TrackId(1),
+            clip: crate::model::ClipId(1),
+            start: 1.0
+        }
+        .is_mix_only());
+        assert!(!Event::TempoChanged {
+            actor: Actor::Human,
+            tempo: 90.0
+        }
+        .is_mix_only());
     }
 
     /// 事件是**外部标记**枚举（`{ Variant: body }`）——前端 `stores/engineEvents.ts` 按这个形状解析。
     #[test]
     fn event_wire_shape_is_externally_tagged() {
-        let e = Event::GainChanged { actor: Actor::Human, track: crate::model::TrackId(2), gain_db: -3.0 };
+        let e = Event::GainChanged {
+            actor: Actor::Human,
+            track: crate::model::TrackId(2),
+            gain_db: -3.0,
+        };
         let v = serde_json::to_value(&e).unwrap();
-        assert!(v["GainChanged"].is_object(), "事件必须是外部标记：{{\"GainChanged\": {{…}}}}");
+        assert!(
+            v["GainChanged"].is_object(),
+            "事件必须是外部标记：{{\"GainChanged\": {{…}}}}"
+        );
         assert_eq!(v["GainChanged"]["track"], 2, "TrackId 序列化成裸数字");
         assert_eq!(v["GainChanged"]["actor"], "Human", "Human 是 unit 变体");
-        let agent = serde_json::to_value(Event::TrackRemoved { actor: Actor::Agent("mcp".into()), id: crate::model::TrackId(4) }).unwrap();
-        assert_eq!(agent["TrackRemoved"]["actor"]["Agent"], "mcp", "Agent 携带代理名");
+        let agent = serde_json::to_value(Event::TrackRemoved {
+            actor: Actor::Agent("mcp".into()),
+            id: crate::model::TrackId(4),
+        })
+        .unwrap();
+        assert_eq!(
+            agent["TrackRemoved"]["actor"]["Agent"], "mcp",
+            "Agent 携带代理名"
+        );
     }
 }

@@ -365,10 +365,6 @@
   body {
     @apply m-0 font-sans antialiased min-h-screen;
     background-color: rgb(var(--md-surface));
-    background-image: 
-      radial-gradient(at 0% 0%, rgba(var(--md-primary) / 0.05) 0px, transparent 50%),
-      radial-gradient(at 100% 0%, rgba(var(--md-tertiary) / 0.04) 0px, transparent 50%);
-    background-attachment: fixed;
     color: rgb(var(--md-on-surface));
     transition: background-color 0.3s ease, color 0.3s ease;
   }
@@ -873,6 +869,282 @@
     margin-top: -12px;
     background-color: rgb(var(--md-on-primary));
   }
+
+  /* ---- 对话框 / 检查器共用的 MD3 表单原语 ----
+     音符设置、演奏技巧、高级 MIDI 三个模态框以及检查器的音符区都使用这一套，
+     避免每个文件各写一份「标签 + 控件 + 提示」的布局，最终堆成参差不齐的参数墙。 */
+
+  .m3-dialog-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 0 16px 16px;
+    overflow-y: auto;
+  }
+
+  .m3-dialog-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid rgb(var(--md-outline-variant) / 0.35);
+  }
+
+  .m3-card {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+    padding: 4px 14px;
+    border-radius: 18px;
+    background-color: var(--app-inset);
+  }
+
+  .m3-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 42px;
+    padding: 4px 0;
+  }
+
+  .m3-card-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    color: rgb(var(--md-on-surface));
+  }
+
+  .m3-card-sub {
+    font-size: 11px;
+    line-height: 1.45;
+    color: rgb(var(--md-on-surface-variant));
+  }
+
+  /* 一行：左侧标题 / 说明，右侧控件（与设置页同构） */
+  .m3-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 50px;
+    padding: 8px 0;
+  }
+
+  .m3-row + .m3-row,
+  .m3-card-head + .m3-row {
+    border-top: 1px solid rgb(var(--md-outline-variant) / 0.3);
+  }
+
+  .m3-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .m3-row-label {
+    font-size: 13px;
+    color: rgb(var(--md-on-surface));
+  }
+
+  .m3-row-sub {
+    font-size: 11px;
+    line-height: 1.45;
+    color: rgb(var(--md-on-surface-variant));
+  }
+
+  .m3-row-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+  }
+
+  .m3-row-value {
+    flex: 0 0 auto;
+    font-size: 12px;
+    font-weight: 500;
+    color: rgb(var(--md-on-surface));
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 竖向堆叠的一组字段（字段多、一行放不下时用） */
+  .m3-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+    padding: 10px 0;
+  }
+
+  .m3-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .m3-field-label {
+    font-size: 10.5px;
+    letter-spacing: 0.3px;
+    color: rgb(var(--md-on-surface-variant));
+  }
+
+  .m3-hint {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.55;
+    color: rgb(var(--md-on-surface-variant));
+  }
+
+  .m3-input {
+    height: 34px;
+    min-width: 0;
+    padding: 0 12px;
+    border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+    border-radius: 999px;
+    background-color: rgb(var(--md-surface-container-highest));
+    color: rgb(var(--md-on-surface));
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+  }
+
+  .m3-input:focus {
+    border-color: rgb(var(--md-primary));
+    box-shadow: 0 0 0 2px rgb(var(--md-primary) / 0.22);
+  }
+
+  /* 卡片内右对齐的操作区 */
+  .m3-card-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 8px 0 6px;
+    border-top: 1px solid rgb(var(--md-outline-variant) / 0.3);
+  }
+
+  /* 对话框里的按钮：比主界面大按钮小一号，高度与 NumberField / Select 对齐 */
+  .m3-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 34px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 999px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: filter 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+  }
+
+  .m3-btn.filled {
+    background-color: rgb(var(--md-primary));
+    color: rgb(var(--md-on-primary));
+  }
+
+  .m3-btn.tonal {
+    background-color: rgb(var(--md-secondary-container));
+    color: rgb(var(--md-on-secondary-container));
+  }
+
+  .m3-btn.text {
+    padding: 0 12px;
+    background: transparent;
+    color: rgb(var(--md-primary));
+  }
+
+  .m3-btn.text:hover {
+    background-color: rgb(var(--md-primary) / var(--md-state-hover-alpha));
+  }
+
+  .m3-btn.filled:hover,
+  .m3-btn.tonal:hover {
+    filter: brightness(1.06);
+  }
+
+  .m3-btn.danger {
+    color: rgb(var(--md-error));
+  }
+
+  .m3-btn.danger:hover {
+    background-color: rgb(var(--md-error) / 0.1);
+  }
+
+  .m3-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+    pointer-events: none;
+  }
+
+  .m3-btn:focus-visible,
+  .m3-icon-btn:focus-visible {
+    outline: 2px solid rgb(var(--md-primary));
+    outline-offset: 2px;
+  }
+
+  .m3-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    flex: 0 0 auto;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: rgb(var(--md-on-surface-variant));
+    cursor: pointer;
+    transition: background-color 0.14s ease, color 0.14s ease;
+  }
+
+  .m3-icon-btn:hover {
+    background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
+    color: rgb(var(--md-on-surface));
+  }
+
+  .m3-icon-btn.danger {
+    color: rgb(var(--md-error));
+  }
+
+  .m3-icon-btn.danger:hover {
+    background-color: rgb(var(--md-error) / 0.1);
+  }
+
+  .m3-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 12px;
+    border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+    border-radius: 999px;
+    background: transparent;
+    color: rgb(var(--md-on-surface));
+    font-family: inherit;
+    font-size: 11.5px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color 0.14s ease, border-color 0.14s ease;
+  }
+
+  .m3-chip:hover {
+    background-color: rgb(var(--md-primary) / 0.08);
+    border-color: rgb(var(--md-primary) / 0.5);
+  }
+
+  .m3-chip.on {
+    border-color: transparent;
+    background-color: rgb(var(--md-secondary-container));
+    color: rgb(var(--md-on-secondary-container));
+  }
 }
 
 /* ===== Utility ===== */
@@ -914,12 +1186,17 @@
 }
 
 /* ===== iOS-style overlay scrollbars ===== */
+/* scrollbar-width 不继承，必须逐个元素声明；
+   scrollbar-color **会继承**，所以只挂在根 / body 上——避免 `*:hover` 在悬停时
+   让整棵 DOM 重新计算样式（WebView2 上代价明显）。 */
 * {
   scrollbar-width: thin;
+}
+:root {
   scrollbar-color: transparent transparent;
 }
-*:hover,
-*:focus-within {
+body:hover,
+body:focus-within {
   scrollbar-color: rgb(var(--md-outline-variant) / 0.5) transparent;
 }
 ::-webkit-scrollbar {

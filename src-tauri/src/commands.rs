@@ -8,9 +8,10 @@ use ai_daw_engine::bus::Engine;
 use ai_daw_engine::command::Command;
 use ai_daw_engine::event::{Actor, Event};
 use ai_daw_engine::model::{
-    AudioSource, AutomationPoint, BeatFilter, ClipId, ClipPlacement, ClipRef, FitMode, HarmonyBar,
-    Keyframe, Note, NoteEdit, NotePatch, NoteRange, PitchRange, Project, Section, Send,
-    StrumDirection, TrackId, Transport, VelocityShape,
+    ArticulationSource, ArticulationSwitch, AudioSource, AutomationPoint, BeatFilter, ClipId,
+    ClipPlacement, ClipRef, FitMode, HarmonyBar, Keyframe, MidiEventAt, MpeConfig, MpeZone, Note,
+    NoteEdit, NotePatch, NoteRange, NoteTag, PitchRange, Project, Section, Send, StrumDirection,
+    TrackId, Transport, VelocityShape,
 };
 use ai_daw_engine::op::OpRecord;
 use ai_daw_engine::registry::{PluginRegistry, PluginSlot};
@@ -19,8 +20,9 @@ use ai_daw_engine::tempo::TempoMap;
 use ai_daw_engine::transport::TransportCommand;
 use ai_daw_engine::wav::wav_bytes;
 use ai_daw_host_vst3::{CatalogPlugin, EditorHandle};
-use ai_daw_plugin_api::ParamInfo;
+use ai_daw_plugin_api::{MidiEvent, ParamInfo, PluginDescriptor};
 
+use crate::articulation_map::{plan_import, ArticulationMapCatalog, ArticulationMapSummary};
 use crate::audio::{EditorSlot, TransportSnapshot};
 use crate::plugins::{build_registry_for_offline_render, uses_external_plugins, LoadWarnings};
 use crate::presets::Preset;
@@ -134,7 +136,12 @@ pub(crate) fn capture_plugin_states(state: &AppState) {
         .project()
         .tracks
         .iter()
-        .map(|t| (t.id.0, t.effects.iter().map(|fx| fx.plugin_id.clone()).collect()))
+        .map(|t| {
+            (
+                t.id.0,
+                t.effects.iter().map(|fx| fx.plugin_id.clone()).collect(),
+            )
+        })
         .collect();
     // (轨道, plugin id) → 本次已匹配到的次数，用于消歧同名效果器。
     let mut cursor: HashMap<(u64, String), usize> = HashMap::new();
@@ -142,9 +149,13 @@ pub(crate) fn capture_plugin_states(state: &AppState) {
         match slot {
             // 带上**句柄自己的** plugin id：引擎会核对它是否还是轨道当前的乐器。
             // 换乐器时句柄要等这一轮重建后才清理，不核对就会把旧乐器的状态写进新乐器。
-            PluginSlot::Instrument => engine.set_instrument_state(TrackId(track), &plugin_id, bytes),
+            PluginSlot::Instrument => {
+                engine.set_instrument_state(TrackId(track), &plugin_id, bytes)
+            }
             PluginSlot::Effect(_) => {
-                let Some(ids) = chain_ids.get(&track) else { continue };
+                let Some(ids) = chain_ids.get(&track) else {
+                    continue;
+                };
                 let start = *cursor.get(&(track, plugin_id.clone())).unwrap_or(&0);
                 if let Some(rel) = ids.iter().skip(start).position(|pid| *pid == plugin_id) {
                     let index = start + rel;
@@ -234,7 +245,10 @@ pub(crate) fn run_agent_as(
 
 /// 以代理身份执行**一批**命令（**合成一个撤销步骤**）：用于一次产出多条轨道的 AI 动作
 /// （如音源分离一次生成鼓/贝斯/其他/人声四条分轨），一次撤销即可整体回退。
-pub(crate) fn run_agent_all(app: &tauri::AppHandle, commands: Vec<Command>) -> (Project, Vec<Event>) {
+pub(crate) fn run_agent_all(
+    app: &tauri::AppHandle,
+    commands: Vec<Command>,
+) -> (Project, Vec<Event>) {
     run_agent_all_as(app, Actor::Agent("mcp".into()), commands)
 }
 
@@ -293,7 +307,11 @@ pub(crate) fn render_inputs(state: &AppState) -> RenderInputs {
 const EXTERNAL_PLUGIN_SETTLE_SECONDS: f64 = 1.5;
 
 /// 离线渲染一份快照（预览 / 导出 / 分析 / MCP 共用同一条路径）。
-pub(crate) fn render_offline(inputs: RenderInputs, sample_rate: u32, tail_seconds: f64) -> AudioBuffer {
+pub(crate) fn render_offline(
+    inputs: RenderInputs,
+    sample_rate: u32,
+    tail_seconds: f64,
+) -> AudioBuffer {
     render_offline_with_progress(inputs, sample_rate, tail_seconds, |_, _| {})
 }
 
@@ -304,7 +322,13 @@ pub(crate) fn render_offline_with_progress(
     tail_seconds: f64,
     on_progress: impl FnMut(usize, usize),
 ) -> AudioBuffer {
-    let RenderInputs { project, catalog, editor_handles, samples, warnings } = inputs;
+    let RenderInputs {
+        project,
+        catalog,
+        editor_handles,
+        samples,
+        warnings,
+    } = inputs;
     // 离线渲染把 VST3 放进 helper 子进程：插件在加载 / 处理音频时崩溃只杀 helper，
     // 宿主记一条警告后继续（该轨道静音），不会再把整个应用带走。
     let registry = build_registry_for_offline_render(
@@ -340,7 +364,10 @@ pub(crate) fn render_offline_with_progress(
 /// 该事件是否会导致播放器重建（混音与实时参数不会）。
 fn is_structural(event: &Event) -> bool {
     !event.is_mix_only()
-        && !matches!(event, Event::ParamChanged { .. } | Event::EffectParamChanged { .. })
+        && !matches!(
+            event,
+            Event::ParamChanged { .. } | Event::EffectParamChanged { .. }
+        )
 }
 
 /// 关掉指定槽位的插件窗口（须在主线程执行创建/销毁，所以走 `run_on_main_thread`）。
@@ -400,8 +427,7 @@ fn close_plugin_windows_for(app: &tauri::AppHandle, keys: Vec<(u64, PluginSlot)>
 
 /// 关掉**全部**插件窗口（整个工程被替换时用，例如打开另一个工程）。
 fn close_all_plugin_windows(app: &tauri::AppHandle, state: &AppState) {
-    let keys: Vec<(u64, PluginSlot)> =
-        state.open_editors.lock().unwrap().iter().copied().collect();
+    let keys: Vec<(u64, PluginSlot)> = state.open_editors.lock().unwrap().iter().copied().collect();
     close_plugin_windows_for(app, keys);
 }
 
@@ -471,7 +497,14 @@ pub fn rename_track(
     track: u64,
     name: String,
 ) -> Project {
-    run(&app, &state, Command::RenameTrack { track: TrackId(track), name })
+    run(
+        &app,
+        &state,
+        Command::RenameTrack {
+            track: TrackId(track),
+            name,
+        },
+    )
 }
 
 /// 为轨道设置乐器插件。
@@ -482,7 +515,14 @@ pub fn set_track_instrument(
     track: u64,
     plugin_id: String,
 ) -> Project {
-    run(&app, &state, Command::SetTrackInstrument { track: TrackId(track), plugin_id })
+    run(
+        &app,
+        &state,
+        Command::SetTrackInstrument {
+            track: TrackId(track),
+            plugin_id,
+        },
+    )
 }
 
 /// 设置轨道乐器的参数（参数 id 由插件自身定义）。
@@ -494,7 +534,15 @@ pub fn set_param(
     param: String,
     value: f32,
 ) -> Project {
-    run(&app, &state, Command::SetParam { track: TrackId(track), param, value })
+    run(
+        &app,
+        &state,
+        Command::SetParam {
+            track: TrackId(track),
+            param,
+            value,
+        },
+    )
 }
 
 /// 改速度 / 拍号后，把每个**音频片段**的「拍长」重算成它在新速度下的**原真实时长**。
@@ -526,7 +574,11 @@ pub(crate) fn resize_audio_clips_for_transport(
             let start_sec = new_map.beats_to_seconds(clip.start);
             let length = new_map.seconds_to_beats(start_sec + span_sec) - clip.start;
             if length > 1e-6 && (length - clip.length).abs() > 1e-6 {
-                out.push(Command::ResizeClip { track: track.id, clip: clip.id, length });
+                out.push(Command::ResizeClip {
+                    track: track.id,
+                    clip: clip.id,
+                    length,
+                });
             }
         }
     }
@@ -544,7 +596,11 @@ fn run_tempo(
     let project = state.engine.lock().unwrap().project().clone();
     let old = project.transport.clone();
     let mut commands = vec![command];
-    commands.extend(resize_audio_clips_for_transport(&project, &old, &new_transport));
+    commands.extend(resize_audio_clips_for_transport(
+        &project,
+        &old,
+        &new_transport,
+    ));
     run_all(app, state, actor, commands).0
 }
 
@@ -559,7 +615,11 @@ pub fn set_tempo(app: tauri::AppHandle, bpm: f64) -> Project {
 /// 音频片段的「拍长」会跟着重算——与界面改 BPM 的行为完全一致，否则导出会与工程对不上。
 pub(crate) fn set_tempo_as(app: &tauri::AppHandle, actor: Actor, bpm: f64) -> Project {
     let state = app.state::<AppState>();
-    let bpm = if bpm.is_finite() { bpm.clamp(1.0, 1000.0) } else { 120.0 };
+    let bpm = if bpm.is_finite() {
+        bpm.clamp(1.0, 1000.0)
+    } else {
+        120.0
+    };
     let mut t = state.engine.lock().unwrap().project().transport.clone();
     t.tempo = bpm;
     run_tempo(app, &state, actor, Command::SetTempo(bpm), t)
@@ -581,7 +641,11 @@ pub fn set_params(
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     let commands: Vec<Command> = pairs
         .into_iter()
-        .map(|(param, value)| Command::SetParam { track: TrackId(track), param, value })
+        .map(|(param, value)| Command::SetParam {
+            track: TrackId(track),
+            param,
+            value,
+        })
         .collect();
 
     let (project, events) = {
@@ -629,14 +693,21 @@ pub(crate) fn apply_preset_inner(
     let mut pairs: Vec<(&String, &f32)> = params.iter().collect();
     pairs.sort_by(|a, b| a.0.cmp(b.0));
     for (param, value) in pairs {
-        commands.push(Command::SetParam { track, param: param.clone(), value: *value });
+        commands.push(Command::SetParam {
+            track,
+            param: param.clone(),
+            value: *value,
+        });
     }
     // 先清空效果链（每一步都删第 0 个，链自己前移），再按顺序重建。
     for _ in 0..existing {
         commands.push(Command::RemoveEffect { track, index: 0 });
     }
     for (index, spec) in effects.iter().enumerate() {
-        commands.push(Command::AddEffect { track, plugin_id: spec.plugin_id.clone() });
+        commands.push(Command::AddEffect {
+            track,
+            plugin_id: spec.plugin_id.clone(),
+        });
         let mut fx_pairs: Vec<(&String, &f32)> = spec.params.iter().collect();
         fx_pairs.sort_by(|a, b| a.0.cmp(b.0));
         for (param, value) in fx_pairs {
@@ -686,7 +757,11 @@ pub(crate) fn sound_snapshot_for(
         .ok_or_else(|| format!("轨道 {} 不存在", track.0))?;
     Ok(SoundSnapshot {
         instrument: t.instrument.as_ref().map(PluginSnapshot::from_instance),
-        effects: t.effects.iter().map(PluginSnapshot::from_instance).collect(),
+        effects: t
+            .effects
+            .iter()
+            .map(PluginSnapshot::from_instance)
+            .collect(),
         mixer: SoundMixer {
             gain_db: t.mixer.gain_db,
             pan: t.mixer.pan,
@@ -826,13 +901,7 @@ pub fn set_time_signature(
 
 /// 在第 `beat` 拍插入/更新关键点（BPM + 拍号）。
 #[tauri::command]
-pub fn set_keyframe(
-    app: tauri::AppHandle,
-    beat: f64,
-    tempo: f64,
-    num: u8,
-    den: u8,
-) -> Project {
+pub fn set_keyframe(app: tauri::AppHandle, beat: f64, tempo: f64, num: u8, den: u8) -> Project {
     set_keyframe_as(&app, Actor::Human, beat, tempo, num, den)
 }
 
@@ -855,7 +924,18 @@ pub(crate) fn set_keyframe_as(
     }) {
         t.upsert_keyframe(kf);
     }
-    run_tempo(app, &state, actor, Command::SetKeyframe { beat, tempo, num, den }, t)
+    run_tempo(
+        app,
+        &state,
+        actor,
+        Command::SetKeyframe {
+            beat,
+            tempo,
+            num,
+            den,
+        },
+        t,
+    )
 }
 
 /// 删除第 `beat` 拍的关键点。
@@ -907,7 +987,10 @@ pub(crate) fn set_clip_rate_as(
         rate,
         pitch_semitones,
     }];
-    if let Some(c) = project.track(track_id).and_then(|t| t.clips.iter().find(|c| c.id == clip_id)) {
+    if let Some(c) = project
+        .track(track_id)
+        .and_then(|t| t.clips.iter().find(|c| c.id == clip_id))
+    {
         if let Some(src) = &c.audio {
             if src.rate > 1e-9 {
                 let map = TempoMap::from_transport(&project.transport);
@@ -916,7 +999,11 @@ pub(crate) fn set_clip_rate_as(
                 let start_sec = map.beats_to_seconds(c.start);
                 let length = map.seconds_to_beats(start_sec + target) - c.start;
                 if length > 1e-6 && (length - c.length).abs() > 1e-6 {
-                    commands.push(Command::ResizeClip { track: track_id, clip: clip_id, length });
+                    commands.push(Command::ResizeClip {
+                        track: track_id,
+                        clip: clip_id,
+                        length,
+                    });
                 }
             }
         }
@@ -1002,21 +1089,36 @@ pub(crate) fn trim_clip_as(
                     index,
                     note: Note {
                         id: 0,
+                        channel: None,
+                        pressure: None,
                         pitch: n.pitch,
                         start: n.start - shift,
                         duration: n.duration,
                         velocity: n.velocity,
                         volume: n.volume,
                         offset: 0.0,
-                        legato: false, expr: ai_daw_engine::model::PitchExpression::NONE,
+                        legato: false,
+                        expr: ai_daw_engine::model::PitchExpression::NONE,
                     },
                 })
                 .collect();
-            commands.push(Command::SetNotes { track: track_id, clip: clip_id, entries });
+            commands.push(Command::SetNotes {
+                track: track_id,
+                clip: clip_id,
+                entries,
+            });
         }
     }
-    commands.push(Command::MoveClip { track: track_id, clip: clip_id, start });
-    commands.push(Command::ResizeClip { track: track_id, clip: clip_id, length });
+    commands.push(Command::MoveClip {
+        track: track_id,
+        clip: clip_id,
+        start,
+    });
+    commands.push(Command::ResizeClip {
+        track: track_id,
+        clip: clip_id,
+        length,
+    });
     Ok(run_all(app, &state, actor, commands).0)
 }
 
@@ -1089,7 +1191,10 @@ pub(crate) fn new_project_as(
     let state = app.state::<AppState>();
     // 新建会清空当前工程：先把它收进历史，用户随时能回去。
     remember_current(app, &state);
-    let mut commands = vec![Command::NewProject { name: "untitled".into(), track_names }];
+    let mut commands = vec![Command::NewProject {
+        name: "untitled".into(),
+        track_names,
+    }];
     // 设置里可配的「新工程默认速度」：与模板默认 120 不同才补一条命令（同一个撤销步骤）。
     if let Some(bpm) = tempo {
         if (bpm - ai_daw_engine::model::Transport::default().tempo).abs() > f64::EPSILON {
@@ -1103,13 +1208,33 @@ pub(crate) fn new_project_as(
     project
 }
 
+/// 新建工程，但**只创建给定的轨道**（agent / 影片清单用），不铺默认分轨模板。
+pub(crate) fn new_project_exact_as(
+    app: &tauri::AppHandle,
+    actor: Actor,
+    track_names: Vec<String>,
+    tempo: Option<f64>,
+) -> Project {
+    let state = app.state::<AppState>();
+    remember_current(app, &state);
+    let mut commands = vec![Command::NewProjectWithTracks {
+        name: "untitled".into(),
+        track_names,
+    }];
+    if let Some(bpm) = tempo {
+        if (bpm - ai_daw_engine::model::Transport::default().tempo).abs() > f64::EPSILON {
+            commands.push(Command::SetTempo(bpm));
+        }
+    }
+    let project = run_agent_all_as(app, actor, commands).0;
+    state.engine.lock().unwrap().mark_saved();
+    state.set_session_path(None);
+    project
+}
+
 /// 重命名当前工程。
 #[tauri::command]
-pub fn rename_project(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    name: String,
-) -> Project {
+pub fn rename_project(app: tauri::AppHandle, state: State<'_, AppState>, name: String) -> Project {
     run(&app, &state, Command::RenameProject { name })
 }
 
@@ -1139,7 +1264,15 @@ pub fn add_clip(
     start: f64,
     length: f64,
 ) -> Project {
-    run(&app, &state, Command::AddClip { track: TrackId(track), start, length })
+    run(
+        &app,
+        &state,
+        Command::AddClip {
+            track: TrackId(track),
+            start,
+            length,
+        },
+    )
 }
 
 /// 删除一个片段。
@@ -1150,7 +1283,14 @@ pub fn remove_clip(
     track: u64,
     clip: u64,
 ) -> Project {
-    run(&app, &state, Command::RemoveClip { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip) })
+    run(
+        &app,
+        &state,
+        Command::RemoveClip {
+            track: TrackId(track),
+            clip: ai_daw_engine::model::ClipId(clip),
+        },
+    )
 }
 
 /// 把片段移动到新的起始拍。
@@ -1165,7 +1305,11 @@ pub fn move_clip(
     run(
         &app,
         &state,
-        Command::MoveClip { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), start },
+        Command::MoveClip {
+            track: TrackId(track),
+            clip: ai_daw_engine::model::ClipId(clip),
+            start,
+        },
     )
 }
 
@@ -1191,7 +1335,11 @@ pub fn resize_clip(
     run(
         &app,
         &state,
-        Command::ResizeClip { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), length },
+        Command::ResizeClip {
+            track: TrackId(track),
+            clip: ai_daw_engine::model::ClipId(clip),
+            length,
+        },
     )
 }
 
@@ -1207,7 +1355,11 @@ pub fn add_note(
     run(
         &app,
         &state,
-        Command::AddNote { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), note },
+        Command::AddNote {
+            track: TrackId(track),
+            clip: ai_daw_engine::model::ClipId(clip),
+            note,
+        },
     )
 }
 
@@ -1224,7 +1376,12 @@ pub fn set_note(
     run(
         &app,
         &state,
-        Command::SetNote { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), index, note },
+        Command::SetNote {
+            track: TrackId(track),
+            clip: ai_daw_engine::model::ClipId(clip),
+            index,
+            note,
+        },
     )
 }
 
@@ -1240,7 +1397,11 @@ pub fn set_notes(
     run(
         &app,
         &state,
-        Command::SetNotes { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), entries },
+        Command::SetNotes {
+            track: TrackId(track),
+            clip: ai_daw_engine::model::ClipId(clip),
+            entries,
+        },
     )
 }
 
@@ -1256,7 +1417,11 @@ pub fn remove_note(
     run(
         &app,
         &state,
-        Command::RemoveNote { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), index },
+        Command::RemoveNote {
+            track: TrackId(track),
+            clip: ai_daw_engine::model::ClipId(clip),
+            index,
+        },
     )
 }
 
@@ -1272,7 +1437,11 @@ pub fn remove_notes(
     run(
         &app,
         &state,
-        Command::RemoveNotes { track: TrackId(track), clip: ai_daw_engine::model::ClipId(clip), indices },
+        Command::RemoveNotes {
+            track: TrackId(track),
+            clip: ai_daw_engine::model::ClipId(clip),
+            indices,
+        },
     )
 }
 
@@ -1299,7 +1468,15 @@ pub fn add_notes(
     clip: u64,
     notes: Vec<Note>,
 ) -> Project {
-    run(&app, &state, Command::AddNotes { track: TrackId(track), clip: ClipId(clip), notes })
+    run(
+        &app,
+        &state,
+        Command::AddNotes {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            notes,
+        },
+    )
 }
 
 /// 原子替换片段内的全部音符（空数组 = 清空片段）。
@@ -1311,7 +1488,15 @@ pub fn replace_notes(
     clip: u64,
     notes: Vec<Note>,
 ) -> Project {
-    run(&app, &state, Command::ReplaceNotes { track: TrackId(track), clip: ClipId(clip), notes })
+    run(
+        &app,
+        &state,
+        Command::ReplaceNotes {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            notes,
+        },
+    )
 }
 
 /// 按稳定 id 批量改写音符（只改给出的字段）。
@@ -1323,7 +1508,15 @@ pub fn update_notes(
     clip: u64,
     updates: Vec<NotePatch>,
 ) -> Project {
-    run(&app, &state, Command::UpdateNotes { track: TrackId(track), clip: ClipId(clip), updates })
+    run(
+        &app,
+        &state,
+        Command::UpdateNotes {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            updates,
+        },
+    )
 }
 
 /// 按稳定 id 批量删除音符。
@@ -1335,7 +1528,15 @@ pub fn remove_notes_by_id(
     clip: u64,
     ids: Vec<u64>,
 ) -> Project {
-    run(&app, &state, Command::RemoveNotesById { track: TrackId(track), clip: ClipId(clip), ids })
+    run(
+        &app,
+        &state,
+        Command::RemoveNotesById {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            ids,
+        },
+    )
 }
 
 /// 批量移调（半音），可限定范围。
@@ -1351,7 +1552,12 @@ pub fn transpose_notes(
     run(
         &app,
         &state,
-        Command::TransposeNotes { track: TrackId(track), clip: ClipId(clip), semitones, range },
+        Command::TransposeNotes {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            semitones,
+            range,
+        },
     )
 }
 
@@ -1544,7 +1750,10 @@ pub fn merge_clips(
     run(
         &app,
         &state,
-        Command::MergeClips { track: TrackId(track), clips: clips.into_iter().map(ClipId).collect() },
+        Command::MergeClips {
+            track: TrackId(track),
+            clips: clips.into_iter().map(ClipId).collect(),
+        },
     )
 }
 
@@ -1580,13 +1789,21 @@ pub fn analyze_track_overlap(
     let project = state.engine.lock().unwrap().project().clone();
     let picked: Vec<&ai_daw_engine::model::Track> = tracks
         .iter()
-        .map(|id| project.track(TrackId(*id)).ok_or_else(|| format!("没有轨道 {id}")))
+        .map(|id| {
+            project
+                .track(TrackId(*id))
+                .ok_or_else(|| format!("没有轨道 {id}"))
+        })
         .collect::<Result<_, _>>()?;
 
     let mut pairs = Vec::new();
     for (i, a) in picked.iter().enumerate() {
         for b in picked.iter().skip(i + 1) {
-            pairs.push(ai_daw_engine::compose::track_overlap(a, b, clip.map(ClipId)));
+            pairs.push(ai_daw_engine::compose::track_overlap(
+                a,
+                b,
+                clip.map(ClipId),
+            ));
         }
     }
     let summary: Vec<String> = pairs
@@ -1594,7 +1811,11 @@ pub fn analyze_track_overlap(
         .filter(|p| p.conflict && !p.suggestion.is_empty())
         .map(|p| p.suggestion.clone())
         .collect();
-    Ok(ai_daw_engine::report::OverlapReport { tracks, pairs, summary })
+    Ok(ai_daw_engine::report::OverlapReport {
+        tracks,
+        pairs,
+        summary,
+    })
 }
 
 /// 和声检查：`bars` 缺省时用工程里存的和弦表；`tracks` 缺省时检查所有有音符的轨道。
@@ -1614,19 +1835,25 @@ pub fn analyze_harmony(
     let bars = match bars {
         Some(bars) if !bars.is_empty() => bars,
         _ if !project.harmony.is_empty() => project.harmony.clone(),
-        _ => {
-            return Err(
-                "没有和弦信息：传 bars（[{start, length, symbol}]），或先用 set_project_harmony 存一份"
-                    .into(),
-            )
-        }
+        _ => return Err(
+            "没有和弦信息：传 bars（[{start, length, symbol}]），或先用 set_project_harmony 存一份"
+                .into(),
+        ),
     };
     let picked: Vec<&ai_daw_engine::model::Track> = match tracks {
         Some(ids) => ids
             .iter()
-            .map(|id| project.track(TrackId(*id)).ok_or_else(|| format!("没有轨道 {id}")))
+            .map(|id| {
+                project
+                    .track(TrackId(*id))
+                    .ok_or_else(|| format!("没有轨道 {id}"))
+            })
             .collect::<Result<_, _>>()?,
-        None => project.tracks.iter().filter(|t| t.clips.iter().any(|c| !c.notes.is_empty())).collect(),
+        None => project
+            .tracks
+            .iter()
+            .filter(|t| t.clips.iter().any(|c| !c.notes.is_empty()))
+            .collect(),
     };
     if picked.is_empty() {
         return Err("没有可检查的音符：指定的轨道上没有任何音符".into());
@@ -1663,7 +1890,11 @@ pub fn analyze_harmony(
         project.transport.bar_beats(),
         time_tolerance.unwrap_or(1.0 / 16.0),
         scale.as_deref(),
-        if ornament_ids.is_empty() { None } else { Some(&ornament_ids) },
+        if ornament_ids.is_empty() {
+            None
+        } else {
+            Some(&ornament_ids)
+        },
     )
 }
 
@@ -1706,7 +1937,203 @@ pub fn set_track_meta(
     run(
         &app,
         &state,
-        Command::SetTrackMeta { track: TrackId(track), role, pitch_range, pitch_bend_range },
+        Command::SetTrackMeta {
+            track: TrackId(track),
+            role,
+            pitch_range,
+            pitch_bend_range,
+        },
+    )
+}
+
+/// 设置轨道的 MPE 配置（`zone` = `lower` / `upper` / `off`）。
+#[tauri::command]
+pub fn set_mpe(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    zone: String,
+    channels: Option<u8>,
+) -> Project {
+    let config = match zone.trim().to_ascii_lowercase().as_str() {
+        "off" | "none" | "" => None,
+        "lower" => Some(MpeConfig {
+            channels: channels.unwrap_or(15),
+            zone: MpeZone::Lower,
+        }),
+        "upper" => Some(MpeConfig {
+            channels: channels.unwrap_or(15),
+            zone: MpeZone::Upper,
+        }),
+        // 未知值不静默改写工程：原样返回当前快照。
+        _ => return state.engine.lock().unwrap().project().clone(),
+    };
+    run(
+        &app,
+        &state,
+        Command::SetMpe {
+            track: TrackId(track),
+            config,
+        },
+    )
+}
+
+/// 设置轨道的通用 MIDI 事件表（整体替换；空 = 清空）。
+#[tauri::command]
+pub fn set_midi_events(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    events: Vec<MidiEventAt>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::SetMidiEvents {
+            track: TrackId(track),
+            events,
+        },
+    )
+}
+
+/// 设置轨道的奏法映射（整体替换；空 = 清空）。
+#[tauri::command]
+pub fn set_articulations(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    articulations: std::collections::BTreeMap<String, ArticulationSwitch>,
+    default_articulation: Option<String>,
+    source: Option<ArticulationSource>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::SetArticulations {
+            track: TrackId(track),
+            articulations,
+            default: default_articulation,
+            source,
+        },
+    )
+}
+
+/// 随包映射库在运行时 / 开发环境下的位置。
+pub(crate) fn articulation_maps_root(app: &tauri::AppHandle) -> std::path::PathBuf {
+    if let Ok(dir) = app.path().resource_dir() {
+        let candidate = dir.join("articulation-maps");
+        if candidate.is_dir() {
+            return candidate;
+        }
+    }
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/articulation-maps")
+}
+
+/// 搜索随包奏法映射库（厂商 / 产品 / patch）。
+#[tauri::command]
+pub fn list_articulation_maps(
+    app: tauri::AppHandle,
+    query: Option<String>,
+    limit: Option<usize>,
+) -> Vec<ArticulationMapSummary> {
+    ArticulationMapCatalog::new(articulation_maps_root(&app))
+        .list(query.as_deref(), limit.unwrap_or(200))
+}
+
+/// 把映射库里的某一份映射导入轨道（整体替换或合并）。
+#[tauri::command]
+pub fn import_articulation_map(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    id: String,
+    mode: Option<String>,
+    default_articulation: Option<String>,
+) -> Result<Project, String> {
+    let catalog = ArticulationMapCatalog::new(articulation_maps_root(&app));
+    let parsed = catalog.load(&id)?;
+
+    let project = state.engine.lock().unwrap().project().clone();
+    let existing = project
+        .tracks
+        .iter()
+        .find(|item| item.id == TrackId(track))
+        .and_then(|item| item.meta.clone())
+        .unwrap_or_default();
+    let plan = plan_import(
+        &existing,
+        parsed,
+        mode.as_deref() == Some("merge"),
+        default_articulation,
+    );
+
+    Ok(run(
+        &app,
+        &state,
+        Command::SetArticulations {
+            track: TrackId(track),
+            articulations: plan.articulations,
+            default: plan.default,
+            source: Some(plan.source),
+        },
+    ))
+}
+
+/// 写入 / 清除一个音符的装饰音与奏法标签。
+#[tauri::command]
+pub fn set_note_tag(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    id: u64,
+    ornament: Option<String>,
+    articulation: Option<String>,
+) -> Project {
+    let tag = NoteTag {
+        ornament,
+        articulation,
+    }
+    .normalized();
+    let tag = if tag.is_empty() { None } else { Some(tag) };
+    run(
+        &app,
+        &state,
+        Command::SetNoteTag {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            id,
+            tag,
+        },
+    )
+}
+
+/// 一次给多个音符写同一个奏法标签（多选切换 = 一个撤销步）。
+#[tauri::command]
+pub fn set_note_tags(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    clip: u64,
+    ids: Vec<u64>,
+    ornament: Option<String>,
+    articulation: Option<String>,
+) -> Project {
+    let tag = NoteTag {
+        ornament,
+        articulation,
+    }
+    .normalized();
+    let tag = if tag.is_empty() { None } else { Some(tag) };
+    run(
+        &app,
+        &state,
+        Command::SetNoteTags {
+            track: TrackId(track),
+            clip: ClipId(clip),
+            ids,
+            tag,
+        },
     )
 }
 
@@ -1722,13 +2149,27 @@ pub fn set_gain(
     track: u64,
     gain_db: f32,
 ) -> Project {
-    run(&app, &state, Command::SetGain { track: TrackId(track), gain_db })
+    run(
+        &app,
+        &state,
+        Command::SetGain {
+            track: TrackId(track),
+            gain_db,
+        },
+    )
 }
 
 /// 设置轨道声像（-1.0 最左，1.0 最右）。
 #[tauri::command]
 pub fn set_pan(app: tauri::AppHandle, state: State<'_, AppState>, track: u64, pan: f32) -> Project {
-    run(&app, &state, Command::SetPan { track: TrackId(track), pan })
+    run(
+        &app,
+        &state,
+        Command::SetPan {
+            track: TrackId(track),
+            pan,
+        },
+    )
 }
 
 /// 设置轨道静音。
@@ -1739,7 +2180,14 @@ pub fn set_mute(
     track: u64,
     mute: bool,
 ) -> Project {
-    run(&app, &state, Command::SetMute { track: TrackId(track), mute })
+    run(
+        &app,
+        &state,
+        Command::SetMute {
+            track: TrackId(track),
+            mute,
+        },
+    )
 }
 
 /// 设置轨道独奏。
@@ -1750,16 +2198,19 @@ pub fn set_solo(
     track: u64,
     solo: bool,
 ) -> Project {
-    run(&app, &state, Command::SetSolo { track: TrackId(track), solo })
+    run(
+        &app,
+        &state,
+        Command::SetSolo {
+            track: TrackId(track),
+            solo,
+        },
+    )
 }
 
 /// 设置总输出增益（dB）。
 #[tauri::command]
-pub fn set_master_gain(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    gain_db: f32,
-) -> Project {
+pub fn set_master_gain(app: tauri::AppHandle, state: State<'_, AppState>, gain_db: f32) -> Project {
     run(&app, &state, Command::SetMasterGain(gain_db))
 }
 
@@ -1771,7 +2222,14 @@ pub fn set_sends(
     track: u64,
     sends: Vec<Send>,
 ) -> Project {
-    run(&app, &state, Command::SetSends { track: TrackId(track), sends })
+    run(
+        &app,
+        &state,
+        Command::SetSends {
+            track: TrackId(track),
+            sends,
+        },
+    )
 }
 
 /// 设置一条自动化车道（整体替换该参数的曲线；空 `points` = 删除该车道）。
@@ -1783,7 +2241,15 @@ pub fn set_automation(
     param: String,
     points: Vec<AutomationPoint>,
 ) -> Project {
-    run(&app, &state, Command::SetAutomation { track: TrackId(track), param, points })
+    run(
+        &app,
+        &state,
+        Command::SetAutomation {
+            track: TrackId(track),
+            param,
+            points,
+        },
+    )
 }
 
 /// 实时监听用的混音预览：**不写入工程、不进入撤销历史**。
@@ -1798,7 +2264,9 @@ pub fn monitor_track_mix(
     mute: bool,
     solo: bool,
 ) {
-    state.audio.monitor_track_mix(TrackId(track), gain_db, pan, mute, solo);
+    state
+        .audio
+        .monitor_track_mix(TrackId(track), gain_db, pan, mute, solo);
 }
 
 // ---------------------------------------------------------------------------
@@ -1809,7 +2277,11 @@ pub fn monitor_track_mix(
 #[tauri::command]
 pub fn history_depths(state: State<'_, AppState>) -> HistoryDepths {
     let engine = state.engine.lock().unwrap();
-    HistoryDepths { undo: engine.undo_depth(), redo: engine.redo_depth(), dirty: engine.is_dirty() }
+    HistoryDepths {
+        undo: engine.undo_depth(),
+        redo: engine.redo_depth(),
+        dirty: engine.is_dirty(),
+    }
 }
 
 /// 从引擎当前状态取一份历史快照。
@@ -1967,7 +2439,9 @@ pub fn transport_set_loop_range(
     start: u64,
     end: u64,
 ) -> Result<(), String> {
-    state.audio.send(TransportCommand::SetLoopRange { start, end })
+    state
+        .audio
+        .send(TransportCommand::SetLoopRange { start, end })
 }
 
 /// 开关节拍器：按工程速度 / 拍号在整数拍上打点（重音在小节头），只在播放时出声。
@@ -2030,7 +2504,11 @@ pub(crate) fn write_session(app: &tauri::AppHandle) -> Result<(), String> {
         let engine = state.engine.lock().unwrap();
         (engine.project().clone(), engine.saved().clone())
     };
-    let session = crate::session::SessionFile { path, project, saved };
+    let session = crate::session::SessionFile {
+        path,
+        project,
+        saved,
+    };
     crate::session::write_session(&file, &session)
 }
 
@@ -2139,10 +2617,7 @@ pub async fn open_project(app: tauri::AppHandle, path: String) -> Result<Project
 }
 
 /// 打开工程的同步实现（界面命令与 MCP 工具共用）。
-pub(crate) fn open_project_impl(
-    app: &tauri::AppHandle,
-    path: &str,
-) -> Result<Project, String> {
+pub(crate) fn open_project_impl(app: &tauri::AppHandle, path: &str) -> Result<Project, String> {
     let state = app.state::<AppState>();
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let project: Project =
@@ -2169,7 +2644,9 @@ fn validate_sample_rate(sample_rate: u32) -> Result<(), String> {
     if (8_000..=192_000).contains(&sample_rate) {
         Ok(())
     } else {
-        Err(format!("unsupported sample rate: {sample_rate} (expected 8000..=192000)"))
+        Err(format!(
+            "unsupported sample rate: {sample_rate} (expected 8000..=192000)"
+        ))
     }
 }
 
@@ -2301,9 +2778,8 @@ pub async fn export_audio(
 
         emit_export(&progress_app, &progress_path, "encoding", 0, None, None);
         let written = match format {
-            ExportFormat::Wav => {
-                ai_daw_engine::wav::write_wav(&path, &buffer, sample_rate).map_err(|e| e.to_string())
-            }
+            ExportFormat::Wav => ai_daw_engine::wav::write_wav(&path, &buffer, sample_rate)
+                .map_err(|e| e.to_string()),
             ExportFormat::Mp3 => {
                 let bitrate = bitrate_kbps.unwrap_or(ai_daw_engine::mp3::DEFAULT_BITRATE_KBPS);
                 ai_daw_engine::mp3::write_mp3(&path, &buffer, sample_rate, bitrate)
@@ -2313,9 +2789,14 @@ pub async fn export_audio(
 
         match &written {
             Ok(()) => emit_export(&progress_app, &progress_path, "done", 0, None, None),
-            Err(err) => {
-                emit_export(&progress_app, &progress_path, "error", 0, None, Some(err.clone()))
-            }
+            Err(err) => emit_export(
+                &progress_app,
+                &progress_path,
+                "error",
+                0,
+                None,
+                Some(err.clone()),
+            ),
         }
         written?;
         Ok::<String, String>(path)
@@ -2381,7 +2862,10 @@ pub(crate) fn trimmed_window(
         sample_rate,
         rate,
     ) as u64;
-    (offset, visible.clamp(1, total.saturating_sub(offset).max(1)))
+    (
+        offset,
+        visible.clamp(1, total.saturating_sub(offset).max(1)),
+    )
 }
 
 /// 音频片段能「展开」到的范围（拍）：左端 = 素材第一帧所在的位置，右端 = 素材最后一帧所在的位置。
@@ -2398,8 +2882,15 @@ pub(crate) fn clip_bounds_for(
 ) -> (f64, f64) {
     let t0 = map.beats_to_seconds(start);
     let consumed = source_frames_to_span(offset_frames as f64, sample_rate, rate);
-    let available = source_frames_to_span(total.saturating_sub(offset_frames) as f64, sample_rate, rate);
-    (map.seconds_to_beats(t0 - consumed), map.seconds_to_beats(t0 + available))
+    let available = source_frames_to_span(
+        total.saturating_sub(offset_frames) as f64,
+        sample_rate,
+        rate,
+    );
+    (
+        map.seconds_to_beats(t0 - consumed),
+        map.seconds_to_beats(t0 + available),
+    )
 }
 
 /// 音频导入的解码进度（与前端 `ImportProgress` 一一对应）。
@@ -2459,7 +2950,14 @@ pub async fn import_audio(
     let progress_path = path.clone();
     let loaded = tauri::async_runtime::spawn_blocking(move || {
         assets.load_with_progress(&path_for_load, |p| {
-            emit_import(&progress_app, &progress_path, "decoding", p.frames, p.total_frames, None);
+            emit_import(
+                &progress_app,
+                &progress_path,
+                "decoding",
+                p.frames,
+                p.total_frames,
+                None,
+            );
         })
     })
     .await
@@ -2494,7 +2992,13 @@ pub async fn import_audio(
             start,
             length,
             // 记下素材总帧数：切分时才知道「左半段到哪停」（否则会一路播到结尾、被拉伸）。
-            source: AudioSource { path, offset_frames: 0, frames: Some(frames), rate: 1.0, pitch_semitones: 0.0 },
+            source: AudioSource {
+                path,
+                offset_frames: 0,
+                frames: Some(frames),
+                rate: 1.0,
+                pitch_semitones: 0.0,
+            },
         },
     ))
 }
@@ -2521,7 +3025,13 @@ pub fn add_audio_clip(
             track: TrackId(track),
             start,
             length,
-            source: AudioSource { path, offset_frames, frames, rate: 1.0, pitch_semitones: 0.0 },
+            source: AudioSource {
+                path,
+                offset_frames,
+                frames,
+                rate: 1.0,
+                pitch_semitones: 0.0,
+            },
         },
     )
 }
@@ -2583,7 +3093,11 @@ pub async fn split_clip(
             }),
         });
     }
-    commands.push(Command::SplitClip { track: TrackId(track), clip: ClipId(clip), beat });
+    commands.push(Command::SplitClip {
+        track: TrackId(track),
+        clip: ClipId(clip),
+        beat,
+    });
 
     Ok(run_all(&app, &state, Actor::Human, commands).0)
 }
@@ -2688,7 +3202,10 @@ pub(crate) fn record_start_impl(
     // 录音前挂载输入流：这里**要等**确认，设备打不开才好立刻提示。
     state.audio.arm_input(device, true)?;
     state.audio.start_recording()?;
-    state.set_recording(Some(crate::state::RecordingTarget { track: TrackId(track), start }));
+    state.set_recording(Some(crate::state::RecordingTarget {
+        track: TrackId(track),
+        start,
+    }));
     let _ = state.audio.send(TransportCommand::Play);
     Ok(())
 }
@@ -2732,18 +3249,31 @@ pub(crate) fn record_stop_as(
     let start = ai_daw_engine::model::Clip::normalize_start(target.start);
     let length = {
         let engine = state.engine.lock().unwrap();
-        natural_length_beats(engine.project(), start, audio.frames() as f64 / audio.sample_rate)
-    };
-    Ok(Some(run_agent_as(
-        app,
-        actor,
-        Command::AddAudioClip {
-            track: target.track,
+        natural_length_beats(
+            engine.project(),
             start,
-            length,
-            source: AudioSource { path, offset_frames: 0, frames: Some(audio.frames() as u64), rate: 1.0, pitch_semitones: 0.0 },
-        },
-    ).0))
+            audio.frames() as f64 / audio.sample_rate,
+        )
+    };
+    Ok(Some(
+        run_agent_as(
+            app,
+            actor,
+            Command::AddAudioClip {
+                track: target.track,
+                start,
+                length,
+                source: AudioSource {
+                    path,
+                    offset_frames: 0,
+                    frames: Some(audio.frames() as u64),
+                    rate: 1.0,
+                    pitch_semitones: 0.0,
+                },
+            },
+        )
+        .0,
+    ))
 }
 
 /// 录音文件路径：应用数据目录下的 `recordings/rec-<epochms>.wav`。
@@ -2758,7 +3288,10 @@ fn recording_path(app: &tauri::AppHandle) -> Result<String, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    Ok(dir.join(format!("rec-{stamp}.wav")).to_string_lossy().into_owned())
+    Ok(dir
+        .join(format!("rec-{stamp}.wav"))
+        .to_string_lossy()
+        .into_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -2802,6 +3335,162 @@ pub(crate) fn plugin_params_with(
     Ok(plugin.params())
 }
 
+/// 取某个插件的描述符（能力位在这里；内置从注册表，外部按目录加载）。
+pub(crate) fn plugin_descriptor_with(
+    catalog: &[CatalogPlugin],
+    plugin_id: &str,
+) -> Result<PluginDescriptor, String> {
+    if let Some(plugin) =
+        PluginRegistry::with_builtins().create(plugin_id, TrackId(0), PluginSlot::Instrument)
+    {
+        return Ok(plugin.descriptor());
+    }
+    let entry = catalog
+        .iter()
+        .find(|e| e.id == plugin_id)
+        .ok_or_else(|| format!("未知插件：{plugin_id}"))?;
+    let plugin = ai_daw_host_vst3::load_catalog_plugin(entry).map_err(|e| e.to_string())?;
+    Ok(plugin.descriptor())
+}
+
+/// MIDI 能力与「实际投递」报告：插件声明了什么、工程用了什么、哪些被降级。
+pub(crate) fn midi_capabilities_with(
+    catalog: &[CatalogPlugin],
+    project: &Project,
+    track_id: u64,
+) -> Result<serde_json::Value, String> {
+    let track = project
+        .track(TrackId(track_id))
+        .ok_or_else(|| format!("没有轨道 {track_id}"))?;
+    let Some(instrument) = track.instrument.as_ref() else {
+        return Ok(serde_json::json!({
+            "track": track_id,
+            "plugin": null,
+            "transport": null,
+            "used": {},
+            "degraded": ["该轨道没有挂乐器"],
+        }));
+    };
+    let descriptor = plugin_descriptor_with(catalog, &instrument.plugin_id)?;
+    let caps = descriptor.capabilities;
+    let meta = track.meta.clone().unwrap_or_default();
+
+    let notes: Vec<&Note> = track
+        .clips
+        .iter()
+        .flat_map(|clip| clip.notes.iter())
+        .collect();
+    let pressure_notes = notes.iter().filter(|note| note.pressure.is_some()).count();
+    let expr_notes = notes.iter().filter(|note| !note.expr.is_none()).count();
+    let articulation_notes = track
+        .clips
+        .iter()
+        .flat_map(|clip| {
+            clip.notes.iter().filter_map(move |note| {
+                let key = ai_daw_engine::model::note_tag_key(track_id, clip.id.0, note.id);
+                project
+                    .note_tags
+                    .get(&key)
+                    .and_then(|tag| tag.articulation.as_ref())
+            })
+        })
+        .count();
+
+    let mut degraded = Vec::new();
+    if pressure_notes > 0 && !caps.poly_pressure {
+        if caps.channel_pressure {
+            degraded.push(format!(
+                "{pressure_notes} 颗音写了 pressure，插件不支持复音压力：已转为通道压力（同通道取最大）"
+            ));
+        } else {
+            degraded.push(format!(
+                "{pressure_notes} 颗音写了 pressure，但插件不支持任何触后：这些压力会被丢弃"
+            ));
+        }
+    }
+    if expr_notes > 0 && !caps.per_note_pitch() {
+        if meta.mpe.is_some() {
+            degraded.push(format!(
+                "{expr_notes} 颗音带推弦/揉弦，插件不支持逐音音高：MPE 只能分通道，最终仍按通道弯音投递"
+            ));
+        } else {
+            degraded.push(format!(
+                "{expr_notes} 颗音带推弦/揉弦，插件不支持逐音音高：折叠成通道弯音，和弦中只有最晚起音生效（可开启 MPE 改善）"
+            ));
+        }
+    }
+    if articulation_notes > 0 && meta.articulations.is_empty() {
+        degraded.push(format!(
+            "{articulation_notes} 颗音有奏法标签，但轨道没有奏法映射：标签不会发声"
+        ));
+    }
+    let mut unknown_articulations = std::collections::BTreeSet::new();
+    for (key, tag) in &project.note_tags {
+        let Some(name) = tag.articulation.as_deref() else {
+            continue;
+        };
+        let Some((tag_track, _, _)) = ai_daw_engine::model::parse_note_tag_key(key) else {
+            continue;
+        };
+        if tag_track != track_id || meta.articulations.contains_key(name) {
+            continue;
+        }
+        unknown_articulations.insert(name.to_string());
+    }
+    if !unknown_articulations.is_empty() {
+        degraded.push(format!(
+            "这些奏法标签没有映射，不会发声：{}",
+            unknown_articulations
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join("、")
+        ));
+    }
+
+    Ok(serde_json::json!({
+        "track": track_id,
+        "plugin": {
+            "id": descriptor.id,
+            "name": descriptor.name,
+            "kind": descriptor.kind,
+        },
+        "transport": {
+            "midi_input": caps.midi_input,
+            "channel_pitch_bend": caps.channel_pitch_bend,
+            "channel_pressure": caps.channel_pressure,
+            "poly_pressure": caps.poly_pressure,
+            "program_change": caps.program_change,
+            "per_note_channel": caps.per_note_channel,
+            "note_expression": caps.note_expression,
+        },
+        "used": {
+            "notes": notes.len(),
+            "pressure_notes": pressure_notes,
+            "expr_notes": expr_notes,
+            "articulation_notes": articulation_notes,
+            "mpe": meta.mpe,
+            "midi_events": meta.midi_events.len(),
+            "articulations": meta.articulations.len(),
+            "articulation_source": meta.articulation_source,
+        },
+        "degraded": degraded,
+        "note": "触后 / 压力是否真的生效取决于插件是否响应；本报告只描述宿主投递路径。",
+    }))
+}
+
+/// 读取轨道的 MIDI 能力与降级报告（供界面展示）。
+#[tauri::command]
+pub async fn track_midi_capabilities(
+    state: State<'_, AppState>,
+    track: u64,
+) -> Result<serde_json::Value, String> {
+    let catalog = state.catalog_snapshot();
+    let project = state.engine.lock().unwrap().project().clone();
+    tauri::async_runtime::spawn_blocking(move || midi_capabilities_with(&catalog, &project, track))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// 取某个插件的参数表（内置插件从注册表拿，外部插件按目录加载）。
 #[tauri::command]
 pub async fn plugin_params(
@@ -2822,7 +3511,14 @@ pub fn add_effect(
     track: u64,
     plugin_id: String,
 ) -> Project {
-    run(&app, &state, Command::AddEffect { track: TrackId(track), plugin_id })
+    run(
+        &app,
+        &state,
+        Command::AddEffect {
+            track: TrackId(track),
+            plugin_id,
+        },
+    )
 }
 
 /// 从轨道效果链移除一个效果器（按链内序号）。
@@ -2833,7 +3529,14 @@ pub fn remove_effect(
     track: u64,
     index: usize,
 ) -> Project {
-    run(&app, &state, Command::RemoveEffect { track: TrackId(track), index })
+    run(
+        &app,
+        &state,
+        Command::RemoveEffect {
+            track: TrackId(track),
+            index,
+        },
+    )
 }
 
 /// 调整效果器在链中的位置。
@@ -2845,7 +3548,15 @@ pub fn move_effect(
     from: usize,
     to: usize,
 ) -> Project {
-    run(&app, &state, Command::MoveEffect { track: TrackId(track), from, to })
+    run(
+        &app,
+        &state,
+        Command::MoveEffect {
+            track: TrackId(track),
+            from,
+            to,
+        },
+    )
 }
 
 /// 设置效果器参数（参数 id 由插件自身定义）。
@@ -2858,7 +3569,16 @@ pub fn set_effect_param(
     param: String,
     value: f32,
 ) -> Project {
-    run(&app, &state, Command::SetEffectParam { track: TrackId(track), index, param, value })
+    run(
+        &app,
+        &state,
+        Command::SetEffectParam {
+            track: TrackId(track),
+            index,
+            param,
+            value,
+        },
+    )
 }
 
 /// 一次设置效果器的**多个**参数（「恢复默认值」走它：一次事务，只占一个撤销步骤）。
@@ -2876,7 +3596,12 @@ pub fn set_effect_params(
     let id = TrackId(track);
     let commands: Vec<Command> = pairs
         .into_iter()
-        .map(|(param, value)| Command::SetEffectParam { track: id, index, param, value })
+        .map(|(param, value)| Command::SetEffectParam {
+            track: id,
+            index,
+            param,
+            value,
+        })
         .collect();
 
     let (project, events) = {
@@ -3145,7 +3870,14 @@ pub fn open_effect_plugin_window(
     title: String,
 ) -> Result<(), String> {
     let index = resolve_effect_index(&state, track, &plugin_id)?;
-    open_slot_editor(app, &state, track, PluginSlot::Effect(index), plugin_id, title)
+    open_slot_editor(
+        app,
+        &state,
+        track,
+        PluginSlot::Effect(index),
+        plugin_id,
+        title,
+    )
 }
 
 /// 关掉某个槽位的插件窗口，但**保留编辑器句柄**（用户只是关界面，之后还要能再开）。
@@ -3164,7 +3896,8 @@ fn close_slot_window(app: &tauri::AppHandle, key: (u64, PluginSlot)) -> Result<(
         state.editor_plugins.lock().unwrap().remove(&key);
         // 嵌入模式的界面住在我们建的宿主窗口里，一并收掉。
         if state.host_windows.lock().unwrap().remove(&key) {
-            if let Some(window) = app_for_main.get_webview_window(&host_window_label(key.0, key.1)) {
+            if let Some(window) = app_for_main.get_webview_window(&host_window_label(key.0, key.1))
+            {
                 let _ = window.close();
             }
         }
@@ -3197,7 +3930,11 @@ pub fn close_effect_plugin_window(
 /// 某条轨道的**乐器**窗口是否开着（用户自己点关闭按钮后会变回 false）。
 #[tauri::command]
 pub fn plugin_window_open(state: State<'_, AppState>, track: u64) -> bool {
-    state.open_editors.lock().unwrap().contains(&(track, PluginSlot::Instrument))
+    state
+        .open_editors
+        .lock()
+        .unwrap()
+        .contains(&(track, PluginSlot::Instrument))
 }
 
 /// 某条轨道上某个**效果器**的原生窗口是否开着。效果器不在链上时返回 false。
@@ -3208,7 +3945,11 @@ pub fn effect_plugin_window_open(
     plugin_id: String,
 ) -> bool {
     match resolve_effect_index(&state, track, &plugin_id) {
-        Ok(index) => state.open_editors.lock().unwrap().contains(&(track, PluginSlot::Effect(index))),
+        Ok(index) => state
+            .open_editors
+            .lock()
+            .unwrap()
+            .contains(&(track, PluginSlot::Effect(index))),
         Err(_) => false,
     }
 }
@@ -3357,7 +4098,38 @@ pub fn scope_data(state: State<'_, AppState>, points: usize) -> Vec<f32> {
 /// 试听一个音（合成器界面里的键盘）：不写工程、不进撤销历史、不等传输。
 #[tauri::command]
 pub fn audition_note(state: State<'_, AppState>, track: u64, note: u8, velocity: u8, on: bool) {
-    state.audio.audition_note(TrackId(track), note, velocity, on);
+    state
+        .audio
+        .audition_note(TrackId(track), note, velocity, on);
+}
+
+/// 试听一组 MIDI 事件（奏法切换序列）：不写工程、不进撤销历史。
+///
+/// NoteOn 和显式 NoteOff 会在 240 ms 后补发，避免试听时挂住插件。
+#[tauri::command]
+pub fn audition_midi_events(state: State<'_, AppState>, track: u64, events: Vec<MidiEvent>) {
+    let mut immediate = Vec::new();
+    let mut delayed = Vec::new();
+    for event in events {
+        match event {
+            MidiEvent::NoteOff { .. } => delayed.push(event),
+            MidiEvent::NoteOn { note, .. } => {
+                immediate.push(event);
+                delayed.push(MidiEvent::NoteOff { note });
+            }
+            _ => immediate.push(event),
+        }
+    }
+    if !immediate.is_empty() {
+        state.audio.audition_events(TrackId(track), immediate);
+    }
+    if !delayed.is_empty() {
+        let audio = state.audio.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(240));
+            audio.audition_events(TrackId(track), delayed);
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3530,7 +4302,12 @@ mod tests {
                     pitch_semitones: 0.0,
                 }),
             }],
-            mixer: MixerChannel { gain_db: 0.0, pan: 0.0, mute: false, solo: false },
+            mixer: MixerChannel {
+                gain_db: 0.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+            },
             sends: Vec::new(),
             automation: Vec::new(),
         }];
@@ -3540,7 +4317,9 @@ mod tests {
         let cmds = resize_audio_clips_for_transport(&p, &old, &new);
         assert_eq!(cmds.len(), 1);
         match &cmds[0] {
-            Command::ResizeClip { length, .. } => assert!((length - 2.0).abs() < 1e-6, "length={length}"),
+            Command::ResizeClip { length, .. } => {
+                assert!((length - 2.0).abs() < 1e-6, "length={length}")
+            }
             other => panic!("expected ResizeClip, got {other:?}"),
         }
         // 速度不变时不动片段。
@@ -3582,7 +4361,7 @@ mod tests {
     fn trimming_consumes_material_in_proportion_to_playback_rate() {
         let map = map120();
         let total = 384_000; // 8 s 素材
-        // 4 拍 = 2 s 时间轴。
+                             // 4 拍 = 2 s 时间轴。
         let (offset, frames) = trimmed_window(&map, 0.0, 0.0, 4.0, 0, total, 48_000.0, 2.0);
         assert_eq!(offset, 0);
         assert_eq!(frames, 192_000, "rate=2：2 s 时间轴要吃 4 s 素材");
@@ -3616,13 +4395,22 @@ mod tests {
         // 第 0 拍的片段、8 s 素材：rate=2 时只能向右展开 4 s 时间轴 = 第 8 拍。
         let (min_start, max_end) = clip_bounds_for(&map, 0.0, 0, 384_000, 48_000.0, 2.0);
         assert_eq!(min_start, 0.0);
-        assert!((max_end - 8.0).abs() < 1e-9, "rate=2 应到第 8 拍，实际 {max_end}");
+        assert!(
+            (max_end - 8.0).abs() < 1e-9,
+            "rate=2 应到第 8 拍，实际 {max_end}"
+        );
         // 原速：展开到 8 s = 第 16 拍。
         let (_, max_end1) = clip_bounds_for(&map, 0.0, 0, 384_000, 48_000.0, 1.0);
-        assert!((max_end1 - 16.0).abs() < 1e-9, "rate=1 应到第 16 拍，实际 {max_end1}");
+        assert!(
+            (max_end1 - 16.0).abs() < 1e-9,
+            "rate=1 应到第 16 拍，实际 {max_end1}"
+        );
         // 已消耗的素材也除以 rate：偏移 2 s 素材在 rate=2 下只占 1 s 时间轴。
         let (min2, _) = clip_bounds_for(&map, 4.0, 96_000, 384_000, 48_000.0, 2.0);
-        assert!((min2 - 2.0).abs() < 1e-9, "第 4 拍（2 s）左移 1 s → 第 2 拍，实际 {min2}");
+        assert!(
+            (min2 - 2.0).abs() < 1e-9,
+            "第 4 拍（2 s）左移 1 s → 第 2 拍，实际 {min2}"
+        );
     }
 
     /// 音色记忆：从轨道抓快照 → 应用回去，乐器/效果链/增益声像逐值一致，且只占一个撤销步。

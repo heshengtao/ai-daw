@@ -12,9 +12,7 @@
 #[cfg(target_os = "macos")]
 fn main() {
     use ai_daw_host_vst3::AuHostedPlugin;
-    use ai_daw_plugin_api::{
-        MidiEvent as HostEvent, Plugin, ProcessContext, TimedMidiEvent,
-    };
+    use ai_daw_plugin_api::{MidiEvent as HostEvent, Plugin, ProcessContext, TimedMidiEvent};
 
     // 告诉宿主「当前就是主线程」，让需要主线程的工作就地执行。
     ai_daw_host_vst3::mark_main_thread();
@@ -30,7 +28,12 @@ fn main() {
         registry_only
     );
 
-    let ctx = ProcessContext { sample_rate: 48_000.0, block_size: 128, tempo: 120.0, playing: true };
+    let ctx = ProcessContext {
+        sample_rate: 48_000.0,
+        block_size: 128,
+        tempo: 120.0,
+        playing: true,
+    };
     let mut failures = 0usize;
     let mut check = |ok: bool, what: &str| {
         println!("  {} {}", if ok { "✓" } else { "✗" }, what);
@@ -47,17 +50,27 @@ fn main() {
         }
         Ok(mut limiter) => {
             limiter.prepare(48_000.0, ctx.block_size);
-            println!("  参数 {} 个，名字 {}", limiter.params().len(), limiter.descriptor().name);
+            println!(
+                "  参数 {} 个，名字 {}",
+                limiter.params().len(),
+                limiter.descriptor().name
+            );
             check(!limiter.params().is_empty(), "读到参数表");
 
             let mut left = vec![0.5f32; ctx.block_size];
             let mut right = vec![-0.5f32; ctx.block_size];
             limiter.process(&ctx, &mut [&mut left, &mut right], &[]);
-            let peak = left.iter().chain(right.iter()).fold(0f32, |m, v| m.max(v.abs()));
+            let peak = left
+                .iter()
+                .chain(right.iter())
+                .fold(0f32, |m, v| m.max(v.abs()));
             check(peak > 0.01, &format!("直通渲染出声（峰值 {peak:.4}）"));
 
             let state = limiter.save_state();
-            check(!state.is_empty(), &format!("保存状态（{} 字节）", state.len()));
+            check(
+                !state.is_empty(),
+                &format!("保存状态（{} 字节）", state.len()),
+            );
             match limiter.load_state(&state) {
                 Ok(()) => check(true, "状态回写成功（主线程）"),
                 Err(err) => check(false, &format!("状态回写失败：{err}")),
@@ -107,7 +120,11 @@ fn main() {
                 let events = if block == 0 {
                     vec![TimedMidiEvent {
                         frame: 0,
-                        event: HostEvent::NoteOn { note: 60, velocity: 100 },
+                        channel: 0,
+                        event: HostEvent::NoteOn {
+                            note: 60,
+                            velocity: 100,
+                        },
                     }]
                 } else {
                     Vec::new()
@@ -117,9 +134,17 @@ fn main() {
                     check(false, "输出出现非有限值");
                     break;
                 }
-                peak = peak.max(out_l.iter().chain(out_r.iter()).fold(0f32, |m, v| m.max(v.abs())));
+                peak = peak.max(
+                    out_l
+                        .iter()
+                        .chain(out_r.iter())
+                        .fold(0f32, |m, v| m.max(v.abs())),
+                );
             }
-            check(peak > 0.001, &format!("收到 NoteOn 后出声（峰值 {peak:.4}）"));
+            check(
+                peak > 0.001,
+                &format!("收到 NoteOn 后出声（峰值 {peak:.4}）"),
+            );
         }
     }
 

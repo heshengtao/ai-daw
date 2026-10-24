@@ -125,10 +125,7 @@ impl PitchExpression {
         }
 
         let _ = duration_beats;
-        cents.clamp(
-            -f32::from(Self::MAX_CENTS),
-            f32::from(Self::MAX_CENTS),
-        )
+        cents.clamp(-f32::from(Self::MAX_CENTS), f32::from(Self::MAX_CENTS))
     }
 }
 
@@ -174,6 +171,12 @@ pub struct Note {
     /// 指弹 / 单音线条里很常用：重复同一个音高时不该在音与音之间留一道缝（采样器会听成断音）。
     #[serde(default, skip_serializing_if = "is_false")]
     pub legato: bool,
+    /// 逐音 MIDI 通道（0..=15）；缺省 = 跟随轨道（MPE 开启时由调度器分配）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<u8>,
+    /// 起音时的复音压力（0..=127）；缺省 = 不发。连续压力用 `at:<通道>` 自动化车道。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure: Option<u8>,
     /// 音高表达（推弦 / 揉弦 / 滑音）。缺省 = 无，且不写进 JSON。
     #[serde(default, skip_serializing_if = "PitchExpression::is_none")]
     pub expr: PitchExpression,
@@ -207,6 +210,10 @@ impl Note {
     pub const MAX_OFFSET_BEATS: f64 = 4.0;
     /// 音量的上界（= 不衰减）。
     pub const MAX_VOLUME: u8 = 127;
+    /// MIDI 通道上界（0..=15）。
+    pub const MAX_CHANNEL: u8 = 15;
+    /// 压力的上界。
+    pub const MAX_PRESSURE: u8 = 127;
 
     /// 归一化：音高/力度/音量夹到 MIDI 0..=127，起点非负且有上界，时长落在合法区间。
     ///
@@ -215,11 +222,17 @@ impl Note {
     pub fn normalize(note: Note) -> Note {
         Note {
             id: note.id,
+            channel: note.channel.map(|c| c.min(Self::MAX_CHANNEL)),
+            pressure: note.pressure.map(|p| p.min(Self::MAX_PRESSURE)),
             pitch: note.pitch.min(127),
             // 音符起点是**相对片段起点**的拍，**允许为负**：左边缘往右拖时音符要停在原处（被
             // 方框裁掉但不删），往回拖就能恢复。
             start: clamp_signed_beats(note.start, Self::MAX_START_BEATS),
-            duration: clamp_range(note.duration, Self::MIN_DURATION_BEATS, Self::MAX_DURATION_BEATS),
+            duration: clamp_range(
+                note.duration,
+                Self::MIN_DURATION_BEATS,
+                Self::MAX_DURATION_BEATS,
+            ),
             velocity: note.velocity.min(127),
             volume: note.volume.min(Self::MAX_VOLUME),
             // 偏移同样允许为负（提前一点起音也是演奏姿态），只夹上下界。
@@ -386,6 +399,12 @@ pub struct NotePatch {
     /// 新的连奏开关。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legato: Option<bool>,
+    /// 新的逐音通道；`None` = 保持原值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<u8>,
+    /// 新的起音压力；`None` = 保持原值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure: Option<u8>,
     /// 新的音高表达；`Some(PitchExpression::NONE)` = 清除。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expr: Option<PitchExpression>,
@@ -396,6 +415,14 @@ impl NotePatch {
     pub fn apply_to(&self, note: Note) -> Note {
         Note {
             id: note.id,
+            channel: self
+                .channel
+                .map(|c| c.min(Note::MAX_CHANNEL))
+                .or(note.channel),
+            pressure: self
+                .pressure
+                .map(|p| p.min(Note::MAX_PRESSURE))
+                .or(note.pressure),
             pitch: self.pitch.unwrap_or(note.pitch),
             start: self.start.unwrap_or(note.start),
             duration: self.duration.unwrap_or(note.duration),
@@ -423,12 +450,23 @@ impl NoteRange {
 
     /// 归一化：保证 `start <= end`，非有限值视为「整段」。
     pub fn normalize(self) -> Self {
-        let start = if self.start.is_finite() { self.start } else { f64::NEG_INFINITY };
-        let end = if self.end.is_finite() { self.end } else { f64::INFINITY };
+        let start = if self.start.is_finite() {
+            self.start
+        } else {
+            f64::NEG_INFINITY
+        };
+        let end = if self.end.is_finite() {
+            self.end
+        } else {
+            f64::INFINITY
+        };
         if start <= end {
             NoteRange { start, end }
         } else {
-            NoteRange { start: end, end: start }
+            NoteRange {
+                start: end,
+                end: start,
+            }
         }
     }
 }
@@ -601,7 +639,19 @@ mod tests {
 
     #[test]
     fn note_normalization_clamps_every_field() {
-        let n = Note::normalize(Note { id: 0, pitch: 200, start: -3.0, duration: 0.0, velocity: 250, volume: 250, offset: 0.0, legato: false, expr: PitchExpression::NONE });
+        let n = Note::normalize(Note {
+            id: 0,
+            channel: None,
+            pressure: None,
+            pitch: 200,
+            start: -3.0,
+            duration: 0.0,
+            velocity: 250,
+            volume: 250,
+            offset: 0.0,
+            legato: false,
+            expr: PitchExpression::NONE,
+        });
         assert_eq!(n.pitch, 127);
         // 起点是**相对片段起点**的拍，允许为负（收起时被裁掉的音符要留着）。
         assert_eq!(n.start, -3.0);
@@ -612,7 +662,19 @@ mod tests {
 
     #[test]
     fn note_normalization_rejects_non_finite() {
-        let n = Note::normalize(Note { id: 0, pitch: 60, start: f64::NAN, duration: f64::INFINITY, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: PitchExpression::NONE });
+        let n = Note::normalize(Note {
+            id: 0,
+            channel: None,
+            pressure: None,
+            pitch: 60,
+            start: f64::NAN,
+            duration: f64::INFINITY,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: PitchExpression::NONE,
+        });
         // 非有限的起点回落到 0；非有限的时长回落到最短时长（而不是让它永远挂着）。
         assert_eq!(n.start, 0.0);
         assert_eq!(n.duration, Note::MIN_DURATION_BEATS);
@@ -621,11 +683,50 @@ mod tests {
     /// `offset` 夹到 ±4 拍、非有限值回落 0；`legato` 原样保留。
     #[test]
     fn note_normalization_clamps_the_offset() {
-        let base = Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: PitchExpression::NONE };
-        assert_eq!(Note::normalize(Note { offset: 99.0, ..base }).offset, Note::MAX_OFFSET_BEATS);
-        assert_eq!(Note::normalize(Note { offset: -99.0, ..base }).offset, -Note::MAX_OFFSET_BEATS);
-        assert_eq!(Note::normalize(Note { offset: f64::NAN, ..base }).offset, 0.0);
-        assert!(Note::normalize(Note { legato: true, ..base }).legato);
+        let base = Note {
+            id: 1,
+            channel: None,
+            pressure: None,
+            pitch: 60,
+            start: 0.0,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: PitchExpression::NONE,
+        };
+        assert_eq!(
+            Note::normalize(Note {
+                offset: 99.0,
+                ..base
+            })
+            .offset,
+            Note::MAX_OFFSET_BEATS
+        );
+        assert_eq!(
+            Note::normalize(Note {
+                offset: -99.0,
+                ..base
+            })
+            .offset,
+            -Note::MAX_OFFSET_BEATS
+        );
+        assert_eq!(
+            Note::normalize(Note {
+                offset: f64::NAN,
+                ..base
+            })
+            .offset,
+            0.0
+        );
+        assert!(
+            Note::normalize(Note {
+                legato: true,
+                ..base
+            })
+            .legato
+        );
     }
 
     /// 扫弦 / 连奏要能往返；缺省的 0 / false 则**不写进 JSON**（旧工程形状逐字不变）。
@@ -633,12 +734,23 @@ mod tests {
     fn offset_and_legato_round_trip_and_stay_optional() {
         let json = r#"{"pitch":60,"start":0.0,"duration":1.0,"velocity":100}"#;
         let n: Note = serde_json::from_str(json).unwrap();
-        assert_eq!((n.offset, n.legato), (0.0, false), "旧工程缺字段时按「同时发声、不连奏」读入");
+        assert_eq!(
+            (n.offset, n.legato),
+            (0.0, false),
+            "旧工程缺字段时按「同时发声、不连奏」读入"
+        );
 
         let plain = serde_json::to_string(&n).unwrap();
-        assert!(!plain.contains("offset") && !plain.contains("legato"), "缺省值不该进 JSON：{plain}");
+        assert!(
+            !plain.contains("offset") && !plain.contains("legato"),
+            "缺省值不该进 JSON：{plain}"
+        );
 
-        let strummed = Note { offset: 0.0625, legato: true, ..n };
+        let strummed = Note {
+            offset: 0.0625,
+            legato: true,
+            ..n
+        };
         let back: Note = serde_json::from_str(&serde_json::to_string(&strummed).unwrap()).unwrap();
         assert_eq!(back, strummed);
     }
@@ -654,7 +766,19 @@ mod tests {
 
     #[test]
     fn pitch_expression_is_optional_and_roundtrips() {
-        let plain = Note { id: 1, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: PitchExpression::NONE };
+        let plain = Note {
+            id: 1,
+            channel: None,
+            pressure: None,
+            pitch: 60,
+            start: 0.0,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: PitchExpression::NONE,
+        };
         let json = serde_json::to_string(&plain).unwrap();
         assert!(!json.contains("expr"), "没有表达时不该写出 expr：{json}");
 
@@ -693,10 +817,17 @@ mod tests {
         assert!((expr.cents_at(0.0, 4.0) - 0.0).abs() < 1e-3);
         assert!((expr.cents_at(0.5, 4.0) - 100.0).abs() < 1e-3);
         assert!((expr.cents_at(1.0, 4.0) - 200.0).abs() < 1e-3);
-        assert!((expr.cents_at(3.0, 4.0) - 200.0).abs() < 1e-3, "到达目标后保持");
+        assert!(
+            (expr.cents_at(3.0, 4.0) - 200.0).abs() < 1e-3,
+            "到达目标后保持"
+        );
 
         // 预推弦：bend_time = 0 时从起音就在目标音高。
-        let pre = PitchExpression { bend: 200, bend_to: 200, ..PitchExpression::NONE };
+        let pre = PitchExpression {
+            bend: 200,
+            bend_to: 200,
+            ..PitchExpression::NONE
+        };
         assert!((pre.cents_at(0.0, 4.0) - 200.0).abs() < 1e-3);
 
         // 揉弦：延迟前为 0，延迟后开始摆动。
@@ -743,7 +874,13 @@ mod tests {
     /// MIDI 片段的输出形状必须与「没有 `audio` 字段」的时代**逐字一致**。
     #[test]
     fn midi_clip_omits_the_audio_key() {
-        let clip = Clip { id: ClipId(1), start: 0.0, length: 1.0, notes: vec![], audio: None };
+        let clip = Clip {
+            id: ClipId(1),
+            start: 0.0,
+            length: 1.0,
+            notes: vec![],
+            audio: None,
+        };
         let json = serde_json::to_string(&clip).unwrap();
         assert!(!json.contains("audio"), "MIDI 片段不该写出 audio：{json}");
     }
@@ -763,7 +900,19 @@ mod tests {
             id: ClipId(2),
             start: -3.0,
             length: 0.0,
-            notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: PitchExpression::NONE }],
+            notes: vec![Note {
+                id: 0,
+                channel: None,
+                pressure: None,
+                pitch: 60,
+                start: 0.0,
+                duration: 1.0,
+                velocity: 100,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+                expr: PitchExpression::NONE,
+            }],
             audio: Some(AudioSource {
                 path: "/tmp/kick.wav".into(),
                 offset_frames: 0,
@@ -802,7 +951,10 @@ mod tests {
             rate: 1.0,
             pitch_semitones: 0.0,
         };
-        assert_eq!(serde_json::to_string(&src).unwrap(), r#"{"path":"a.wav","offset_frames":0}"#);
+        assert_eq!(
+            serde_json::to_string(&src).unwrap(),
+            r#"{"path":"a.wav","offset_frames":0}"#
+        );
     }
 
     /// 旧工程没有 rate/pitch → 按原速 / 不变调读入。
@@ -829,14 +981,102 @@ mod tests {
         assert!(json.contains("\"pitch_semitones\":-12.0"), "{json}");
         assert_eq!(serde_json::from_str::<AudioSource>(&json).unwrap(), src);
 
-        let hi = AudioSource { rate: 99.0, pitch_semitones: 99.0, ..src.clone() };
+        let hi = AudioSource {
+            rate: 99.0,
+            pitch_semitones: 99.0,
+            ..src.clone()
+        };
         let n = hi.normalize();
         assert_eq!(n.rate, AudioSource::MAX_RATE);
         assert_eq!(n.pitch_semitones, AudioSource::MAX_PITCH_SEMITONES);
 
-        let nan = AudioSource { rate: f64::NAN, pitch_semitones: f64::NAN, ..src };
+        let nan = AudioSource {
+            rate: f64::NAN,
+            pitch_semitones: f64::NAN,
+            ..src
+        };
         let n = nan.normalize();
         assert_eq!(n.rate, 1.0, "非有限速度应回落原速");
         assert_eq!(n.pitch_semitones, 0.0);
+    }
+
+    /// 通道与压力是可选字段：缺省不写进 JSON，旧工程形状不变。
+    #[test]
+    fn note_channel_and_pressure_are_optional_and_roundtrip() {
+        let plain = Note {
+            id: 1,
+            channel: None,
+            pressure: None,
+            pitch: 60,
+            start: 0.0,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: PitchExpression::NONE,
+        };
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("channel"), "缺省通道不该出现：{json}");
+        assert!(!json.contains("pressure"), "缺省压力不该出现：{json}");
+
+        let voiced = Note {
+            channel: Some(3),
+            pressure: Some(80),
+            ..plain
+        };
+        let back: Note = serde_json::from_str(&serde_json::to_string(&voiced).unwrap()).unwrap();
+        assert_eq!(back, voiced, "通道/压力要能往返");
+    }
+
+    #[test]
+    fn note_channel_and_pressure_are_clamped() {
+        let n = Note::normalize(Note {
+            id: 1,
+            channel: Some(99),
+            pressure: Some(200),
+            pitch: 60,
+            start: 0.0,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: PitchExpression::NONE,
+        });
+        assert_eq!(n.channel, Some(Note::MAX_CHANNEL));
+        assert_eq!(n.pressure, Some(Note::MAX_PRESSURE));
+    }
+
+    #[test]
+    fn note_patch_updates_channel_and_pressure() {
+        let note = Note {
+            id: 1,
+            channel: None,
+            pressure: None,
+            pitch: 60,
+            start: 0.0,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: PitchExpression::NONE,
+        };
+        let patch = NotePatch {
+            id: 1,
+            pitch: None,
+            start: None,
+            duration: None,
+            velocity: None,
+            volume: None,
+            offset: None,
+            legato: None,
+            channel: Some(9),
+            pressure: Some(64),
+            expr: None,
+        };
+        let out = patch.apply_to(note);
+        assert_eq!((out.channel, out.pressure), (Some(9), Some(64)));
     }
 }

@@ -1,0 +1,4 @@
+ArtiCluster Universal Definition articulation maps
+Source: https://github.com/r-koubou/ArticulationMappingFiles
+Snapshot: 2026-10-23T07:23:28.481Z
+Maps: 354

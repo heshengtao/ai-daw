@@ -25,8 +25,9 @@ withDefaults(defineProps<{ filled?: boolean }>(), { filled: false });
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  background-color: rgb(var(--md-primary));
-  color: rgb(var(--md-on-primary));
+  /* 品牌标志固定用这一套颜色：不随浅色 / 深色主题或强调色变化。 */
+  background-color: #6750a4;
+  color: #ffffff;
 }
 .logo.filled svg {
   width: 15px;

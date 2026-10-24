@@ -9,8 +9,8 @@ use ai_daw_engine::registry::PluginSlot;
 use ai_daw_host_vst3::{CatalogPlugin, EditorHandle, PluginEditorWindow};
 
 use crate::ai::AiRuntime;
-use crate::audio::{AudioEngine, EditorSlot};
 use crate::assets::AssetCache;
+use crate::audio::{AudioEngine, EditorSlot};
 use crate::presets::PresetStore;
 use crate::sound_memories::SoundMemoryStore;
 
@@ -23,7 +23,9 @@ thread_local! {
 }
 
 /// 在主线程里操作「(轨道, 槽位) → 插件窗口」表。
-pub fn with_editor_windows<R>(f: impl FnOnce(&mut HashMap<(u64, PluginSlot), PluginEditorWindow>) -> R) -> R {
+pub fn with_editor_windows<R>(
+    f: impl FnOnce(&mut HashMap<(u64, PluginSlot), PluginEditorWindow>) -> R,
+) -> R {
     EDITOR_WINDOWS.with(|windows| f(&mut windows.borrow_mut()))
 }
 

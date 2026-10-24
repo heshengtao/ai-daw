@@ -10,7 +10,7 @@ import * as api from "@/api/tauri";
 import { useI18n } from "@/i18n";
 import { useParamBindingsStore } from "@/stores/paramBindings";
 import { useSettingsStore } from "@/stores/settings";
-import type { AutomationPoint, ClipPlacement, ClipRef, HistoryState, Keyframe, MixerState, Note, NoteEdit, NotePatch, Project, ProjectHistoryEntry, Send } from "@/api/types";
+import type { AutomationPoint, ClipPlacement, ClipRef, HistoryState, Keyframe, MixerState, MpeConfig, Note, NoteEdit, NotePatch, NoteTag, Project, ProjectHistoryEntry, Send } from "@/api/types";
 import { meterAt, meterBeatAt, tempoAt } from "@/utils/tempo";
 
 /**
@@ -308,6 +308,57 @@ export const useProjectStore = defineStore("project", () => {
   function removeNote(track: number, clip: number, index: number): Promise<void> {
     return edit(() => api.removeNote(track, clip, index));
   }
+
+  /**
+   * 写入 / 清除音符的奏法标签（`tag = null` = 清除）。
+   *
+   * 奏法本身由 `Track.meta.articulations`（`setArticulations`）定义；这里只记录「这颗音要哪种」。
+   */
+  function setNoteTag(track: number, clip: number, id: number, tag: NoteTag | null): Promise<void> {
+    return edit(() => api.setNoteTag(track, clip, id, tag));
+  }
+
+  /** 一次给多个音符写同一个奏法标签（多选切换 = 一个撤销步）。 */
+  function setNoteTags(
+    track: number,
+    clip: number,
+    ids: number[],
+    tag: NoteTag | null,
+  ): Promise<void> {
+    if (ids.length === 0) return Promise.resolve();
+    return edit(() => api.setNoteTags(track, clip, ids, tag));
+  }
+
+  /** 设置轨道的 MPE 配置（`null` = 关闭）。 */
+  function setMpe(track: number, config: MpeConfig | null): Promise<void> {
+    return edit(() => api.setMpe(track, config));
+  }
+
+  /** 整体替换轨道的通用 MIDI 事件表。 */
+  function setMidiEvents(track: number, events: import("@/api/types").MidiEventAt[]): Promise<void> {
+    return edit(() => api.setMidiEvents(track, events));
+  }
+
+  /** 整体替换轨道的奏法映射。 */
+  function setArticulations(
+    track: number,
+    articulations: Record<string, import("@/api/types").ArticulationSwitch>,
+    defaultArticulation?: string,
+    source?: import("@/api/types").ArticulationSource,
+  ): Promise<void> {
+    return edit(() => api.setArticulations(track, articulations, defaultArticulation, source));
+  }
+
+  /** 从随包映射库导入一份映射（替换或合并 = 一个撤销步）。 */
+  function importArticulationMap(
+    track: number,
+    id: string,
+    mode: "replace" | "merge" = "replace",
+    defaultArticulation?: string,
+  ): Promise<void> {
+    return edit(() => api.importArticulationMap(track, id, mode, defaultArticulation));
+  }
+
   /** 批量删除音符（框选后删除）。 */
   function removeNotes(track: number, clip: number, indices: number[]): Promise<void> {
     if (indices.length === 0) return Promise.resolve();
@@ -571,6 +622,12 @@ export const useProjectStore = defineStore("project", () => {
     setNotes,
     updateNotes,
     strumNotes,
+    setNoteTag,
+    setNoteTags,
+    setMpe,
+    setMidiEvents,
+    setArticulations,
+    importArticulationMap,
     removeNote,
     removeNotes,
     removeClips,

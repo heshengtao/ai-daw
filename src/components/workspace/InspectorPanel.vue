@@ -15,7 +15,10 @@ import { computed, ref, watch } from "vue";
 import { ArrowDownIcon, ArrowUpIcon, XMarkIcon } from "@heroicons/vue/24/outline";
 import NumberField from "@/components/common/NumberField.vue";
 import Md3Select, { type SelectOption } from "@/components/common/Md3Select.vue";
+import Md3Switch from "@/components/common/Md3Switch.vue";
 import PluginBrowser from "@/components/common/PluginBrowser.vue";
+import MidiExpressionDialog from "@/components/workspace/MidiExpressionDialog.vue";
+import NoteEditorDialog from "@/components/workspace/NoteEditorDialog.vue";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
@@ -24,8 +27,8 @@ import { useParamBrowserStore } from "@/stores/paramBrowser";
 import { usePluginInterface } from "@/composables/usePluginInterface";
 import { canonicalPluginId } from "@/data/plugins";
 import { useI18n } from "@/i18n";
-import type { Note, NotePatch, PitchExpression } from "@/api/types";
-
+import { formatSemitones } from "@/utils/pitch";
+import type { Note, NotePatch } from "@/api/types";
 const store = useProjectStore();
 const selection = useSelectionStore();
 const layout = useLayoutStore();
@@ -243,16 +246,10 @@ async function commitPitch(value: number): Promise<void> {
   }
 }
 
-// ---- 音符（有音符选中时才出现）：扫弦偏移 / 连奏 ----
+// ---- 音符（有音符选中时才出现）：只暴露简单项 ----
 //
-// 「起始偏移」是**每个音符**的字段（拍）：同一个 `start` 上的一组音，给它们写递增偏移就是扫弦
-// （下扫 = 低音先响）。缺省 0 = 同时发声。卷帘里音符仍画在**记谱位置**上（网格保持诚实），
-// 偏移只在这里读数与调整——这样量化、对齐、复制粘贴都不会把扫弦搞乱。
-
-/** 起点归组用的键：1e-6 拍以内的起点算「同一格」（浮点上的同一格不该被拆成两组）。 */
-function startKey(startBeat: number): string {
-  return (Math.round(startBeat * 1e6) / 1e6).toFixed(6);
-}
+// 连奏、演奏技巧、音高表达摘要留在检查器；扫弦 / 音高表达细节 / 逐音 MIDI 都收进
+// `NoteEditorDialog`，避免初始界面信息过载。
 
 /** 选中的音符（只取拿得到稳定 id 的——改写按 id 定位）。 */
 const pickedNotes = computed(() => {
@@ -266,41 +263,6 @@ const pickedNotes = computed(() => {
   return out;
 });
 
-/**
- * 参与扫弦的音符：选中音符所在**起点**上的**全部**音符。
- *
- * 展开成整组是有意的——选和弦里任意一个音再点「应用」就该把整组扫开，而不是只动那一个。
- */
-const strumGroup = computed(() => {
-  const c = selection.clip;
-  if (!c || pickedNotes.value.length === 0) return [];
-  const starts = new Set(pickedNotes.value.map((p) => startKey(c.start + p.note.start)));
-  const out: { id: number; note: Note; startBeat: number }[] = [];
-  for (const note of c.notes) {
-    if (typeof note.id !== "number") continue;
-    const startBeat = c.start + note.start;
-    if (starts.has(startKey(startBeat))) out.push({ id: note.id, note, startBeat });
-  }
-  return out;
-});
-
-/** 扫弦间隔（ms）：每根弦之间差多少毫秒。0 = 同时发声。 */
-const strumMs = ref(28);
-/** 扫弦方向：下扫 = 低音先响（吉他上最常用的那一种）。 */
-const strumDirection = ref("down");
-
-const strumDirections = computed(() => [
-  { id: "down", label: i18n.t("inspector.strumDown") },
-  { id: "up", label: i18n.t("inspector.strumUp") },
-]);
-
-/** 参与扫弦的音符当前偏移范围（读数）。 */
-const offsetRange = computed(() => {
-  const offsets = strumGroup.value.map((entry) => entry.note.offset ?? 0);
-  if (offsets.length === 0) return null;
-  return { min: Math.min(...offsets), max: Math.max(...offsets) };
-});
-
 /** 连奏状态：整组都已连奏 / 都没有 / 混合。 */
 const legatoState = computed<"on" | "off" | "mixed">(() => {
   const values = pickedNotes.value.map((p) => !!p.note.legato);
@@ -309,23 +271,14 @@ const legatoState = computed<"on" | "off" | "mixed">(() => {
   return values.some(Boolean) ? "mixed" : "off";
 });
 
-/**
- * 应用扫弦：把**起点相同**的一组音按音高依次错开。
- *
- * 手势（分组、排序、毫秒→拍）在引擎里做（`Command::StrumNotes`），界面只给参数——
- * 这样界面与 AI 侧的 `strum_notes` 工具永远是同一套语义。间隔填 0 就是清掉扫弦。
- */
-async function applyStrum(): Promise<void> {
-  const c = selection.clip;
-  const t = track.value;
-  if (!c || !t || strumGroup.value.length === 0) return;
-  try {
-    await store.strumNotes(t.id, c.id, strumMs.value, strumDirection.value as "down" | "up");
-    layout.notify(i18n.t("inspector.strumApplied", { count: strumGroup.value.length }));
-  } catch (err) {
-    layout.notify(i18n.t("error.updateNotes", { error: String(err) }));
-  }
-}
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+/** 选中音符的音名摘要（去重、按音高排序），让人一眼确认选的是哪几个音。 */
+const selectedPitchLabel = computed(() => {
+  const pitches = [...new Set(pickedNotes.value.map((p) => p.note.pitch))].sort((a, b) => a - b);
+  const names = pitches.map((pitch) => `${NOTE_NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}`);
+  return names.length > 6 ? `${names.slice(0, 6).join(" · ")} …` : names.join(" · ");
+});
 
 /** 把选中的音符整体设为 / 取消连奏。 */
 async function setLegato(on: boolean): Promise<void> {
@@ -340,77 +293,101 @@ async function setLegato(on: boolean): Promise<void> {
   }
 }
 
-// ---- 音高表达（推弦 / 揉弦 / 滑音） ----
+// ---- 演奏技巧 / 音高表达摘要 / 音符编辑模态框 ----
 
-const exprBend = ref(0);
-const exprBendTo = ref(0);
-const exprBendTime = ref(0);
-const exprVibrato = ref(0);
-const exprRate = ref(5.5);
-const exprDelay = ref(0);
-const exprFade = ref(0);
+const noteTechnique = ref("");
+const techniqueDialogOpen = ref(false);
+const techniqueDialogTab = ref<"techniques" | "library" | "advanced">("techniques");
+const noteEditorOpen = ref(false);
 
-/** 选中音符变化时，用第一颗音符的值回填表单。 */
+/** 没配映射时直接打开映射库；已有映射时打开技巧列表。 */
+function openTechniques(): void {
+  const configured = Object.keys(track.value?.meta?.articulations ?? {}).length > 0;
+  techniqueDialogTab.value = configured ? "techniques" : "library";
+  techniqueDialogOpen.value = true;
+}
+const noteEditorTab = ref<"strum" | "expr" | "midi">("expr");
+
+const techniqueOptions = computed<SelectOption[]>(() => [
+  { id: "", label: i18n.t("inspector.articulationNone") },
+  ...Object.keys(track.value?.meta?.articulations ?? {}).map((name) => ({
+    id: name,
+    label: name,
+  })),
+]);
+
+const techniquesSummary = computed(() => {
+  const names = Object.keys(track.value?.meta?.articulations ?? {});
+  if (names.length === 0) return i18n.t("midi.notConfiguredShort");
+  const shown = names.slice(0, 4).join(" · ");
+  return names.length > 4 ? `${shown} +${names.length - 4}` : shown;
+});
+
 watch(
-  () => pickedNotes.value[0]?.note.expr,
-  (expr) => {
-    exprBend.value = expr?.bend ?? 0;
-    exprBendTo.value = expr?.bend_to ?? 0;
-    exprBendTime.value = expr?.bend_time ?? 0;
-    exprVibrato.value = expr?.vibrato ?? 0;
-    exprRate.value = expr?.vibrato_rate || 5.5;
-    exprDelay.value = expr?.vibrato_delay ?? 0;
-    exprFade.value = expr?.vibrato_fade ?? 0;
+  () => pickedNotes.value[0],
+  (entry) => {
+    if (!entry) return;
+    const t = track.value;
+    const c = selection.clip;
+    noteTechnique.value =
+      t && c
+        ? store.project?.note_tags?.[`${t.id}:${c.id}:${entry.id}`]?.articulation ?? ""
+        : "";
   },
   { immediate: true },
 );
 
-function exprPayload(): PitchExpression {
-  return {
-    bend: Math.round(exprBend.value),
-    bend_to: Math.round(exprBendTo.value),
-    bend_time: exprBendTime.value,
-    vibrato: Math.round(exprVibrato.value),
-    vibrato_rate: exprRate.value,
-    vibrato_delay: exprDelay.value,
-    vibrato_fade: exprFade.value,
-  };
-}
-
-/** 把表单应用到所有选中音符（全零 = 清除表达）。 */
-async function applyExpr(): Promise<void> {
-  const c = selection.clip;
+/** 切换选中音符的演奏技巧：多选一次事务写回（一个撤销步）。 */
+async function setNoteTechnique(value: string): Promise<void> {
   const t = track.value;
-  if (!c || !t || pickedNotes.value.length === 0) return;
-  const expr = exprPayload();
-  const patches: NotePatch[] = pickedNotes.value.map((entry) => ({ id: entry.id, expr }));
+  const c = selection.clip;
+  if (!t || !c) return;
+  const ids = pickedNotes.value.map((entry) => entry.id);
+  if (ids.length === 0) return;
+  noteTechnique.value = value;
   try {
-    await store.updateNotes(t.id, c.id, patches);
-    layout.notify(i18n.t("inspector.exprApplied", { count: patches.length }));
+    await store.setNoteTags(t.id, c.id, ids, value ? { articulation: value } : null);
   } catch (err) {
     layout.notify(i18n.t("error.updateNotes", { error: String(err) }));
   }
 }
 
-/** 清除选中音符的音高表达。 */
-async function clearExpr(): Promise<void> {
-  const c = selection.clip;
-  const t = track.value;
-  if (!c || !t || pickedNotes.value.length === 0) return;
-  exprBend.value = 0;
-  exprBendTo.value = 0;
-  exprBendTime.value = 0;
-  exprVibrato.value = 0;
-  exprRate.value = 5.5;
-  exprDelay.value = 0;
-  exprFade.value = 0;
-  const patches: NotePatch[] = pickedNotes.value.map((entry) => ({ id: entry.id, expr: {} }));
-  try {
-    await store.updateNotes(t.id, c.id, patches);
-  } catch (err) {
-    layout.notify(i18n.t("error.updateNotes", { error: String(err) }));
+/** 选中音符的音高表达摘要（第一颗音）。 */
+const exprSummary = computed(() => {
+  const expr = pickedNotes.value[0]?.note.expr;
+  if (!expr) return i18n.t("inspector.exprNone");
+  const bits: string[] = [];
+  if (expr.bend || expr.bend_to) {
+    if ((expr.bend ?? 0) === (expr.bend_to ?? 0)) {
+      bits.push(
+        i18n.t("inspector.exprPrebendSummary", {
+          semis: formatSemitones(expr.bend ?? 0),
+        }),
+      );
+    } else {
+      bits.push(
+        i18n.t("inspector.exprBendSummary", {
+          from: formatSemitones(expr.bend ?? 0),
+          to: formatSemitones(expr.bend_to ?? expr.bend ?? 0),
+        }),
+      );
+    }
   }
+  if (expr.vibrato) {
+    bits.push(
+      i18n.t("inspector.exprVibratoSummary", {
+        semis: formatSemitones(expr.vibrato),
+      }),
+    );
+  }
+  return bits.length > 0 ? bits.join(" · ") : i18n.t("inspector.exprNone");
+});
+
+function openNoteEditor(tab: "strum" | "expr" | "midi"): void {
+  noteEditorTab.value = tab;
+  noteEditorOpen.value = true;
 }
+
 </script>
 
 <template>
@@ -471,6 +448,14 @@ async function clearExpr(): Promise<void> {
               @click="pluginInterface.open(track!.id, track!.instrument!.plugin_id)"
             >
               {{ i18n.t("panel.openEditor") }}
+            </button>
+          </div>
+
+          <div v-if="track.instrument" class="row">
+            <span class="row-label">{{ i18n.t("midi.title") }}</span>
+            <span class="row-value expr-summary">{{ techniquesSummary }}</span>
+            <button class="open-editor small" @click="openTechniques">
+              {{ i18n.t("midi.configure") }}
             </button>
           </div>
         </div>
@@ -534,156 +519,60 @@ async function clearExpr(): Promise<void> {
         </div>
       </section>
 
-      <!-- 音符：只在该片段里有音符被选中时出现 -->
+      <!-- 音符：只在该片段里有音符被选中时出现。简单项留在这里，复杂项进模态框。 -->
       <section v-if="pickedNotes.length > 0" class="group">
         <div class="group-title">{{ i18n.t("inspector.note") }}</div>
-        <div class="card">
-          <div class="row">
-            <span class="row-label">{{ i18n.t("inspector.noteSelected") }}</span>
-            <span class="row-value">{{ pickedNotes.length }}</span>
+        <div class="card note-card">
+          <div class="note-summary">
+            <span class="note-badge">{{ pickedNotes.length }}</span>
+            <div class="note-summary-main">
+              <span class="note-summary-title">{{ i18n.t("inspector.noteSelected") }}</span>
+              <span class="note-summary-pitches">{{ selectedPitchLabel }}</span>
+            </div>
           </div>
 
-          <!-- 扫弦：同一起点的一组音按音高依次错开（间隔 0 = 同时发声） -->
           <div class="row">
-            <span class="row-label">{{ i18n.t("inspector.strum") }}</span>
-            <NumberField
-              v-model="strumMs"
-              :sr-label="i18n.t('inspector.strum')"
-              :min="0"
-              :max="500"
-              :step="1"
+            <div class="row-main">
+              <span class="row-label">{{ i18n.t("inspector.legato") }}</span>
+              <span class="row-sub">{{ i18n.t("inspector.legatoHint") }}</span>
+            </div>
+            <Md3Switch
+              :model-value="legatoState === 'on'"
+              :mixed="legatoState === 'mixed'"
+              :label="i18n.t('inspector.legato')"
+              @update:model-value="setLegato"
             />
           </div>
+
           <div class="row">
-            <span class="row-label">{{ i18n.t("inspector.strumDirection") }}</span>
-            <Md3Select
-              v-model="strumDirection"
-              :options="strumDirections"
-              :label="i18n.t('inspector.strumDirection')"
-            />
+            <span class="row-label">{{ i18n.t("inspector.articulation") }}</span>
+            <div class="row-control">
+              <Md3Select
+                :model-value="noteTechnique"
+                :options="techniqueOptions"
+                :label="i18n.t('inspector.articulation')"
+                :empty="i18n.t('midi.noTechniques')"
+                :action="{ label: i18n.t('midi.addTechniqueAction') }"
+                @action="openTechniques"
+                @update:model-value="setNoteTechnique"
+              />
+            </div>
           </div>
+
           <div class="row">
-            <span class="row-value">
-              {{ i18n.t("inspector.strumScope", { count: strumGroup.length }) }}
-            </span>
-            <button class="open-editor small" @click="applyStrum">
-              {{ i18n.t("inspector.strumApply") }}
+            <span class="row-label">{{ i18n.t("inspector.pitchExpr") }}</span>
+            <span class="row-value expr-summary">{{ exprSummary }}</span>
+            <button class="open-editor small" @click="openNoteEditor('expr')">
+              {{ i18n.t("inspector.edit") }}
             </button>
           </div>
-          <p v-if="offsetRange" class="hint">
-            {{
-              i18n.t("inspector.offsetRange", {
-                min: offsetRange.min.toFixed(3),
-                max: offsetRange.max.toFixed(3),
-              })
-            }}
-          </p>
 
-          <!-- 连奏：NoteOff 延到同音高的下一个音（重复同一个音不断音） -->
           <div class="row">
-            <span class="row-label">{{ i18n.t("inspector.legato") }}</span>
-            <div class="strip-buttons">
-              <button
-                class="pill"
-                :class="{ on: legatoState === 'on' }"
-                :aria-pressed="legatoState === 'on'"
-                @click="setLegato(true)"
-              >
-                {{ i18n.t("inspector.legatoOn") }}
-              </button>
-              <button
-                class="pill"
-                :class="{ on: legatoState === 'off' }"
-                :aria-pressed="legatoState === 'off'"
-                @click="setLegato(false)"
-              >
-                {{ i18n.t("inspector.legatoOff") }}
-              </button>
-            </div>
+            <span class="row-label">{{ i18n.t("inspector.moreNoteSettings") }}</span>
+            <button class="open-editor small" @click="openNoteEditor('strum')">
+              {{ i18n.t("inspector.open") }}
+            </button>
           </div>
-
-          <!-- 音高表达：推弦 / 揉弦 / 滑音 -->
-          <details class="expr-editor">
-            <summary class="row-label">{{ i18n.t("inspector.pitchExpr") }}</summary>
-            <div class="row">
-              <span class="row-label">{{ i18n.t("inspector.exprBend") }}</span>
-              <NumberField
-                v-model="exprBend"
-                :sr-label="i18n.t('inspector.exprBend')"
-                :min="-2400"
-                :max="2400"
-                :step="10"
-              />
-            </div>
-            <div class="row">
-              <span class="row-label">{{ i18n.t("inspector.exprBendTo") }}</span>
-              <NumberField
-                v-model="exprBendTo"
-                :sr-label="i18n.t('inspector.exprBendTo')"
-                :min="-2400"
-                :max="2400"
-                :step="10"
-              />
-            </div>
-            <div class="row">
-              <span class="row-label">{{ i18n.t("inspector.exprBendTime") }}</span>
-              <NumberField
-                v-model="exprBendTime"
-                :sr-label="i18n.t('inspector.exprBendTime')"
-                :min="0"
-                :max="8"
-                :step="0.0625"
-              />
-            </div>
-            <div class="row">
-              <span class="row-label">{{ i18n.t("inspector.exprVibrato") }}</span>
-              <NumberField
-                v-model="exprVibrato"
-                :sr-label="i18n.t('inspector.exprVibrato')"
-                :min="0"
-                :max="1200"
-                :step="5"
-              />
-            </div>
-            <div class="row">
-              <span class="row-label">{{ i18n.t("inspector.exprRate") }}</span>
-              <NumberField
-                v-model="exprRate"
-                :sr-label="i18n.t('inspector.exprRate')"
-                :min="0.1"
-                :max="20"
-                :step="0.1"
-              />
-            </div>
-            <div class="row">
-              <span class="row-label">{{ i18n.t("inspector.exprDelay") }}</span>
-              <NumberField
-                v-model="exprDelay"
-                :sr-label="i18n.t('inspector.exprDelay')"
-                :min="0"
-                :max="8"
-                :step="0.0625"
-              />
-            </div>
-            <div class="row">
-              <span class="row-label">{{ i18n.t("inspector.exprFade") }}</span>
-              <NumberField
-                v-model="exprFade"
-                :sr-label="i18n.t('inspector.exprFade')"
-                :min="0"
-                :max="8"
-                :step="0.0625"
-              />
-            </div>
-            <div class="row">
-              <button class="open-editor small" @click="applyExpr">
-                {{ i18n.t("inspector.exprApply") }}
-              </button>
-              <button class="pill" @click="clearExpr">
-                {{ i18n.t("inspector.exprClear") }}
-              </button>
-            </div>
-          </details>
         </div>
       </section>
 
@@ -718,6 +607,13 @@ async function clearExpr(): Promise<void> {
           </div>
         </div>
       </section>
+
+      <MidiExpressionDialog
+        v-model:open="techniqueDialogOpen"
+        :track="track"
+        :initial-tab="techniqueDialogTab"
+      />
+      <NoteEditorDialog v-model:open="noteEditorOpen" :initial-tab="noteEditorTab" />
 
       <PluginBrowser
         v-model:open="browserOpen"
@@ -798,11 +694,82 @@ async function clearExpr(): Promise<void> {
   flex: 0 0 auto;
   white-space: nowrap;
 }
+.row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.row-sub {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: rgb(var(--md-on-surface-muted));
+}
+.row-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 1 200px;
+  min-width: 0;
+}
 .row-value {
   color: rgb(var(--md-on-surface));
   font-weight: 500;
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
+}
+/* 音符区：先给一个「选了几颗、哪几颗」的摘要，再列简单项 */
+.note-card .row + .row {
+  border-top: 1px solid rgb(var(--md-outline-variant) / 0.3);
+}
+.note-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 10px;
+}
+.note-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background-color: rgb(var(--md-primary-container));
+  color: rgb(var(--md-on-primary-container));
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.note-summary-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.note-summary-title {
+  font-size: 11px;
+  color: rgb(var(--md-on-surface-variant));
+}
+.note-summary-pitches {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgb(var(--md-on-surface));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.expr-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 58%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  color: rgb(var(--md-on-surface-variant));
+  font-weight: 400;
 }
 .rows .row {
   background-color: var(--app-inset);
@@ -863,46 +830,11 @@ async function clearExpr(): Promise<void> {
 .mini.danger:hover:not(:disabled) {
   background-color: rgb(var(--md-error) / 0.12);
 }
-/* 二选一的文字药丸（连奏 开 / 关）：选中的那颗用主色实心。 */
-.pill {
-  height: 26px;
-  padding: 0 12px;
-  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
-  border-radius: 999px;
-  background: transparent;
-  color: rgb(var(--md-on-surface-variant));
-  font-size: 11px;
-  cursor: pointer;
-  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
-}
-.pill:hover {
-  background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
-}
-.pill.on {
-  border-color: rgb(var(--md-primary));
-  background-color: rgb(var(--md-primary));
-  color: rgb(var(--md-on-primary));
-}
-.pill:focus-visible {
-  outline: 2px solid rgb(var(--md-primary));
-  outline-offset: 1px;
-}
 .hint {
   margin: 0 8px;
   font-size: 11px;
   line-height: 1.5;
   color: rgb(var(--md-on-surface-muted));
-}
-/* 音高表达：默认折叠，避免把音符区撑得太长 */
-.expr-editor {
-  margin-top: 8px;
-  padding-top: 6px;
-  border-top: 1px solid rgb(var(--md-outline-variant) / 0.3);
-}
-.expr-editor > summary {
-  cursor: pointer;
-  user-select: none;
-  margin-bottom: 4px;
 }
 /* 效果器链 */
 .fx {

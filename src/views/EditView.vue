@@ -243,6 +243,8 @@ function noteTitle(note: Note): string {
   ];
   if (note.offset) parts.push(i18n.t("edit.noteOffset", { beats: note.offset.toFixed(3) }));
   if (note.legato) parts.push(i18n.t("edit.noteLegato"));
+  if (note.channel != null) parts.push(i18n.t("edit.noteChannel", { n: note.channel + 1 }));
+  if (note.pressure != null) parts.push(i18n.t("edit.notePressure", { value: note.pressure }));
   const expr = note.expr;
   if (expr) {
     const bits: string[] = [];
@@ -653,10 +655,12 @@ watch(
   },
   { immediate: true },
 );
-// 目标消失（乐器 / 效果器被删）时回落到力度。
+// 目标消失（乐器 / 效果器被删）时回落到力度；逐音符属性（力度 / 压力 / 通道）不在曲线列表里，
+// 但它们是一直可用的目标，不能被这条兜底逻辑踢掉。
 watch(controllerTargets, (list) => {
+  const noteTargets = new Set(["velocity", "pressure", "channel"]);
   if (
-    controllerTargetKey.value !== "velocity" &&
+    !noteTargets.has(controllerTargetKey.value) &&
     !list.some((t) => t.key === controllerTargetKey.value)
   ) {
     controllerTargetKey.value = "velocity";

@@ -98,7 +98,9 @@ fn exercise(format: &str) {
         return;
     };
 
-    let mut plugin = scanned.load().unwrap_or_else(|e| panic!("加载 {format} 失败：{e}"));
+    let mut plugin = scanned
+        .load()
+        .unwrap_or_else(|e| panic!("加载 {format} 失败：{e}"));
 
     let d = plugin.descriptor();
     assert_eq!(
@@ -121,8 +123,20 @@ fn exercise(format: &str) {
         "{format} 的参数默认值不应当全是 0——那说明后端没把插件的默认值传下来"
     );
 
-    let ctx = ProcessContext { sample_rate: 48_000.0, block_size: 512, tempo: 120.0, playing: true };
-    let events = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } }];
+    let ctx = ProcessContext {
+        sample_rate: 48_000.0,
+        block_size: 512,
+        tempo: 120.0,
+        playing: true,
+    };
+    let events = [TimedMidiEvent {
+        frame: 0,
+        channel: 0,
+        event: MidiEvent::NoteOn {
+            note: 60,
+            velocity: 100,
+        },
+    }];
 
     let mut peak = 0.0f32;
     let mut left = vec![0.0f32; 512];
@@ -141,7 +155,11 @@ fn exercise(format: &str) {
     // 注意这条断言抓不到完整的 bug：真正出事的是「**界面开着**时 reset」——那需要开原生窗口，
     // 只能在主线程上做，测试进程给不了。那一路由 `examples/editor_audio.rs` 覆盖
     // （它照搬应用的主线程泵界面 + 独立音频线程的结构）。这条断言守住的是「reset 本身不许弄哑乐器」。
-    let off = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOff { note: 60 } }];
+    let off = [TimedMidiEvent {
+        frame: 0,
+        channel: 0,
+        event: MidiEvent::NoteOff { note: 60 },
+    }];
     plugin.process(&ctx, &mut [&mut left, &mut right], &off);
     plugin.process(&ctx, &mut [&mut left, &mut right], &[]);
     plugin.reset();
@@ -222,8 +240,20 @@ fn clap_lifecycle_follows_thread_rules() {
     );
 
     // 在「音频线程」上跑一块：这里才允许 start_processing。
-    let ctx = ProcessContext { sample_rate: 48_000.0, block_size: 512, tempo: 120.0, playing: true };
-    let events = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } }];
+    let ctx = ProcessContext {
+        sample_rate: 48_000.0,
+        block_size: 512,
+        tempo: 120.0,
+        playing: true,
+    };
+    let events = [TimedMidiEvent {
+        frame: 0,
+        channel: 0,
+        event: MidiEvent::NoteOn {
+            note: 60,
+            velocity: 100,
+        },
+    }];
     let mut left = vec![0.0f32; 512];
     let mut right = vec![0.0f32; 512];
     let mut peak = 0.0f32;
@@ -278,8 +308,20 @@ fn clap_instance_can_be_reused_across_a_rebuild() {
 
     // ——第一次「宿主」：在一条线程上跑起来——
     let (mut plugin, first) = std::thread::spawn(move || {
-        let ctx = ProcessContext { sample_rate: 48_000.0, block_size: 512, tempo: 120.0, playing: true };
-        let events = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } }];
+        let ctx = ProcessContext {
+            sample_rate: 48_000.0,
+            block_size: 512,
+            tempo: 120.0,
+            playing: true,
+        };
+        let events = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 60,
+                velocity: 100,
+            },
+        }];
         let mut l = vec![0.0f32; 512];
         let mut r = vec![0.0f32; 512];
         let mut peak = 0.0f32;
@@ -303,8 +345,20 @@ fn clap_instance_can_be_reused_across_a_rebuild() {
     // ——重建：在**另一条**线程上重新 prepare 并跑（模拟新的音频流）——
     let (recognized_again, peak_again) = std::thread::spawn(move || {
         plugin.prepare(48_000.0, 512);
-        let ctx = ProcessContext { sample_rate: 48_000.0, block_size: 512, tempo: 120.0, playing: true };
-        let events = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } }];
+        let ctx = ProcessContext {
+            sample_rate: 48_000.0,
+            block_size: 512,
+            tempo: 120.0,
+            playing: true,
+        };
+        let events = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 60,
+                velocity: 100,
+            },
+        }];
         let mut l = vec![0.0f32; 512];
         let mut r = vec![0.0f32; 512];
         let mut peak = 0.0f32;

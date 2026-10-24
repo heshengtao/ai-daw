@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+# MIDI 事件类型（`MidiEvent`）是工程数据的一部分：`Track.midi_events` 直接持久化它。
+ai-daw-plugin-api = { path = "../plugin-api" }
 
 [dev-dependencies]
 serde_json = "1"

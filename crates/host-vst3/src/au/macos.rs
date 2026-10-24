@@ -55,16 +55,15 @@ use objc2_app_kit::{
     NSWindowStyleMask,
 };
 use objc2_audio_toolbox::{
-    kAudioUnitType_Effect, kAudioUnitType_MusicDevice, kAudioUnitType_MusicEffect, AUAudioFrameCount,
-    AUAudioUnit, AUAudioUnitBus, AUAudioUnitStatus, AUEventSampleTimeImmediate, AUParameter,
-    AUParameterTree, AURenderPullInputBlock,
-    AudioComponent, AudioComponentCopyName, AudioComponentDescription,
-    AudioComponentFindNext, AudioComponentGetDescription, AudioComponentInstantiationOptions,
-    AudioUnitParameterOptions, AudioUnitRenderActionFlags,
+    kAudioUnitType_Effect, kAudioUnitType_MusicDevice, kAudioUnitType_MusicEffect,
+    AUAudioFrameCount, AUAudioUnit, AUAudioUnitBus, AUAudioUnitStatus, AUEventSampleTimeImmediate,
+    AUParameter, AUParameterTree, AURenderPullInputBlock, AudioComponent, AudioComponentCopyName,
+    AudioComponentDescription, AudioComponentFindNext, AudioComponentGetDescription,
+    AudioComponentInstantiationOptions, AudioUnitParameterOptions, AudioUnitRenderActionFlags,
 };
 use objc2_avf_audio::AVAudioFormat;
 use objc2_core_audio_types::{
-    kAudioFormatFlagIsNonInterleaved, kAudioFormatLinearPCM, kAudioFormatFlagsNativeFloatPacked,
+    kAudioFormatFlagIsNonInterleaved, kAudioFormatFlagsNativeFloatPacked, kAudioFormatLinearPCM,
     AudioBuffer, AudioBufferList, AudioStreamBasicDescription, AudioTimeStamp, AudioTimeStampFlags,
 };
 use objc2_core_foundation::{CFRetained, CFString};
@@ -74,9 +73,9 @@ use objc2_foundation::{
 };
 
 use ai_daw_plugin_api::{
-    pitch_bend_midi_bytes, IoLayout, MidiEvent as HostEvent, ParamId, ParamInfo, Plugin,
-    PluginCapabilities, PluginDescriptor, PluginError, PluginKind, ProcessContext,
-    TimedMidiEvent,
+    pitch_bend_midi_bytes_on, IoLayout, MidiEvent as HostEvent, NoteExpressionSupport, ParamId,
+    ParamInfo, Plugin, PluginCapabilities, PluginDescriptor, PluginError, PluginKind,
+    ProcessContext, TimedMidiEvent,
 };
 
 use crate::error::HostError;
@@ -207,7 +206,9 @@ pub fn scan(extra: &[PathBuf]) -> Vec<ScannedPlugin> {
         }
     }
     for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("component") {
@@ -279,6 +280,7 @@ fn registered_units(mut seen: HashSet<String>) -> Vec<ScannedPlugin> {
                 format: "au",
                 accepts_midi: au.accepts_midi(),
                 has_editor: true,
+                description: None,
                 path: PathBuf::new(),
             });
         }
@@ -315,8 +317,15 @@ fn read_component(bundle: &Path) -> Vec<ScannedPlugin> {
 
     let mut out = Vec::new();
     for item in components {
-        let Some(entry) = item.as_dictionary() else { continue };
-        let get = |key: &str| entry.get(key).and_then(|v| v.as_string()).map(str::to_string);
+        let Some(entry) = item.as_dictionary() else {
+            continue;
+        };
+        let get = |key: &str| {
+            entry
+                .get(key)
+                .and_then(|v| v.as_string())
+                .map(str::to_string)
+        };
         let (Some(type_str), Some(subtype), Some(manufacturer)) =
             (get("type"), get("subtype"), get("manufacturer"))
         else {
@@ -342,6 +351,7 @@ fn read_component(bundle: &Path) -> Vec<ScannedPlugin> {
             // （Apple 自带的那批就是后者）。所以恒为 true，也不必为了探测去实例化（那会让扫描
             // 慢二十多秒）。真正的失败在打开时才暴露。
             has_editor: true,
+            description: get("description"),
             path: bundle.to_path_buf(),
         });
     }
@@ -477,9 +487,8 @@ fn instantiate_on_main(desc: AuDesc) -> Result<Retained<AUAudioUnit>, HostError>
     };
     // 还有一类 AU 声明了 `RequiresAsyncInstantiation`（不少进程外的 AUv3 如此），同步接口必然
     // 失败——只能走异步接口。
-    instantiate_async(desc).ok_or_else(|| {
-        HostError::Load(format!("AU 实例化失败（{}）：{error}", desc.to_id()))
-    })
+    instantiate_async(desc)
+        .ok_or_else(|| HostError::Load(format!("AU 实例化失败（{}）：{error}", desc.to_id())))
 }
 
 /// 异步实例化。**必须在主线程调用**：这里泵主线程 run loop 等回调。
@@ -571,7 +580,9 @@ fn collect_params(tree: Option<&AUParameterTree>) -> Vec<AuParamMeta> {
 /// **autorelease 工厂方法**（返回 +0），当成 +1 接管会多释放一次——主线程的 autorelease pool
 /// 收的时候直接崩在 `objc_release`（应用里就是「打不开 / 选插件闪退」）。
 fn save_state_here(shared: &Arc<Mutex<AuInstance>>) -> Vec<u8> {
-    let Ok(inst) = shared.lock() else { return Vec::new() };
+    let Ok(inst) = shared.lock() else {
+        return Vec::new();
+    };
     // SAFETY: 实例合法；`fullState` 返回一个当前状态的字典快照。
     unsafe {
         let Some(state) = inst.au_ref().fullState() else {
@@ -731,9 +742,8 @@ fn stream_format(sample_rate: f64) -> AudioStreamBasicDescription {
 /// 所以自己发消息。
 fn set_bus_format(bus: &AUAudioUnitBus, format: &AVAudioFormat) -> bool {
     // SAFETY: `bus` 合法；`error:` 传 NULL 是允许的（我们只关心成败）。
-    let ok: Bool = unsafe {
-        msg_send![bus, setFormat: format, error: std::ptr::null_mut::<*mut NSError>()]
-    };
+    let ok: Bool =
+        unsafe { msg_send![bus, setFormat: format, error: std::ptr::null_mut::<*mut NSError>()] };
     ok.as_bool()
 }
 
@@ -755,10 +765,8 @@ fn configure_on_main(
         }
 
         let fmt = stream_format(sample_rate);
-        let av_format = AVAudioFormat::initWithStreamDescription(
-            AVAudioFormat::alloc(),
-            NonNull::from(&fmt),
-        )?;
+        let av_format =
+            AVAudioFormat::initWithStreamDescription(AVAudioFormat::alloc(), NonNull::from(&fmt))?;
 
         // 输出总线（音源与效果器都要）。
         let outs = au.outputBusses();
@@ -864,7 +872,11 @@ impl AuHostedPlugin {
             .map(|n| n.to_string())
             .unwrap_or_else(|| owned_id.clone());
         let params = collect_params(tree.as_deref());
-        let inputs = if kind == PluginKind::Effect { ENGINE_CHANNELS } else { 0 };
+        let inputs = if kind == PluginKind::Effect {
+            ENGINE_CHANNELS
+        } else {
+            0
+        };
 
         Ok(AuHostedPlugin {
             shared: Arc::new(Mutex::new(AuInstance {
@@ -876,7 +888,10 @@ impl AuHostedPlugin {
             id: owned_id,
             name,
             kind,
-            io: IoLayout { inputs: inputs as u16, outputs: ENGINE_CHANNELS as u16 },
+            io: IoLayout {
+                inputs: inputs as u16,
+                outputs: ENGINE_CHANNELS as u16,
+            },
             params,
             sample_rate: 48_000.0,
             block_size: DEFAULT_BLOCK,
@@ -895,7 +910,9 @@ impl AuHostedPlugin {
 
     /// 给界面用的编辑器句柄。
     pub fn editor_handle(&self) -> AuEditorHandle {
-        AuEditorHandle { shared: Arc::clone(&self.shared) }
+        AuEditorHandle {
+            shared: Arc::clone(&self.shared),
+        }
     }
 }
 
@@ -908,10 +925,17 @@ impl Plugin for AuHostedPlugin {
             io: self.io,
             // AUAudioUnit 基类总能给一个界面（自带或通用参数界面）。
             capabilities: PluginCapabilities {
-                per_note_volume: false,
+                midi_input: self.kind == PluginKind::Instrument,
                 has_editor: true,
-                per_note_pitch: false,
                 channel_pitch_bend: self.kind == PluginKind::Instrument,
+                // AUv2 的 `scheduleMIDIEventBlock` 收 3 字节 MIDI：触后 / 复音压力 / 音色切换都能送。
+                channel_pressure: true,
+                poly_pressure: true,
+                program_change: true,
+                // 状态字节自带通道，可以逐音寻址。
+                per_note_channel: true,
+                // AUv2 没有可探测的逐音表达契约；保守报否，需要时用 `midi_events` 显式发送。
+                note_expression: NoteExpressionSupport::default(),
             },
         }
     }
@@ -944,9 +968,13 @@ impl Plugin for AuHostedPlugin {
         if !value.is_finite() {
             return;
         }
-        let Some(meta) = self.params.iter().find(|p| &p.id == id) else { return };
+        let Some(meta) = self.params.iter().find(|p| &p.id == id) else {
+            return;
+        };
         let Ok(inst) = self.shared.lock() else { return };
-        let Some(tree) = inst.tree.as_deref() else { return };
+        let Some(tree) = inst.tree.as_deref() else {
+            return;
+        };
         // SAFETY: 参数树与地址都来自这个实例。
         if let Some(param) = unsafe { tree.parameterWithAddress(meta.address) } {
             // SAFETY: 参数对象来自参数树。
@@ -1012,19 +1040,30 @@ impl Plugin for AuHostedPlugin {
 
     fn reset(&mut self) {
         // 音频线程：切断全部发声。用 try_lock，绝不阻塞实时线程。
-        let Ok(inst) = self.shared.try_lock() else { return };
+        let Ok(inst) = self.shared.try_lock() else {
+            return;
+        };
         // SAFETY: 实例合法。
         unsafe { inst.au_ref().reset() };
     }
 
-    fn process(&mut self, _ctx: &ProcessContext, audio: &mut [&mut [f32]], events: &[TimedMidiEvent]) {
+    fn process(
+        &mut self,
+        _ctx: &ProcessContext,
+        audio: &mut [&mut [f32]],
+        events: &[TimedMidiEvent],
+    ) {
         let frames = audio.first().map_or(0, |c| c.len());
         if frames == 0 || audio.len() < ENGINE_CHANNELS {
             return;
         }
-        let Some(handles) = self.handles.as_ref() else { return };
+        let Some(handles) = self.handles.as_ref() else {
+            return;
+        };
         // 界面/参数线程可能正持有实例：本块先静音，下一块继续（同 VST3）。
-        let Ok(_inst) = self.shared.try_lock() else { return };
+        let Ok(_inst) = self.shared.try_lock() else {
+            return;
+        };
 
         let inputs = self.io.inputs as usize;
         if inputs > 0 {
@@ -1060,19 +1099,24 @@ impl Plugin for AuHostedPlugin {
         if let Some(midi) = handles.midi.as_ref() {
             let last = (frames - 1) as i64;
             for e in events {
+                let ch = e.channel & 0x0F;
                 let (status, data1, data2) = match e.event {
-                    HostEvent::NoteOn { note, velocity } => {
-                        (0x90u8, note, velocity.min(127))
-                    }
-                    HostEvent::NoteOff { note } => (0x80, note, 0),
+                    HostEvent::NoteOn { note, velocity } => (0x90 | ch, note, velocity.min(127)),
+                    HostEvent::NoteOff { note } => (0x80 | ch, note, 0),
                     // AUv2 没有逐音表达；通道弯音对所有音源都可用。
                     HostEvent::PitchBend { cents } | HostEvent::NotePitch { cents, .. } => {
-                        let bytes = pitch_bend_midi_bytes(cents, self.pitch_bend_range);
+                        let bytes =
+                            pitch_bend_midi_bytes_on(cents, self.pitch_bend_range, e.channel);
                         (bytes[0], bytes[1], bytes[2])
                     }
                     HostEvent::ControlChange { controller, value } => {
-                        (0xB0, controller, value.min(127))
+                        (0xB0 | ch, controller, value.min(127))
                     }
+                    HostEvent::ChannelPressure { value } => (0xD0 | ch, value.min(127), 0),
+                    HostEvent::PolyPressure { note, value } => (0xA0 | ch, note, value.min(127)),
+                    HostEvent::ProgramChange { program } => (0xC0 | ch, program.min(127), 0),
+                    // AUv2 没有通用的逐音表达事件；丢弃（能力位已如实报 false）。
+                    HostEvent::NoteExpression { .. } => continue,
                     // 折叠路径已在 `Player` 里完成；本适配器声明不支持 per-note 音量。
                     HostEvent::NoteVolume { .. } => continue,
                 };
@@ -1206,7 +1250,9 @@ impl AuEditorHandle {
                 .map_err(|_| HostError::Editor("AU 实例锁中毒".into()))?;
             if let Some(editor) = inst.editor.as_ref() {
                 editor.window.makeKeyAndOrderFront(None);
-                return Ok(AuEditorWindow { window: Retained::clone(&editor.window) });
+                return Ok(AuEditorWindow {
+                    window: Retained::clone(&editor.window),
+                });
             }
         }
 
@@ -1282,8 +1328,9 @@ fn request_view_controller(au: &AUAudioUnit) -> Option<Retained<NSViewController
     const VIEW_CONTROLLER_TIMEOUT: Duration = Duration::from_secs(3);
 
     // SAFETY: 先问插件有没有实现这个可选方法。
-    let responds: Bool =
-        unsafe { msg_send![au, respondsToSelector: sel!(requestViewControllerWithCompletionHandler:)] };
+    let responds: Bool = unsafe {
+        msg_send![au, respondsToSelector: sel!(requestViewControllerWithCompletionHandler:)]
+    };
     if !responds.as_bool() {
         return None;
     }
@@ -1325,9 +1372,8 @@ fn pump_main_run_loop(seconds: f64) {
 fn build_plugin_window(view: &NSView, title: &str, mtm: MainThreadMarker) -> Retained<NSWindow> {
     // SAFETY: `view.frame` 是标准 NSView 属性。
     let frame: NSRect = unsafe { msg_send![view, frame] };
-    let style = NSWindowStyleMask::Titled
-        | NSWindowStyleMask::Closable
-        | NSWindowStyleMask::Miniaturizable;
+    let style =
+        NSWindowStyleMask::Titled | NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable;
     // SAFETY: 直接用插件视图的尺寸开窗；视图由控制器持有。
     let window = unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -1510,8 +1556,8 @@ mod tests {
             crate::set_main_thread_dispatch(Arc::new(PoolingMainThread(tx)));
         });
 
-        let mut limiter = AuHostedPlugin::from_loaded("au:aufx:lmtr:appl".into())
-            .expect("加载 AUPeakLimiter");
+        let mut limiter =
+            AuHostedPlugin::from_loaded("au:aufx:lmtr:appl".into()).expect("加载 AUPeakLimiter");
         // `prepare` 会派发到假主线程执行（配置 + 取 render block）。
         limiter.prepare(48_000.0, 128);
         assert!(limiter.handles.is_some(), "限幅器应当配置成功");

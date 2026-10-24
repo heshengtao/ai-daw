@@ -94,7 +94,13 @@ impl Engine {
     pub fn new_project(name: impl Into<String>) -> Self {
         let mut engine = Engine::new(name);
         let name = engine.initial_name.clone();
-        let events = engine.translate(&Command::NewProject { name, track_names: None }, &Actor::Human);
+        let events = engine.translate(
+            &Command::NewProject {
+                name,
+                track_names: None,
+            },
+            &Actor::Human,
+        );
         for event in &events {
             apply(&mut engine.project, event);
         }
@@ -174,7 +180,11 @@ impl Engine {
 
     /// 按「轨道 + 片段」取片段（只读）。
     fn find_clip(&self, track: TrackId, clip: ClipId) -> Option<&crate::model::Clip> {
-        self.project.track(track)?.clips.iter().find(|c| c.id == clip)
+        self.project
+            .track(track)?
+            .clips
+            .iter()
+            .find(|c| c.id == clip)
     }
 
     /// 把当前工程记为「已保存」的基线（保存成功后调用）。
@@ -200,7 +210,9 @@ impl Engine {
         let Some(t) = self.project.tracks.iter_mut().find(|t| t.id == track) else {
             return;
         };
-        let Some(inst) = t.instrument.as_mut() else { return };
+        let Some(inst) = t.instrument.as_mut() else {
+            return;
+        };
         // 乐器已经换掉了：这份状态属于上一件乐器，写进来只会毒化新乐器。
         if inst.plugin_id != plugin_id {
             return;
@@ -225,7 +237,9 @@ impl Engine {
         let Some(t) = self.project.tracks.iter_mut().find(|t| t.id == track) else {
             return;
         };
-        let Some(fx) = t.effects.get_mut(index) else { return };
+        let Some(fx) = t.effects.get_mut(index) else {
+            return;
+        };
         if fx.state == state {
             return;
         }
@@ -401,27 +415,57 @@ impl Engine {
             Command::SetTempo(tempo) => {
                 // 夹紧到安全区间：`tempo` 会参与 `60 / bpm` 的秒数换算，0 或负数会
                 // 让渲染时长变成 Inf / NaN，最终触发超大分配而中止进程。
-                vec![Event::TempoChanged { actor: actor.clone(), tempo: tempo.clamp(1.0, 1000.0) }]
+                vec![Event::TempoChanged {
+                    actor: actor.clone(),
+                    tempo: tempo.clamp(1.0, 1000.0),
+                }]
             }
             Command::SetTimeSignature { num, den } => {
                 let (num, den) = crate::model::Transport::normalize_time_sig(*num, *den);
-                vec![Event::TimeSignatureChanged { actor: actor.clone(), num, den }]
+                vec![Event::TimeSignatureChanged {
+                    actor: actor.clone(),
+                    num,
+                    den,
+                }]
             }
-            Command::SetKeyframe { beat, tempo, num, den } => vec![Event::KeyframeSet {
+            Command::SetKeyframe {
+                beat,
+                tempo,
+                num,
+                den,
+            } => vec![Event::KeyframeSet {
                 actor: actor.clone(),
                 beat: *beat,
-                tempo: if tempo.is_finite() { tempo.clamp(1.0, 1000.0) } else { 120.0 },
+                tempo: if tempo.is_finite() {
+                    tempo.clamp(1.0, 1000.0)
+                } else {
+                    120.0
+                },
                 num: *num,
                 den: *den,
             }],
             Command::RemoveKeyframe { beat } => {
-                vec![Event::KeyframeRemoved { actor: actor.clone(), beat: *beat }]
+                vec![Event::KeyframeRemoved {
+                    actor: actor.clone(),
+                    beat: *beat,
+                }]
             }
             Command::AddTrack { name } => {
                 let id = self.alloc_track_id();
-                vec![Event::TrackAdded { actor: actor.clone(), id, name: name.clone(), at: None }]
+                vec![Event::TrackAdded {
+                    actor: actor.clone(),
+                    id,
+                    name: name.clone(),
+                    at: None,
+                }]
             }
-            Command::AddNoteTrack { name, start, length, notes, at } => {
+            Command::AddNoteTrack {
+                name,
+                start,
+                length,
+                notes,
+                at,
+            } => {
                 // 轨道 / 片段的 id 在同一次 translate 里分配，整条链只占一个撤销步骤。
                 let track = self.alloc_track_id();
                 let clip = self.alloc_clip_id();
@@ -449,15 +493,25 @@ impl Engine {
                 events
             }
             Command::RemoveTrack(track) => {
-                vec![Event::TrackRemoved { actor: actor.clone(), id: *track }]
+                vec![Event::TrackRemoved {
+                    actor: actor.clone(),
+                    id: *track,
+                }]
             }
             Command::RenameTrack { track, name } => {
-                vec![Event::TrackRenamed { actor: actor.clone(), track: *track, name: name.clone() }]
+                vec![Event::TrackRenamed {
+                    actor: actor.clone(),
+                    track: *track,
+                    name: name.clone(),
+                }]
             }
             Command::SetTrackInstrument { track, plugin_id } => {
                 // 空 id 表示「卸载乐器」，而不是挂一个不存在的插件（后者会静默无声）。
                 if plugin_id.is_empty() {
-                    vec![Event::TrackInstrumentCleared { actor: actor.clone(), track: *track }]
+                    vec![Event::TrackInstrumentCleared {
+                        actor: actor.clone(),
+                        track: *track,
+                    }]
                 } else {
                     vec![Event::TrackInstrumentSet {
                         actor: actor.clone(),
@@ -466,7 +520,11 @@ impl Engine {
                     }]
                 }
             }
-            Command::AddClip { track, start, length } => {
+            Command::AddClip {
+                track,
+                start,
+                length,
+            } => {
                 let clip = self.alloc_clip_id();
                 vec![Event::ClipAdded {
                     actor: actor.clone(),
@@ -476,7 +534,12 @@ impl Engine {
                     length: crate::model::Clip::normalize_length(*length),
                 }]
             }
-            Command::AddAudioClip { track, start, length, source } => {
+            Command::AddAudioClip {
+                track,
+                start,
+                length,
+                source,
+            } => {
                 let clip = self.alloc_clip_id();
                 vec![Event::AudioClipAdded {
                     actor: actor.clone(),
@@ -487,13 +550,24 @@ impl Engine {
                     source: source.clone(),
                 }]
             }
-            Command::AddAudioTrack { name, start, length, source, at } => {
+            Command::AddAudioTrack {
+                name,
+                start,
+                length,
+                source,
+                at,
+            } => {
                 // 与 `AddNoteTrack` 同理：轨道 / 片段的 id 在同一次 translate 里分配，
                 // 整条链只占一个撤销步骤，调用方不必先建轨道再回读 id。
                 let track = self.alloc_track_id();
                 let clip = self.alloc_clip_id();
                 vec![
-                    Event::TrackAdded { actor: actor.clone(), id: track, name: name.clone(), at: *at },
+                    Event::TrackAdded {
+                        actor: actor.clone(),
+                        id: track,
+                        name: name.clone(),
+                        at: *at,
+                    },
                     Event::AudioClipAdded {
                         actor: actor.clone(),
                         track,
@@ -512,7 +586,12 @@ impl Engine {
                     audio: audio.clone(),
                 }]
             }
-            Command::SetClipRate { track, clip, rate, pitch_semitones } => {
+            Command::SetClipRate {
+                track,
+                clip,
+                rate,
+                pitch_semitones,
+            } => {
                 // 只对**音频片段**有效；MIDI 片段 / 不存在的片段安静忽略。
                 let Some(existing) = self
                     .project
@@ -533,7 +612,11 @@ impl Engine {
                 }]
             }
             Command::RemoveClip { track, clip } => {
-                vec![Event::ClipRemoved { actor: actor.clone(), track: *track, clip: *clip }]
+                vec![Event::ClipRemoved {
+                    actor: actor.clone(),
+                    track: *track,
+                    clip: *clip,
+                }]
             }
             Command::MoveClip { track, clip, start } => {
                 vec![Event::ClipMoved {
@@ -560,7 +643,11 @@ impl Engine {
                         .collect(),
                 }]
             }
-            Command::ResizeClip { track, clip, length } => {
+            Command::ResizeClip {
+                track,
+                clip,
+                length,
+            } => {
                 vec![Event::ClipResized {
                     actor: actor.clone(),
                     track: *track,
@@ -593,10 +680,20 @@ impl Engine {
                     if n_end <= rel + eps {
                         left_notes.push(*n);
                     } else if n.start >= rel - eps {
-                        right_notes.push(crate::model::Note { start: n.start - rel, ..*n });
+                        right_notes.push(crate::model::Note {
+                            start: n.start - rel,
+                            ..*n
+                        });
                     } else {
-                        left_notes.push(crate::model::Note { duration: rel - n.start, ..*n });
-                        right_notes.push(crate::model::Note { start: 0.0, duration: n_end - rel, ..*n });
+                        left_notes.push(crate::model::Note {
+                            duration: rel - n.start,
+                            ..*n
+                        });
+                        right_notes.push(crate::model::Note {
+                            start: 0.0,
+                            duration: n_end - rel,
+                            ..*n
+                        });
                     }
                 }
 
@@ -605,7 +702,9 @@ impl Engine {
                 let mut right_audio = None;
                 if let Some(src) = &existing.audio {
                     // 没有窗口长度信息（旧工程）→ 无从确定左半段到哪停，安静忽略。
-                    let Some(window) = src.frames else { return vec![] };
+                    let Some(window) = src.frames else {
+                        return vec![];
+                    };
                     if window < 2 {
                         return vec![];
                     }
@@ -648,7 +747,9 @@ impl Engine {
                 }]
             }
             Command::AddNote { track, clip, note } => {
-                let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
+                let Some(existing) = self.find_clip(*track, *clip) else {
+                    return vec![];
+                };
                 let notes = assign_ids(&existing.notes, std::slice::from_ref(note));
                 vec![Event::NoteAdded {
                     actor: actor.clone(),
@@ -657,7 +758,12 @@ impl Engine {
                     note: notes[0],
                 }]
             }
-            Command::SetNote { track, clip, index, note } => {
+            Command::SetNote {
+                track,
+                clip,
+                index,
+                note,
+            } => {
                 vec![Event::NoteChanged {
                     actor: actor.clone(),
                     track: *track,
@@ -666,7 +772,11 @@ impl Engine {
                     note: crate::model::Note::normalize(*note),
                 }]
             }
-            Command::SetNotes { track, clip, entries } => {
+            Command::SetNotes {
+                track,
+                clip,
+                entries,
+            } => {
                 if entries.is_empty() {
                     return vec![];
                 }
@@ -691,7 +801,11 @@ impl Engine {
                     index: *index,
                 }]
             }
-            Command::RemoveNotes { track, clip, indices } => {
+            Command::RemoveNotes {
+                track,
+                clip,
+                indices,
+            } => {
                 if indices.is_empty() {
                     return vec![];
                 }
@@ -706,7 +820,10 @@ impl Engine {
                 if items.is_empty() {
                     return vec![];
                 }
-                vec![Event::ClipsRemoved { actor: actor.clone(), items: items.clone() }]
+                vec![Event::ClipsRemoved {
+                    actor: actor.clone(),
+                    items: items.clone(),
+                }]
             }
             Command::SetGain { track, gain_db } => {
                 vec![Event::GainChanged {
@@ -723,10 +840,18 @@ impl Engine {
                 }]
             }
             Command::SetMute { track, mute } => {
-                vec![Event::MuteChanged { actor: actor.clone(), track: *track, mute: *mute }]
+                vec![Event::MuteChanged {
+                    actor: actor.clone(),
+                    track: *track,
+                    mute: *mute,
+                }]
             }
             Command::SetSolo { track, solo } => {
-                vec![Event::SoloChanged { actor: actor.clone(), track: *track, solo: *solo }]
+                vec![Event::SoloChanged {
+                    actor: actor.clone(),
+                    track: *track,
+                    solo: *solo,
+                }]
             }
             Command::SetMasterGain(gain_db) => {
                 vec![Event::MasterGainChanged {
@@ -741,9 +866,17 @@ impl Engine {
                     .filter(|s| s.target != *track)
                     .map(|s| s.normalize())
                     .collect();
-                vec![Event::TrackSendsChanged { actor: actor.clone(), track: *track, sends }]
+                vec![Event::TrackSendsChanged {
+                    actor: actor.clone(),
+                    track: *track,
+                    sends,
+                }]
             }
-            Command::SetAutomation { track, param, points } => {
+            Command::SetAutomation {
+                track,
+                param,
+                points,
+            } => {
                 let param = crate::model::AutomationLane::normalize_param(param);
                 if param.is_empty() {
                     return vec![];
@@ -754,13 +887,29 @@ impl Engine {
                     .iter()
                     .copied()
                     .filter(|p| p.beat.is_finite() && p.value.is_finite())
-                    .map(|p| crate::model::AutomationPoint { beat: p.beat.max(0.0), value: p.value })
+                    .map(|p| crate::model::AutomationPoint {
+                        beat: p.beat.max(0.0),
+                        value: p.value,
+                    })
                     .collect();
-                points.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
+                points.sort_by(|a, b| {
+                    a.beat
+                        .partial_cmp(&b.beat)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
                 points.truncate(MAX_POINTS);
-                vec![Event::AutomationChanged { actor: actor.clone(), track: *track, param, points }]
+                vec![Event::AutomationChanged {
+                    actor: actor.clone(),
+                    track: *track,
+                    param,
+                    points,
+                }]
             }
-            Command::SetParam { track, param, value } => {
+            Command::SetParam {
+                track,
+                param,
+                value,
+            } => {
                 // 非有限值会让插件内部出现 NaN；在命令层就丢掉，事件因此不会带毒。
                 if !value.is_finite() {
                     return vec![];
@@ -784,7 +933,11 @@ impl Engine {
                 }]
             }
             Command::RemoveEffect { track, index } => {
-                vec![Event::EffectRemoved { actor: actor.clone(), track: *track, index: *index }]
+                vec![Event::EffectRemoved {
+                    actor: actor.clone(),
+                    track: *track,
+                    index: *index,
+                }]
             }
             Command::MoveEffect { track, from, to } => {
                 vec![Event::EffectMoved {
@@ -794,7 +947,12 @@ impl Engine {
                     to: *to,
                 }]
             }
-            Command::SetEffectParam { track, index, param, value } => {
+            Command::SetEffectParam {
+                track,
+                index,
+                param,
+                value,
+            } => {
                 // 非有限值会让插件内部出现 NaN，在命令层就丢掉。
                 if !value.is_finite() {
                     return vec![];
@@ -808,14 +966,19 @@ impl Engine {
                 }]
             }
             Command::RenameProject { name } => {
-                vec![Event::ProjectRenamed { actor: actor.clone(), name: name.clone() }]
+                vec![Event::ProjectRenamed {
+                    actor: actor.clone(),
+                    name: name.clone(),
+                }]
             }
             // ---- 批量音符（编曲主力） ----
             Command::AddNotes { track, clip, notes } => {
                 if notes.is_empty() {
                     return vec![];
                 }
-                let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
+                let Some(existing) = self.find_clip(*track, *clip) else {
+                    return vec![];
+                };
                 let notes = assign_ids(&existing.notes, notes);
                 vec![Event::NotesAdded {
                     actor: actor.clone(),
@@ -837,18 +1000,28 @@ impl Engine {
                     notes,
                 }]
             }
-            Command::UpdateNotes { track, clip, updates } => {
+            Command::UpdateNotes {
+                track,
+                clip,
+                updates,
+            } => {
                 if updates.is_empty() {
                     return vec![];
                 }
-                let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
+                let Some(existing) = self.find_clip(*track, *clip) else {
+                    return vec![];
+                };
                 let transform = crate::compose::update_by_id(existing, updates);
                 changed_notes(actor, *track, *clip, transform)
             }
             Command::RemoveNotesById { track, clip, ids } => {
-                let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
-                let mut indices: Vec<usize> =
-                    ids.iter().filter_map(|id| existing.note_index(*id)).collect();
+                let Some(existing) = self.find_clip(*track, *clip) else {
+                    return vec![];
+                };
+                let mut indices: Vec<usize> = ids
+                    .iter()
+                    .filter_map(|id| existing.note_index(*id))
+                    .collect();
                 indices.sort_unstable();
                 indices.dedup();
                 if indices.is_empty() {
@@ -861,13 +1034,28 @@ impl Engine {
                     indices,
                 }]
             }
-            Command::TransposeNotes { track, clip, semitones, range } => {
-                let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
+            Command::TransposeNotes {
+                track,
+                clip,
+                semitones,
+                range,
+            } => {
+                let Some(existing) = self.find_clip(*track, *clip) else {
+                    return vec![];
+                };
                 let transform = crate::compose::transpose(existing, *semitones, *range);
                 changed_notes(actor, *track, *clip, transform)
             }
-            Command::SetNoteVelocity { track, clip, shape, range, beat_filter } => {
-                let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
+            Command::SetNoteVelocity {
+                track,
+                clip,
+                shape,
+                range,
+                beat_filter,
+            } => {
+                let Some(existing) = self.find_clip(*track, *clip) else {
+                    return vec![];
+                };
                 let transform =
                     crate::compose::set_velocity(existing, *shape, *range, *beat_filter);
                 changed_notes(actor, *track, *clip, transform)
@@ -880,19 +1068,43 @@ impl Engine {
                 range,
                 quantize_duration,
             } => {
-                let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
-                let transform =
-                    crate::compose::quantize(existing, *grid, *strength, *range, *quantize_duration);
+                let Some(existing) = self.find_clip(*track, *clip) else {
+                    return vec![];
+                };
+                let transform = crate::compose::quantize(
+                    existing,
+                    *grid,
+                    *strength,
+                    *range,
+                    *quantize_duration,
+                );
                 changed_notes(actor, *track, *clip, transform)
             }
-            Command::StrumNotes { track, clip, step_ms, direction, range } => {
-                let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
+            Command::StrumNotes {
+                track,
+                clip,
+                step_ms,
+                direction,
+                range,
+            } => {
+                let Some(existing) = self.find_clip(*track, *clip) else {
+                    return vec![];
+                };
                 let map = crate::tempo::TempoMap::from_transport(&self.project.transport);
                 let transform = crate::compose::strum(existing, *step_ms, *direction, &map, *range);
                 changed_notes(actor, *track, *clip, transform)
             }
-            Command::ApplySwing { track, clip, subdivision, ratio, strength, range } => {
-                let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
+            Command::ApplySwing {
+                track,
+                clip,
+                subdivision,
+                ratio,
+                strength,
+                range,
+            } => {
+                let Some(existing) = self.find_clip(*track, *clip) else {
+                    return vec![];
+                };
                 let transform =
                     crate::compose::swing(existing, *subdivision, *ratio, *strength, *range);
                 changed_notes(actor, *track, *clip, transform)
@@ -907,7 +1119,9 @@ impl Engine {
                 min_duration,
                 group_by_start,
             } => {
-                let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
+                let Some(existing) = self.find_clip(*track, *clip) else {
+                    return vec![];
+                };
                 let transform = crate::compose::humanize(
                     existing,
                     *timing,
@@ -919,15 +1133,29 @@ impl Engine {
                 );
                 changed_notes(actor, *track, *clip, transform)
             }
-            Command::FitNotesToRange { track, clip, min_pitch, max_pitch, mode, range } => {
-                let Some(existing) = self.find_clip(*track, *clip) else { return vec![] };
+            Command::FitNotesToRange {
+                track,
+                clip,
+                min_pitch,
+                max_pitch,
+                mode,
+                range,
+            } => {
+                let Some(existing) = self.find_clip(*track, *clip) else {
+                    return vec![];
+                };
                 let report =
                     crate::compose::fit_to_range(existing, *min_pitch, *max_pitch, *mode, *range);
                 changed_notes(actor, *track, *clip, report.transform)
             }
 
             // ---- 片段编辑（复制 / 合并） ----
-            Command::DuplicateClip { track, clip, to_track, start } => {
+            Command::DuplicateClip {
+                track,
+                clip,
+                to_track,
+                start,
+            } => {
                 let Some((audio, notes, length, src_start)) = self
                     .find_clip(*track, *clip)
                     .map(|c| (c.audio.clone(), c.notes.clone(), c.length, c.start))
@@ -938,7 +1166,8 @@ impl Engine {
                 if self.project.track(dest).is_none() {
                     return vec![];
                 }
-                let start = crate::model::Clip::normalize_start(start.unwrap_or(src_start + length));
+                let start =
+                    crate::model::Clip::normalize_start(start.unwrap_or(src_start + length));
                 let new_clip = self.alloc_clip_id();
                 match audio {
                     Some(source) => vec![Event::AudioClipAdded {
@@ -988,16 +1217,24 @@ impl Engine {
                 }
                 // 收集要合并的片段（按起点排序）；缺一个、或其中有音频片段 → 整体拒绝，
                 // 免得「合并了一半」这种半成品状态进历史。
-                let Some(t) = self.project.track(*track) else { return vec![] };
+                let Some(t) = self.project.track(*track) else {
+                    return vec![];
+                };
                 let mut picked: Vec<crate::model::Clip> = Vec::with_capacity(clips.len());
                 for id in clips {
-                    let Some(c) = t.clips.iter().find(|c| c.id == *id) else { return vec![] };
+                    let Some(c) = t.clips.iter().find(|c| c.id == *id) else {
+                        return vec![];
+                    };
                     if c.is_audio() {
                         return vec![];
                     }
                     picked.push(c.clone());
                 }
-                picked.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+                picked.sort_by(|a, b| {
+                    a.start
+                        .partial_cmp(&b.start)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
                 let start = picked[0].start;
                 let end = picked
                     .iter()
@@ -1009,14 +1246,22 @@ impl Engine {
                 for c in &picked {
                     let offset = c.start - start;
                     for n in &c.notes {
-                        merged.push(crate::model::Note { start: n.start + offset, ..*n });
+                        merged.push(crate::model::Note {
+                            start: n.start + offset,
+                            ..*n
+                        });
                         tags.push(self.project.note_tag(*track, c.id, n.id).cloned());
                     }
                 }
                 let assigned = assign_ids(&[], &merged);
                 let target = picked[0].id;
                 let mut events = vec![
-                    Event::ClipMoved { actor: actor.clone(), track: *track, clip: target, start },
+                    Event::ClipMoved {
+                        actor: actor.clone(),
+                        track: *track,
+                        clip: target,
+                        start,
+                    },
                     Event::ClipResized {
                         actor: actor.clone(),
                         track: *track,
@@ -1035,7 +1280,10 @@ impl Engine {
                     actor: actor.clone(),
                     items: picked[1..]
                         .iter()
-                        .map(|c| crate::model::ClipRef { track: *track, clip: c.id })
+                        .map(|c| crate::model::ClipRef {
+                            track: *track,
+                            clip: c.id,
+                        })
                         .collect(),
                 });
                 for (note, tag) in assigned.iter().zip(tags) {
@@ -1054,7 +1302,10 @@ impl Engine {
 
             // ---- 编曲元数据 ----
             Command::SetProjectHarmony { bars } => {
-                vec![Event::ProjectHarmonyChanged { actor: actor.clone(), bars: bars.clone() }]
+                vec![Event::ProjectHarmonyChanged {
+                    actor: actor.clone(),
+                    bars: bars.clone(),
+                }]
             }
             Command::SetProjectSections { sections } => {
                 vec![Event::ProjectSectionsChanged {
@@ -1062,7 +1313,127 @@ impl Engine {
                     sections: sections.clone(),
                 }]
             }
-            Command::SetTrackMeta { track, role, pitch_range, pitch_bend_range } => {
+            Command::ApplyCueSheet { plan } => {
+                // 整份清单在同一次 translate 里分配 id：轨道 / 片段 / 音符全部落在一个撤销步里。
+                let mut events = Vec::new();
+                if plan.clear {
+                    // 从干净工程开始：默认分轨模板、旧轨道与 id 计数器一起归零。
+                    self.next_track_id = 1;
+                    self.next_clip_id = 1;
+                    events.push(Event::ProjectCleared {
+                        actor: actor.clone(),
+                        name: plan
+                            .name
+                            .clone()
+                            .unwrap_or_else(|| self.project.name.clone()),
+                    });
+                } else if let Some(name) = &plan.name {
+                    events.push(Event::ProjectRenamed {
+                        actor: actor.clone(),
+                        name: name.clone(),
+                    });
+                }
+                if let Some(tempo) = plan.tempo {
+                    events.push(Event::TempoChanged {
+                        actor: actor.clone(),
+                        tempo,
+                    });
+                }
+                if let Some((num, den)) = plan.time_sig {
+                    events.push(Event::TimeSignatureChanged {
+                        actor: actor.clone(),
+                        num,
+                        den,
+                    });
+                }
+                events.push(Event::ProjectSectionsChanged {
+                    actor: actor.clone(),
+                    sections: plan.sections.clone(),
+                });
+                events.push(Event::ProjectHarmonyChanged {
+                    actor: actor.clone(),
+                    bars: plan.harmony.clone(),
+                });
+                for track_plan in &plan.tracks {
+                    let track = self.alloc_track_id();
+                    events.push(Event::TrackAdded {
+                        actor: actor.clone(),
+                        id: track,
+                        name: track_plan.name.clone(),
+                        at: None,
+                    });
+                    if let Some(plugin_id) = &track_plan.plugin_id {
+                        events.push(Event::TrackInstrumentSet {
+                            actor: actor.clone(),
+                            track,
+                            plugin_id: plugin_id.clone(),
+                        });
+                        for (param, value) in &track_plan.params {
+                            events.push(Event::ParamChanged {
+                                actor: actor.clone(),
+                                track,
+                                param: param.clone(),
+                                value: *value,
+                            });
+                        }
+                    }
+                    for effect in &track_plan.effects {
+                        events.push(Event::EffectAdded {
+                            actor: actor.clone(),
+                            track,
+                            plugin_id: effect.clone(),
+                        });
+                    }
+                    if track_plan.role.is_some() || track_plan.pitch_range.is_some() {
+                        events.push(Event::TrackMetaChanged {
+                            actor: actor.clone(),
+                            track,
+                            role: track_plan.role.clone(),
+                            pitch_range: track_plan.pitch_range,
+                            pitch_bend_range: None,
+                        });
+                    }
+                    if let Some(gain_db) = track_plan.gain_db {
+                        events.push(Event::GainChanged {
+                            actor: actor.clone(),
+                            track,
+                            gain_db,
+                        });
+                    }
+                    if let Some(pan) = track_plan.pan {
+                        events.push(Event::PanChanged {
+                            actor: actor.clone(),
+                            track,
+                            pan,
+                        });
+                    }
+                    for clip_plan in &track_plan.clips {
+                        let clip = self.alloc_clip_id();
+                        events.push(Event::ClipAdded {
+                            actor: actor.clone(),
+                            track,
+                            clip,
+                            start: clip_plan.start,
+                            length: clip_plan.length,
+                        });
+                        if !clip_plan.notes.is_empty() {
+                            events.push(Event::NotesAdded {
+                                actor: actor.clone(),
+                                track,
+                                clip,
+                                notes: clip_plan.notes.clone(),
+                            });
+                        }
+                    }
+                }
+                events
+            }
+            Command::SetTrackMeta {
+                track,
+                role,
+                pitch_range,
+                pitch_bend_range,
+            } => {
                 vec![Event::TrackMetaChanged {
                     actor: actor.clone(),
                     track: *track,
@@ -1071,7 +1442,95 @@ impl Engine {
                     pitch_bend_range: *pitch_bend_range,
                 }]
             }
-            Command::SetNoteTag { track, clip, id, tag } => vec![Event::NoteTagChanged {
+            Command::SetMpe { track, config } => vec![Event::MpeChanged {
+                actor: actor.clone(),
+                track: *track,
+                config: config.map(crate::model::MpeConfig::normalized),
+            }],
+            Command::SetMidiEvents { track, events } => {
+                // 事件表是「逃生口」，但也要挡住荒谬输入：非负拍、通道 0..15、总量上限。
+                const MAX_MIDI_EVENTS: usize = 8192;
+                let mut events: Vec<crate::model::MidiEventAt> = events
+                    .iter()
+                    .copied()
+                    .map(crate::model::MidiEventAt::normalized)
+                    .collect();
+                events.sort_by(|a, b| {
+                    a.beat
+                        .partial_cmp(&b.beat)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                events.truncate(MAX_MIDI_EVENTS);
+                vec![Event::MidiEventsChanged {
+                    actor: actor.clone(),
+                    track: *track,
+                    events,
+                }]
+            }
+            Command::SetArticulations {
+                track,
+                articulations,
+                default,
+                source,
+            } => {
+                let articulations: std::collections::BTreeMap<_, _> = articulations
+                    .iter()
+                    .filter_map(|(name, switch)| {
+                        let name = name.trim().to_string();
+                        (!name.is_empty() && !switch.is_empty())
+                            .then(|| (name, switch.clone().normalized()))
+                    })
+                    .collect();
+                let default = default
+                    .as_ref()
+                    .map(|name| name.trim().to_string())
+                    .filter(|name| !name.is_empty());
+                vec![Event::ArticulationsChanged {
+                    actor: actor.clone(),
+                    track: *track,
+                    articulations,
+                    default,
+                    source: source.clone(),
+                }]
+            }
+            Command::SetNoteTags {
+                track,
+                clip,
+                ids,
+                tag,
+            } => {
+                // 只保留真正存在的音符 id：无效 id 不该产生一个空撤销步。
+                let Some(clip_ref) = self
+                    .project
+                    .track(*track)
+                    .and_then(|t| t.clips.iter().find(|c| c.id == *clip))
+                else {
+                    return vec![];
+                };
+                let mut ids: Vec<u64> = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| clip_ref.notes.iter().any(|note| note.id == *id))
+                    .collect();
+                ids.sort_unstable();
+                ids.dedup();
+                if ids.is_empty() {
+                    return vec![];
+                }
+                vec![Event::NoteTagsChanged {
+                    actor: actor.clone(),
+                    track: *track,
+                    clip: *clip,
+                    ids,
+                    tag: tag.clone(),
+                }]
+            }
+            Command::SetNoteTag {
+                track,
+                clip,
+                id,
+                tag,
+            } => vec![Event::NoteTagChanged {
                 actor: actor.clone(),
                 track: *track,
                 clip: *clip,
@@ -1081,8 +1540,10 @@ impl Engine {
 
             Command::NewProject { name, track_names } => {
                 // 先清空，再铺默认分轨：每一步都走正常事件，因此整条链天然可撤销。
-                let mut events =
-                    vec![Event::ProjectCleared { actor: actor.clone(), name: name.clone() }];
+                let mut events = vec![Event::ProjectCleared {
+                    actor: actor.clone(),
+                    name: name.clone(),
+                }];
                 // **id 计数器归零**：工程整体清空了，重新从 1 开始才是用户（和 AI）期待的编号——
                 // 不重置的话「新建工程」会接着用旧计数器，新工程的第一条轨道可能叫「93 号轨」，
                 // 让人以为 AI 操作错了轨道（其实它就是第一行）。
@@ -1106,6 +1567,25 @@ impl Engine {
                         actor: actor.clone(),
                         track: id,
                         plugin_id: starter.plugin_id.to_string(),
+                    });
+                }
+                events
+            }
+            Command::NewProjectWithTracks { name, track_names } => {
+                // 与 `NewProject` 一样先清空并归零 id，但**只**创建调用方给的轨道。
+                self.next_track_id = 1;
+                self.next_clip_id = 1;
+                let mut events = vec![Event::ProjectCleared {
+                    actor: actor.clone(),
+                    name: name.clone(),
+                }];
+                for track_name in track_names {
+                    let id = self.alloc_track_id();
+                    events.push(Event::TrackAdded {
+                        actor: actor.clone(),
+                        id,
+                        name: track_name.clone(),
+                        at: None,
                     });
                 }
                 events
@@ -1144,7 +1624,10 @@ fn next_ids(project: &Project) -> (u64, u64) {
 ///
 /// 发号在**命令层**做（而不是应用事件时），事件因此自带最终 id——撤销/重做重放同一串事件
 /// 得到完全一样的 id，外部拿着旧 id 的操作在撤销后仍然指得准。
-fn assign_ids(existing: &[crate::model::Note], notes: &[crate::model::Note]) -> Vec<crate::model::Note> {
+fn assign_ids(
+    existing: &[crate::model::Note],
+    notes: &[crate::model::Note],
+) -> Vec<crate::model::Note> {
     let mut next = existing.iter().map(|n| n.id).max().unwrap_or(0) + 1;
     let mut seen: std::collections::HashSet<u64> = existing.iter().map(|n| n.id).collect();
     notes
@@ -1171,7 +1654,12 @@ fn changed_notes(
     if transform.edits.is_empty() {
         return vec![];
     }
-    vec![Event::NotesChanged { actor: actor.clone(), track, clip, entries: transform.edits }]
+    vec![Event::NotesChanged {
+        actor: actor.clone(),
+        track,
+        clip,
+        entries: transform.edits,
+    }]
 }
 
 #[cfg(test)]
@@ -1183,7 +1671,12 @@ mod tests {
     #[test]
     fn execute_returns_events_and_mutates_state() {
         let mut e = Engine::new("demo");
-        let events = e.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+        let events = e.execute(
+            Command::AddTrack {
+                name: "Bass".into(),
+            },
+            Actor::Human,
+        );
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], crate::event::Event::TrackAdded { .. }));
         assert_eq!(e.project().tracks.len(), 1);
@@ -1192,7 +1685,12 @@ mod tests {
     #[test]
     fn undo_reverts_last_change() {
         let mut e = Engine::new("demo");
-        e.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+        e.execute(
+            Command::AddTrack {
+                name: "Bass".into(),
+            },
+            Actor::Human,
+        );
         e.execute(Command::SetTempo(150.0), Actor::Human);
         assert_eq!(e.project().transport.tempo, 150.0);
         assert!(e.undo());
@@ -1205,13 +1703,22 @@ mod tests {
     #[test]
     fn ops_track_actors_and_replay_position() {
         let mut e = Engine::new("demo");
-        e.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+        e.execute(
+            Command::AddTrack {
+                name: "Bass".into(),
+            },
+            Actor::Human,
+        );
         e.execute(Command::SetTempo(140.0), Actor::Agent("chat".into()));
 
         let ops = e.ops();
         assert_eq!(ops.len(), 2);
         assert_eq!(ops[0].kind, "add_track");
-        assert_eq!(ops[0].target.as_deref(), Some("Bass"), "操作对象要记下当时的轨道名");
+        assert_eq!(
+            ops[0].target.as_deref(),
+            Some("Bass"),
+            "操作对象要记下当时的轨道名"
+        );
         assert_eq!(ops[0].actor, Actor::Human);
         assert_eq!(ops[1].actor, Actor::Agent("chat".into()));
         assert!(ops.iter().all(|op| op.applied));
@@ -1281,10 +1788,28 @@ mod tests {
     #[test]
     fn add_clip_uses_allocated_ids_and_is_consistent() {
         let mut e = Engine::new("demo");
-        let ev = e.execute(Command::AddTrack { name: "Keys".into() }, Actor::Human);
-        let track = match ev[0] { crate::event::Event::TrackAdded { id, .. } => id, _ => unreachable!() };
-        let ev = e.execute(Command::AddClip { track, start: 0.0, length: 8.0 }, Actor::Human);
-        let clip = match ev[0] { crate::event::Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
+        let ev = e.execute(
+            Command::AddTrack {
+                name: "Keys".into(),
+            },
+            Actor::Human,
+        );
+        let track = match ev[0] {
+            crate::event::Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
+        let ev = e.execute(
+            Command::AddClip {
+                track,
+                start: 0.0,
+                length: 8.0,
+            },
+            Actor::Human,
+        );
+        let clip = match ev[0] {
+            crate::event::Event::ClipAdded { clip, .. } => clip,
+            _ => unreachable!(),
+        };
         assert_eq!(e.project().track(track).unwrap().clips[0].id, clip);
     }
 
@@ -1292,24 +1817,45 @@ mod tests {
     fn add_audio_clip_is_normalized_and_undoable() {
         use crate::model::AudioSource;
         let mut e = Engine::new("demo");
-        let ev = e.execute(Command::AddTrack { name: "Audio".into() }, Actor::Human);
-        let track = match ev[0] { crate::event::Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        let ev = e.execute(
+            Command::AddTrack {
+                name: "Audio".into(),
+            },
+            Actor::Human,
+        );
+        let track = match ev[0] {
+            crate::event::Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
         let ev = e.execute(
             Command::AddAudioClip {
                 track,
                 start: -5.0,
                 length: 1e9,
-                source: AudioSource { path: "/tmp/a.wav".into(), offset_frames: 0, frames: None, rate: 1.0, pitch_semitones: 0.0 },
+                source: AudioSource {
+                    path: "/tmp/a.wav".into(),
+                    offset_frames: 0,
+                    frames: None,
+                    rate: 1.0,
+                    pitch_semitones: 0.0,
+                },
             },
             Actor::Human,
         );
-        let clip = match ev[0] { crate::event::Event::AudioClipAdded { clip, .. } => clip, _ => unreachable!() };
+        let clip = match ev[0] {
+            crate::event::Event::AudioClipAdded { clip, .. } => clip,
+            _ => unreachable!(),
+        };
 
         let stored = &e.project().track(track).unwrap().clips[0];
         assert!(stored.is_audio(), "存进去的必须是音频片段");
         assert_eq!(stored.id, clip);
         assert_eq!(stored.start, 0.0, "负起点必须被夹到 0");
-        assert_eq!(stored.length, crate::model::Clip::MAX_LENGTH_BEATS, "超长必须被夹紧");
+        assert_eq!(
+            stored.length,
+            crate::model::Clip::MAX_LENGTH_BEATS,
+            "超长必须被夹紧"
+        );
 
         assert!(e.undo());
         assert!(e.project().track(track).unwrap().clips.is_empty());
@@ -1326,7 +1872,19 @@ mod tests {
             Command::AddNote {
                 track,
                 clip,
-                note: Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+                note: Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 60,
+                    start: 0.0,
+                    duration: 1.0,
+                    velocity: 100,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                },
             },
             Actor::Human,
         );
@@ -1336,7 +1894,13 @@ mod tests {
             Command::SetClipAudio {
                 track,
                 clip,
-                audio: Some(AudioSource { path: "x.wav".into(), offset_frames: 0, frames: None, rate: 1.0, pitch_semitones: 0.0 }),
+                audio: Some(AudioSource {
+                    path: "x.wav".into(),
+                    offset_frames: 0,
+                    frames: None,
+                    rate: 1.0,
+                    pitch_semitones: 0.0,
+                }),
             },
             Actor::Human,
         );
@@ -1344,8 +1908,18 @@ mod tests {
         assert!(c.is_audio());
         assert!(c.notes.is_empty(), "转成音频片段必须清空音符");
 
-        e.execute(Command::SetClipAudio { track, clip, audio: None }, Actor::Human);
-        assert!(!e.project().track(track).unwrap().clips[0].is_audio(), "去掉素材应当变回 MIDI 片段");
+        e.execute(
+            Command::SetClipAudio {
+                track,
+                clip,
+                audio: None,
+            },
+            Actor::Human,
+        );
+        assert!(
+            !e.project().track(track).unwrap().clips[0].is_audio(),
+            "去掉素材应当变回 MIDI 片段"
+        );
     }
 
     #[test]
@@ -1377,7 +1951,10 @@ mod tests {
 
         let mut loaded = Engine::from_project(project);
         let ev = loaded.execute(Command::AddTrack { name: "C".into() }, Actor::Human);
-        let id = match ev[0] { crate::event::Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        let id = match ev[0] {
+            crate::event::Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
         // must not collide with the two loaded tracks
         assert_eq!(id.0, 3);
         assert_eq!(loaded.project().tracks.len(), 3);
@@ -1386,16 +1963,27 @@ mod tests {
     #[test]
     fn new_project_lays_down_the_starter_tracks_and_is_undoable() {
         let mut e = Engine::new("demo");
-        e.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+        e.execute(
+            Command::AddTrack {
+                name: "Bass".into(),
+            },
+            Actor::Human,
+        );
         assert_eq!(e.project().tracks.len(), 1);
 
         let events = e.execute(
-            Command::NewProject { name: "x".into(), track_names: None },
+            Command::NewProject {
+                name: "x".into(),
+                track_names: None,
+            },
             Actor::Human,
         );
         // 1 个 ProjectCleared + 每条分轨（TrackAdded + TrackInstrumentSet）
         assert_eq!(events.len(), 1 + crate::STARTER_TRACKS.len() * 2);
-        assert!(matches!(events[0], crate::event::Event::ProjectCleared { .. }));
+        assert!(matches!(
+            events[0],
+            crate::event::Event::ProjectCleared { .. }
+        ));
         assert_eq!(e.project().name, "x");
 
         let names: Vec<&str> = e.project().tracks.iter().map(|t| t.name.as_str()).collect();
@@ -1427,10 +2015,21 @@ mod tests {
         let mut e = Engine::new("demo");
         // 把计数器顶到高位（只加轨、不新建，计数器就一路涨上去）。
         for i in 0..90 {
-            e.execute(Command::AddTrack { name: format!("t{i}") }, Actor::Human);
+            e.execute(
+                Command::AddTrack {
+                    name: format!("t{i}"),
+                },
+                Actor::Human,
+            );
         }
 
-        let events = e.execute(Command::NewProject { name: "fresh".into(), track_names: None }, Actor::Human);
+        let events = e.execute(
+            Command::NewProject {
+                name: "fresh".into(),
+                track_names: None,
+            },
+            Actor::Human,
+        );
         let ids: Vec<u64> = events
             .iter()
             .filter_map(|ev| match ev {
@@ -1445,8 +2044,16 @@ mod tests {
         );
 
         // 之后新加的轨道接着往下排。
-        let events = e.execute(Command::AddTrack { name: "after".into() }, Actor::Human);
-        assert_eq!(track_added_id(&events), crate::STARTER_TRACKS.len() as u64 + 1);
+        let events = e.execute(
+            Command::AddTrack {
+                name: "after".into(),
+            },
+            Actor::Human,
+        );
+        assert_eq!(
+            track_added_id(&events),
+            crate::STARTER_TRACKS.len() as u64 + 1
+        );
     }
 
     /// 撤销 / 重做之后，id 计数器必须按**回放结果**重算。
@@ -1458,7 +2065,13 @@ mod tests {
         let mut e = Engine::new("demo");
         e.execute(Command::AddTrack { name: "A".into() }, Actor::Human); // id 1
         e.execute(Command::AddTrack { name: "B".into() }, Actor::Human); // id 2
-        e.execute(Command::NewProject { name: "gone".into(), track_names: None }, Actor::Human);
+        e.execute(
+            Command::NewProject {
+                name: "gone".into(),
+                track_names: None,
+            },
+            Actor::Human,
+        );
         assert_eq!(e.project().tracks[0].id.0, 1, "新工程从 1 重新编号");
 
         // 撤销回「A + B」，再加一条：不能与 1 / 2 撞号。
@@ -1476,12 +2089,21 @@ mod tests {
         let mut e = Engine::new("demo");
         e.execute(Command::AddTrack { name: "A".into() }, Actor::Human); // id 1
         e.execute(Command::AddTrack { name: "B".into() }, Actor::Human); // id 2
-        e.execute(Command::NewProject { name: "gone".into(), track_names: None }, Actor::Human);
+        e.execute(
+            Command::NewProject {
+                name: "gone".into(),
+                track_names: None,
+            },
+            Actor::Human,
+        );
 
         assert!(e.undo());
         assert!(e.redo());
         let events = e.execute(Command::AddTrack { name: "D".into() }, Actor::Human);
-        assert_eq!(track_added_id(&events), crate::STARTER_TRACKS.len() as u64 + 1);
+        assert_eq!(
+            track_added_id(&events),
+            crate::STARTER_TRACKS.len() as u64 + 1
+        );
     }
 
     /// 从事件里取新轨道的 id（测试用）。
@@ -1498,7 +2120,12 @@ mod tests {
     #[test]
     fn redo_reapplies_the_undone_command() {
         let mut e = Engine::new("demo");
-        e.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+        e.execute(
+            Command::AddTrack {
+                name: "Bass".into(),
+            },
+            Actor::Human,
+        );
         e.execute(Command::SetTempo(150.0), Actor::Human);
 
         assert!(e.undo());
@@ -1518,7 +2145,13 @@ mod tests {
         let mut e = Engine::new("demo");
         e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
         e.execute(Command::AddTrack { name: "B".into() }, Actor::Human);
-        e.execute(Command::NewProject { name: "gone".into(), track_names: None }, Actor::Human);
+        e.execute(
+            Command::NewProject {
+                name: "gone".into(),
+                track_names: None,
+            },
+            Actor::Human,
+        );
         assert_eq!(e.project().tracks.len(), crate::STARTER_TRACKS.len());
 
         assert!(e.undo());
@@ -1538,7 +2171,12 @@ mod tests {
         let tracks = e.project().tracks.len();
         assert!(tracks > 0, "启动就有默认分轨");
 
-        e.execute(Command::AddTrack { name: "Extra".into() }, Actor::Human);
+        e.execute(
+            Command::AddTrack {
+                name: "Extra".into(),
+            },
+            Actor::Human,
+        );
         assert_eq!(e.project().tracks.len(), tracks + 1);
 
         assert!(e.undo());
@@ -1570,7 +2208,19 @@ mod tests {
                 id: ClipId(3),
                 start: 0.0,
                 length: 4.0,
-                notes: vec![Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE }],
+                notes: vec![Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 60,
+                    start: 0.0,
+                    duration: 1.0,
+                    velocity: 100,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                }],
                 audio: None,
             }],
             mixer: Default::default(),
@@ -1579,13 +2229,26 @@ mod tests {
         });
 
         let mut e = Engine::from_project(loaded);
-        e.execute(Command::AddTrack { name: "Extra".into() }, Actor::Human);
+        e.execute(
+            Command::AddTrack {
+                name: "Extra".into(),
+            },
+            Actor::Human,
+        );
         assert_eq!(e.project().tracks.len(), 2);
 
         assert!(e.undo());
-        assert_eq!(e.project().tracks.len(), 1, "打开的文件里的轨道不能被撤销掉");
+        assert_eq!(
+            e.project().tracks.len(),
+            1,
+            "打开的文件里的轨道不能被撤销掉"
+        );
         assert_eq!(e.project().tracks[0].name, "Lead");
-        assert_eq!(e.project().tracks[0].clips[0].notes.len(), 1, "音符也要还在");
+        assert_eq!(
+            e.project().tracks[0].clips[0].notes.len(),
+            1,
+            "音符也要还在"
+        );
         assert_eq!(e.project().name, "loaded");
     }
 
@@ -1619,31 +2282,50 @@ mod tests {
     #[test]
     fn instrument_state_from_the_previous_plugin_is_ignored() {
         let mut e = Engine::new("demo");
-        let ev = e.execute(Command::AddTrack { name: "Drums".into() }, Actor::Human);
+        let ev = e.execute(
+            Command::AddTrack {
+                name: "Drums".into(),
+            },
+            Actor::Human,
+        );
         let track = match ev[0] {
             crate::event::Event::TrackAdded { id, .. } => id,
             _ => unreachable!(),
         };
         e.execute(
-            Command::SetTrackInstrument { track, plugin_id: "vst3:drums".into() },
+            Command::SetTrackInstrument {
+                track,
+                plugin_id: "vst3:drums".into(),
+            },
             Actor::Human,
         );
         // 换成内置合成器（结构性变更：旧乐器的句柄要等重建后才清理）。
         e.execute(
-            Command::SetTrackInstrument { track, plugin_id: "builtin.synth".into() },
+            Command::SetTrackInstrument {
+                track,
+                plugin_id: "builtin.synth".into(),
+            },
             Actor::Human,
         );
 
         // 旧乐器迟到的状态：必须被忽略，不能污染新乐器。
         e.set_instrument_state(track, "vst3:drums", vec![1, 2, 3, 4]);
         assert!(
-            e.project().tracks[0].instrument.as_ref().unwrap().state.is_empty(),
+            e.project().tracks[0]
+                .instrument
+                .as_ref()
+                .unwrap()
+                .state
+                .is_empty(),
             "上一件乐器的状态不能写进新乐器"
         );
 
         // 新乐器自己的状态照收。
         e.set_instrument_state(track, "builtin.synth", vec![9, 9, 9, 9]);
-        assert_eq!(e.project().tracks[0].instrument.as_ref().unwrap().state, vec![9, 9, 9, 9]);
+        assert_eq!(
+            e.project().tracks[0].instrument.as_ref().unwrap().state,
+            vec![9, 9, 9, 9]
+        );
     }
 
     /// 一批命令只占**一个**撤销步骤。
@@ -1652,21 +2334,42 @@ mod tests {
     #[test]
     fn execute_all_is_a_single_undo_step() {
         let mut e = Engine::new("demo");
-        let ev = e.execute(Command::AddTrack { name: "Lead".into() }, Actor::Human);
+        let ev = e.execute(
+            Command::AddTrack {
+                name: "Lead".into(),
+            },
+            Actor::Human,
+        );
         let track = match ev[0] {
             crate::event::Event::TrackAdded { id, .. } => id,
             _ => unreachable!(),
         };
         e.execute(
-            Command::SetTrackInstrument { track, plugin_id: "builtin.synth".into() },
+            Command::SetTrackInstrument {
+                track,
+                plugin_id: "builtin.synth".into(),
+            },
             Actor::Human,
         );
-        let before = e.project().tracks[0].instrument.as_ref().unwrap().params.clone();
+        let before = e.project().tracks[0]
+            .instrument
+            .as_ref()
+            .unwrap()
+            .params
+            .clone();
 
         e.execute_all(
             vec![
-                Command::SetParam { track, param: "attack".into(), value: 0.5 },
-                Command::SetParam { track, param: "release".into(), value: 0.9 },
+                Command::SetParam {
+                    track,
+                    param: "attack".into(),
+                    value: 0.5,
+                },
+                Command::SetParam {
+                    track,
+                    param: "release".into(),
+                    value: 0.9,
+                },
             ],
             Actor::Human,
         );
@@ -1684,20 +2387,182 @@ mod tests {
         );
     }
 
+    /// 影片清单导入：轨道 / 乐器 / 片段 / 段落 / 和弦必须全部落在**一个**撤销步里。
+    #[test]
+    fn apply_cue_sheet_builds_everything_in_one_undo_step() {
+        use crate::model::{
+            CueClip, CueSheetPlan, CueTrack, HarmonyBar, Note, PitchRange, Section,
+        };
+        use std::collections::BTreeMap;
+
+        let mut e = Engine::from_project(crate::model::Project::new("empty"));
+        let plan = CueSheetPlan {
+            clear: false,
+            name: Some("film".into()),
+            tempo: Some(120.0),
+            time_sig: Some((4, 4)),
+            sections: vec![Section {
+                name: "s01".into(),
+                start: 0.0,
+                end: 8.0,
+                role: Some("scene".into()),
+            }],
+            harmony: vec![HarmonyBar {
+                start: 0.0,
+                length: 4.0,
+                symbol: "Am".into(),
+                source: Some("film.json".into()),
+            }],
+            tracks: vec![CueTrack {
+                name: "guqin".into(),
+                plugin_id: Some("builtin.synth".into()),
+                params: BTreeMap::from([("gain".to_string(), 0.5)]),
+                effects: vec!["builtin.reverb".into()],
+                role: Some("lead".into()),
+                pitch_range: Some(PitchRange { min: 40, max: 84 }),
+                gain_db: Some(-3.0),
+                pan: Some(-0.2),
+                clips: vec![CueClip {
+                    start: 0.0,
+                    length: 8.0,
+                    notes: vec![Note {
+                        id: 0,
+                        channel: None,
+                        pressure: None,
+                        pitch: 60,
+                        start: 0.0,
+                        duration: 1.0,
+                        velocity: 100,
+                        volume: 127,
+                        offset: 0.0,
+                        legato: false,
+                        expr: crate::model::PitchExpression::NONE,
+                    }],
+                }],
+            }],
+        };
+
+        let events = e.execute(Command::ApplyCueSheet { plan }, Actor::Human);
+        assert!(!events.is_empty());
+        assert_eq!(e.undo_depth(), 1, "整份清单只能占一个撤销步");
+
+        let project = e.project();
+        assert_eq!(project.name, "film");
+        assert_eq!(project.transport.tempo, 120.0);
+        assert_eq!(project.sections.len(), 1);
+        assert_eq!(project.harmony.len(), 1);
+        assert_eq!(project.tracks.len(), 1);
+        let track = &project.tracks[0];
+        assert_eq!(track.name, "guqin");
+        let instrument = track.instrument.as_ref().expect("应挂上乐器");
+        assert_eq!(instrument.plugin_id, "builtin.synth");
+        assert_eq!(instrument.params.get("gain"), Some(&0.5));
+        assert_eq!(track.effects.len(), 1);
+        assert_eq!(track.meta.as_ref().unwrap().role.as_deref(), Some("lead"));
+        assert_eq!(track.mixer.gain_db, -3.0);
+        assert_eq!(track.mixer.pan, -0.2);
+        assert_eq!(track.clips.len(), 1);
+        assert_eq!(track.clips[0].notes.len(), 1);
+        assert_eq!(track.clips[0].notes[0].id, 1, "音符 id 由引擎发放");
+
+        assert!(e.undo());
+        assert!(e.project().tracks.is_empty(), "一次撤销把整份清单收回");
+        assert_eq!(e.project().name, "empty");
+    }
+
+    /// `clear=true`：先清空默认分轨模板，再按清单重建；整件事仍是一个撤销步。
+    #[test]
+    fn apply_cue_sheet_can_clear_the_starter_tracks() {
+        use crate::model::CueSheetPlan;
+
+        let mut e = Engine::new_project("demo");
+        assert!(!e.project().tracks.is_empty(), "新工程应带默认分轨模板");
+
+        e.execute(
+            Command::ApplyCueSheet {
+                plan: CueSheetPlan {
+                    clear: true,
+                    name: Some("film".into()),
+                    ..Default::default()
+                },
+            },
+            Actor::Human,
+        );
+        assert!(e.project().tracks.is_empty());
+        assert_eq!(e.project().name, "film");
+        assert_eq!(e.undo_depth(), 1);
+
+        assert!(e.undo());
+        assert!(!e.project().tracks.is_empty(), "撤销应恢复默认模板");
+        assert_eq!(e.project().name, "demo");
+    }
+
+    /// `NewProjectWithTracks`：按名字建 N 条，不铺默认模板；仍然是一个撤销步。
+    #[test]
+    fn new_project_with_tracks_creates_exactly_those_tracks() {
+        let mut e = Engine::new_project("demo");
+        assert_eq!(e.project().tracks.len(), 5);
+
+        e.execute(
+            Command::NewProjectWithTracks {
+                name: "film".into(),
+                track_names: vec!["Piano".into(), "Strings".into()],
+            },
+            Actor::Human,
+        );
+        assert_eq!(e.project().name, "film");
+        assert_eq!(e.project().tracks.len(), 2);
+        assert_eq!(
+            e.project()
+                .tracks
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Piano", "Strings"]
+        );
+        assert!(e.project().tracks.iter().all(|t| t.instrument.is_none()));
+        assert_eq!(e.undo_depth(), 1);
+
+        assert!(e.undo());
+        assert_eq!(e.project().tracks.len(), 5, "撤销恢复默认模板");
+        assert_eq!(e.project().name, "demo");
+    }
+
     #[test]
     fn from_empty_project_starts_ids_at_one() {
         let mut e = Engine::from_project(crate::model::Project::new("empty"));
         let ev = e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
-        let id = match ev[0] { crate::event::Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        let id = match ev[0] {
+            crate::event::Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
         assert_eq!(id.0, 1);
     }
 
     /// 建一条带片段与音符的轨道，返回 (track, clip)。
     fn seeded(e: &mut Engine) -> (TrackId, ClipId) {
-        let ev = e.execute(Command::AddTrack { name: "Lead".into() }, Actor::Human);
-        let track = match ev[0] { crate::event::Event::TrackAdded { id, .. } => id, _ => unreachable!() };
-        let ev = e.execute(Command::AddClip { track, start: 0.0, length: 4.0 }, Actor::Human);
-        let clip = match ev[0] { crate::event::Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
+        let ev = e.execute(
+            Command::AddTrack {
+                name: "Lead".into(),
+            },
+            Actor::Human,
+        );
+        let track = match ev[0] {
+            crate::event::Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
+        let ev = e.execute(
+            Command::AddClip {
+                track,
+                start: 0.0,
+                length: 4.0,
+            },
+            Actor::Human,
+        );
+        let clip = match ev[0] {
+            crate::event::Event::ClipAdded { clip, .. } => clip,
+            _ => unreachable!(),
+        };
         (track, clip)
     }
 
@@ -1706,9 +2571,24 @@ mod tests {
         let mut e = Engine::new("demo");
         let (track, _) = seeded(&mut e);
 
-        e.execute(Command::SetGain { track, gain_db: 100.0 }, Actor::Human);
-        assert_eq!(e.project().track(track).unwrap().mixer.gain_db, crate::model::MixerChannel::MAX_GAIN_DB);
-        e.execute(Command::SetPan { track, pan: f32::NAN }, Actor::Human);
+        e.execute(
+            Command::SetGain {
+                track,
+                gain_db: 100.0,
+            },
+            Actor::Human,
+        );
+        assert_eq!(
+            e.project().track(track).unwrap().mixer.gain_db,
+            crate::model::MixerChannel::MAX_GAIN_DB
+        );
+        e.execute(
+            Command::SetPan {
+                track,
+                pan: f32::NAN,
+            },
+            Actor::Human,
+        );
         assert_eq!(e.project().track(track).unwrap().mixer.pan, 0.0);
         e.execute(Command::SetMute { track, mute: true }, Actor::Human);
         e.execute(Command::SetSolo { track, solo: true }, Actor::Human);
@@ -1727,14 +2607,35 @@ mod tests {
         let mut e = Engine::new("demo");
         let (track, clip) = seeded(&mut e);
 
-        e.execute(Command::MoveClip { track, clip, start: -4.0 }, Actor::Human);
+        e.execute(
+            Command::MoveClip {
+                track,
+                clip,
+                start: -4.0,
+            },
+            Actor::Human,
+        );
         assert_eq!(e.project().track(track).unwrap().clips[0].start, 0.0);
-        e.execute(Command::ResizeClip { track, clip, length: f64::NAN }, Actor::Human);
+        e.execute(
+            Command::ResizeClip {
+                track,
+                clip,
+                length: f64::NAN,
+            },
+            Actor::Human,
+        );
         assert_eq!(
             e.project().track(track).unwrap().clips[0].length,
             crate::model::Clip::MIN_LENGTH_BEATS
         );
-        e.execute(Command::MoveClip { track, clip, start: 6.0 }, Actor::Human);
+        e.execute(
+            Command::MoveClip {
+                track,
+                clip,
+                start: 6.0,
+            },
+            Actor::Human,
+        );
         assert_eq!(e.project().track(track).unwrap().clips[0].start, 6.0);
     }
 
@@ -1744,7 +2645,23 @@ mod tests {
         let (track, clip) = seeded(&mut e);
         for pitch in [60u8, 64] {
             e.execute(
-                Command::AddNote { track, clip, note: crate::model::Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE } },
+                Command::AddNote {
+                    track,
+                    clip,
+                    note: crate::model::Note {
+                        id: 0,
+                        channel: None,
+                        pressure: None,
+                        pitch,
+                        start: 0.0,
+                        duration: 1.0,
+                        velocity: 100,
+                        volume: 127,
+                        offset: 0.0,
+                        legato: false,
+                        expr: crate::model::PitchExpression::NONE,
+                    },
+                },
                 Actor::Human,
             );
         }
@@ -1753,7 +2670,19 @@ mod tests {
                 track,
                 clip,
                 index: 0,
-                note: crate::model::Note { id: 0, pitch: 62, start: 1.5, duration: 0.5, velocity: 80, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+                note: crate::model::Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 62,
+                    start: 1.5,
+                    duration: 0.5,
+                    velocity: 80,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                },
             },
             Actor::Human,
         );
@@ -1761,28 +2690,65 @@ mod tests {
         assert_eq!(notes[0].pitch, 62);
         assert_eq!(notes[0].start, 1.5);
 
-        e.execute(Command::RemoveNote { track, clip, index: 1 }, Actor::Human);
+        e.execute(
+            Command::RemoveNote {
+                track,
+                clip,
+                index: 1,
+            },
+            Actor::Human,
+        );
         assert_eq!(e.project().track(track).unwrap().clips[0].notes.len(), 1);
 
         assert!(e.undo());
         assert_eq!(e.project().track(track).unwrap().clips[0].notes.len(), 2);
         assert!(e.undo());
-        assert_eq!(e.project().track(track).unwrap().clips[0].notes[0].pitch, 60);
+        assert_eq!(
+            e.project().track(track).unwrap().clips[0].notes[0].pitch,
+            60
+        );
     }
 
     #[test]
     fn param_command_is_dropped_when_not_finite() {
         let mut e = Engine::new("demo");
         let (track, _) = seeded(&mut e);
-        e.execute(Command::SetTrackInstrument { track, plugin_id: "builtin.synth".into() }, Actor::Human);
+        e.execute(
+            Command::SetTrackInstrument {
+                track,
+                plugin_id: "builtin.synth".into(),
+            },
+            Actor::Human,
+        );
         let depth = e.undo_depth();
 
-        let events = e.execute(Command::SetParam { track, param: "gain".into(), value: f32::NAN }, Actor::Human);
+        let events = e.execute(
+            Command::SetParam {
+                track,
+                param: "gain".into(),
+                value: f32::NAN,
+            },
+            Actor::Human,
+        );
         assert!(events.is_empty(), "非有限参数不得产出事件");
         assert_eq!(e.undo_depth(), depth, "被拒绝的命令不应进入撤销历史");
 
-        e.execute(Command::SetParam { track, param: "gain".into(), value: 0.25 }, Actor::Human);
-        let params = &e.project().track(track).unwrap().instrument.as_ref().unwrap().params;
+        e.execute(
+            Command::SetParam {
+                track,
+                param: "gain".into(),
+                value: 0.25,
+            },
+            Actor::Human,
+        );
+        let params = &e
+            .project()
+            .track(track)
+            .unwrap()
+            .instrument
+            .as_ref()
+            .unwrap()
+            .params;
         assert_eq!(params.get("gain"), Some(&0.25));
     }
 
@@ -1794,7 +2760,23 @@ mod tests {
         let (track, clip) = seeded(&mut e);
         for pitch in [60u8, 64, 67, 71] {
             e.execute(
-                Command::AddNote { track, clip, note: Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE } },
+                Command::AddNote {
+                    track,
+                    clip,
+                    note: Note {
+                        id: 0,
+                        channel: None,
+                        pressure: None,
+                        pitch,
+                        start: 0.0,
+                        duration: 1.0,
+                        velocity: 100,
+                        volume: 127,
+                        offset: 0.0,
+                        legato: false,
+                        expr: crate::model::PitchExpression::NONE,
+                    },
+                },
                 Actor::Human,
             );
         }
@@ -1803,23 +2785,59 @@ mod tests {
         let entries: Vec<NoteEdit> = (0..4)
             .map(|i| NoteEdit {
                 index: i,
-                note: Note { id: 0, pitch: 60 + i as u8, start: 0.0, duration: 1.0, velocity: 40, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+                note: Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 60 + i as u8,
+                    start: 0.0,
+                    duration: 1.0,
+                    velocity: 40,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                },
             })
             .collect();
-        e.execute(Command::SetNotes { track, clip, entries }, Actor::Human);
+        e.execute(
+            Command::SetNotes {
+                track,
+                clip,
+                entries,
+            },
+            Actor::Human,
+        );
         assert_eq!(e.undo_depth(), depth + 1, "批量改写应只记一条");
-        assert!(e.project().track(track).unwrap().clips[0].notes.iter().all(|n| n.velocity == 40));
+        assert!(e.project().track(track).unwrap().clips[0]
+            .notes
+            .iter()
+            .all(|n| n.velocity == 40));
 
         // 乱序 + 重复 + 越界的序号：只应删掉 0 与 3 两个。
-        e.execute(Command::RemoveNotes { track, clip, indices: vec![3, 0, 0, 99] }, Actor::Human);
+        e.execute(
+            Command::RemoveNotes {
+                track,
+                clip,
+                indices: vec![3, 0, 0, 99],
+            },
+            Actor::Human,
+        );
         assert_eq!(e.undo_depth(), depth + 2);
-        let pitches: Vec<u8> = e.project().track(track).unwrap().clips[0].notes.iter().map(|n| n.pitch).collect();
+        let pitches: Vec<u8> = e.project().track(track).unwrap().clips[0]
+            .notes
+            .iter()
+            .map(|n| n.pitch)
+            .collect();
         assert_eq!(pitches, vec![61, 62], "倒序删除 + 去重 + 越界保护");
 
         assert!(e.undo());
         assert_eq!(e.project().track(track).unwrap().clips[0].notes.len(), 4);
         assert!(e.undo());
-        assert!(e.project().track(track).unwrap().clips[0].notes.iter().all(|n| n.velocity == 100));
+        assert!(e.project().track(track).unwrap().clips[0]
+            .notes
+            .iter()
+            .all(|n| n.velocity == 100));
     }
 
     #[test]
@@ -1828,12 +2846,47 @@ mod tests {
         let mut e = Engine::new("demo");
         let (track, clip) = seeded(&mut e);
         let depth = e.undo_depth();
-        assert!(e.execute(Command::SetNotes { track, clip, entries: vec![] }, Actor::Human).is_empty());
-        assert!(e.execute(Command::RemoveNotes { track, clip, indices: vec![] }, Actor::Human).is_empty());
-        assert!(e.execute(Command::RemoveClips { items: vec![] }, Actor::Human).is_empty());
+        assert!(e
+            .execute(
+                Command::SetNotes {
+                    track,
+                    clip,
+                    entries: vec![]
+                },
+                Actor::Human
+            )
+            .is_empty());
+        assert!(e
+            .execute(
+                Command::RemoveNotes {
+                    track,
+                    clip,
+                    indices: vec![]
+                },
+                Actor::Human
+            )
+            .is_empty());
+        assert!(e
+            .execute(Command::RemoveClips { items: vec![] }, Actor::Human)
+            .is_empty());
         assert_eq!(e.undo_depth(), depth);
         // 仅仅是构造一下类型，确保它在公开 API 上可用。
-        let _ = NoteEdit { index: 0, note: crate::model::Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE } };
+        let _ = NoteEdit {
+            index: 0,
+            note: crate::model::Note {
+                id: 0,
+                channel: None,
+                pressure: None,
+                pitch: 60,
+                start: 0.0,
+                duration: 1.0,
+                velocity: 100,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+                expr: crate::model::PitchExpression::NONE,
+            },
+        };
     }
 
     #[test]
@@ -1842,13 +2895,37 @@ mod tests {
         let mut e = Engine::new("demo");
         let (t1, c1) = seeded(&mut e);
         let ev = e.execute(Command::AddTrack { name: "B".into() }, Actor::Human);
-        let t2 = match ev[0] { crate::event::Event::TrackAdded { id, .. } => id, _ => unreachable!() };
-        let ev = e.execute(Command::AddClip { track: t2, start: 0.0, length: 2.0 }, Actor::Human);
-        let c2 = match ev[0] { crate::event::Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
+        let t2 = match ev[0] {
+            crate::event::Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
+        let ev = e.execute(
+            Command::AddClip {
+                track: t2,
+                start: 0.0,
+                length: 2.0,
+            },
+            Actor::Human,
+        );
+        let c2 = match ev[0] {
+            crate::event::Event::ClipAdded { clip, .. } => clip,
+            _ => unreachable!(),
+        };
 
         let depth = e.undo_depth();
         e.execute(
-            Command::RemoveClips { items: vec![ClipRef { track: t1, clip: c1 }, ClipRef { track: t2, clip: c2 }] },
+            Command::RemoveClips {
+                items: vec![
+                    ClipRef {
+                        track: t1,
+                        clip: c1,
+                    },
+                    ClipRef {
+                        track: t2,
+                        clip: c2,
+                    },
+                ],
+            },
             Actor::Human,
         );
         assert_eq!(e.undo_depth(), depth + 1, "跨轨道批量删除应只记一条");
@@ -1866,15 +2943,26 @@ mod tests {
         let mut e = Engine::new("demo");
         let (t1, c1) = seeded(&mut e);
         let ev = e.execute(Command::AddTrack { name: "B".into() }, Actor::Human);
-        let t2 = match ev[0] { crate::event::Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        let t2 = match ev[0] {
+            crate::event::Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
 
         e.execute(
             Command::MoveClips {
-                items: vec![ClipPlacement { track: t1, clip: c1, to_track: t2, start: 4.0 }],
+                items: vec![ClipPlacement {
+                    track: t1,
+                    clip: c1,
+                    to_track: t2,
+                    start: 4.0,
+                }],
             },
             Actor::Human,
         );
-        assert!(e.project().track(t1).unwrap().clips.is_empty(), "原轨道必须腾空");
+        assert!(
+            e.project().track(t1).unwrap().clips.is_empty(),
+            "原轨道必须腾空"
+        );
         let moved = &e.project().track(t2).unwrap().clips;
         assert_eq!(moved.len(), 1);
         assert_eq!(moved[0].id, c1, "跨轨移动不得换 id");
@@ -1892,7 +2980,12 @@ mod tests {
         let (t1, c1) = seeded(&mut e);
         e.execute(
             Command::MoveClips {
-                items: vec![ClipPlacement { track: t1, clip: c1, to_track: TrackId(999), start: 8.0 }],
+                items: vec![ClipPlacement {
+                    track: t1,
+                    clip: c1,
+                    to_track: TrackId(999),
+                    start: 8.0,
+                }],
             },
             Actor::Human,
         );
@@ -1902,14 +2995,30 @@ mod tests {
     }
 
     #[test]
-    fn empty_plugin_id_clears_the_instrument() {        let mut e = Engine::new("demo");
+    fn empty_plugin_id_clears_the_instrument() {
+        let mut e = Engine::new("demo");
         let (track, _) = seeded(&mut e);
-        e.execute(Command::SetTrackInstrument { track, plugin_id: "builtin.synth".into() }, Actor::Human);
+        e.execute(
+            Command::SetTrackInstrument {
+                track,
+                plugin_id: "builtin.synth".into(),
+            },
+            Actor::Human,
+        );
         assert!(e.project().track(track).unwrap().instrument.is_some());
 
         // 空 id 表示卸载：不能留下一个指向不存在插件的实例（那会让轨道静默无声）。
-        let events = e.execute(Command::SetTrackInstrument { track, plugin_id: String::new() }, Actor::Human);
-        assert!(matches!(events[0], crate::event::Event::TrackInstrumentCleared { .. }));
+        let events = e.execute(
+            Command::SetTrackInstrument {
+                track,
+                plugin_id: String::new(),
+            },
+            Actor::Human,
+        );
+        assert!(matches!(
+            events[0],
+            crate::event::Event::TrackInstrumentCleared { .. }
+        ));
         assert!(e.project().track(track).unwrap().instrument.is_none());
 
         assert!(e.undo());
@@ -1917,9 +3026,16 @@ mod tests {
     }
 
     #[test]
-    fn rename_track_keeps_identity_and_survives_undo() {        let mut e = Engine::new("demo");
+    fn rename_track_keeps_identity_and_survives_undo() {
+        let mut e = Engine::new("demo");
         let (track, _) = seeded(&mut e);
-        e.execute(Command::RenameTrack { track, name: "和弦".into() }, Actor::Human);
+        e.execute(
+            Command::RenameTrack {
+                track,
+                name: "和弦".into(),
+            },
+            Actor::Human,
+        );
         assert_eq!(e.project().track(track).unwrap().name, "和弦");
         // 重命名不得改变 id（否则选中态与片段都会错位）。
         assert!(e.project().track(track).is_some());
@@ -1956,7 +3072,10 @@ mod tests {
         let mut e = Engine::new("demo");
         let names = ["Lead", "Chords", "Bass", "Drums", "Pad"].map(String::from);
         e.execute(
-            Command::NewProject { name: "x".into(), track_names: Some(names.to_vec()) },
+            Command::NewProject {
+                name: "x".into(),
+                track_names: Some(names.to_vec()),
+            },
             Actor::Human,
         );
         let got: Vec<&str> = e.project().tracks.iter().map(|t| t.name.as_str()).collect();
@@ -1965,7 +3084,10 @@ mod tests {
         // 名字数量对不上时退回模板默认名，而不是少几条轨道或 panic。
         let mut e = Engine::new("demo");
         e.execute(
-            Command::NewProject { name: "x".into(), track_names: Some(vec!["Solo".into()]) },
+            Command::NewProject {
+                name: "x".into(),
+                track_names: Some(vec!["Solo".into()]),
+            },
             Actor::Human,
         );
         assert_eq!(e.project().tracks.len(), crate::STARTER_TRACKS.len());
@@ -1980,7 +3102,12 @@ mod tests {
 
         let mut fresh = Engine::new_project("untitled");
         assert!(fresh.localize_starter_tracks(&names));
-        let got: Vec<&str> = fresh.project().tracks.iter().map(|t| t.name.as_str()).collect();
+        let got: Vec<&str> = fresh
+            .project()
+            .tracks
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
         assert_eq!(got, names);
         // 改名属于「初始状态」：撤销不该退回旧语言。
         assert!(!fresh.undo(), "改名不进历史");
@@ -1988,46 +3115,101 @@ mod tests {
         // 用户动过一次（这里：加了一个片段）之后就不该再被改名。
         let mut edited = Engine::new_project("untitled");
         let track = edited.project().tracks[0].id;
-        edited.execute(Command::AddClip { track, start: 0.0, length: 1.0 }, Actor::Human);
+        edited.execute(
+            Command::AddClip {
+                track,
+                start: 0.0,
+                length: 1.0,
+            },
+            Actor::Human,
+        );
         assert!(!edited.localize_starter_tracks(&names));
-        assert_eq!(edited.project().tracks[0].name, crate::STARTER_TRACKS[0].name);
+        assert_eq!(
+            edited.project().tracks[0].name,
+            crate::STARTER_TRACKS[0].name
+        );
     }
 
     #[test]
     fn keyframe_commands_are_normalized_and_undoable() {
         let mut e = Engine::new("t");
-        e.execute(Command::SetKeyframe { beat: 4.0, tempo: 90.0, num: 3, den: 4 }, Actor::Human);
+        e.execute(
+            Command::SetKeyframe {
+                beat: 4.0,
+                tempo: 90.0,
+                num: 3,
+                den: 4,
+            },
+            Actor::Human,
+        );
         assert_eq!(e.project().transport.keyframes.len(), 1);
         assert_eq!(e.project().transport.keyframes[0].tempo, 90.0);
         assert_eq!(
-            (e.project().transport.keyframes[0].time_sig_num, e.project().transport.keyframes[0].time_sig_den),
+            (
+                e.project().transport.keyframes[0].time_sig_num,
+                e.project().transport.keyframes[0].time_sig_den
+            ),
             (3, 4)
         );
 
         // beat<=0 → 安静忽略（列表不变），但命令仍算一次撤销步骤。
-        e.execute(Command::SetKeyframe { beat: 0.0, tempo: 200.0, num: 4, den: 4 }, Actor::Human);
+        e.execute(
+            Command::SetKeyframe {
+                beat: 0.0,
+                tempo: 200.0,
+                num: 4,
+                den: 4,
+            },
+            Actor::Human,
+        );
         assert_eq!(e.project().transport.keyframes.len(), 1);
 
         assert!(e.undo()); // 撤销 beat=0 那次
         assert!(e.undo()); // 撤销 beat=4 那次
         assert_eq!(e.project().transport.keyframes.len(), 0);
 
-        e.execute(Command::SetKeyframe { beat: 4.0, tempo: 90.0, num: 4, den: 4 }, Actor::Human);
+        e.execute(
+            Command::SetKeyframe {
+                beat: 4.0,
+                tempo: 90.0,
+                num: 4,
+                den: 4,
+            },
+            Actor::Human,
+        );
         e.execute(Command::RemoveKeyframe { beat: 4.0 }, Actor::Human);
         assert_eq!(e.project().transport.keyframes.len(), 0);
     }
 
     #[test]
     fn keyframe_events_are_structural() {
-        assert!(!Event::KeyframeSet { actor: Actor::Human, beat: 1.0, tempo: 120.0, num: 4, den: 4 }.is_mix_only());
-        assert!(!Event::KeyframeRemoved { actor: Actor::Human, beat: 1.0 }.is_mix_only());
+        assert!(!Event::KeyframeSet {
+            actor: Actor::Human,
+            beat: 1.0,
+            tempo: 120.0,
+            num: 4,
+            den: 4
+        }
+        .is_mix_only());
+        assert!(!Event::KeyframeRemoved {
+            actor: Actor::Human,
+            beat: 1.0
+        }
+        .is_mix_only());
     }
 
     #[test]
     fn rename_project_emits_event_and_is_undoable() {
         let mut e = Engine::new("demo");
-        let events = e.execute(Command::RenameProject { name: "Song".into() }, Actor::Human);
-        assert!(matches!(events.as_slice(), [Event::ProjectRenamed { name, .. }] if name == "Song"));
+        let events = e.execute(
+            Command::RenameProject {
+                name: "Song".into(),
+            },
+            Actor::Human,
+        );
+        assert!(
+            matches!(events.as_slice(), [Event::ProjectRenamed { name, .. }] if name == "Song")
+        );
         assert_eq!(e.project().name, "Song");
         assert!(e.undo());
         assert_eq!(e.project().name, "demo");
@@ -2051,7 +3233,12 @@ mod tests {
         assert!(!e.is_dirty(), "撤销回到保存点 → 不再是 dirty");
 
         // 改了名字也算改动。
-        e.execute(Command::RenameProject { name: "Renamed".into() }, Actor::Human);
+        e.execute(
+            Command::RenameProject {
+                name: "Renamed".into(),
+            },
+            Actor::Human,
+        );
         assert!(e.is_dirty());
     }
 
@@ -2063,22 +3250,78 @@ mod tests {
         let working = e.project().clone();
 
         let restored = Engine::restore(working, saved);
-        assert!(restored.is_dirty(), "缓存里带着未保存改动，恢复后仍应为 dirty");
+        assert!(
+            restored.is_dirty(),
+            "缓存里带着未保存改动，恢复后仍应为 dirty"
+        );
     }
 
     #[test]
     fn split_clip_cuts_notes_at_the_beat() {
         let mut e = Engine::new("t");
         let ev = e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
-        let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
-        let ev = e.execute(Command::AddClip { track, start: 0.0, length: 4.0 }, Actor::Human);
-        let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
-        let note = |pitch, start, duration| crate::model::Note { id: 0, pitch, start, duration, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE };
-        e.execute(Command::AddNote { track, clip, note: note(60, 0.0, 1.0) }, Actor::Human);
-        e.execute(Command::AddNote { track, clip, note: note(62, 1.0, 2.0) }, Actor::Human); // 跨过第 2 拍
-        e.execute(Command::AddNote { track, clip, note: note(64, 3.0, 0.5) }, Actor::Human);
+        let track = match ev[0] {
+            Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
+        let ev = e.execute(
+            Command::AddClip {
+                track,
+                start: 0.0,
+                length: 4.0,
+            },
+            Actor::Human,
+        );
+        let clip = match ev[0] {
+            Event::ClipAdded { clip, .. } => clip,
+            _ => unreachable!(),
+        };
+        let note = |pitch, start, duration| crate::model::Note {
+            id: 0,
+            channel: None,
+            pressure: None,
+            pitch,
+            start,
+            duration,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: crate::model::PitchExpression::NONE,
+        };
+        e.execute(
+            Command::AddNote {
+                track,
+                clip,
+                note: note(60, 0.0, 1.0),
+            },
+            Actor::Human,
+        );
+        e.execute(
+            Command::AddNote {
+                track,
+                clip,
+                note: note(62, 1.0, 2.0),
+            },
+            Actor::Human,
+        ); // 跨过第 2 拍
+        e.execute(
+            Command::AddNote {
+                track,
+                clip,
+                note: note(64, 3.0, 0.5),
+            },
+            Actor::Human,
+        );
 
-        let events = e.execute(Command::SplitClip { track, clip, beat: 2.0 }, Actor::Human);
+        let events = e.execute(
+            Command::SplitClip {
+                track,
+                clip,
+                beat: 2.0,
+            },
+            Actor::Human,
+        );
         assert!(matches!(events.as_slice(), [Event::ClipSplit { .. }]));
 
         let t = e.project().track(track).unwrap();
@@ -2096,7 +3339,11 @@ mod tests {
         assert_eq!((right.notes[1].start, right.notes[1].duration), (1.0, 0.5));
 
         assert!(e.undo());
-        assert_eq!(e.project().track(track).unwrap().clips.len(), 1, "切分可撤销");
+        assert_eq!(
+            e.project().track(track).unwrap().clips.len(),
+            1,
+            "切分可撤销"
+        );
     }
 
     #[test]
@@ -2104,19 +3351,38 @@ mod tests {
         use crate::model::AudioSource;
         let mut e = Engine::new("t");
         let ev = e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
-        let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        let track = match ev[0] {
+            Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
         let ev = e.execute(
             Command::AddAudioClip {
                 track,
                 start: 0.0,
                 length: 4.0,
-                source: AudioSource { path: "/tmp/a.wav".into(), offset_frames: 100, frames: Some(800), rate: 1.0, pitch_semitones: 0.0 },
+                source: AudioSource {
+                    path: "/tmp/a.wav".into(),
+                    offset_frames: 100,
+                    frames: Some(800),
+                    rate: 1.0,
+                    pitch_semitones: 0.0,
+                },
             },
             Actor::Human,
         );
-        let clip = match ev[0] { Event::AudioClipAdded { clip, .. } => clip, _ => unreachable!() };
+        let clip = match ev[0] {
+            Event::AudioClipAdded { clip, .. } => clip,
+            _ => unreachable!(),
+        };
 
-        e.execute(Command::SplitClip { track, clip, beat: 2.0 }, Actor::Human);
+        e.execute(
+            Command::SplitClip {
+                track,
+                clip,
+                beat: 2.0,
+            },
+            Actor::Human,
+        );
         let t = e.project().track(track).unwrap();
         let left = t.clips[0].audio.clone().unwrap();
         let right = t.clips[1].audio.clone().unwrap();
@@ -2133,11 +3399,26 @@ mod tests {
     fn split_clip_ignores_beats_outside_the_clip() {
         let mut e = Engine::new("t");
         let ev = e.execute(Command::AddTrack { name: "A".into() }, Actor::Human);
-        let track = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
-        let ev = e.execute(Command::AddClip { track, start: 2.0, length: 2.0 }, Actor::Human);
-        let clip = match ev[0] { Event::ClipAdded { clip, .. } => clip, _ => unreachable!() };
+        let track = match ev[0] {
+            Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
+        let ev = e.execute(
+            Command::AddClip {
+                track,
+                start: 2.0,
+                length: 2.0,
+            },
+            Actor::Human,
+        );
+        let clip = match ev[0] {
+            Event::ClipAdded { clip, .. } => clip,
+            _ => unreachable!(),
+        };
         for beat in [2.0, 1.0, 4.0, 9.0, f64::NAN] {
-            assert!(e.execute(Command::SplitClip { track, clip, beat }, Actor::Human).is_empty());
+            assert!(e
+                .execute(Command::SplitClip { track, clip, beat }, Actor::Human)
+                .is_empty());
         }
         assert_eq!(e.project().track(track).unwrap().clips.len(), 1);
     }
@@ -2149,11 +3430,41 @@ mod tests {
         let mut e = Engine::new("demo");
         let depth = e.undo_depth();
         let notes = vec![
-            Note { id: 0, pitch: 60, start: 0.0, duration: 0.5, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
-            Note { id: 0, pitch: 64, start: 0.5, duration: 0.5, velocity: 90, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+            Note {
+                id: 0,
+                channel: None,
+                pressure: None,
+                pitch: 60,
+                start: 0.0,
+                duration: 0.5,
+                velocity: 100,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+                expr: crate::model::PitchExpression::NONE,
+            },
+            Note {
+                id: 0,
+                channel: None,
+                pressure: None,
+                pitch: 64,
+                start: 0.5,
+                duration: 0.5,
+                velocity: 90,
+                volume: 127,
+                offset: 0.0,
+                legato: false,
+                expr: crate::model::PitchExpression::NONE,
+            },
         ];
         e.execute(
-            Command::AddNoteTrack { name: "MIDI".into(), start: 2.0, length: 4.0, notes, at: None },
+            Command::AddNoteTrack {
+                name: "MIDI".into(),
+                start: 2.0,
+                length: 4.0,
+                notes,
+                at: None,
+            },
             Actor::Human,
         );
         assert_eq!(e.undo_depth(), depth + 1, "整条链只占一个撤销步骤");
@@ -2174,18 +3485,40 @@ mod tests {
             e.project().tracks.iter().map(|t| t.name.clone()).collect()
         };
         let mut e = Engine::new("demo");
-        e.execute(Command::AddTrack { name: "Audio".into() }, Actor::Human);
-        e.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+        e.execute(
+            Command::AddTrack {
+                name: "Audio".into(),
+            },
+            Actor::Human,
+        );
+        e.execute(
+            Command::AddTrack {
+                name: "Bass".into(),
+            },
+            Actor::Human,
+        );
 
         e.execute(
-            Command::AddNoteTrack { name: "MIDI".into(), start: 0.0, length: 4.0, notes: vec![], at: Some(1) },
+            Command::AddNoteTrack {
+                name: "MIDI".into(),
+                start: 0.0,
+                length: 4.0,
+                notes: vec![],
+                at: Some(1),
+            },
             Actor::Human,
         );
         assert_eq!(names(&e), vec!["Audio", "MIDI", "Bass"], "应插在第 1 行");
 
         // 越界的位置夹到末尾，不 panic。
         e.execute(
-            Command::AddNoteTrack { name: "Tail".into(), start: 0.0, length: 1.0, notes: vec![], at: Some(99) },
+            Command::AddNoteTrack {
+                name: "Tail".into(),
+                start: 0.0,
+                length: 1.0,
+                notes: vec![],
+                at: Some(99),
+            },
             Actor::Human,
         );
         assert_eq!(names(&e), vec!["Audio", "MIDI", "Bass", "Tail"]);
@@ -2195,15 +3528,29 @@ mod tests {
         assert!(e.undo());
         assert_eq!(names(&e), vec!["Audio", "Bass"], "撤销后顺序复原");
         assert!(e.redo());
-        assert_eq!(names(&e), vec!["Audio", "MIDI", "Bass"], "重做要把轨道放回中间");
+        assert_eq!(
+            names(&e),
+            vec!["Audio", "MIDI", "Bass"],
+            "重做要把轨道放回中间"
+        );
     }
 
     /// 一次事务建「音频轨道 + 引用素材的片段」（降噪就靠它把结果放到源轨道下面），只占一条撤销记录。
     #[test]
     fn add_audio_track_inserts_below_and_is_one_undo_step() {
         let mut e = Engine::new("demo");
-        e.execute(Command::AddTrack { name: "Audio".into() }, Actor::Human);
-        e.execute(Command::AddTrack { name: "Bass".into() }, Actor::Human);
+        e.execute(
+            Command::AddTrack {
+                name: "Audio".into(),
+            },
+            Actor::Human,
+        );
+        e.execute(
+            Command::AddTrack {
+                name: "Bass".into(),
+            },
+            Actor::Human,
+        );
         let depth = e.undo_depth();
 
         e.execute(
@@ -2233,7 +3580,11 @@ mod tests {
         assert_eq!(clip.length, 4.0);
         let src = clip.audio.as_ref().unwrap();
         assert_eq!(src.path, "clean.wav");
-        assert_eq!((src.offset_frames, src.frames), (100, Some(800)), "素材窗口原样保留");
+        assert_eq!(
+            (src.offset_frames, src.frames),
+            (100, Some(800)),
+            "素材窗口原样保留"
+        );
 
         assert!(e.undo());
         assert_eq!(e.project().tracks.len(), 2, "撤销应把新轨道一并收回");
@@ -2245,14 +3596,23 @@ mod tests {
         let mut e = Engine::new("demo");
         let (t1, _) = seeded(&mut e);
         let ev = e.execute(Command::AddTrack { name: "Bus".into() }, Actor::Human);
-        let t2 = match ev[0] { Event::TrackAdded { id, .. } => id, _ => unreachable!() };
+        let t2 = match ev[0] {
+            Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
 
         e.execute(
             Command::SetSends {
                 track: t1,
                 sends: vec![
-                    Send { target: t2, gain_db: 999.0 },
-                    Send { target: t1, gain_db: 0.0 }, // 自发送 → 丢弃
+                    Send {
+                        target: t2,
+                        gain_db: 999.0,
+                    },
+                    Send {
+                        target: t1,
+                        gain_db: 0.0,
+                    }, // 自发送 → 丢弃
                 ],
             },
             Actor::Human,
@@ -2260,7 +3620,11 @@ mod tests {
         let sends = &e.project().track(t1).unwrap().sends;
         assert_eq!(sends.len(), 1, "自发送必须被丢弃");
         assert_eq!(sends[0].target, t2);
-        assert_eq!(sends[0].gain_db, crate::model::MixerChannel::MAX_GAIN_DB, "增益归一化");
+        assert_eq!(
+            sends[0].gain_db,
+            crate::model::MixerChannel::MAX_GAIN_DB,
+            "增益归一化"
+        );
 
         assert!(e.undo(), "发送可撤销");
         assert!(e.project().track(t1).unwrap().sends.is_empty());
@@ -2277,9 +3641,18 @@ mod tests {
                 track,
                 param: "gain_db".into(),
                 points: vec![
-                    AutomationPoint { beat: 4.0, value: -6.0 },
-                    AutomationPoint { beat: 0.0, value: 0.0 },
-                    AutomationPoint { beat: f64::NAN, value: 1.0 }, // 非有限 → 丢弃
+                    AutomationPoint {
+                        beat: 4.0,
+                        value: -6.0,
+                    },
+                    AutomationPoint {
+                        beat: 0.0,
+                        value: 0.0,
+                    },
+                    AutomationPoint {
+                        beat: f64::NAN,
+                        value: 1.0,
+                    }, // 非有限 → 丢弃
                 ],
             },
             Actor::Human,
@@ -2295,20 +3668,40 @@ mod tests {
             Command::SetAutomation {
                 track,
                 param: "gain_db".into(),
-                points: vec![AutomationPoint { beat: 1.0, value: 1.0 }],
+                points: vec![AutomationPoint {
+                    beat: 1.0,
+                    value: 1.0,
+                }],
             },
             Actor::Human,
         );
-        assert_eq!(e.project().track(track).unwrap().automation[0].points.len(), 1);
+        assert_eq!(
+            e.project().track(track).unwrap().automation[0].points.len(),
+            1
+        );
 
         // 空曲线 = 删除车道。
-        e.execute(Command::SetAutomation { track, param: "gain_db".into(), points: vec![] }, Actor::Human);
+        e.execute(
+            Command::SetAutomation {
+                track,
+                param: "gain_db".into(),
+                points: vec![],
+            },
+            Actor::Human,
+        );
         assert!(e.project().track(track).unwrap().automation.is_empty());
 
         // 空参数名 = 无效命令，不产事件、不进历史。
         let depth = e.undo_depth();
         assert!(e
-            .execute(Command::SetAutomation { track, param: "  ".into(), points: vec![] }, Actor::Human)
+            .execute(
+                Command::SetAutomation {
+                    track,
+                    param: "  ".into(),
+                    points: vec![]
+                },
+                Actor::Human
+            )
             .is_empty());
         assert_eq!(e.undo_depth(), depth);
     }

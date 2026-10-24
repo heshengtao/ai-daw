@@ -24,7 +24,12 @@ pub struct Transport {
 
 impl Default for Transport {
     fn default() -> Self {
-        Transport { tempo: 120.0, time_sig_num: 4, time_sig_den: 4, keyframes: vec![] }
+        Transport {
+            tempo: 120.0,
+            time_sig_num: 4,
+            time_sig_den: 4,
+            keyframes: vec![],
+        }
     }
 }
 
@@ -62,7 +67,11 @@ impl Transport {
     ///
     /// 编曲统计（每小节密度）与「和弦表只覆盖到第几拍」都按它换算。
     pub fn bar_beats(&self) -> f64 {
-        let den = if self.time_sig_den == 0 { 4 } else { self.time_sig_den };
+        let den = if self.time_sig_den == 0 {
+            4
+        } else {
+            self.time_sig_den
+        };
         self.time_sig_num as f64 * 4.0 / den as f64
     }
 
@@ -72,13 +81,24 @@ impl Transport {
             return None;
         }
         let (num, den) = Self::normalize_time_sig(kf.time_sig_num, kf.time_sig_den);
-        let tempo = if kf.tempo.is_finite() { kf.tempo.clamp(1.0, 1000.0) } else { 120.0 };
-        Some(Keyframe { beat: kf.beat, tempo, time_sig_num: num, time_sig_den: den })
+        let tempo = if kf.tempo.is_finite() {
+            kf.tempo.clamp(1.0, 1000.0)
+        } else {
+            120.0
+        };
+        Some(Keyframe {
+            beat: kf.beat,
+            tempo,
+            time_sig_num: num,
+            time_sig_den: den,
+        })
     }
 
     /// 插入或覆盖关键点（同 beat 容差内视为同一个），并保持按 beat 升序。
     pub fn upsert_keyframe(&mut self, kf: Keyframe) {
-        let Some(kf) = Self::normalize_keyframe(kf) else { return };
+        let Some(kf) = Self::normalize_keyframe(kf) else {
+            return;
+        };
         if let Some(slot) = self
             .keyframes
             .iter_mut()
@@ -88,12 +108,17 @@ impl Transport {
         } else {
             self.keyframes.push(kf);
         }
-        self.keyframes.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
+        self.keyframes.sort_by(|a, b| {
+            a.beat
+                .partial_cmp(&b.beat)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     /// 删除指定 beat 处的关键点（容差内匹配）。
     pub fn remove_keyframe(&mut self, beat: f64) {
-        self.keyframes.retain(|k| (k.beat - beat).abs() > Self::MIN_KEYFRAME_BEAT);
+        self.keyframes
+            .retain(|k| (k.beat - beat).abs() > Self::MIN_KEYFRAME_BEAT);
     }
 }
 
@@ -124,20 +149,46 @@ mod tests {
         use super::{Keyframe, Transport};
         let mut t = Transport::default();
         // 越界 beat / tempo / 拍号都要被处理。
-        t.upsert_keyframe(Keyframe { beat: 8.0, tempo: 5000.0, time_sig_num: 0, time_sig_den: 0 });
-        t.upsert_keyframe(Keyframe { beat: 2.0, tempo: 90.0, time_sig_num: 3, time_sig_den: 4 });
-        t.upsert_keyframe(Keyframe { beat: 0.0, tempo: 100.0, time_sig_num: 4, time_sig_den: 4 }); // 被拒
+        t.upsert_keyframe(Keyframe {
+            beat: 8.0,
+            tempo: 5000.0,
+            time_sig_num: 0,
+            time_sig_den: 0,
+        });
+        t.upsert_keyframe(Keyframe {
+            beat: 2.0,
+            tempo: 90.0,
+            time_sig_num: 3,
+            time_sig_den: 4,
+        });
+        t.upsert_keyframe(Keyframe {
+            beat: 0.0,
+            tempo: 100.0,
+            time_sig_num: 4,
+            time_sig_den: 4,
+        }); // 被拒
         assert_eq!(t.keyframes.len(), 2, "beat<=0 的关键点不得进入列表");
         assert_eq!(t.keyframes[0].beat, 2.0, "必须按 beat 升序");
         assert_eq!(t.keyframes[1].beat, 8.0);
         assert_eq!(t.keyframes[1].tempo, 1000.0, "tempo 夹到 1000");
-        assert_eq!((t.keyframes[1].time_sig_num, t.keyframes[1].time_sig_den), (1, 1));
+        assert_eq!(
+            (t.keyframes[1].time_sig_num, t.keyframes[1].time_sig_den),
+            (1, 1)
+        );
 
         // 同 beat 覆盖（容差内视为同一个）。
-        t.upsert_keyframe(Keyframe { beat: 2.0 + 1e-9, tempo: 60.0, time_sig_num: 6, time_sig_den: 8 });
+        t.upsert_keyframe(Keyframe {
+            beat: 2.0 + 1e-9,
+            tempo: 60.0,
+            time_sig_num: 6,
+            time_sig_den: 8,
+        });
         assert_eq!(t.keyframes.len(), 2);
         assert_eq!(t.keyframes[0].tempo, 60.0);
-        assert_eq!((t.keyframes[0].time_sig_num, t.keyframes[0].time_sig_den), (6, 8));
+        assert_eq!(
+            (t.keyframes[0].time_sig_num, t.keyframes[0].time_sig_den),
+            (6, 8)
+        );
 
         t.remove_keyframe(2.0);
         assert_eq!(t.keyframes.len(), 1);

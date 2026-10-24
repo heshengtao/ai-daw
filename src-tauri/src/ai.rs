@@ -175,12 +175,7 @@ pub fn ai_start(
 ) -> Result<(), String> {
     if !matches!(
         kind.as_str(),
-        KIND_TO_MIDI
-            | KIND_ENHANCE
-            | KIND_ENHANCE_DSP
-            | KIND_MASTER
-            | KIND_SEPARATE
-            | KIND_TEMPO
+        KIND_TO_MIDI | KIND_ENHANCE | KIND_ENHANCE_DSP | KIND_MASTER | KIND_SEPARATE | KIND_TEMPO
     ) {
         return Err(format!("未知的 AI 任务：{kind}"));
     }
@@ -218,7 +213,13 @@ pub fn ai_start(
     std::thread::Builder::new()
         .name("ai-daw-ai".into())
         .spawn(move || {
-            let outcome = run_job(&thread_app, &thread_runtime, &kind, &input, model.as_deref());
+            let outcome = run_job(
+                &thread_app,
+                &thread_runtime,
+                &kind,
+                &input,
+                model.as_deref(),
+            );
             finish(&thread_app, &thread_runtime, outcome);
         })
         .map_err(|e| e.to_string())?;
@@ -306,14 +307,21 @@ fn run_job(
     let rt = runtime.clone();
     let app_cb = app.clone();
     let progress = move |p: f32| -> bool {
-        rt.progress.store((p.clamp(0.0, 1.0) * 1000.0) as u32, Ordering::Relaxed);
+        rt.progress
+            .store((p.clamp(0.0, 1.0) * 1000.0) as u32, Ordering::Relaxed);
         let _ = app_cb.emit(EVENT_AI, rt.status());
         !rt.cancel.load(Ordering::Relaxed)
     };
 
     if kind == KIND_TO_MIDI {
         return transcribe_input(
-            app, input, &samples, channels, sample_rate, frames, &progress,
+            app,
+            input,
+            &samples,
+            channels,
+            sample_rate,
+            frames,
+            &progress,
         );
     }
 
@@ -370,6 +378,8 @@ fn transcribe_input(
         .iter()
         .map(|n| Note {
             id: 0,
+            channel: None,
+            pressure: None,
             pitch: n.pitch,
             start: n.start_sec * beats_per_second,
             duration: (n.duration_sec * beats_per_second).max(Note::MIN_DURATION_BEATS),
@@ -426,9 +436,17 @@ fn enhance_input(
     }
     state.assets.insert(
         &path,
-        Arc::new(DecodedAudio { samples: processed.into(), channels, sample_rate }),
+        Arc::new(DecodedAudio {
+            samples: processed.into(),
+            channels,
+            sample_rate,
+        }),
     );
-    let suffix = if force_dsp { "底噪降噪" } else { "人声降噪" };
+    let suffix = if force_dsp {
+        "底噪降噪"
+    } else {
+        "人声降噪"
+    };
     commands_run(
         app,
         Command::AddAudioTrack {
@@ -491,7 +509,13 @@ fn enhance_audio(
         }
     }
     (
-        ai_daw_local_ai::denoise::denoise(samples, channels, sample_rate, ENHANCE_STRENGTH, progress),
+        ai_daw_local_ai::denoise::denoise(
+            samples,
+            channels,
+            sample_rate,
+            ENHANCE_STRENGTH,
+            progress,
+        ),
         "内置 DSP",
     )
 }
@@ -519,7 +543,9 @@ fn separate_with_model(
 ) -> Result<ai_daw_local_ai::models::Stems, String> {
     use ai_daw_local_ai::models;
     match model.unwrap_or("htdemucs-ort-v1") {
-        "" | "htdemucs-ort-v1" => models::demucs::separate(samples, channels, sample_rate, progress),
+        "" | "htdemucs-ort-v1" => {
+            models::demucs::separate(samples, channels, sample_rate, progress)
+        }
         "htdemucs-6s" => models::demucs6s::separate(samples, channels, sample_rate, progress),
         other => Err(format!("未知的音源分离模型：{other}")),
     }
@@ -595,8 +621,7 @@ pub(crate) fn separate_track(
     if frames == 0 || sample_rate <= 0.0 {
         return Err("素材是空的".into());
     }
-    let stems =
-        separate_with_model(model.as_deref(), &samples, channels, sample_rate, &|_| true)?;
+    let stems = separate_with_model(model.as_deref(), &samples, channels, sample_rate, &|_| true)?;
     place_stems(app, &input, &stems, channels, sample_rate, frames)
 }
 
@@ -643,7 +668,11 @@ fn apply_tempo_detection(
         Err(e) => return Err(e),
     };
 
-    let (bpm, num, den) = (detection.bpm, detection.time_sig_num, detection.time_sig_den);
+    let (bpm, num, den) = (
+        detection.bpm,
+        detection.time_sig_num,
+        detection.time_sig_den,
+    );
     // 一小节多少拍（四分音符为基准）：4/4 → 4，3/4 → 3。
     let bar_beats = num as f64 * (4.0 / den as f64);
     // 第一个重拍相对片段起点的拍数。
@@ -658,9 +687,22 @@ fn apply_tempo_detection(
         vec![
             Command::SetTempo(bpm),
             Command::SetTimeSignature { num, den },
-            Command::MoveClip { track: input.track, clip: input.clip, start },
-            Command::ResizeClip { track: input.track, clip: input.clip, length },
-            Command::SetClipRate { track: input.track, clip: input.clip, rate: 1.0, pitch_semitones: 0.0 },
+            Command::MoveClip {
+                track: input.track,
+                clip: input.clip,
+                start,
+            },
+            Command::ResizeClip {
+                track: input.track,
+                clip: input.clip,
+                length,
+            },
+            Command::SetClipRate {
+                track: input.track,
+                clip: input.clip,
+                rate: 1.0,
+                pitch_semitones: 0.0,
+            },
         ],
     );
 
@@ -697,7 +739,15 @@ pub(crate) fn transcribe_track(app: &tauri::AppHandle, track: u64) -> Result<Str
     if frames == 0 || sample_rate <= 0.0 {
         return Err("素材是空的".into());
     }
-    transcribe_input(app, &input, &samples, channels, sample_rate, frames, &|_| true)
+    transcribe_input(
+        app,
+        &input,
+        &samples,
+        channels,
+        sample_rate,
+        frames,
+        &|_| true,
+    )
 }
 
 /// 同步跑一遍降噪（供 MCP 工具用；`dsp = true` 走内置 DSP，即「乐器底噪降噪」）。
@@ -716,7 +766,17 @@ pub(crate) fn enhance_track(
     if frames == 0 || sample_rate <= 0.0 {
         return Err("素材是空的".into());
     }
-    enhance_input(app, &input, &samples, channels, sample_rate, frames, dsp, &|_| true, || false)
+    enhance_input(
+        app,
+        &input,
+        &samples,
+        channels,
+        sample_rate,
+        frames,
+        dsp,
+        &|_| true,
+        || false,
+    )
 }
 
 /// 走与界面/代理同一条命令管线（会广播事件、进撤销历史）。
@@ -728,9 +788,10 @@ fn commands_run(app: &tauri::AppHandle, command: Command) -> Result<(), String> 
 
 /// 粗粒度进度：渲染与母带都是一整段不可打断的调用，只能报里程碑。
 fn step(runtime: &AiRuntime, app: &tauri::AppHandle, progress: f32) {
-    runtime
-        .progress
-        .store((progress.clamp(0.0, 1.0) * 1000.0) as u32, Ordering::Relaxed);
+    runtime.progress.store(
+        (progress.clamp(0.0, 1.0) * 1000.0) as u32,
+        Ordering::Relaxed,
+    );
     let _ = app.emit(EVENT_AI, runtime.status());
 }
 
@@ -777,7 +838,8 @@ fn run_master_job(
     {
         let mut out = ai_daw_engine::audio::AudioBuffer::silence(channels, frames);
         out.data_mut().copy_from_slice(&processed);
-        ai_daw_engine::wav::write_wav(&path, &out, MASTER_SAMPLE_RATE).map_err(|e| e.to_string())?;
+        ai_daw_engine::wav::write_wav(&path, &out, MASTER_SAMPLE_RATE)
+            .map_err(|e| e.to_string())?;
     }
     // 先把要用的数字与长度算出来，再交出 `processed` 的所有权。
     let length = crate::commands::natural_length_beats(&project, 0.0, seconds);
@@ -832,6 +894,8 @@ fn ai_output_path(app: &tauri::AppHandle, kind: &str) -> Result<String, String> 
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    Ok(dir.join(format!("{kind}-{stamp}.wav")).to_string_lossy().into_owned())
+    Ok(dir
+        .join(format!("{kind}-{stamp}.wav"))
+        .to_string_lossy()
+        .into_owned())
 }
-

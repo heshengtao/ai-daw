@@ -3,8 +3,8 @@
 mod voice;
 
 use ai_daw_plugin_api::{
-    IoLayout, MidiEvent, ParamId, ParamInfo, Plugin, PluginCapabilities, PluginDescriptor,
-    PluginError, PluginKind, ProcessContext, TimedMidiEvent,
+    IoLayout, MidiEvent, NoteExpressionSupport, ParamId, ParamInfo, Plugin, PluginCapabilities,
+    PluginDescriptor, PluginError, PluginKind, ProcessContext, TimedMidiEvent,
 };
 use voice::Voice;
 
@@ -128,7 +128,10 @@ fn voice_gain(index: usize, spread: f32) -> (f32, f32) {
     let pan = if index % 2 == 1 { spread } else { -spread };
     let angle = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
     let (sin, cos) = angle.sin_cos();
-    (cos * std::f32::consts::SQRT_2, sin * std::f32::consts::SQRT_2)
+    (
+        cos * std::f32::consts::SQRT_2,
+        sin * std::f32::consts::SQRT_2,
+    )
 }
 
 /// 内置合成器：DCO（主振 + 副振）→ HPF → VCF → VCA 的复音减法合成器。
@@ -236,6 +239,11 @@ impl SynthPlugin {
                 }
             }
             MidiEvent::ControlChange { .. } => {}
+            // 能力位已如实报 false；真送到这里时也不假装有效果。
+            MidiEvent::ChannelPressure { .. }
+            | MidiEvent::PolyPressure { .. }
+            | MidiEvent::ProgramChange { .. }
+            | MidiEvent::NoteExpression { .. } => {}
         }
     }
 
@@ -329,14 +337,26 @@ impl Plugin for SynthPlugin {
             id: self.id.into(),
             name: self.name.into(),
             kind: PluginKind::Instrument,
-            io: IoLayout { inputs: 0, outputs: 2 },
+            io: IoLayout {
+                inputs: 0,
+                outputs: 2,
+            },
             // 内置合成器能单独处理单音音量（每个声部一个增益）；它的「界面」是前端那套
             // 合成器面板，不是原生窗口，因此 `has_editor` 为 false。
             capabilities: PluginCapabilities {
-                per_note_volume: true,
+                midi_input: true,
                 has_editor: false,
-                per_note_pitch: true,
                 channel_pitch_bend: true,
+                // 这台合成器没有触后路由；如实报否，避免「写了却没反应」。
+                channel_pressure: false,
+                poly_pressure: false,
+                program_change: false,
+                per_note_channel: true,
+                note_expression: NoteExpressionSupport {
+                    volume: true,
+                    tuning: true,
+                    ..NoteExpressionSupport::default()
+                },
             },
         }
     }
@@ -365,7 +385,11 @@ impl Plugin for SynthPlugin {
             return;
         };
         let (_, _, min, max, _) = PARAM_TABLE[index];
-        let value = if value.is_finite() { value.clamp(min, max) } else { return };
+        let value = if value.is_finite() {
+            value.clamp(min, max)
+        } else {
+            return;
+        };
         let p = &mut self.params;
         match index {
             0 => p.gain = value,
@@ -418,7 +442,12 @@ impl Plugin for SynthPlugin {
         self.lfo_age = 0.0;
     }
 
-    fn process(&mut self, _ctx: &ProcessContext, audio: &mut [&mut [f32]], events: &[TimedMidiEvent]) {
+    fn process(
+        &mut self,
+        _ctx: &ProcessContext,
+        audio: &mut [&mut [f32]],
+        events: &[TimedMidiEvent],
+    ) {
         let frames = audio.first().map_or(0, |c| c.len());
         let sr = self.sample_rate;
         let params = self.params;
@@ -529,7 +558,12 @@ mod tests {
     use ai_daw_plugin_api::{MidiEvent, Plugin, ProcessContext, TimedMidiEvent};
 
     fn ctx(block: usize) -> ProcessContext {
-        ProcessContext { sample_rate: 48_000.0, block_size: block, tempo: 120.0, playing: true }
+        ProcessContext {
+            sample_rate: 48_000.0,
+            block_size: block,
+            tempo: 120.0,
+            playing: true,
+        }
     }
 
     /// 跑若干块并返回峰值；`events` **只在第一块**送入（之后按键状态由包络自己维持）。
@@ -582,7 +616,14 @@ mod tests {
         s.process(
             &ctx(256),
             &mut [&mut l, &mut r],
-            &[TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 100 } }],
+            &[TimedMidiEvent {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 69,
+                    velocity: 100,
+                },
+            }],
         );
         let peak = l.iter().fold(0.0f32, |a, b| a.max(b.abs()));
         assert!(peak > 0.05, "peak too low: {peak}");
@@ -590,7 +631,11 @@ mod tests {
         s.process(
             &ctx(256),
             &mut [&mut l, &mut r],
-            &[TimedMidiEvent { frame: 0, event: MidiEvent::NoteOff { note: 69 } }],
+            &[TimedMidiEvent {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::NoteOff { note: 69 },
+            }],
         );
         for _ in 0..2000 {
             let mut l = [0.0f32; 256];
@@ -606,13 +651,34 @@ mod tests {
 
     #[test]
     fn note_volume_attenuates_independently_of_velocity() {
-        let note_on = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 100 } }];
+        let note_on = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 69,
+                velocity: 100,
+            },
+        }];
         let loud = peak_of(&[], &note_on, 1);
         let soft = peak_of(
             &[],
             &[
-                TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 100 } },
-                TimedMidiEvent { frame: 0, event: MidiEvent::NoteVolume { note: 69, value: 64 } },
+                TimedMidiEvent {
+                    frame: 0,
+                    channel: 0,
+                    event: MidiEvent::NoteOn {
+                        note: 69,
+                        velocity: 100,
+                    },
+                },
+                TimedMidiEvent {
+                    frame: 0,
+                    channel: 0,
+                    event: MidiEvent::NoteVolume {
+                        note: 69,
+                        value: 64,
+                    },
+                },
             ],
             1,
         );
@@ -622,24 +688,52 @@ mod tests {
     /// 滤波器的截止真的在起作用：关小截止，输出必须明显变轻（高频被削掉）。
     #[test]
     fn cutoff_changes_the_signal() {
-        let note_on = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let note_on = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 69,
+                velocity: 127,
+            },
+        }];
         let open = peak_of(&[("cutoff", 1.0), ("filterEnv", 0.0)], &note_on, 4);
         let closed = peak_of(&[("cutoff", 0.05), ("filterEnv", 0.0)], &note_on, 4);
-        assert!(closed < open * 0.5, "closing the filter must soften: {open} -> {closed}");
+        assert!(
+            closed < open * 0.5,
+            "closing the filter must soften: {open} -> {closed}"
+        );
     }
 
     /// 共振有意义：拉满共振，输出不会爆掉也不会静音。
     #[test]
     fn resonance_stays_stable() {
-        let note_on = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 45, velocity: 127 } }];
-        let peak = peak_of(&[("cutoff", 0.35), ("resonance", 1.0), ("filterEnv", 0.8)], &note_on, 40);
+        let note_on = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 45,
+                velocity: 127,
+            },
+        }];
+        let peak = peak_of(
+            &[("cutoff", 0.35), ("resonance", 1.0), ("filterEnv", 0.8)],
+            &note_on,
+            40,
+        );
         assert!(peak > 0.01 && peak <= 1.0, "peak out of range: {peak}");
     }
 
     /// 每种波形都出声，且强弱关系符合各自的形状（峰值会被削波，所以比均方根）。
     #[test]
     fn waveforms_differ() {
-        let note_on = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 57, velocity: 127 } }];
+        let note_on = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 57,
+                velocity: 127,
+            },
+        }];
         let common: &[(&str, f32)] = &[("gain", 0.3), ("filterEnv", 0.0), ("cutoff", 1.0)];
         let rms = |wave: f32| {
             let mut params = common.to_vec();
@@ -647,18 +741,33 @@ mod tests {
             run(&params, &note_on, 4).1
         };
         let (saw, square, sine, triangle) = (rms(0.0), rms(1.0), rms(2.0), rms(3.0));
-        for (name, value) in [("saw", saw), ("square", square), ("sine", sine), ("triangle", triangle)] {
+        for (name, value) in [
+            ("saw", saw),
+            ("square", square),
+            ("sine", sine),
+            ("triangle", triangle),
+        ] {
             assert!(value > 0.01, "{name} must sound: {value}");
         }
         // 方波(RMS=1) > 正弦(0.707) > 锯齿/三角(≈0.577)。
         assert!(square > sine * 1.15, "square vs sine: {square} / {sine}");
-        assert!(sine > triangle * 1.1, "sine vs triangle: {sine} / {triangle}");
+        assert!(
+            sine > triangle * 1.1,
+            "sine vs triangle: {sine} / {triangle}"
+        );
     }
 
     /// 释音为 0 时按键一放就静音；延音为 0 时衰减完就静音。
     #[test]
     fn zero_sustain_ends_the_note_during_decay() {
-        let note_on = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let note_on = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 69,
+                velocity: 127,
+            },
+        }];
         let params = [("sustain", 0.0), ("decay", 0.05)];
         let (peak, _, _) = run(&params, &note_on, 1);
         assert!(peak > 0.01, "attack must sound");
@@ -682,7 +791,14 @@ mod tests {
         s.process(
             &ctx(48_000),
             &mut [&mut l, &mut r],
-            &[TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }],
+            &[TimedMidiEvent {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 69,
+                    velocity: 127,
+                },
+            }],
         );
         let crossings = l.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count();
         assert!((crossings as i64 - 440).abs() <= 4, "crossings={crossings}");
@@ -704,10 +820,21 @@ mod tests {
             &ctx(48_000),
             &mut [&mut l, &mut r],
             &[
-                TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } },
                 TimedMidiEvent {
                     frame: 0,
-                    event: MidiEvent::NotePitch { note: 69, cents: 200 },
+                    channel: 0,
+                    event: MidiEvent::NoteOn {
+                        note: 69,
+                        velocity: 127,
+                    },
+                },
+                TimedMidiEvent {
+                    frame: 0,
+                    channel: 0,
+                    event: MidiEvent::NotePitch {
+                        note: 69,
+                        cents: 200,
+                    },
                 },
             ],
         );
@@ -728,7 +855,11 @@ mod tests {
         let mut t = SynthPlugin::new();
         t.load_state(&state).unwrap();
         for (id, ..) in PARAM_TABLE.iter() {
-            assert_eq!(t.get_param(&ParamId::from(*id)), s.get_param(&ParamId::from(*id)), "{id}");
+            assert_eq!(
+                t.get_param(&ParamId::from(*id)),
+                s.get_param(&ParamId::from(*id)),
+                "{id}"
+            );
         }
     }
 
@@ -751,7 +882,11 @@ mod tests {
 
     #[test]
     fn preset_reports_its_own_identity_and_defaults() {
-        let s = SynthPlugin::preset("builtin.synth.pad", "Pad", &[("gain", 0.5), ("attack", 0.4), ("release", 1.5)]);
+        let s = SynthPlugin::preset(
+            "builtin.synth.pad",
+            "Pad",
+            &[("gain", 0.5), ("attack", 0.4), ("release", 1.5)],
+        );
         assert_eq!(s.descriptor().id, "builtin.synth.pad");
         assert_eq!(s.descriptor().name, "Pad");
         assert_eq!(s.get_param(&ParamId::from("gain")), Some(0.5));
@@ -831,7 +966,9 @@ mod tests {
 
     /// 上升过零次数：基频的粗略代理（纯净单音下 ≈ 基频 × 秒数）。
     fn crossings(data: &[f32]) -> usize {
-        data.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count()
+        data.windows(2)
+            .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
+            .count()
     }
 
     /// 排序去重后相邻电平的**最小正间隔**：量化步长的直接度量（越小 = 越连续）。
@@ -856,7 +993,10 @@ mod tests {
         ]
     }
 
-    fn with(base: &[(&'static str, f32)], extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
+    fn with(
+        base: &[(&'static str, f32)],
+        extra: &[(&'static str, f32)],
+    ) -> Vec<(&'static str, f32)> {
         let mut out = base.to_vec();
         out.extend_from_slice(extra);
         out
@@ -865,7 +1005,14 @@ mod tests {
     /// 噪声是**混合**：`noise = 1` 得到纯噪声（宽带），`noise = 0` 是干净的正弦。
     #[test]
     fn noise_replaces_the_oscillator_with_broadband() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 69,
+                velocity: 127,
+            },
+        }];
         let clean = render(&with(&flat(), &[("noise", 0.0)]), &note, 20);
         let noisy = render(&with(&flat(), &[("noise", 1.0)]), &note, 20);
         let (c, n) = (crossings(&clean), crossings(&noisy));
@@ -873,7 +1020,9 @@ mod tests {
         assert!(c < 60, "干净正弦不该有过多次过零：{c}");
         assert!(n > c * 8, "纯噪声应当异常频繁地过零：{c} -> {n}");
         // 带宽上去之后，能量不该同时崩掉。
-        let rms = |d: &[f32]| (d.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / d.len() as f64).sqrt();
+        let rms = |d: &[f32]| {
+            (d.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / d.len() as f64).sqrt()
+        };
         assert!(rms(&noisy) > rms(&clean) * 0.5, "噪声不该比正弦轻太多");
     }
 
@@ -883,7 +1032,14 @@ mod tests {
     /// ——`crush = 1` 对应 4 bit（16 档），与 NES 的 4 bit 音量同量级。
     #[test]
     fn crush_quantizes_the_output() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 69,
+                velocity: 127,
+            },
+        }];
         let clean = render(&with(&flat(), &[("crush", 0.0)]), &note, 8);
         let crushed = render(&with(&flat(), &[("crush", 1.0)]), &note, 8);
         let (c, k) = (min_level_gap(&clean), min_level_gap(&crushed));
@@ -897,9 +1053,25 @@ mod tests {
     /// 压碎 = 0 时逐样本等于改版前的输出（新算子不许悄悄改变默认音色）。
     #[test]
     fn defaults_are_byte_for_byte_unchanged() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } }];
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 60,
+                velocity: 100,
+            },
+        }];
         // 只用改版前就存在的参数。
-        let old = render(&[("gain", 0.8), ("wave", 2.0), ("cutoff", 0.7), ("lfoPitch", 0.3)], &note, 6);
+        let old = render(
+            &[
+                ("gain", 0.8),
+                ("wave", 2.0),
+                ("cutoff", 0.7),
+                ("lfoPitch", 0.3),
+            ],
+            &note,
+            6,
+        );
         // 显式把新参数钉在默认值上，结果必须一致。
         let pinned = render(
             &[
@@ -932,7 +1104,14 @@ mod tests {
     /// 失谐靠**拍频**验证：两个失谐的振荡器会此消彼长，窗口峰值随之起伏。
     #[test]
     fn detune_beats_against_the_main_oscillator() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 69,
+                velocity: 127,
+            },
+        }];
         // 拉满失谐 = +2% ≈ 34 音分 → 440 Hz 上约 8.8 Hz 拍频（周期 114 ms）。
         // 窗口必须**明显短于一个拍周期**，否则每个窗口的峰值都能赶上一次相长干涉，测不出起伏。
         let spread = |detune: f32| -> f32 {
@@ -940,13 +1119,21 @@ mod tests {
             let windows = 16;
             let win = data.len() / windows;
             let peaks: Vec<f32> = (0..windows)
-                .map(|i| data[i * win..(i + 1) * win].iter().fold(0.0f32, |a, b| a.max(b.abs())))
+                .map(|i| {
+                    data[i * win..(i + 1) * win]
+                        .iter()
+                        .fold(0.0f32, |a, b| a.max(b.abs()))
+                })
                 .collect();
             let (lo, hi) = (
                 peaks.iter().cloned().fold(f32::MAX, f32::min),
                 peaks.iter().cloned().fold(0.0f32, f32::max),
             );
-            if hi <= 0.0 { 0.0 } else { lo / hi }
+            if hi <= 0.0 {
+                0.0
+            } else {
+                lo / hi
+            }
         };
         let dry = spread(0.0);
         let wet = spread(1.0);
@@ -957,7 +1144,14 @@ mod tests {
     /// FM 产生边带：同样的音高下，过零次数显著增多。
     #[test]
     fn fm_adds_sidebands() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 69,
+                velocity: 127,
+            },
+        }];
         let clean = render(&with(&flat(), &[("fm", 0.0)]), &note, 20);
         let fm = render(&with(&flat(), &[("fm", 0.9), ("fmRatio", 3.0)]), &note, 20);
         let (c, m) = (crossings(&clean), crossings(&fm));
@@ -967,9 +1161,24 @@ mod tests {
     /// FM 深度拉满也不许削波爆掉。
     #[test]
     fn extreme_fm_stays_bounded() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 45, velocity: 127 } }];
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 45,
+                velocity: 127,
+            },
+        }];
         let data = render(
-            &with(&flat(), &[("fm", 1.0), ("fmRatio", 8.0), ("resonance", 1.0), ("noise", 0.3)]),
+            &with(
+                &flat(),
+                &[
+                    ("fm", 1.0),
+                    ("fmRatio", 8.0),
+                    ("resonance", 1.0),
+                    ("noise", 0.3),
+                ],
+            ),
             &note,
             10,
         );
@@ -981,23 +1190,50 @@ mod tests {
     /// 音高包络是**下扫**：前段过零率明显高于后段。
     #[test]
     fn pitch_envelope_sweeps_down() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 57, velocity: 127 } }];
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 57,
+                velocity: 127,
+            },
+        }];
         // pitchDecay = 0.5 → 0.005 × 400^0.5 = 0.1 s 扫完（+2 八度 → 0）。
-        let data = render(&with(&flat(), &[("pitchEnv", 1.0), ("pitchDecay", 0.5)]), &note, 40);
+        let data = render(
+            &with(&flat(), &[("pitchEnv", 1.0), ("pitchDecay", 0.5)]),
+            &note,
+            40,
+        );
         let head = crossings(&data[0..4800]);
         let tail = crossings(&data[5400..10200]);
-        assert!(head > tail * 2, "起音应当是下扫：前段 {head} vs 后段 {tail}");
+        assert!(
+            head > tail * 2,
+            "起音应当是下扫：前段 {head} vs 后段 {tail}"
+        );
 
         // 关掉音高包络则前后一致。
         let flat_data = render(&with(&flat(), &[("pitchEnv", 0.0)]), &note, 40);
-        let (h2, t2) = (crossings(&flat_data[0..4800]), crossings(&flat_data[5400..10200]));
-        assert!((h2 as i64 - t2 as i64).abs() <= 4, "关掉后前后应当一致：{h2} / {t2}");
+        let (h2, t2) = (
+            crossings(&flat_data[0..4800]),
+            crossings(&flat_data[5400..10200]),
+        );
+        assert!(
+            (h2 as i64 - t2 as i64).abs() <= 4,
+            "关掉后前后应当一致：{h2} / {t2}"
+        );
     }
 
     /// 独立滤波包络：幅度保持满延音时，滤波包络可以自己关掉（老版本做不到）。
     #[test]
     fn independent_filter_envelope_closes_while_amp_sustains() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 127 } }];
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 60,
+                velocity: 127,
+            },
+        }];
         let base: Vec<(&'static str, f32)> = vec![
             ("gain", 0.8),
             ("attack", 0.0),
@@ -1029,7 +1265,14 @@ mod tests {
     /// 音高包络现在也能**上扫**（`pitchEnvDir = 1`）：后段频率明显高于前段。
     #[test]
     fn pitch_envelope_can_sweep_up() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 57, velocity: 127 } }];
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 57,
+                velocity: 127,
+            },
+        }];
         let data = render(
             &with(
                 &flat(),
@@ -1040,18 +1283,39 @@ mod tests {
         );
         let head = crossings(&data[0..4800]);
         let tail = crossings(&data[5400..10200]);
-        assert!(tail > head * 3 / 2, "起音应当是上扫：前段 {head} vs 后段 {tail}");
+        assert!(
+            tail > head * 3 / 2,
+            "起音应当是上扫：前段 {head} vs 后段 {tail}"
+        );
     }
 
     /// 4 副本 unison 必须有限、限幅，而且确实改变波形。
     #[test]
     fn unison_stays_bounded_and_changes_the_waveform() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 57, velocity: 127 } }];
-        let single = render(&with(&flat(), &[("unison", 1.0), ("detune", 0.5)]), &note, 20);
-        let stack = render(&with(&flat(), &[("unison", 4.0), ("detune", 0.5)]), &note, 20);
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 57,
+                velocity: 127,
+            },
+        }];
+        let single = render(
+            &with(&flat(), &[("unison", 1.0), ("detune", 0.5)]),
+            &note,
+            20,
+        );
+        let stack = render(
+            &with(&flat(), &[("unison", 4.0), ("detune", 0.5)]),
+            &note,
+            20,
+        );
         assert!(stack.iter().all(|x| x.is_finite()), "不得出现 NaN / Inf");
         let peak = stack.iter().fold(0.0f32, |a, b| a.max(b.abs()));
-        assert!(peak > 0.01 && peak <= 1.0, "unison 输出必须有限且限幅：{peak}");
+        assert!(
+            peak > 0.01 && peak <= 1.0,
+            "unison 输出必须有限且限幅：{peak}"
+        );
         assert_ne!(single, stack, "4 副本 unison 应当与单振不同");
     }
 
@@ -1059,9 +1323,30 @@ mod tests {
     #[test]
     fn spread_pans_chord_voices_and_is_mono_at_zero() {
         let events = [
-            TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 60, velocity: 100 } },
-            TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 64, velocity: 100 } },
-            TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 67, velocity: 100 } },
+            TimedMidiEvent {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 60,
+                    velocity: 100,
+                },
+            },
+            TimedMidiEvent {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 64,
+                    velocity: 100,
+                },
+            },
+            TimedMidiEvent {
+                frame: 0,
+                channel: 0,
+                event: MidiEvent::NoteOn {
+                    note: 67,
+                    velocity: 100,
+                },
+            },
         ];
         let mono = with(&flat(), &[("spread", 0.0)]);
         let (l0, r0) = render_stereo(&mono, &events, 8);
@@ -1078,9 +1363,19 @@ mod tests {
     /// 2x 过采样：高 FM 下仍然有限、限幅、出声。
     #[test]
     fn oversampling_stays_bounded_and_sounds() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 45, velocity: 127 } }];
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 45,
+                velocity: 127,
+            },
+        }];
         let data = render(
-            &with(&flat(), &[("fm", 1.0), ("fmRatio", 8.0), ("oversample", 1.0)]),
+            &with(
+                &flat(),
+                &[("fm", 1.0), ("fmRatio", 8.0), ("oversample", 1.0)],
+            ),
             &note,
             20,
         );
@@ -1092,10 +1387,20 @@ mod tests {
     /// 每声部 LFO 模式必须真的在调制（不是静音、不是坏值）。
     #[test]
     fn per_voice_lfo_modulates() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 127 } }];
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 69,
+                velocity: 127,
+            },
+        }];
         let flat_pitch = render(&with(&flat(), &[("lfoPitch", 0.0)]), &note, 40);
         let vibrato = render(
-            &with(&flat(), &[("lfoMode", 1.0), ("lfoPitch", 1.0), ("lfoRate", 1.0)]),
+            &with(
+                &flat(),
+                &[("lfoMode", 1.0), ("lfoPitch", 1.0), ("lfoRate", 1.0)],
+            ),
             &note,
             40,
         );
@@ -1106,7 +1411,14 @@ mod tests {
     /// 高通真的把低频削掉：同一颗低音用高通播会明显更轻。
     #[test]
     fn filter_type_high_pass_removes_the_low_end() {
-        let note = [TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 40, velocity: 127 } }];
+        let note = [TimedMidiEvent {
+            frame: 0,
+            channel: 0,
+            event: MidiEvent::NoteOn {
+                note: 40,
+                velocity: 127,
+            },
+        }];
         let rms = |data: &[f32]| {
             (data.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / data.len() as f64).sqrt()
         };
@@ -1147,7 +1459,11 @@ mod tests {
         let mut t = SynthPlugin::new();
         t.load_state(&state).unwrap();
         for (id, ..) in PARAM_TABLE.iter() {
-            assert_eq!(t.get_param(&ParamId::from(*id)), s.get_param(&ParamId::from(*id)), "{id}");
+            assert_eq!(
+                t.get_param(&ParamId::from(*id)),
+                s.get_param(&ParamId::from(*id)),
+                "{id}"
+            );
         }
     }
 
@@ -1161,7 +1477,11 @@ mod tests {
 
         let mut t = SynthPlugin::new();
         t.load_state(short).unwrap();
-        assert_eq!(t.get_param(&ParamId::from("noise")), Some(0.9), "老的参数照读");
+        assert_eq!(
+            t.get_param(&ParamId::from("noise")),
+            Some(0.9),
+            "老的参数照读"
+        );
         for (id, expected) in [
             ("filterEnvMode", 0.0),
             ("fAttack", 0.01),
@@ -1207,7 +1527,14 @@ mod tests {
             s.process(
                 &ctx(256),
                 &mut [&mut l, &mut r],
-                &[TimedMidiEvent { frame: 0, event: MidiEvent::NoteOn { note: 69, velocity: 100 } }],
+                &[TimedMidiEvent {
+                    frame: 0,
+                    channel: 0,
+                    event: MidiEvent::NoteOn {
+                        note: 69,
+                        velocity: 100,
+                    },
+                }],
             );
             let peak = l.iter().fold(0.0f32, |a, b| a.max(b.abs()));
             assert!(peak > 0.05, "{name}状态被拒后必须仍然出声，peak={peak}");

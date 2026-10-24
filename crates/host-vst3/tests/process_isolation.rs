@@ -18,14 +18,11 @@ use ai_daw_plugin_api::{PluginKind, ProcessContext};
 fn helper_path() -> Option<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/binaries");
     let entries = std::fs::read_dir(dir).ok()?;
-    entries
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("vst3-host-helper-"))
-        })
+    entries.flatten().map(|e| e.path()).find(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("vst3-host-helper-"))
+    })
 }
 
 /// 测试插件：`AIDAW_TEST_VST3` 优先，否则用本机安装的 RdPiano。
@@ -35,9 +32,8 @@ fn crashy_plugin() -> Option<PathBuf> {
         return path.exists().then_some(path);
     }
     let home = std::env::var_os("HOME")?;
-    let path = PathBuf::from(home).join(
-        "Library/Application Support/com.aidaw.app/plugins/vst3/rdpiano_juce.vst3",
-    );
+    let path = PathBuf::from(home)
+        .join("Library/Application Support/com.aidaw.app/plugins/vst3/rdpiano_juce.vst3");
     path.exists().then_some(path)
 }
 
@@ -65,6 +61,7 @@ fn isolated_load_survives_a_crashing_vst3() {
             format: "vst3".into(),
             accepts_midi: true,
             has_editor: false,
+            description: None,
             path: plugin_path.clone(),
         };
 

@@ -10,6 +10,15 @@ import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updat
 import { relaunch } from "@tauri-apps/plugin-process";
 import { mockEnabled } from "./mock";
 
+/** 仓库的 Releases 页：更新日志总入口。 */
+export const RELEASES_URL = "https://github.com/heshengtao/ai-daw/releases";
+
+/** 某个版本的发布页（带 `v` 前缀的 tag）；版本号为空时退回 Releases 列表。 */
+export function releaseNotesUrl(version: string): string {
+  const tag = version.trim().replace(/^v/i, "");
+  return tag ? `${RELEASES_URL}/tag/v${tag}` : RELEASES_URL;
+}
+
 /** 一次更新检查的结果（供界面展示；不含插件内部句柄）。 */
 export interface UpdateInfo {
   /** 新版本号。 */

@@ -14,7 +14,13 @@ pub fn apply(project: &mut Project, event: &Event) {
             project.transport.time_sig_num = num;
             project.transport.time_sig_den = den;
         }
-        Event::KeyframeSet { beat, tempo, num, den, .. } => {
+        Event::KeyframeSet {
+            beat,
+            tempo,
+            num,
+            den,
+            ..
+        } => {
             if let Some(kf) = crate::model::Transport::normalize_keyframe(crate::model::Keyframe {
                 beat: *beat,
                 tempo: *tempo,
@@ -39,7 +45,9 @@ pub fn apply(project: &mut Project, event: &Event) {
             };
             match at {
                 // 事件自带插入位置：撤销/重放才能重现「插在中间」。
-                Some(index) => project.tracks.insert((*index).min(project.tracks.len()), track),
+                Some(index) => project
+                    .tracks
+                    .insert((*index).min(project.tracks.len()), track),
                 None => project.tracks.push(track),
             }
         }
@@ -52,7 +60,9 @@ pub fn apply(project: &mut Project, event: &Event) {
                 t.name = name.clone();
             }
         }
-        Event::TrackInstrumentSet { track, plugin_id, .. } => {
+        Event::TrackInstrumentSet {
+            track, plugin_id, ..
+        } => {
             if let Some(t) = project.track_mut(*track) {
                 t.instrument = Some(PluginInstance {
                     plugin_id: plugin_id.clone(),
@@ -66,7 +76,13 @@ pub fn apply(project: &mut Project, event: &Event) {
                 t.instrument = None;
             }
         }
-        Event::ClipAdded { track, clip, start, length, .. } => {
+        Event::ClipAdded {
+            track,
+            clip,
+            start,
+            length,
+            ..
+        } => {
             if let Some(t) = project.track_mut(*track) {
                 t.clips.push(Clip {
                     id: *clip,
@@ -77,7 +93,14 @@ pub fn apply(project: &mut Project, event: &Event) {
                 });
             }
         }
-        Event::AudioClipAdded { track, clip, start, length, source, .. } => {
+        Event::AudioClipAdded {
+            track,
+            clip,
+            start,
+            length,
+            source,
+            ..
+        } => {
             if let Some(t) = project.track_mut(*track) {
                 t.clips.push(Clip {
                     id: *clip,
@@ -88,7 +111,9 @@ pub fn apply(project: &mut Project, event: &Event) {
                 });
             }
         }
-        Event::ClipAudioChanged { track, clip, audio, .. } => {
+        Event::ClipAudioChanged {
+            track, clip, audio, ..
+        } => {
             let mut cleared_notes = false;
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 c.audio = audio.clone();
@@ -102,7 +127,13 @@ pub fn apply(project: &mut Project, event: &Event) {
                 project.remove_clip_note_tags(*track, *clip);
             }
         }
-        Event::ClipRateChanged { track, clip, rate, pitch_semitones, .. } => {
+        Event::ClipRateChanged {
+            track,
+            clip,
+            rate,
+            pitch_semitones,
+            ..
+        } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 if let Some(audio) = c.audio.as_mut() {
                     audio.rate = crate::model::AudioSource::normalize_rate(*rate);
@@ -117,7 +148,9 @@ pub fn apply(project: &mut Project, event: &Event) {
             }
             project.remove_clip_note_tags(*track, *clip);
         }
-        Event::ClipMoved { track, clip, start, .. } => {
+        Event::ClipMoved {
+            track, clip, start, ..
+        } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 c.start = Clip::normalize_start(*start);
             }
@@ -130,8 +163,12 @@ pub fn apply(project: &mut Project, event: &Event) {
                     continue;
                 }
                 // 先从原轨道摘下来；摘不到说明片段已被删除，同样跳过。
-                let Some(from) = project.track_mut(item.track) else { continue };
-                let Some(index) = from.clips.iter().position(|c| c.id == item.clip) else { continue };
+                let Some(from) = project.track_mut(item.track) else {
+                    continue;
+                };
+                let Some(index) = from.clips.iter().position(|c| c.id == item.clip) else {
+                    continue;
+                };
                 let mut clip = from.clips.remove(index);
                 clip.start = Clip::normalize_start(item.start);
 
@@ -144,16 +181,33 @@ pub fn apply(project: &mut Project, event: &Event) {
                 project.move_clip_note_tags(item.track, item.to_track, item.clip);
             }
         }
-        Event::ClipResized { track, clip, length, .. } => {
+        Event::ClipResized {
+            track,
+            clip,
+            length,
+            ..
+        } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 c.length = Clip::normalize_length(*length);
             }
         }
-        Event::ClipSplit { track, clip, new_clip, at_beat, left_notes, right_notes, left_audio, right_audio, .. } => {
+        Event::ClipSplit {
+            track,
+            clip,
+            new_clip,
+            at_beat,
+            left_notes,
+            right_notes,
+            left_audio,
+            right_audio,
+            ..
+        } => {
             let right_ids: Vec<u64> = right_notes.iter().map(|n| n.id).collect();
             let left_ids: Vec<u64> = left_notes.iter().map(|n| n.id).collect();
             if let Some(t) = project.track_mut(*track) {
-                let Some(pos) = t.clips.iter().position(|c| c.id == *clip) else { return };
+                let Some(pos) = t.clips.iter().position(|c| c.id == *clip) else {
+                    return;
+                };
                 let end = t.clips[pos].start + t.clips[pos].length;
                 {
                     let left = &mut t.clips[pos];
@@ -174,7 +228,9 @@ pub fn apply(project: &mut Project, event: &Event) {
             }
             project.move_note_tags_to_clip(*track, *clip, *new_clip, &right_ids, &left_ids);
         }
-        Event::NoteAdded { track, clip, note, .. } => {
+        Event::NoteAdded {
+            track, clip, note, ..
+        } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 // 事件里的 id 正常由命令层发放；手写 / 旧事件可能带 0，就地补一个。
                 let mut note = Note::normalize(*note);
@@ -184,7 +240,9 @@ pub fn apply(project: &mut Project, event: &Event) {
                 c.notes.push(note);
             }
         }
-        Event::NotesAdded { track, clip, notes, .. } => {
+        Event::NotesAdded {
+            track, clip, notes, ..
+        } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 // 先算一次高水位，避免逐个 `next_note_id()` 反复扫描整段音符。
                 let mut next = c.next_note_id();
@@ -201,7 +259,9 @@ pub fn apply(project: &mut Project, event: &Event) {
                 }
             }
         }
-        Event::NotesReplaced { track, clip, notes, .. } => {
+        Event::NotesReplaced {
+            track, clip, notes, ..
+        } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 let mut next = 1u64;
                 c.notes = notes
@@ -229,14 +289,25 @@ pub fn apply(project: &mut Project, event: &Event) {
             // 整体替换会从 1 重新发 id；旧标签必须清掉，否则会套到新音符上。
             project.remove_clip_note_tags(*track, *clip);
         }
-        Event::NoteChanged { track, clip, index, note, .. } => {
+        Event::NoteChanged {
+            track,
+            clip,
+            index,
+            note,
+            ..
+        } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 if let Some(slot) = c.notes.get_mut(*index) {
                     *slot = Note::normalize(*note);
                 }
             }
         }
-        Event::NotesChanged { track, clip, entries, .. } => {
+        Event::NotesChanged {
+            track,
+            clip,
+            entries,
+            ..
+        } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 for entry in entries {
                     if let Some(slot) = c.notes.get_mut(entry.index) {
@@ -245,7 +316,9 @@ pub fn apply(project: &mut Project, event: &Event) {
                 }
             }
         }
-        Event::NoteRemoved { track, clip, index, .. } => {
+        Event::NoteRemoved {
+            track, clip, index, ..
+        } => {
             let removed = if let Some(c) = find_clip_mut(project, *track, *clip) {
                 if *index < c.notes.len() {
                     Some(c.notes.remove(*index).id)
@@ -259,12 +332,20 @@ pub fn apply(project: &mut Project, event: &Event) {
                 project.remove_note_tag(*track, *clip, id);
             }
         }
-        Event::NotesRemoved { track, clip, indices, .. } => {
+        Event::NotesRemoved {
+            track,
+            clip,
+            indices,
+            ..
+        } => {
             let mut removed = Vec::new();
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 // 倒序删除：正序删除会让后面的序号整体前移，删错对象。
-                let mut targets: Vec<usize> =
-                    indices.iter().copied().filter(|i| *i < c.notes.len()).collect();
+                let mut targets: Vec<usize> = indices
+                    .iter()
+                    .copied()
+                    .filter(|i| *i < c.notes.len())
+                    .collect();
                 targets.sort_unstable();
                 targets.dedup();
                 for index in targets.into_iter().rev() {
@@ -316,7 +397,12 @@ pub fn apply(project: &mut Project, event: &Event) {
                     .collect();
             }
         }
-        Event::AutomationChanged { track, param, points, .. } => {
+        Event::AutomationChanged {
+            track,
+            param,
+            points,
+            ..
+        } => {
             if let Some(t) = project.track_mut(*track) {
                 let param = crate::model::AutomationLane::normalize_param(param);
                 if param.is_empty() {
@@ -329,15 +415,28 @@ pub fn apply(project: &mut Project, event: &Event) {
                         .iter()
                         .copied()
                         .filter(|p| p.beat.is_finite() && p.value.is_finite())
-                        .map(|p| crate::model::AutomationPoint { beat: p.beat.max(0.0), value: p.value })
+                        .map(|p| crate::model::AutomationPoint {
+                            beat: p.beat.max(0.0),
+                            value: p.value,
+                        })
                         .collect();
-                    points.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
-                    t.automation.push(crate::model::AutomationLane { param, points });
+                    points.sort_by(|a, b| {
+                        a.beat
+                            .partial_cmp(&b.beat)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    t.automation
+                        .push(crate::model::AutomationLane { param, points });
                     t.automation.sort_by(|a, b| a.param.cmp(&b.param));
                 }
             }
         }
-        Event::ParamChanged { track, param, value, .. } => {
+        Event::ParamChanged {
+            track,
+            param,
+            value,
+            ..
+        } => {
             if let Some(t) = project.track_mut(*track) {
                 if let Some(inst) = t.instrument.as_mut() {
                     // 非有限值会让插件内部出现 NaN 并污染整条音频链，直接拒绝。
@@ -347,7 +446,9 @@ pub fn apply(project: &mut Project, event: &Event) {
                 }
             }
         }
-        Event::EffectAdded { track, plugin_id, .. } => {
+        Event::EffectAdded {
+            track, plugin_id, ..
+        } => {
             if let Some(t) = project.track_mut(*track) {
                 t.effects.push(PluginInstance {
                     plugin_id: plugin_id.clone(),
@@ -363,7 +464,9 @@ pub fn apply(project: &mut Project, event: &Event) {
                 }
             }
         }
-        Event::EffectMoved { track, from, to, .. } => {
+        Event::EffectMoved {
+            track, from, to, ..
+        } => {
             if let Some(t) = project.track_mut(*track) {
                 if *from < t.effects.len() {
                     let fx = t.effects.remove(*from);
@@ -373,7 +476,13 @@ pub fn apply(project: &mut Project, event: &Event) {
                 }
             }
         }
-        Event::EffectParamChanged { track, index, param, value, .. } => {
+        Event::EffectParamChanged {
+            track,
+            index,
+            param,
+            value,
+            ..
+        } => {
             if let Some(t) = project.track_mut(*track) {
                 if let Some(fx) = t.effects.get_mut(*index) {
                     if value.is_finite() {
@@ -384,20 +493,81 @@ pub fn apply(project: &mut Project, event: &Event) {
         }
         Event::ProjectRenamed { name, .. } => project.name = name.clone(),
         Event::ProjectCleared { name, .. } => *project = Project::new(name.clone()),
-        Event::TrackMetaChanged { track, role, pitch_range, pitch_bend_range, .. } => {
+        Event::TrackMetaChanged {
+            track,
+            role,
+            pitch_range,
+            pitch_bend_range,
+            ..
+        } => {
             if let Some(t) = project.track_mut(*track) {
-                // 三者都空 → 元数据整个消失（JSON 里不再出现 `meta` 键）。
+                // MPE / 奏法 / MIDI 事件表由各自的事件维护；改分工/音域不能顺手清掉它们。
+                let existing = t.meta.clone().unwrap_or_default();
                 let meta = crate::model::TrackMeta {
                     role: role.clone().filter(|r| !r.trim().is_empty()),
                     pitch_range: pitch_range.map(|r| r.normalize()),
                     pitch_bend_range: *pitch_bend_range,
+                    mpe: existing.mpe,
+                    articulations: existing.articulations,
+                    default_articulation: existing.default_articulation,
+                    articulation_source: existing.articulation_source,
+                    midi_events: existing.midi_events,
                 }
                 .normalized();
                 t.meta = if meta.is_empty() { None } else { Some(meta) };
             }
         }
-        Event::NoteTagChanged { track, clip, id, tag, .. } => {
+        Event::MpeChanged { track, config, .. } => {
+            if let Some(t) = project.track_mut(*track) {
+                let mut meta = t.meta.clone().unwrap_or_default();
+                meta.mpe = config.map(crate::model::MpeConfig::normalized);
+                let meta = meta.normalized();
+                t.meta = if meta.is_empty() { None } else { Some(meta) };
+            }
+        }
+        Event::MidiEventsChanged { track, events, .. } => {
+            if let Some(t) = project.track_mut(*track) {
+                let mut meta = t.meta.clone().unwrap_or_default();
+                meta.midi_events = events.to_vec();
+                let meta = meta.normalized();
+                t.meta = if meta.is_empty() { None } else { Some(meta) };
+            }
+        }
+        Event::ArticulationsChanged {
+            track,
+            articulations,
+            default,
+            source,
+            ..
+        } => {
+            if let Some(t) = project.track_mut(*track) {
+                let mut meta = t.meta.clone().unwrap_or_default();
+                meta.articulations = articulations.clone();
+                meta.default_articulation = default.clone();
+                meta.articulation_source = source.clone();
+                let meta = meta.normalized();
+                t.meta = if meta.is_empty() { None } else { Some(meta) };
+            }
+        }
+        Event::NoteTagChanged {
+            track,
+            clip,
+            id,
+            tag,
+            ..
+        } => {
             project.set_note_tag(*track, *clip, *id, tag.clone());
+        }
+        Event::NoteTagsChanged {
+            track,
+            clip,
+            ids,
+            tag,
+            ..
+        } => {
+            for id in ids {
+                project.set_note_tag(*track, *clip, *id, tag.clone());
+            }
         }
         Event::ProjectHarmonyChanged { bars, .. } => {
             let mut bars: Vec<crate::model::HarmonyBar> = bars
@@ -411,7 +581,11 @@ pub fn apply(project: &mut Project, event: &Event) {
                 })
                 .filter(|b| !b.symbol.is_empty())
                 .collect();
-            bars.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+            bars.sort_by(|a, b| {
+                a.start
+                    .partial_cmp(&b.start)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             project.harmony = bars;
         }
         Event::ProjectSectionsChanged { sections, .. } => {
@@ -426,15 +600,27 @@ pub fn apply(project: &mut Project, event: &Event) {
                 })
                 .filter(|s| !s.name.is_empty() && s.end > s.start)
                 .collect();
-            sections.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+            sections.sort_by(|a, b| {
+                a.start
+                    .partial_cmp(&b.start)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             project.sections = sections;
         }
     }
 }
 
 /// 按「轨道 + 片段」定位片段；任一层缺失时返回 `None`（事件指向已删除对象是合法情形）。
-fn find_clip_mut(project: &mut Project, track: crate::model::TrackId, clip: crate::model::ClipId) -> Option<&mut Clip> {
-    project.track_mut(track)?.clips.iter_mut().find(|c| c.id == clip)
+fn find_clip_mut(
+    project: &mut Project,
+    track: crate::model::TrackId,
+    clip: crate::model::ClipId,
+) -> Option<&mut Clip> {
+    project
+        .track_mut(track)?
+        .clips
+        .iter_mut()
+        .find(|c| c.id == clip)
 }
 
 #[cfg(test)]
@@ -446,9 +632,26 @@ mod tests {
     fn project_with_clip() -> (Project, TrackId, ClipId) {
         let mut p = Project::new("t");
         let t = TrackId(1);
-        apply(&mut p, &Event::TrackAdded { actor: Actor::Human, id: t, name: "Keys".into(), at: None });
+        apply(
+            &mut p,
+            &Event::TrackAdded {
+                actor: Actor::Human,
+                id: t,
+                name: "Keys".into(),
+                at: None,
+            },
+        );
         let c = ClipId(1);
-        apply(&mut p, &Event::ClipAdded { actor: Actor::Human, track: t, clip: c, start: 0.0, length: 4.0 });
+        apply(
+            &mut p,
+            &Event::ClipAdded {
+                actor: Actor::Human,
+                track: t,
+                clip: c,
+                start: 0.0,
+                length: 4.0,
+            },
+        );
         (p, t, c)
     }
 
@@ -465,7 +668,19 @@ mod tests {
                 actor: Actor::Human,
                 track: t,
                 clip: c,
-                note: Note { id: 0, pitch: 60, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+                note: Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 60,
+                    start: 0.0,
+                    duration: 1.0,
+                    velocity: 100,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                },
             },
         );
         assert_eq!(p.track(t).unwrap().clips[0].notes.len(), 1);
@@ -474,7 +689,13 @@ mod tests {
     #[test]
     fn set_tempo_event_updates_transport() {
         let mut p = Project::new("t");
-        apply(&mut p, &Event::TempoChanged { actor: Actor::Human, tempo: 90.0 });
+        apply(
+            &mut p,
+            &Event::TempoChanged {
+                actor: Actor::Human,
+                tempo: 90.0,
+            },
+        );
         assert_eq!(p.transport.tempo, 90.0);
     }
 
@@ -482,10 +703,24 @@ mod tests {
     fn time_signature_event_is_defensively_normalized() {
         // 手写 / 加载来的事件也必须落在合法范围，分母 0 会让小节长度除不尽。
         let mut p = Project::new("t");
-        apply(&mut p, &Event::TimeSignatureChanged { actor: Actor::Human, num: 0, den: 0 });
+        apply(
+            &mut p,
+            &Event::TimeSignatureChanged {
+                actor: Actor::Human,
+                num: 0,
+                den: 0,
+            },
+        );
         assert_eq!(p.transport.time_sig_num, 1);
         assert_eq!(p.transport.time_sig_den, 1);
-        apply(&mut p, &Event::TimeSignatureChanged { actor: Actor::Human, num: 6, den: 8 });
+        apply(
+            &mut p,
+            &Event::TimeSignatureChanged {
+                actor: Actor::Human,
+                num: 6,
+                den: 8,
+            },
+        );
         assert_eq!(p.transport.time_sig_num, 6);
         assert_eq!(p.transport.time_sig_den, 8);
     }
@@ -494,26 +729,68 @@ mod tests {
     fn tempo_event_is_defensively_clamped() {
         // 手写 / 加载来的事件也必须落在安全区间，否则渲染时长会溢出。
         let mut p = Project::new("t");
-        apply(&mut p, &Event::TempoChanged { actor: Actor::Human, tempo: 0.0 });
+        apply(
+            &mut p,
+            &Event::TempoChanged {
+                actor: Actor::Human,
+                tempo: 0.0,
+            },
+        );
         assert_eq!(p.transport.tempo, 1.0);
-        apply(&mut p, &Event::TempoChanged { actor: Actor::Human, tempo: 100000.0 });
+        apply(
+            &mut p,
+            &Event::TempoChanged {
+                actor: Actor::Human,
+                tempo: 100000.0,
+            },
+        );
         assert_eq!(p.transport.tempo, 1000.0);
     }
 
     #[test]
     fn rename_move_resize_and_remove_clip() {
         let (mut p, t, c) = project_with_clip();
-        apply(&mut p, &Event::TrackRenamed { actor: Actor::Human, track: t, name: "Bass".into() });
+        apply(
+            &mut p,
+            &Event::TrackRenamed {
+                actor: Actor::Human,
+                track: t,
+                name: "Bass".into(),
+            },
+        );
         assert_eq!(p.track(t).unwrap().name, "Bass");
 
-        apply(&mut p, &Event::ClipMoved { actor: Actor::Human, track: t, clip: c, start: 2.5 });
+        apply(
+            &mut p,
+            &Event::ClipMoved {
+                actor: Actor::Human,
+                track: t,
+                clip: c,
+                start: 2.5,
+            },
+        );
         assert_eq!(p.track(t).unwrap().clips[0].start, 2.5);
 
-        apply(&mut p, &Event::ClipResized { actor: Actor::Human, track: t, clip: c, length: 0.0 });
+        apply(
+            &mut p,
+            &Event::ClipResized {
+                actor: Actor::Human,
+                track: t,
+                clip: c,
+                length: 0.0,
+            },
+        );
         // 零长度片段会让 NoteOn/NoteOff 同帧，必须被抬到最短长度。
         assert_eq!(p.track(t).unwrap().clips[0].length, Clip::MIN_LENGTH_BEATS);
 
-        apply(&mut p, &Event::ClipRemoved { actor: Actor::Human, track: t, clip: c });
+        apply(
+            &mut p,
+            &Event::ClipRemoved {
+                actor: Actor::Human,
+                track: t,
+                clip: c,
+            },
+        );
         assert!(p.track(t).unwrap().clips.is_empty());
     }
 
@@ -527,7 +804,19 @@ mod tests {
                     actor: Actor::Human,
                     track: t,
                     clip: c,
-                    note: Note { id: 0, pitch, start: 0.0, duration: 1.0, velocity: 100, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+                    note: Note {
+                        id: 0,
+                        channel: None,
+                        pressure: None,
+                        pitch,
+                        start: 0.0,
+                        duration: 1.0,
+                        velocity: 100,
+                        volume: 127,
+                        offset: 0.0,
+                        legato: false,
+                        expr: crate::model::PitchExpression::NONE,
+                    },
                 },
             );
         }
@@ -538,7 +827,19 @@ mod tests {
                 track: t,
                 clip: c,
                 index: 1,
-                note: Note { id: 0, pitch: 200, start: -1.0, duration: 0.0, velocity: 255, volume: 127, offset: 0.0, legato: false, expr: crate::model::PitchExpression::NONE },
+                note: Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: 200,
+                    start: -1.0,
+                    duration: 0.0,
+                    velocity: 255,
+                    volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: crate::model::PitchExpression::NONE,
+                },
             },
         );
         let n = p.track(t).unwrap().clips[0].notes[1];
@@ -549,27 +850,81 @@ mod tests {
         assert_eq!(n.velocity, 127);
 
         // 越界索引不得 panic，也不得改动任何东西。
-        apply(&mut p, &Event::NoteRemoved { actor: Actor::Human, track: t, clip: c, index: 99 });
+        apply(
+            &mut p,
+            &Event::NoteRemoved {
+                actor: Actor::Human,
+                track: t,
+                clip: c,
+                index: 99,
+            },
+        );
         assert_eq!(p.track(t).unwrap().clips[0].notes.len(), 3);
 
-        apply(&mut p, &Event::NoteRemoved { actor: Actor::Human, track: t, clip: c, index: 0 });
-        let pitches: Vec<u8> = p.track(t).unwrap().clips[0].notes.iter().map(|n| n.pitch).collect();
+        apply(
+            &mut p,
+            &Event::NoteRemoved {
+                actor: Actor::Human,
+                track: t,
+                clip: c,
+                index: 0,
+            },
+        );
+        let pitches: Vec<u8> = p.track(t).unwrap().clips[0]
+            .notes
+            .iter()
+            .map(|n| n.pitch)
+            .collect();
         assert_eq!(pitches, vec![127, 67]);
     }
 
     #[test]
     fn mixer_events_are_clamped_and_master_is_separate() {
         let (mut p, t, _) = project_with_clip();
-        apply(&mut p, &Event::GainChanged { actor: Actor::Human, track: t, gain_db: 100.0 });
+        apply(
+            &mut p,
+            &Event::GainChanged {
+                actor: Actor::Human,
+                track: t,
+                gain_db: 100.0,
+            },
+        );
         assert_eq!(p.track(t).unwrap().mixer.gain_db, MixerChannel::MAX_GAIN_DB);
-        apply(&mut p, &Event::PanChanged { actor: Actor::Human, track: t, pan: -9.0 });
+        apply(
+            &mut p,
+            &Event::PanChanged {
+                actor: Actor::Human,
+                track: t,
+                pan: -9.0,
+            },
+        );
         assert_eq!(p.track(t).unwrap().mixer.pan, -1.0);
-        apply(&mut p, &Event::MuteChanged { actor: Actor::Human, track: t, mute: true });
-        apply(&mut p, &Event::SoloChanged { actor: Actor::Human, track: t, solo: true });
+        apply(
+            &mut p,
+            &Event::MuteChanged {
+                actor: Actor::Human,
+                track: t,
+                mute: true,
+            },
+        );
+        apply(
+            &mut p,
+            &Event::SoloChanged {
+                actor: Actor::Human,
+                track: t,
+                solo: true,
+            },
+        );
         assert!(p.track(t).unwrap().mixer.mute);
         assert!(p.track(t).unwrap().mixer.solo);
 
-        apply(&mut p, &Event::MasterGainChanged { actor: Actor::Human, gain_db: -6.0 });
+        apply(
+            &mut p,
+            &Event::MasterGainChanged {
+                actor: Actor::Human,
+                gain_db: -6.0,
+            },
+        );
         assert_eq!(p.master.gain_db, -6.0);
         // 总输出是独立通道，不能被轨道增益波及。
         assert_eq!(p.track(t).unwrap().mixer.gain_db, MixerChannel::MAX_GAIN_DB);
@@ -579,12 +934,43 @@ mod tests {
     fn param_event_requires_an_instrument_and_rejects_non_finite() {
         let (mut p, t, _) = project_with_clip();
         // 还没有乐器：事件必须被安静地忽略。
-        apply(&mut p, &Event::ParamChanged { actor: Actor::Human, track: t, param: "gain".into(), value: 0.5 });
+        apply(
+            &mut p,
+            &Event::ParamChanged {
+                actor: Actor::Human,
+                track: t,
+                param: "gain".into(),
+                value: 0.5,
+            },
+        );
         assert!(p.track(t).unwrap().instrument.is_none());
 
-        apply(&mut p, &Event::TrackInstrumentSet { actor: Actor::Human, track: t, plugin_id: "builtin.synth".into() });
-        apply(&mut p, &Event::ParamChanged { actor: Actor::Human, track: t, param: "gain".into(), value: 0.5 });
-        apply(&mut p, &Event::ParamChanged { actor: Actor::Human, track: t, param: "attack".into(), value: f32::NAN });
+        apply(
+            &mut p,
+            &Event::TrackInstrumentSet {
+                actor: Actor::Human,
+                track: t,
+                plugin_id: "builtin.synth".into(),
+            },
+        );
+        apply(
+            &mut p,
+            &Event::ParamChanged {
+                actor: Actor::Human,
+                track: t,
+                param: "gain".into(),
+                value: 0.5,
+            },
+        );
+        apply(
+            &mut p,
+            &Event::ParamChanged {
+                actor: Actor::Human,
+                track: t,
+                param: "attack".into(),
+                value: f32::NAN,
+            },
+        );
         let params = &p.track(t).unwrap().instrument.as_ref().unwrap().params;
         assert_eq!(params.get("gain"), Some(&0.5));
         assert_eq!(params.get("attack"), None);
@@ -593,24 +979,77 @@ mod tests {
     #[test]
     fn effect_chain_add_move_remove_and_param() {
         let (mut p, t, _) = project_with_clip();
-        apply(&mut p, &Event::EffectAdded { actor: Actor::Human, track: t, plugin_id: "a".into() });
-        apply(&mut p, &Event::EffectAdded { actor: Actor::Human, track: t, plugin_id: "b".into() });
+        apply(
+            &mut p,
+            &Event::EffectAdded {
+                actor: Actor::Human,
+                track: t,
+                plugin_id: "a".into(),
+            },
+        );
+        apply(
+            &mut p,
+            &Event::EffectAdded {
+                actor: Actor::Human,
+                track: t,
+                plugin_id: "b".into(),
+            },
+        );
         assert_eq!(p.track(t).unwrap().effects.len(), 2);
 
-        apply(&mut p, &Event::EffectMoved { actor: Actor::Human, track: t, from: 0, to: 1 });
+        apply(
+            &mut p,
+            &Event::EffectMoved {
+                actor: Actor::Human,
+                track: t,
+                from: 0,
+                to: 1,
+            },
+        );
         assert_eq!(p.track(t).unwrap().effects[0].plugin_id, "b");
         assert_eq!(p.track(t).unwrap().effects[1].plugin_id, "a");
 
-        apply(&mut p, &Event::EffectParamChanged { actor: Actor::Human, track: t, index: 0, param: "mix".into(), value: 0.5 });
+        apply(
+            &mut p,
+            &Event::EffectParamChanged {
+                actor: Actor::Human,
+                track: t,
+                index: 0,
+                param: "mix".into(),
+                value: 0.5,
+            },
+        );
         assert_eq!(p.track(t).unwrap().effects[0].params.get("mix"), Some(&0.5));
 
-        apply(&mut p, &Event::EffectRemoved { actor: Actor::Human, track: t, index: 0 });
+        apply(
+            &mut p,
+            &Event::EffectRemoved {
+                actor: Actor::Human,
+                track: t,
+                index: 0,
+            },
+        );
         assert_eq!(p.track(t).unwrap().effects.len(), 1);
         assert_eq!(p.track(t).unwrap().effects[0].plugin_id, "a");
 
         // 越界索引必须安静忽略，不得 panic。
-        apply(&mut p, &Event::EffectRemoved { actor: Actor::Human, track: t, index: 99 });
-        apply(&mut p, &Event::EffectMoved { actor: Actor::Human, track: t, from: 99, to: 0 });
+        apply(
+            &mut p,
+            &Event::EffectRemoved {
+                actor: Actor::Human,
+                track: t,
+                index: 99,
+            },
+        );
+        apply(
+            &mut p,
+            &Event::EffectMoved {
+                actor: Actor::Human,
+                track: t,
+                from: 99,
+                to: 0,
+            },
+        );
         assert_eq!(p.track(t).unwrap().effects.len(), 1);
     }
 
@@ -618,9 +1057,31 @@ mod tests {
     fn events_pointing_at_missing_objects_are_ignored() {
         let mut p = Project::new("t");
         let ghost = TrackId(42);
-        apply(&mut p, &Event::ClipMoved { actor: Actor::Human, track: ghost, clip: ClipId(1), start: 4.0 });
-        apply(&mut p, &Event::GainChanged { actor: Actor::Human, track: ghost, gain_db: -3.0 });
-        apply(&mut p, &Event::TrackRenamed { actor: Actor::Human, track: ghost, name: "x".into() });
+        apply(
+            &mut p,
+            &Event::ClipMoved {
+                actor: Actor::Human,
+                track: ghost,
+                clip: ClipId(1),
+                start: 4.0,
+            },
+        );
+        apply(
+            &mut p,
+            &Event::GainChanged {
+                actor: Actor::Human,
+                track: ghost,
+                gain_db: -3.0,
+            },
+        );
+        apply(
+            &mut p,
+            &Event::TrackRenamed {
+                actor: Actor::Human,
+                track: ghost,
+                name: "x".into(),
+            },
+        );
         assert!(p.tracks.is_empty());
     }
 }

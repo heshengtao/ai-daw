@@ -84,9 +84,14 @@ function isAutomatable(t: AutomationTarget): boolean {
   return t.automatable !== false;
 }
 
-/** 增益 / 声像 / 常用 MIDI CC 由 `curateTargets` 钉住：永远在车道下拉里，**不可能解绑**。 */
+/** 增益 / 声像 / 常用 MIDI CC / 通道触后由 `curateTargets` 钉住：永远在车道下拉里，**不可能解绑**。 */
 function isPinned(key: string): boolean {
-  return key === "gain_db" || key === "pan" || key.startsWith("cc:");
+  return (
+    key === "gain_db" ||
+    key === "pan" ||
+    key.startsWith("cc:") ||
+    key.startsWith("at:")
+  );
 }
 
 /** 生效的绑定状态（与车道下拉同一个判定）。 */
@@ -109,7 +114,7 @@ function paramId(key: string): string {
   return key.replace(/^(inst:|fx\d+:)/, "");
 }
 
-/** 目标属于哪个插件筛选组（增益 / 声像归「轨道」，只在「全部」下露出）。 */
+/** 目标属于哪个插件筛选组（增益 / 声像 / MIDI 通道归「全部」）。 */
 function groupOf(key: string): PluginFilter {
   if (key.startsWith("inst:")) return "inst";
   const fx = /^fx(\d+):/.exec(key);

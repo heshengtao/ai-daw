@@ -158,7 +158,11 @@ impl SoundMemoryStore {
         self.memories.iter().find(|m| m.id == id).cloned()
     }
 
-    pub fn create(&mut self, meta: MemoryMeta, snapshot: SoundSnapshot) -> Result<SoundMemory, String> {
+    pub fn create(
+        &mut self,
+        meta: MemoryMeta,
+        snapshot: SoundSnapshot,
+    ) -> Result<SoundMemory, String> {
         let meta = normalize_meta(meta)?;
         let now = now_millis();
         let memory = SoundMemory {
@@ -254,7 +258,9 @@ impl SoundMemoryStore {
     }
 
     fn flush(&self) -> Result<(), String> {
-        let Some(path) = &self.path else { return Ok(()) };
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).map_err(|e| format!("创建音色记忆目录失败：{e}"))?;
         }
@@ -355,7 +361,10 @@ mod tests {
         assert_eq!(reloaded.all(), vec![saved.clone()]);
         assert_eq!(reloaded.get(&saved.id), Some(saved.clone()));
         let summary = &reloaded.summaries()[0];
-        assert_eq!(summary.instrument_plugin_id.as_deref(), Some("builtin.synth"));
+        assert_eq!(
+            summary.instrument_plugin_id.as_deref(),
+            Some("builtin.synth")
+        );
         assert_eq!(
             summary.effect_plugin_ids,
             vec!["builtin.reverb".to_string()]

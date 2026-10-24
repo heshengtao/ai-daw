@@ -44,7 +44,10 @@ impl AgentConfigRuntime {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|text| serde_json::from_str::<AgentConfig>(&text).ok())
             .unwrap_or_default();
-        Self { inner: Mutex::new(config), path }
+        Self {
+            inner: Mutex::new(config),
+            path,
+        }
     }
 
     /// 当前配置。

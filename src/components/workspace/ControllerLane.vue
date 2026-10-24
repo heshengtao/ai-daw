@@ -38,19 +38,42 @@ interface Spec {
 }
 
 /**
- * 力度：本组件唯一保留的**逐音符**属性（写在 MIDI Note On 里，所有乐器通用）。
+ * 逐音符属性：本组件保留的三条**写在 Note 上**的量（力度 / 起音压力 / 通道）。
  *
  * 其余目标一律是**轨道参数曲线**（`Track.automation`）——它们不是逐音符的量，由
  * `AutomationCurve` 编辑、外壳提交，见 `utils/automation.ts`。
  */
-const spec: Spec = {
-  min: 0,
-  max: 127,
-  step: 1,
-  digits: 0,
-  get: (n) => n.velocity,
-  patch: (v) => ({ velocity: Math.round(v) }),
+const noteSpecs: Record<string, Spec> = {
+  velocity: {
+    min: 0,
+    max: 127,
+    step: 1,
+    digits: 0,
+    get: (n) => n.velocity,
+    patch: (v) => ({ velocity: Math.round(v) }),
+  },
+  pressure: {
+    min: 0,
+    max: 127,
+    step: 1,
+    digits: 0,
+    get: (n) => n.pressure ?? 0,
+    patch: (v) => ({ pressure: Math.round(v) }),
+  },
+  channel: {
+    min: 0,
+    max: 15,
+    step: 1,
+    digits: 0,
+    get: (n) => n.channel ?? 0,
+    patch: (v) => ({ channel: Math.round(v) }),
+  },
 };
+
+/** 当前目标是不是逐音符属性（三条之一）。 */
+const isNoteTarget = computed(() => props.targetKey in noteSpecs);
+/** 当前逐音符属性的取值域 / 读写（曲线目标用不到）。 */
+const spec = computed(() => noteSpecs[props.targetKey] ?? noteSpecs.velocity!);
 
 const props = defineProps<{
   notes: Note[];
@@ -85,8 +108,8 @@ const i18n = useI18n();
 const curveTarget = computed(() => props.targets.find((t) => t.key === props.targetKey) ?? null);
 
 /** 刻度列极值：非 `velocity` 目标取自它的值域，`力度` 仍是 0 / 127。 */
-const scaleMin = computed(() => curveTarget.value?.min ?? spec.min);
-const scaleMax = computed(() => curveTarget.value?.max ?? spec.max);
+const scaleMin = computed(() => curveTarget.value?.min ?? spec.value.min);
+const scaleMax = computed(() => curveTarget.value?.max ?? spec.value.max);
 
 /**
  * 下拉选项：`力度` 单独一组（逐音符），其余按 `props.targets` 的 `group` 分组。
@@ -95,13 +118,20 @@ const scaleMax = computed(() => curveTarget.value?.max ?? spec.max);
  * 这一行与选中读数，表头才能压得住 28px 的高度。
  */
 const chooserOptions = computed(() => [
-  {
-    id: "velocity",
-    label: i18n.t("lane.velocity"),
-    group: i18n.t("auto.group.note"),
-  },
+  { id: "velocity", label: i18n.t("lane.velocity"), group: i18n.t("auto.group.note") },
+  { id: "pressure", label: i18n.t("lane.pressure"), group: i18n.t("auto.group.note") },
+  { id: "channel", label: i18n.t("lane.channel"), group: i18n.t("auto.group.note") },
   ...props.targets.map((t) => ({ id: t.key, label: t.label, group: t.group })),
 ]);
+
+/** 当前逐音符属性 / 曲线目标的显示名。 */
+const noteLabel = computed(() => {
+  const key = props.targetKey;
+  if (key === "velocity") return i18n.t("lane.velocity");
+  if (key === "pressure") return i18n.t("lane.pressure");
+  if (key === "channel") return i18n.t("lane.channel");
+  return curveTarget.value?.label ?? key;
+});
 
 /** 卷帘网格的候选项（`free` 用 i18n 文案「自由」）。 */
 const gridOptions = computed(() =>
@@ -152,7 +182,7 @@ const marqueeStyle = computed(() => ({
 
 /** 某个数值对应的条形高度（px）。 */
 function heightFor(value: number): number {
-  const { min, max } = spec;
+  const { min, max } = spec.value;
   const ratio = (value - min) / (max - min || 1);
   return Math.max(2, Math.min(1, Math.max(0, ratio)) * props.contentHeight);
 }
@@ -160,7 +190,7 @@ function heightFor(value: number): number {
 /** 渲染用数值：拖动中的已选音符显示预览值。 */
 function valueOf(index: number, note: Note): number {
   if (dragValue.value !== null && props.selectedIndices.includes(index)) return dragValue.value;
-  return spec.get(note);
+  return spec.value.get(note);
 }
 
 function barStyle(index: number, note: Note): Record<string, string> {
@@ -178,11 +208,11 @@ function isSelected(index: number): boolean {
 /** 指针 y → 数值（顶部最大）。 */
 function valueFromY(clientY: number): number {
   const el = bodyEl.value;
-  if (!el) return spec.min;
+  if (!el) return spec.value.min;
   const rect = el.getBoundingClientRect();
   const usable = Math.max(1, rect.height - 6);
   const ratio = Math.min(1, Math.max(0, 1 - (clientY - rect.top - 3) / usable));
-  const { min, max, step } = spec;
+  const { min, max, step } = spec.value;
   const raw = min + ratio * (max - min);
   return Math.min(max, Math.max(min, Math.round(raw / step) * step));
 }
@@ -262,7 +292,7 @@ function onPointerUp(): void {
     const value = dragValue.value;
     dragValue.value = null;
     if (value === null) return;
-    emit("apply", spec.patch(value));
+    emit("apply", spec.value.patch(value));
     return;
   }
   if (current === "marquee") {
@@ -293,8 +323,8 @@ const readout = computed(() => {
   if (indices.length === 0) return null;
   const primary = props.notes[indices[indices.length - 1]];
   if (!primary) return null;
-  const value = dragValue.value ?? spec.get(primary);
-  return { count: indices.length, value: value.toFixed(spec.digits) };
+  const value = dragValue.value ?? spec.value.get(primary);
+  return { count: indices.length, value: value.toFixed(spec.value.digits) };
 });
 
 onMounted(() => {
@@ -330,7 +360,7 @@ onUnmounted(() => {
       />
 
       <span v-if="readout" class="readout">
-        {{ i18n.t("lane.selected", { count: readout.count }) }} · {{ i18n.t("lane.velocity") }}
+        {{ i18n.t("lane.selected", { count: readout.count }) }} · {{ noteLabel }}
         <strong class="tabular">{{ readout.value }}</strong>
       </span>
 
@@ -363,9 +393,9 @@ onUnmounted(() => {
       </div>
 
       <div class="lane-clip">
-        <!-- 力度：逐音符直角条（横位置与宽度与上方音符一一对应） -->
+        <!-- 逐音符属性：直角条（横位置与宽度与上方音符一一对应） -->
         <div
-          v-if="targetKey === 'velocity'"
+          v-if="isNoteTarget"
           ref="bodyEl"
           class="lane-body"
           :style="{ height: `${contentHeight + 6}px` }"
@@ -381,7 +411,7 @@ onUnmounted(() => {
               :class="{ selected: isSelected(i), dragging: mode === 'value' && isSelected(i) }"
               :style="barStyle(i, n)"
               :data-index="i"
-              :title="i18n.t('lane.velocity')"
+              :title="noteLabel"
               @pointerdown="onBarPointerDown($event, i)"
               @contextmenu="onBarContextMenu($event, i)"
             />

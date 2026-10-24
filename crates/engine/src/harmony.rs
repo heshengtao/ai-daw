@@ -33,8 +33,11 @@ pub struct Chord {
 impl Chord {
     /// 构成音的音级集合（去重、升序）。
     pub fn pitch_classes(&self) -> Vec<u8> {
-        let mut out: Vec<u8> =
-            self.intervals.iter().map(|i| ((self.root as i32 + i).rem_euclid(12)) as u8).collect();
+        let mut out: Vec<u8> = self
+            .intervals
+            .iter()
+            .map(|i| ((self.root as i32 + i).rem_euclid(12)) as u8)
+            .collect();
         out.sort_unstable();
         out.dedup();
         out
@@ -52,7 +55,10 @@ impl Chord {
 
     /// 构成音的音名（报告里直接可读）。
     pub fn tone_names(&self) -> Vec<String> {
-        self.pitch_classes().into_iter().map(pitch_class_name).collect()
+        self.pitch_classes()
+            .into_iter()
+            .map(pitch_class_name)
+            .collect()
     }
 
     /// 是否是属和弦（大三度 + 小七度）。
@@ -189,7 +195,10 @@ pub fn parse_chord(symbol: &str) -> Result<Chord, String> {
             .find(|t| tail.starts_with(**t))
             .copied()
             .ok_or_else(|| {
-                format!("无法识别的和弦修饰：`{tail}`（在 `{raw}` 里）；支持 {}", MODIFIERS.join(" / "))
+                format!(
+                    "无法识别的和弦修饰：`{tail}`（在 `{raw}` 里）；支持 {}",
+                    MODIFIERS.join(" / ")
+                )
             })?;
         intervals = apply_modifier(intervals, token);
         tail = &tail[token.len()..];
@@ -197,9 +206,19 @@ pub fn parse_chord(symbol: &str) -> Result<Chord, String> {
 
     intervals.sort_unstable();
     intervals.dedup();
-    let quality = if name.is_empty() { "major".to_string() } else { (*name).to_string() };
+    let quality = if name.is_empty() {
+        "major".to_string()
+    } else {
+        (*name).to_string()
+    };
 
-    Ok(Chord { symbol: raw.to_string(), root, bass, intervals, quality })
+    Ok(Chord {
+        symbol: raw.to_string(),
+        root,
+        bass,
+        intervals,
+        quality,
+    })
 }
 
 /// 把单个修饰符作用到音程集合上。
@@ -241,12 +260,20 @@ struct BarChord {
 /// 把和弦表整理成「按起点排序、带有效区间」的段落。
 fn layout(bars: &[HarmonyBar], bar_beats: f64) -> Result<Vec<BarChord>, String> {
     let mut sorted: Vec<&HarmonyBar> = bars.iter().collect();
-    sorted.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| {
+        a.start
+            .partial_cmp(&b.start)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut out = Vec::with_capacity(sorted.len());
     for (index, bar) in sorted.iter().enumerate() {
         let chord = parse_chord(&bar.symbol)
             .map_err(|e| format!("第 {} 小节「{}」：{e}", index + 1, bar.symbol))?;
-        let start = if bar.start.is_finite() { bar.start.max(0.0) } else { 0.0 };
+        let start = if bar.start.is_finite() {
+            bar.start.max(0.0)
+        } else {
+            0.0
+        };
         let end = if bar.length.is_finite() && bar.length > 0.0 {
             start + bar.length
         } else if let Some(next) = sorted.get(index + 1) {
@@ -254,7 +281,12 @@ fn layout(bars: &[HarmonyBar], bar_beats: f64) -> Result<Vec<BarChord>, String> 
         } else {
             start + bar_beats
         };
-        out.push(BarChord { index, start, end, chord });
+        out.push(BarChord {
+            index,
+            start,
+            end,
+            chord,
+        });
     }
     Ok(out)
 }
@@ -280,17 +312,14 @@ struct ScannedNote {
 ///
 /// 不是乐谱级识别——工程里没有 `ornament` 字段；这个判据只是把「倚音/短倚音」从
 /// `non_chord_tone` 里分出来，避免把故意的装饰音当成错音。显式 `ornaments` 参数可以覆盖它。
-fn looks_like_ornament(
-    notes: &[ScannedNote],
-    index: usize,
-    chord: &Chord,
-    duration: f64,
-) -> bool {
+fn looks_like_ornament(notes: &[ScannedNote], index: usize, chord: &Chord, duration: f64) -> bool {
     if duration > 1.0 / 16.0 + 1e-9 {
         return false;
     }
     let note = notes[index];
-    let Some(next) = notes.get(index + 1) else { return false };
+    let Some(next) = notes.get(index + 1) else {
+        return false;
+    };
     if next.start <= note.start + 1e-9 || next.start - note.start > 0.5 {
         return false;
     }
@@ -327,8 +356,10 @@ pub fn parse_scale(root: &str, mode: &str) -> Result<Vec<u8>, String> {
             ))
         }
     };
-    let mut pcs: Vec<u8> =
-        intervals.iter().map(|i| ((root_pc as i32 + i).rem_euclid(12)) as u8).collect();
+    let mut pcs: Vec<u8> = intervals
+        .iter()
+        .map(|i| ((root_pc as i32 + i).rem_euclid(12)) as u8)
+        .collect();
     pcs.sort_unstable();
     pcs.dedup();
     Ok(pcs)
@@ -338,7 +369,9 @@ pub fn parse_scale(root: &str, mode: &str) -> Result<Vec<u8>, String> {
 fn unrecommended_extension(chord: &Chord, pc: u8) -> Option<&'static str> {
     let degree = chord.degree(pc);
     match degree {
-        5 if chord.is_major() => Some("大三和弦上的纯四度（11 音）会与三音顶牛；除非当经过音或改成 sus"),
+        5 if chord.is_major() => {
+            Some("大三和弦上的纯四度（11 音）会与三音顶牛；除非当经过音或改成 sus")
+        }
         11 if chord.is_minor() => Some("小三和弦上叠大七度极不协和"),
         10 if chord.is_major() => Some("大和弦上叠小七度（属七）会与七音打架"),
         1 if chord.is_major() => Some("大三和弦上的 b9 极不协和，通常只出现在属和弦上"),
@@ -393,9 +426,16 @@ pub fn analyze_with_options(
         return Err("没有和弦信息：请传入 bars，或先设置工程和弦表".into());
     }
     let policy = policy.normalize();
-    let bar_beats = if bar_beats.is_finite() && bar_beats > 0.0 { bar_beats } else { 4.0 };
-    let time_tolerance =
-        if time_tolerance.is_finite() { time_tolerance.clamp(0.0, 8.0) } else { 0.0 };
+    let bar_beats = if bar_beats.is_finite() && bar_beats > 0.0 {
+        bar_beats
+    } else {
+        4.0
+    };
+    let time_tolerance = if time_tolerance.is_finite() {
+        time_tolerance.clamp(0.0, 8.0)
+    } else {
+        0.0
+    };
     let layout = layout(bars, bar_beats)?;
     let first_start = layout.first().map(|b| b.start).unwrap_or(0.0);
     let last_end = layout.last().map(|b| b.end).unwrap_or(0.0);
@@ -426,14 +466,21 @@ pub fn analyze_with_options(
                 });
             }
         }
-        notes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+        notes.sort_by(|a, b| {
+            a.start
+                .partial_cmp(&b.start)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         for (index, note) in notes.iter().enumerate() {
             total += 1;
             let start = &note.start;
             let end = &note.end;
             let pitch = &note.pitch;
-            let Some(bar) = layout.iter().position(|b| *start >= b.start && *start < b.end) else {
+            let Some(bar) = layout
+                .iter()
+                .position(|b| *start >= b.start && *start < b.end)
+            else {
                 outside += 1;
                 continue;
             };
@@ -447,9 +494,7 @@ pub fn analyze_with_options(
             }
 
             // 0) 显式装饰音：由调用方用 (track, clip, note id) 指定，优先于其他判断。
-            if ornament_ids
-                .map_or(false, |ids| ids.contains(&(track.id.0, note.clip, note.id)))
-            {
+            if ornament_ids.map_or(false, |ids| ids.contains(&(track.id.0, note.clip, note.id))) {
                 push_issue(
                     &mut issues,
                     &mut bar_issue_counts,
@@ -567,7 +612,11 @@ pub fn analyze_with_options(
             //    其中 `unrecommended_extension` 命中的仍然给 warning，其余给 info。
             if is_extension_degree(chord.degree(pc)) {
                 let reason = unrecommended_extension(chord, pc);
-                let severity = if reason.is_some() { Severity::Warning } else { Severity::Info };
+                let severity = if reason.is_some() {
+                    Severity::Warning
+                } else {
+                    Severity::Info
+                };
                 let message = match reason {
                     Some(reason) => format!(
                         "{} 是 {} 的延伸音，但：{reason}",
@@ -608,8 +657,11 @@ pub fn analyze_with_options(
             //    短音给 info，长音给 warning——它仍然是色彩/张力，不是「错音」。
             if let Some(scale) = scale {
                 if scale.contains(&pc) {
-                    let severity =
-                        if duration >= 2.0 { Severity::Warning } else { Severity::Info };
+                    let severity = if duration >= 2.0 {
+                        Severity::Warning
+                    } else {
+                        Severity::Info
+                    };
                     push_issue(
                         &mut issues,
                         &mut bar_issue_counts,
@@ -637,7 +689,11 @@ pub fn analyze_with_options(
             }
 
             // 5) 真正不属和弦、也不是延伸音/调内音：长音才算冲突。
-            let severity = if duration >= 2.0 { Severity::Error } else { Severity::Warning };
+            let severity = if duration >= 2.0 {
+                Severity::Error
+            } else {
+                Severity::Warning
+            };
             push_issue(
                 &mut issues,
                 &mut bar_issue_counts,
@@ -671,10 +727,7 @@ pub fn analyze_with_options(
                 continue;
             }
             for (bar, seg) in layout.iter().enumerate() {
-                if *start < seg.start
-                    && seg.start - *start > time_tolerance
-                    && *end > seg.start
-                {
+                if *start < seg.start && seg.start - *start > time_tolerance && *end > seg.start {
                     let pc = pitch % 12;
                     if !seg.chord.contains(pc) {
                         push_issue(
@@ -706,7 +759,10 @@ pub fn analyze_with_options(
         per_track.push((track.id.0, total, outside));
     }
 
-    uncovered += per_track.iter().map(|(_, _, outside)| *outside).sum::<usize>();
+    uncovered += per_track
+        .iter()
+        .map(|(_, _, outside)| *outside)
+        .sum::<usize>();
 
     // 5) 轨道间同音区重叠。
     for (i, a) in tracks.iter().enumerate() {
@@ -756,10 +812,16 @@ pub fn analyze_with_options(
         }
     }
     if uncovered > 0 && notes_out.is_empty() {
-        notes_out.push(format!("有 {uncovered} 个音落在和弦表覆盖范围之外，未参与检查"));
+        notes_out.push(format!(
+            "有 {uncovered} 个音落在和弦表覆盖范围之外，未参与检查"
+        ));
     }
 
-    let conflict_level = issues.iter().map(|i| i.severity).max().unwrap_or(Severity::Info);
+    let conflict_level = issues
+        .iter()
+        .map(|i| i.severity)
+        .max()
+        .unwrap_or(Severity::Info);
 
     let bars_report = layout
         .iter()
@@ -774,7 +836,12 @@ pub fn analyze_with_options(
         })
         .collect();
 
-    Ok(HarmonyReport { bars: bars_report, issues, conflict_level, notes: notes_out })
+    Ok(HarmonyReport {
+        bars: bars_report,
+        issues,
+        conflict_level,
+        notes: notes_out,
+    })
 }
 
 fn round3(value: f64) -> f64 {
@@ -823,7 +890,10 @@ mod tests {
         // Dm9：D F A C E
         assert_eq!(pcs(&parse_chord("Dm9").unwrap()), vec![0, 2, 4, 5, 9]);
         // G13：G B D F A C E
-        assert_eq!(pcs(&parse_chord("G13").unwrap()), vec![0, 2, 4, 5, 7, 9, 11]);
+        assert_eq!(
+            pcs(&parse_chord("G13").unwrap()),
+            vec![0, 2, 4, 5, 7, 9, 11]
+        );
         // E7b9：E G# B D F
         assert_eq!(pcs(&parse_chord("E7b9").unwrap()), vec![2, 4, 5, 8, 11]);
         // Cmaj9：C E G B D
@@ -868,13 +938,16 @@ mod tests {
                     .enumerate()
                     .map(|(i, (pitch, start, duration))| Note {
                         id: i as u64 + 1,
+                        channel: None,
+                        pressure: None,
                         pitch,
                         start,
                         duration,
                         velocity: 100,
                         volume: 127,
                         offset: 0.0,
-                        legato: false, expr: crate::model::PitchExpression::NONE,
+                        legato: false,
+                        expr: crate::model::PitchExpression::NONE,
                     })
                     .collect(),
                 audio: None,
@@ -888,8 +961,18 @@ mod tests {
 
     fn bars() -> Vec<HarmonyBar> {
         vec![
-            HarmonyBar { start: 0.0, length: 4.0, symbol: "Cmaj7".into(), source: None },
-            HarmonyBar { start: 4.0, length: 4.0, symbol: "G7".into(), source: None },
+            HarmonyBar {
+                start: 0.0,
+                length: 4.0,
+                symbol: "Cmaj7".into(),
+                source: None,
+            },
+            HarmonyBar {
+                start: 4.0,
+                length: 4.0,
+                symbol: "G7".into(),
+                source: None,
+            },
         ]
     }
 
@@ -936,7 +1019,10 @@ mod tests {
         let allowed = analyze(
             &bars,
             &[&t],
-            HarmonyPolicy { allow_extensions: true, ..Default::default() },
+            HarmonyPolicy {
+                allow_extensions: true,
+                ..Default::default()
+            },
             4.0,
         )
         .unwrap();
@@ -947,7 +1033,10 @@ mod tests {
         let denied = analyze(
             &bars,
             &[&t],
-            HarmonyPolicy { allow_extensions: false, ..Default::default() },
+            HarmonyPolicy {
+                allow_extensions: false,
+                ..Default::default()
+            },
             4.0,
         )
         .unwrap();
@@ -960,17 +1049,32 @@ mod tests {
         // Cmaj7 上 D#4 -> E4：D# 是短倚音，E 是和弦音。
         let t = track_with(vec![(63, 0.0, 0.05), (64, 0.05, 1.0)]);
         let report = analyze(&bars(), &[&t], HarmonyPolicy::default(), 4.0).unwrap();
-        let grace = report.issues.iter().find(|i| i.pitch == 63).expect("装饰音应当被报告");
+        let grace = report
+            .issues
+            .iter()
+            .find(|i| i.pitch == 63)
+            .expect("装饰音应当被报告");
         assert_eq!(grace.kind, HarmonyIssueKind::Ornament);
         assert_eq!(grace.severity, Severity::Info);
     }
 
     #[test]
     fn parse_scale_knows_common_modes() {
-        assert_eq!(parse_scale("F", "major").unwrap(), vec![0, 2, 4, 5, 7, 9, 10]);
-        assert_eq!(parse_scale("A", "minor").unwrap(), vec![0, 2, 4, 5, 7, 9, 11]);
-        assert_eq!(parse_scale("D", "dorian").unwrap(), vec![0, 2, 4, 5, 7, 9, 11]);
-        assert!(parse_scale("F", "no_such_mode").unwrap_err().contains("未知调式"));
+        assert_eq!(
+            parse_scale("F", "major").unwrap(),
+            vec![0, 2, 4, 5, 7, 9, 10]
+        );
+        assert_eq!(
+            parse_scale("A", "minor").unwrap(),
+            vec![0, 2, 4, 5, 7, 9, 11]
+        );
+        assert_eq!(
+            parse_scale("D", "dorian").unwrap(),
+            vec![0, 2, 4, 5, 7, 9, 11]
+        );
+        assert!(parse_scale("F", "no_such_mode")
+            .unwrap_err()
+            .contains("未知调式"));
     }
 
     #[test]
@@ -994,7 +1098,11 @@ mod tests {
             None,
         )
         .unwrap();
-        let issue = report.issues.iter().find(|i| i.pitch == 62).expect("应当报告调内经过音");
+        let issue = report
+            .issues
+            .iter()
+            .find(|i| i.pitch == 62)
+            .expect("应当报告调内经过音");
         assert_eq!(issue.kind, HarmonyIssueKind::ScaleTone);
         assert_eq!(issue.severity, Severity::Info);
 
@@ -1010,7 +1118,11 @@ mod tests {
             None,
         )
         .unwrap();
-        let issue = report.issues.iter().find(|i| i.pitch == 63).expect("应当报告外音");
+        let issue = report
+            .issues
+            .iter()
+            .find(|i| i.pitch == 63)
+            .expect("应当报告外音");
         assert_eq!(issue.kind, HarmonyIssueKind::NonChordTone);
     }
 
@@ -1035,7 +1147,11 @@ mod tests {
             Some(&ornaments),
         )
         .unwrap();
-        let issue = report.issues.iter().find(|i| i.pitch == 63).expect("应当报告装饰音");
+        let issue = report
+            .issues
+            .iter()
+            .find(|i| i.pitch == 63)
+            .expect("应当报告装饰音");
         assert_eq!(issue.kind, HarmonyIssueKind::Ornament);
         assert_eq!(issue.severity, Severity::Info);
     }
@@ -1046,14 +1162,20 @@ mod tests {
         let t = track_with(vec![(60, 3.99, 1.0)]);
         let strict = analyze(&bars(), &[&t], HarmonyPolicy::default(), 4.0).unwrap();
         assert!(
-            strict.issues.iter().any(|i| i.kind == HarmonyIssueKind::Suspension),
+            strict
+                .issues
+                .iter()
+                .any(|i| i.kind == HarmonyIssueKind::Suspension),
             "{:?}",
             strict.issues
         );
         let tolerant =
             analyze_with_tolerance(&bars(), &[&t], HarmonyPolicy::default(), 4.0, 0.0625).unwrap();
         assert!(
-            !tolerant.issues.iter().any(|i| i.kind == HarmonyIssueKind::Suspension),
+            !tolerant
+                .issues
+                .iter()
+                .any(|i| i.kind == HarmonyIssueKind::Suspension),
             "{:?}",
             tolerant.issues
         );
@@ -1076,7 +1198,12 @@ mod tests {
 
     #[test]
     fn unknown_symbol_aborts_with_the_bar_number() {
-        let bad = vec![HarmonyBar { start: 0.0, length: 4.0, symbol: "Hm".into(), source: None }];
+        let bad = vec![HarmonyBar {
+            start: 0.0,
+            length: 4.0,
+            symbol: "Hm".into(),
+            source: None,
+        }];
         let t = track_with(vec![(60, 0.0, 1.0)]);
         let err = analyze(&bad, &[&t], HarmonyPolicy::default(), 4.0).unwrap_err();
         assert!(err.contains("第 1 小节"), "{err}");
@@ -1096,7 +1223,10 @@ mod tests {
         let t = track_with(vec![(60, 2.0, 4.0)]);
         let report = analyze(&bars(), &[&t], HarmonyPolicy::default(), 4.0).unwrap();
         assert!(
-            report.issues.iter().any(|i| i.kind == HarmonyIssueKind::Suspension && i.bar == 1),
+            report
+                .issues
+                .iter()
+                .any(|i| i.kind == HarmonyIssueKind::Suspension && i.bar == 1),
             "{:?}",
             report.issues
         );
