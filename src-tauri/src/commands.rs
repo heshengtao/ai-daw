@@ -19,7 +19,7 @@ use ai_daw_engine::render::{render_with_assets_progress, RenderOptions};
 use ai_daw_engine::tempo::TempoMap;
 use ai_daw_engine::transport::TransportCommand;
 use ai_daw_engine::wav::wav_bytes;
-use ai_daw_host_vst3::{CatalogPlugin, EditorHandle};
+use ai_daw_host_vst3::{CatalogPlugin, EditorHandle, SkippedPlugin};
 use ai_daw_plugin_api::{MidiEvent, ParamInfo, PluginDescriptor};
 
 use crate::articulation_map::{plan_import, ArticulationMapCatalog, ArticulationMapSummary};
@@ -3302,6 +3302,27 @@ fn recording_path(app: &tauri::AppHandle) -> Result<String, String> {
 #[tauri::command]
 pub fn list_plugins(state: State<'_, AppState>) -> Vec<CatalogPlugin> {
     state.catalog_snapshot()
+}
+
+/// 最近一次插件扫描的结果摘要。
+#[derive(serde::Serialize)]
+pub struct PluginScanStatus {
+    /// 探测时崩溃 / 超时 / 读取失败，因而没进目录的插件。
+    pub skipped: Vec<SkippedPlugin>,
+    /// 扫描整体没跑起来的原因（例如扫描探针缺失）；正常为 `None`。
+    pub error: Option<String>,
+}
+
+/// 最近一次插件扫描的结果摘要。
+///
+/// 扫描本身总能完成；跳过的插件不会出现在 `list_plugins` 里，界面用这份报告提示用户
+/// 「这些插件没扫到」，并允许重扫。`error` 用来区分「本机确实没有插件」与「扫描没跑起来」。
+#[tauri::command]
+pub fn plugin_scan_status(state: State<'_, AppState>) -> PluginScanStatus {
+    PluginScanStatus {
+        skipped: state.scan_skipped_snapshot(),
+        error: state.scan_error_snapshot(),
+    }
 }
 
 /// 重新扫描本机插件（慢，放到阻塞线程池）；完成后广播事件。

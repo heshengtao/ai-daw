@@ -341,11 +341,100 @@ pub fn managed_scan_dirs(app: &AppHandle) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<Pa
     }
 }
 
+/// 扫描结果缓存的格式版本；字段或语义变了就加一（旧缓存直接丢弃）。
+const CATALOG_CACHE_VERSION: u32 = 1;
+
+/// 上一次成功扫描的插件目录（落盘缓存）。
+#[derive(Serialize, Deserialize)]
+struct CatalogCache {
+    version: u32,
+    plugins: Vec<CatalogPlugin>,
+}
+
+fn catalog_cache_file(app: &AppHandle) -> Option<PathBuf> {
+    ManagedDirs::resolve(app)
+        .ok()
+        .map(|dirs| dirs.root.join("catalog-cache.json"))
+}
+
+/// 读上次成功扫描的缓存：路径已经不存在的条目会被丢掉。
+///
+/// 启动时先用它把外部插件装上，界面不必等整轮扫描（每个 VST3 都要起一个探针子进程）。
+pub fn cached_catalog(app: &AppHandle) -> Vec<CatalogPlugin> {
+    let Some(file) = catalog_cache_file(app) else {
+        return Vec::new();
+    };
+    let Ok(text) = fs::read_to_string(&file) else {
+        return Vec::new();
+    };
+    let Ok(cache) = serde_json::from_str::<CatalogCache>(&text) else {
+        return Vec::new();
+    };
+    if cache.version != CATALOG_CACHE_VERSION {
+        return Vec::new();
+    }
+    cache
+        .plugins
+        .into_iter()
+        .filter(|plugin| plugin.path.exists())
+        .collect()
+}
+
+fn save_catalog_cache(app: &AppHandle, plugins: &[CatalogPlugin]) {
+    let Some(file) = catalog_cache_file(app) else {
+        return;
+    };
+    let cache = CatalogCache {
+        version: CATALOG_CACHE_VERSION,
+        plugins: plugins.to_vec(),
+    };
+    let Ok(json) = serde_json::to_string_pretty(&cache) else {
+        return;
+    };
+    if let Some(dir) = file.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    // 先写临时文件再替换：中途崩掉也不会留下半截 JSON。
+    let tmp = file.with_extension("json.tmp");
+    if fs::write(&tmp, json).is_err() {
+        return;
+    }
+    // Windows 的 rename 不会覆盖已存在的目标，先删旧的。
+    let _ = fs::remove_file(&file);
+    let _ = fs::rename(&tmp, &file);
+}
+
 /// 重新扫描插件（含托管目录），更新共享状态并广播给界面。
+///
+/// VST3 用探针子进程逐个探测：坏插件崩在子进程里，只会进「跳过名单」，不会带走应用。
 pub fn rescan_with_managed(app: &AppHandle) -> Vec<CatalogPlugin> {
     let (vst3, clap, au) = managed_scan_dirs(app);
-    let catalog = ai_daw_host_vst3::scan_catalog_with(&vst3, &clap, &au);
+    let report = ai_daw_host_vst3::scan_report_with(&vst3, &clap, &au);
+    let error = report.error;
+    let skipped = report.skipped;
+    let mut catalog = report.plugins;
+
+    if let Some(error) = &error {
+        eprintln!("插件扫描未完成：{error}");
+    }
+    for skip in &skipped {
+        eprintln!("跳过插件 {}：{}", skip.path.display(), skip.reason);
+    }
+
+    if error.is_some() {
+        // 扫描器临时跑不起来（例如升级后 sidecar 没就位）时，沿用上次缓存里的条目，
+        // 别让「暂时扫不了」变成「插件全消失」。
+        for cached in cached_catalog(app) {
+            if !catalog.iter().any(|plugin| plugin.id == cached.id) {
+                catalog.push(cached);
+            }
+        }
+    } else {
+        save_catalog_cache(app, &catalog);
+    }
+
     let state = app.state::<AppState>();
+    state.set_scan_report(skipped, error);
     state.install_catalog(catalog.clone());
     let _ = app.emit(EVENT_PLUGINS, &catalog);
     catalog

@@ -633,6 +633,19 @@ export interface CatalogPlugin {
   path: string;
 }
 
+/** 扫描时被跳过的插件（崩溃 / 超时 / 读取失败）。 */
+export interface SkippedPlugin {
+  path: string;
+  reason: string;
+}
+
+/** 最近一次插件扫描的结果摘要。 */
+export interface PluginScanStatus {
+  skipped: SkippedPlugin[];
+  /** 扫描整体没跑起来的原因（例如扫描探针缺失）；正常为 `null`。 */
+  error: string | null;
+}
+
 /** 插件自报的参数元信息（与 `plugin-api` 的 `ParamInfo` 同构）。 */
 export interface BackendParam {
   id: string;

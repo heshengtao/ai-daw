@@ -17,9 +17,9 @@ import {
   type ParamSpec,
   type PluginInfo,
 } from "@/data/plugins";
-import { listPlugins, pluginParams, rescanPlugins } from "@/api/tauri";
+import { listPlugins, pluginParams, pluginScanStatus, rescanPlugins } from "@/api/tauri";
 import { useI18n } from "@/i18n";
-import type { BackendParam, CatalogPlugin } from "@/api/types";
+import type { BackendParam, CatalogPlugin, PluginScanStatus, SkippedPlugin } from "@/api/types";
 
 /**
  * 内置条目的名字 / 说明 / 分类存的是 **i18n key**（外部插件的名字后端给，不翻译）。
@@ -71,6 +71,10 @@ function toInfo(p: CatalogPlugin): PluginInfo {
 export const usePluginsStore = defineStore("plugins", () => {
   /** 后端扫描到的外部插件。 */
   const scanned = ref<CatalogPlugin[]>([]);
+  /** 最近一次扫描里崩溃 / 超时 / 读不出来的插件。 */
+  const skipped = ref<SkippedPlugin[]>([]);
+  /** 扫描整体没跑起来的原因（例如扫描探针缺失）；正常为 `null`。 */
+  const scanError = ref<string | null>(null);
   /** 是否正在扫描。 */
   const loading = ref(false);
   /** 参数表缓存（内置预填 + 外部懒加载）。 */
@@ -119,21 +123,35 @@ export const usePluginsStore = defineStore("plugins", () => {
     }
   }
 
-  /** 拉取一次插件目录。 */
+  /** 拉取一次插件目录与被跳过的插件。 */
   async function refresh(): Promise<void> {
     loading.value = true;
     try {
-      scanned.value = await listPlugins();
+      // 跳过名单是附加信息；它取不到不该让整份插件清单也失败。
+      const empty: PluginScanStatus = { skipped: [], error: null };
+      const [list, status] = await Promise.all([
+        listPlugins(),
+        pluginScanStatus().catch(() => empty),
+      ]);
+      scanned.value = list;
+      skipped.value = status.skipped;
+      scanError.value = status.error;
     } finally {
       loading.value = false;
     }
   }
 
-  /** 让后端重新扫描本机插件（会 dlopen 每个插件，明显更慢）。 */
+  /** 让后端重新扫描本机插件（每个 VST3 起一个探针子进程，明显更慢）。 */
   async function rescan(): Promise<void> {
     loading.value = true;
     try {
       scanned.value = await rescanPlugins();
+      // 跳过名单要在扫描**之后**取，否则拿到的是上一轮的结果。
+      const status = await pluginScanStatus().catch(
+        () => ({ skipped: [], error: null }) as PluginScanStatus,
+      );
+      skipped.value = status.skipped;
+      scanError.value = status.error;
     } finally {
       loading.value = false;
     }
@@ -141,6 +159,8 @@ export const usePluginsStore = defineStore("plugins", () => {
 
   return {
     scanned,
+    skipped,
+    scanError,
     loading,
     all,
     instruments,

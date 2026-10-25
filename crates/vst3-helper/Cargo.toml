@@ -8,6 +8,12 @@ license.workspace = true
 name = "vst3-host-helper"
 path = "src/main.rs"
 
+# 扫描隔离探针：每个插件单独起一个进程读元数据，插件崩了只死子进程。
+# 同样抄自 `vst3-host` 0.9.0（`src/bin/vst3-host-probe.rs`），见 NOTICE。
+[[bin]]
+name = "vst3-host-probe"
+path = "src/probe.rs"
+
 [dependencies]
 # 隔离协议本身（`HostCommand` / `HostResponse` / `ProtocolChannel`）由该 crate 提供；
 # 必须启用 `process-isolation`，否则 `process_isolation` 模块不导出。

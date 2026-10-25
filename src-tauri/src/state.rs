@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use ai_daw_engine::bus::Engine;
 use ai_daw_engine::model::TrackId;
 use ai_daw_engine::registry::PluginSlot;
-use ai_daw_host_vst3::{CatalogPlugin, EditorHandle, PluginEditorWindow};
+use ai_daw_host_vst3::{CatalogPlugin, EditorHandle, PluginEditorWindow, SkippedPlugin};
 
 use crate::ai::AiRuntime;
 use crate::assets::AssetCache;
@@ -46,6 +46,10 @@ pub struct AppState {
     pub audio: Arc<AudioEngine>,
     /// 已扫描到的插件目录（启动时后台扫描填充；离线渲染也用它）。
     pub catalog: Mutex<Vec<CatalogPlugin>>,
+    /// 最近一次扫描里被跳过的插件（崩溃 / 超时 / 探测失败），界面据此提示用户。
+    pub scan_skipped: Mutex<Vec<SkippedPlugin>>,
+    /// 最近一次扫描**整体**没跑起来的原因（例如扫描探针缺失）；正常时为 `None`。
+    pub scan_error: Mutex<Option<String>>,
     /// 「(轨道, 槽位) → 插件编辑器句柄」：插件工厂在实例创建时登记，界面据此打开原生窗口。
     pub editor_handles: Arc<Mutex<HashMap<(u64, PluginSlot), EditorSlot>>>,
     /// 哪些 (轨道, 槽位) 开着插件窗口（主线程那张表的**可跨线程镜像**，供界面查询）。
@@ -92,6 +96,8 @@ impl AppState {
             engine: Mutex::new(engine),
             audio,
             catalog: Mutex::new(Vec::new()),
+            scan_skipped: Mutex::new(Vec::new()),
+            scan_error: Mutex::new(None),
             editor_handles,
             open_editors: Arc::new(Mutex::new(HashSet::new())),
             editor_plugins: Arc::new(Mutex::new(HashMap::new())),
@@ -144,6 +150,22 @@ impl AppState {
     /// 当前插件目录的快照。
     pub fn catalog_snapshot(&self) -> Vec<CatalogPlugin> {
         self.catalog.lock().unwrap().clone()
+    }
+
+    /// 记下最近一次扫描的结果摘要（被跳过的插件 + 扫描器错误）。
+    pub fn set_scan_report(&self, skipped: Vec<SkippedPlugin>, error: Option<String>) {
+        *self.scan_skipped.lock().unwrap() = skipped;
+        *self.scan_error.lock().unwrap() = error;
+    }
+
+    /// 最近一次扫描里被跳过的插件。
+    pub fn scan_skipped_snapshot(&self) -> Vec<SkippedPlugin> {
+        self.scan_skipped.lock().unwrap().clone()
+    }
+
+    /// 最近一次扫描整体失败的原因（正常为 `None`）。
+    pub fn scan_error_snapshot(&self) -> Option<String> {
+        self.scan_error.lock().unwrap().clone()
     }
 
     /// 用会话缓存恢复工作状态（启动时调用）。

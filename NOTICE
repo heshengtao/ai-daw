@@ -61,9 +61,10 @@ SF2 to SF3 (Ogg Vorbis q0.8) where noted in `assets/LICENSES.md`.
 vst3-host (https://github.com/HelgeSverre/rust-vst3-host)
 Copyright Helge Sverre. Licensed under the MIT License.
 
-The process-isolation helper in `crates/vst3-helper/src/main.rs` is copied
-verbatim from that crate's `src/bin/vst3-host-helper.rs` (version 0.9.0), so the
-application can ship the helper as a Tauri sidecar. Redistributed under the MIT
+The process-isolation helper in `crates/vst3-helper/src/main.rs` and the scan
+probe in `crates/vst3-helper/src/probe.rs` are copied verbatim from that crate's
+`src/bin/vst3-host-helper.rs` and `src/bin/vst3-host-probe.rs` (version 0.9.0),
+so the application can ship them as Tauri sidecars. Redistributed under the MIT
 License; the full licence text is available in the crate's source distribution.
 --------------------------------------------------------------------------------
 

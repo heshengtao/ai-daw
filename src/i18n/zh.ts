@@ -38,6 +38,10 @@ const zh: Record<string, string> = {
   "plugins.loadTo": "加载到：",
   "plugins.loadNamed": "加载 {name}",
   "plugins.pending": "待接入",
+  "plugins.scanFailed": "插件扫描未能运行",
+  "plugins.scanSkipped": "{count} 个插件扫描失败，已跳过",
+  "plugins.scanSkippedHint": "坏插件不会再让应用崩溃；可重试，失败原因见插件名悬停提示",
+  "plugins.scanSkippedRetry": "重新扫描",
 
   // ---- 面板 ----
   "panel.loadFailed": "加载失败：{error}",

@@ -38,6 +38,10 @@ const en: Record<string, string> = {
   "plugins.loadTo": "Load to: ",
   "plugins.loadNamed": "Load {name}",
   "plugins.pending": "Coming soon",
+  "plugins.scanFailed": "Plugin scan could not run",
+  "plugins.scanSkipped": "{count} plugin(s) failed to scan and were skipped",
+  "plugins.scanSkippedHint": "A bad plugin can no longer crash the app. Retry any time; hover a name for the reason.",
+  "plugins.scanSkippedRetry": "Rescan",
 
   // ---- 面板 ----
   "panel.loadFailed": "Load failed: {error}",

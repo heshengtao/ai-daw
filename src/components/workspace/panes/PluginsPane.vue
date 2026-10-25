@@ -140,6 +140,21 @@ function toggleLabel(it: PluginInfo): string {
     ? i18n.t("plugins.fxRemove", { name: it.name })
     : i18n.t("plugins.fxAdd", { name: it.name });
 }
+
+/** 被跳过插件的显示名：取包名（去掉 `.vst3` / `.clap` 后缀）。 */
+function skippedName(path: string): string {
+  const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+  return name.replace(/\.(vst3|clap|component)$/i, "");
+}
+
+/** 重新扫描（坏插件只会被再次跳过，不会再连累宿主）。 */
+async function retryScan(): Promise<void> {
+  try {
+    await plugins.rescan();
+  } catch (err) {
+    layout.notify(i18n.t("error.load", { error: String(err) }));
+  }
+}
 </script>
 
 <template>
@@ -163,6 +178,35 @@ function toggleLabel(it: PluginInfo): string {
           {{ i18n.t(s.labelKey) }}
         </button>
       </div>
+    </div>
+
+    <!-- 扫描器整体没跑起来（探针缺失等）：说清楚原因，而不是静默显示「没有插件」 -->
+    <div v-if="plugins.scanError" class="scan-warn" role="alert">
+      <div class="scan-warn-main">
+        <span class="scan-warn-title">{{ i18n.t("plugins.scanFailed") }}</span>
+        <span class="scan-warn-hint">{{ plugins.scanError }}</span>
+      </div>
+      <button class="scan-warn-retry" :disabled="plugins.loading" @click="retryScan">
+        {{ i18n.t("plugins.scanSkippedRetry") }}
+      </button>
+    </div>
+
+    <!-- 扫描时崩溃 / 超时 / 读不出来的插件：列出来，给一个重扫入口 -->
+    <div v-if="plugins.skipped.length" class="scan-warn" role="status">
+      <div class="scan-warn-main">
+        <span class="scan-warn-title">
+          {{ i18n.t("plugins.scanSkipped", { count: plugins.skipped.length }) }}
+        </span>
+        <span class="scan-warn-hint">{{ i18n.t("plugins.scanSkippedHint") }}</span>
+        <ul class="scan-warn-list">
+          <li v-for="s in plugins.skipped" :key="s.path" :title="s.reason">
+            {{ skippedName(s.path) }}
+          </li>
+        </ul>
+      </div>
+      <button class="scan-warn-retry" :disabled="plugins.loading" @click="retryScan">
+        {{ i18n.t("plugins.scanSkippedRetry") }}
+      </button>
     </div>
 
     <div v-for="g in groups" :key="g.category" class="group">
@@ -265,6 +309,62 @@ function toggleLabel(it: PluginInfo): string {
 .src-chip:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 1px;
+}
+.scan-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 12px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background-color: rgb(var(--md-error-container));
+  color: rgb(var(--md-on-error-container));
+}
+.scan-warn-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.scan-warn-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+.scan-warn-hint {
+  font-size: 11px;
+  opacity: 0.8;
+}
+.scan-warn-list {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+}
+.scan-warn-list li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.scan-warn-retry {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.scan-warn-retry:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .group {
   margin-top: 12px;

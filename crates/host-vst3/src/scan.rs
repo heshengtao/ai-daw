@@ -1,10 +1,14 @@
 use std::ffi::{CStr, CString};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, TryRecvError};
+use std::time::{Duration, Instant};
 
 use ai_daw_plugin_api::{Plugin, PluginKind};
 use clack_host::prelude::*;
 use serde::{Deserialize, Serialize};
-use vst3_host::Vst3Host;
+use vst3_host::{SafeDiscoverySkip, Vst3Host};
 
 use crate::clap::ClapHostedPlugin;
 use crate::editor::EditorHandle;
@@ -135,10 +139,38 @@ pub fn load_clap_plugin(
     }
 }
 
+/// 单个 VST3 元数据探针的超时。
+///
+/// 正常插件读元数据远用不到一秒；Waves / iZotope 这类在加载时会弹模态框把扫描线程卡死，
+/// 超时后直接杀掉探针子进程，扫描继续往下走。
+const VST3_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 扫描时被跳过的插件（崩溃 / 超时 / 探测失败）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkippedPlugin {
+    /// 插件包路径。
+    pub path: PathBuf,
+    /// 跳过原因（给界面展示用，不要拿来程序判断）。
+    pub reason: String,
+}
+
+/// 一次完整扫描的结果：成功条目 + 被跳过的插件 + 扫描器自身是否跑得起来。
+#[derive(Debug, Default)]
+pub struct ScanReport {
+    /// 扫描成功的插件目录。
+    pub plugins: Vec<CatalogPlugin>,
+    /// 崩溃 / 超时 / 探测失败的插件。
+    pub skipped: Vec<SkippedPlugin>,
+    /// 扫描器整体没跑起来的原因（例如探针 sidecar 缺失）。
+    ///
+    /// `None` 表示扫描确实执行过；此时 [`Self::plugins`] 为空只代表本机没有插件。
+    pub error: Option<String>,
+}
+
 /// 扫描本机全部 VST3 与 CLAP 插件。
 ///
-/// 会遍历标准安装目录并**实例化**每个插件来读元数据，可能耗时数秒——**不可**在音频线程调用。
-/// 单个插件出错会被跳过，不影响整体结果。
+/// VST3 的元数据在**独立探针子进程**里读（插件崩了只死子进程），所以本函数不会因为某个
+/// 坏插件带走宿主；CLAP 只读插件描述符，不实例化。可能耗时较久——**不可**在音频线程调用。
 pub fn scan() -> Vec<ScannedPlugin> {
     scan_with(&[], &[], &[])
 }
@@ -171,10 +203,37 @@ pub fn scan_catalog_with(
     clap_extra: &[PathBuf],
     au_extra: &[PathBuf],
 ) -> Vec<CatalogPlugin> {
-    scan_with(vst3_extra, clap_extra, au_extra)
-        .iter()
-        .map(ScannedPlugin::catalog)
-        .collect()
+    scan_report_with(vst3_extra, clap_extra, au_extra).plugins
+}
+
+/// 同 [`scan_catalog_with`]，但把被跳过的插件与扫描器错误一并带出来。
+///
+/// 宿主用 `skipped` 在插件面板里提示「哪些插件没能扫描」，用 `error` 区分
+/// 「确实没有插件」与「扫描根本没跑起来」（探针缺失等）。
+pub fn scan_report_with(
+    vst3_extra: &[PathBuf],
+    clap_extra: &[PathBuf],
+    au_extra: &[PathBuf],
+) -> ScanReport {
+    let vst3 = scan_vst3_report(vst3_extra);
+    let clap = scan_clap_report(clap_extra);
+    let mut plugins: Vec<CatalogPlugin> = vst3.plugins.iter().map(ScannedPlugin::catalog).collect();
+    plugins.extend(clap.plugins.iter().map(ScannedPlugin::catalog));
+    plugins.extend(crate::au::scan(au_extra).iter().map(ScannedPlugin::catalog));
+    let mut skipped = vst3.skipped;
+    skipped.extend(clap.skipped);
+    ScanReport {
+        plugins,
+        skipped,
+        error: vst3.error,
+    }
+}
+
+/// VST3 扫描的内部结果（还没转成可持久化的 [`CatalogPlugin`]）。
+struct Vst3ScanReport {
+    plugins: Vec<ScannedPlugin>,
+    skipped: Vec<SkippedPlugin>,
+    error: Option<String>,
 }
 
 /// 按目录条目加载插件（已适配成引擎的 [`Plugin`]）。
@@ -245,34 +304,167 @@ fn load_vst3_plugin(path: &Path, isolate: bool) -> Result<vst3_host::Plugin, Hos
 }
 
 fn scan_vst3(extra: &[PathBuf]) -> Vec<ScannedPlugin> {
-    let mut builder = Vst3Host::builder().scan_default_paths();
+    scan_vst3_report(extra).plugins
+}
+
+/// 扫描 VST3，并把「崩溃 / 超时 / 失败」的插件单独记下来。
+///
+/// 这里**绝不**在本进程里实例化插件：`vst3_host::Vst3Host::discover_plugins` 会逐个
+/// `LoadLibrary` + `FreeLibrary`，坏插件在卸载阶段（WER 里的 `xxx.vst3_unloaded`、
+/// `0xc0000005`）或加载时 `abort()` 会直接带走宿主。改用 `discover_plugins_safe`：
+/// 每个插件起一个 `vst3-host-probe` 子进程，崩的只是子进程，宿主把它记成「跳过」。
+fn scan_vst3_report(extra: &[PathBuf]) -> Vst3ScanReport {
+    if let Err(error) = ensure_vst3_probe() {
+        return Vst3ScanReport {
+            plugins: Vec::new(),
+            skipped: Vec::new(),
+            error: Some(error),
+        };
+    }
+
+    let mut builder = Vst3Host::builder()
+        .scan_default_paths()
+        .probe_timeout(VST3_PROBE_TIMEOUT);
     for dir in extra {
         builder = builder.add_scan_path(dir);
     }
-    let Ok(mut host) = builder.build() else {
-        return Vec::new();
+    let host = match builder.build() {
+        Ok(host) => host,
+        Err(error) => {
+            return Vst3ScanReport {
+                plugins: Vec::new(),
+                skipped: Vec::new(),
+                error: Some(format!("初始化 VST3 扫描器失败：{error}")),
+            }
+        }
     };
-    let Ok(infos) = host.discover_plugins() else {
-        return Vec::new();
-    };
-    infos
+
+    let report = host.discover_plugins_safe();
+    if let Some(error) = report.error {
+        return Vst3ScanReport {
+            plugins: Vec::new(),
+            skipped: Vec::new(),
+            error: Some(error),
+        };
+    }
+
+    // 探针文件在、但根本起不来（缺 DLL / 权限被拦）时，每个插件都会报「failed to spawn
+    // probe」。这属于扫描器自身坏了，不能当成「这些插件都有问题」——尤其不能拿空结果
+    // 覆盖宿主磁盘上的上一次成功扫描。
+    let probe_cannot_spawn = report.plugins.is_empty()
+        && !report.skipped.is_empty()
+        && report.skipped.iter().all(|skip| {
+            matches!(
+                skip,
+                SafeDiscoverySkip::Failed { detail, .. } if detail.contains("failed to spawn probe")
+            )
+        });
+    if probe_cannot_spawn {
+        return Vst3ScanReport {
+            plugins: Vec::new(),
+            skipped: Vec::new(),
+            error: Some("扫描探针无法启动（vst3-host-probe 缺失依赖或被安全软件拦截）".into()),
+        };
+    }
+
+    let skipped = report
+        .skipped
         .into_iter()
-        .map(|i| ScannedPlugin {
-            id: format!("vst3:{}", i.uid),
-            name: i.name.clone(),
-            vendor: i.vendor.clone(),
-            kind: if i.category.contains("Instrument") {
-                PluginKind::Instrument
-            } else {
-                PluginKind::Effect
+        .map(|skip| SkippedPlugin {
+            path: skip.path().to_path_buf(),
+            reason: match skip {
+                SafeDiscoverySkip::Crashed { detail, .. } => format!("探测时崩溃：{detail}"),
+                SafeDiscoverySkip::TimedOut { .. } => "探测超时（插件可能弹出了阻塞对话框）".into(),
+                SafeDiscoverySkip::Failed { detail, .. } => format!("探测失败：{detail}"),
             },
-            format: "vst3",
-            accepts_midi: i.has_midi_input,
-            has_editor: i.has_gui,
-            description: vst3_native_description(&i.path),
-            path: i.path.clone(),
         })
-        .collect()
+        .collect();
+
+    let plugins = report
+        .plugins
+        .into_iter()
+        .map(|detailed| {
+            let info = detailed.info;
+            ScannedPlugin {
+                id: format!("vst3:{}", info.uid),
+                name: info.name.clone(),
+                vendor: info.vendor.clone(),
+                kind: if info.category.contains("Instrument") {
+                    PluginKind::Instrument
+                } else {
+                    PluginKind::Effect
+                },
+                format: "vst3",
+                accepts_midi: info.has_midi_input,
+                has_editor: info.has_gui,
+                description: vst3_native_description(&info.path),
+                path: info.path,
+            }
+        })
+        .collect();
+
+    Vst3ScanReport {
+        plugins,
+        skipped,
+        error: None,
+    }
+}
+
+/// 让 `vst3-host` 能找到扫描探针（`vst3-host-probe`）。
+///
+/// 上游查找探针时用 `exe_dir.join("vst3-host-probe")`——Windows 上不会自动补 `.exe`，
+/// 而 Tauri 打包出来的 sidecar 叫 `vst3-host-probe.exe`。所以这里自己找一次，找到后用
+/// `VST3_HOST_PROBE_PATH` 明确告诉上游；找不到就返回错误，让宿主把「扫描没跑起来」
+/// 显示出来，而不是静默地报告「本机没有插件」。
+pub fn ensure_vst3_probe() -> Result<PathBuf, String> {
+    if let Some(configured) = std::env::var_os("VST3_HOST_PROBE_PATH").map(PathBuf::from) {
+        if configured.exists() {
+            return Ok(configured);
+        }
+    }
+
+    let exe = std::env::current_exe().map_err(|e| format!("拿不到当前可执行文件路径：{e}"))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| "当前可执行文件没有父目录".to_string())?;
+    let name = probe_binary_name();
+
+    // 打包后的 sidecar 就在主程序旁边。
+    let direct = dir.join(name);
+    if direct.exists() {
+        return Ok(register_probe(direct));
+    }
+
+    // 开发 / 测试：二进制在 target/{debug,release} 里（test 在 deps 子目录）。
+    for ancestor in dir.ancestors() {
+        for profile in ["debug", "release"] {
+            let candidate = ancestor.join("target").join(profile).join(name);
+            if candidate.exists() {
+                return Ok(register_probe(candidate));
+            }
+        }
+        if ancestor.join("Cargo.toml").exists() {
+            break;
+        }
+    }
+
+    Err(format!(
+        "找不到扫描探针 {name}（应在主程序旁边或 cargo target 里）。\
+         已安装的插件无法扫描；请重新构建 sidecar（npm run build:vst3-helper）。"
+    ))
+}
+
+fn register_probe(path: PathBuf) -> PathBuf {
+    std::env::set_var("VST3_HOST_PROBE_PATH", &path);
+    path
+}
+
+fn probe_binary_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "vst3-host-probe.exe"
+    } else {
+        "vst3-host-probe"
+    }
 }
 
 /// 读 VST3 包里的 `moduleinfo.json`，取插件自述。
@@ -320,14 +512,58 @@ fn clap_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// CLAP 扫描探针在 stdout 上输出的协议前缀。
+///
+/// 插件自己也可能往 stdout 打印东西，所以不能把整行都当 JSON：只认带这个前缀的那一行。
+pub const CLAP_PROBE_MARKER: &str = "AI_DAW_CLAP_SCAN:";
+
+/// 单个 CLAP 探针的超时（理由同 VST3：卡住的插件不能拖住整轮扫描）。
+const CLAP_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 子进程已经退出后，再给读取线程一点时间把已写出的结果送回来（有界）。
+const PROBE_OUTPUT_GRACE: Duration = Duration::from_millis(250);
+
+/// 扫描探针从 `.clap` 里读出的一个插件条目（JSON 协议，宿主与探针共用）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClapScanEntry {
+    /// CLAP 自己的插件 id（不含 `clap:` 前缀）。
+    pub id: String,
+    pub name: String,
+    pub vendor: String,
+    /// 描述符 feature 里带 `instrument` 就是乐器。
+    pub is_instrument: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// CLAP 扫描的内部结果。
+#[derive(Default)]
+struct ClapScanReport {
+    plugins: Vec<ScannedPlugin>,
+    skipped: Vec<SkippedPlugin>,
+}
+
 fn scan_clap(extra: &[PathBuf]) -> Vec<ScannedPlugin> {
-    let mut out = Vec::new();
+    scan_clap_report(extra).plugins
+}
+
+/// 扫描 CLAP：每个 `.clap` 都交给 `clap-scan-probe` 子进程读描述符。
+///
+/// 和 VST3 一样，插件在加载/卸载（`dlclose` / `FreeLibrary` / bundle unload）阶段崩溃只会
+/// 杀掉探针，宿主把它记进跳过名单。找不到探针时（开发 / 测试环境没构建 sidecar）退回进程内
+/// 读取：功能不丢，但那一刻没有崩溃隔离。
+fn scan_clap_report(extra: &[PathBuf]) -> ClapScanReport {
+    let mut report = ClapScanReport::default();
+    let probe = ensure_clap_probe();
+    let mut warned = false;
+
     let mut dirs = clap_dirs();
     for dir in extra {
         if !dirs.contains(dir) {
             dirs.push(dir.clone());
         }
     }
+
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
@@ -337,66 +573,259 @@ fn scan_clap(extra: &[PathBuf]) -> Vec<ScannedPlugin> {
             if path.extension().and_then(|e| e.to_str()) != Some("clap") {
                 continue;
             }
-            out.extend(read_clap_bundle(&path));
+            match &probe {
+                Some(probe) => match run_clap_probe(probe, &path, CLAP_PROBE_TIMEOUT) {
+                    Ok(entries) => report.plugins.extend(
+                        entries
+                            .into_iter()
+                            .map(|entry| scanned_from_clap(entry, &path)),
+                    ),
+                    Err(reason) => report.skipped.push(SkippedPlugin { path, reason }),
+                },
+                None => {
+                    if !warned {
+                        warned = true;
+                        eprintln!(
+                            "未找到 clap-scan-probe：CLAP 扫描退回进程内读取（没有崩溃隔离）"
+                        );
+                    }
+                    report.plugins.extend(read_clap_bundle_in_process(&path));
+                }
+            }
         }
     }
-    out
+
+    report
 }
 
-/// 读出一个 .clap 文件里导出的全部插件。
-///
-/// 整段都派发到主线程：判断有没有界面要实例化一次（`has_gui`），而 CLAP 的 `init` 与
-/// `is_api_supported` 都是主线程专属。
-fn read_clap_bundle(path: &Path) -> Vec<ScannedPlugin> {
-    let owned = path.to_path_buf();
-    match crate::dispatch::on_main_thread(move || read_clap_bundle_here(&owned)) {
-        Ok(out) => out,
-        // 主线程已退出：就地读（那时已经没有更合规的选择了）。
-        Err(_) => read_clap_bundle_here(path),
+/// 把探针读出的条目转成扫描条目。
+fn scanned_from_clap(entry: ClapScanEntry, path: &Path) -> ScannedPlugin {
+    ScannedPlugin {
+        id: format!("clap:{}", entry.id),
+        name: entry.name,
+        vendor: entry.vendor,
+        kind: if entry.is_instrument {
+            PluginKind::Instrument
+        } else {
+            PluginKind::Effect
+        },
+        format: "clap",
+        accepts_midi: true,
+        // CLAP 的描述符没有「有没有界面」这一位；扫描阶段又不该为了它实例化插件
+        // （`has_gui` 要建实例，坏插件会因此把宿主带走）。先按「有界面」登记，
+        // 真正加载时 `ClapHostedPlugin::from_loaded` 会再确认一次。
+        has_editor: true,
+        description: entry.description,
+        path: path.to_path_buf(),
     }
 }
 
-/// [`read_clap_bundle`] 的实现。**必须在主线程上跑。**
-fn read_clap_bundle_here(path: &Path) -> Vec<ScannedPlugin> {
+/// 进程内读取一个 `.clap`（仅在探针不可用时兜底）。
+fn read_clap_bundle_in_process(path: &Path) -> Vec<ScannedPlugin> {
+    match read_clap_bundle_entries(path) {
+        Ok(entries) => entries
+            .into_iter()
+            .map(|entry| scanned_from_clap(entry, path))
+            .collect(),
+        Err(error) => {
+            eprintln!("读取 CLAP 失败 {}：{error}", path.display());
+            Vec::new()
+        }
+    }
+}
+
+/// 加载一个 `.clap` 并读出它的全部插件描述符。**不实例化插件。**
+///
+/// 这是兜底路径：`entry` 在函数结束时释放（可能触发插件的卸载代码）。正常扫描走
+/// [`clap_bundle_probe_json`]，把这段风险隔离在子进程里。
+fn read_clap_bundle_entries(path: &Path) -> Result<Vec<ClapScanEntry>, String> {
     // SAFETY: 加载外部动态库本身不安全；所有 CLAP 宿主都要承担这个风险。
-    let Ok(entry) = (unsafe { PluginEntry::load(path) }) else {
-        return Vec::new();
-    };
-    let Some(factory) = entry.get_plugin_factory() else {
-        return Vec::new();
-    };
+    let entry = unsafe { PluginEntry::load(path) }.map_err(|e| e.to_string())?;
+    read_clap_entries(&entry)
+}
+
+/// 从已加载的 entry 里读描述符。不碰插件实例，所以与线程无关。
+fn read_clap_entries(entry: &PluginEntry) -> Result<Vec<ClapScanEntry>, String> {
+    let factory = entry
+        .get_plugin_factory()
+        .ok_or_else(|| "插件没有导出 factory".to_string())?;
 
     let mut out = Vec::new();
     for descriptor in factory.plugin_descriptors() {
         let Some(id) = descriptor.id() else { continue };
         let plugin_id = id.to_string_lossy().into_owned();
-        out.push(ScannedPlugin {
-            id: format!("clap:{plugin_id}"),
+        out.push(ClapScanEntry {
             name: descriptor
                 .name()
-                .map(|n| n.to_string_lossy().into_owned())
+                .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| plugin_id.clone()),
             vendor: descriptor
                 .vendor()
-                .map(|v| v.to_string_lossy().into_owned())
+                .map(|vendor| vendor.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            kind: if descriptor.features().any(|f| f.to_bytes() == b"instrument") {
-                PluginKind::Instrument
-            } else {
-                PluginKind::Effect
-            },
-            format: "clap",
-            accepts_midi: true,
-            // GUI 支持要实例化一次才知道（与 VST3 的扫描口径一致）。
-            has_editor: crate::clap::has_gui(&entry, id),
+            is_instrument: descriptor.features().any(|f| f.to_bytes() == b"instrument"),
             description: descriptor
                 .description()
                 .map(|value| value.to_string_lossy().into_owned())
                 .filter(|value| !value.trim().is_empty()),
-            path: path.to_path_buf(),
+            id: plugin_id,
         });
     }
-    out
+    Ok(out)
+}
+
+/// 供 `clap-scan-probe` 使用：读出条目并序列化成一行 JSON。
+///
+/// **故意不卸载模块**：有些插件的 `DllMain` / 静态析构在卸载阶段崩溃，那会发生在输出之前，
+/// 把本来能用的插件误判成坏插件。探针进程随后立刻退出，这份泄漏由系统回收。
+pub fn clap_bundle_probe_json(path: &Path) -> Result<String, String> {
+    // SAFETY: 加载外部动态库本身不安全；所有 CLAP 宿主都要承担这个风险。
+    let entry = unsafe { PluginEntry::load(path) }.map_err(|e| e.to_string())?;
+    let entries = read_clap_entries(&entry)?;
+    let json = serde_json::to_string(&entries).map_err(|e| e.to_string())?;
+    std::mem::forget(entry);
+    Ok(json)
+}
+
+/// 定位 `clap-scan-probe`（Windows 带 `.exe`，其它平台不带）。
+///
+/// 查找顺序：`AI_DAW_CLAP_PROBE_PATH` → 主程序旁边（Tauri sidecar）→ cargo
+/// `target/{debug,release}`（`cargo run` / `cargo test`）。
+fn ensure_clap_probe() -> Option<PathBuf> {
+    if let Some(configured) = std::env::var_os("AI_DAW_CLAP_PROBE_PATH").map(PathBuf::from) {
+        if configured.exists() {
+            return Some(configured);
+        }
+    }
+
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let name = clap_probe_binary_name();
+
+    let direct = dir.join(name);
+    if direct.exists() {
+        return Some(direct);
+    }
+
+    for ancestor in dir.ancestors() {
+        for profile in ["debug", "release"] {
+            let candidate = ancestor.join("target").join(profile).join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        if ancestor.join("Cargo.toml").exists() {
+            break;
+        }
+    }
+
+    None
+}
+
+fn clap_probe_binary_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "clap-scan-probe.exe"
+    } else {
+        "clap-scan-probe"
+    }
+}
+
+/// 让探针读一个 `.clap`，带超时；插件崩溃 / 卡住只影响这个子进程。
+fn run_clap_probe(
+    probe: &Path,
+    plugin: &Path,
+    timeout: Duration,
+) -> Result<Vec<ClapScanEntry>, String> {
+    let mut child = Command::new(probe)
+        .arg(plugin)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        // stderr 只用来诊断；插件日志可能很吵，直接丢掉。
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("无法启动 CLAP 扫描探针：{e}"))?;
+
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("探针没有 stdout 管道".into());
+    };
+
+    // 只认带协议前缀的那一行：插件自己打印的内容会被忽略。
+    let (tx, rx) = mpsc::channel::<Option<String>>();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => {
+                    let _ = tx.send(None);
+                    return;
+                }
+                Ok(_) => {
+                    if let Some(json) = line.trim_end().strip_prefix(CLAP_PROBE_MARKER) {
+                        let _ = tx.send(Some(json.to_string()));
+                        return;
+                    }
+                }
+            }
+        }
+    });
+
+    /// 距离 deadline 的剩余时间；至少给一点，避免子进程刚写完就因为超时把输出丢掉。
+    fn remaining(deadline: Instant) -> Duration {
+        deadline
+            .saturating_duration_since(Instant::now())
+            .max(PROBE_OUTPUT_GRACE)
+    }
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match rx.try_recv() {
+            // 已经拿到结果：插件就算之后崩溃 / 卡住也不影响这次扫描。
+            Ok(Some(json)) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return parse_clap_probe_output(&json);
+            }
+            Ok(None) | Err(TryRecvError::Disconnected) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("探针没有返回扫描结果".into());
+            }
+            Err(TryRecvError::Empty) => {}
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // 子进程已退出：给它已经写出的结果一个很短的收集窗口。
+                let line = rx.recv_timeout(remaining(deadline)).ok().flatten();
+                return match line {
+                    Some(json) => parse_clap_probe_output(&json),
+                    None if status.success() => Err("探针没有返回扫描结果".into()),
+                    None => Err(format!("探测时崩溃（{status}）")),
+                };
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("探测超时（插件可能弹出了阻塞对话框）".into());
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("等待探针失败：{error}"));
+            }
+        }
+    }
+}
+
+fn parse_clap_probe_output(json: &str) -> Result<Vec<ClapScanEntry>, String> {
+    serde_json::from_str(json).map_err(|e| format!("探针输出无法解析：{e}"))
 }
 
 /// 从 `clap:<plugin_id>` 里取出插件 id。
@@ -427,5 +856,76 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), total, "扫描结果里有重复的插件 id");
+    }
+
+    #[test]
+    fn a_broken_bundle_is_skipped_instead_of_failing_the_scan() {
+        // 没有探针（没构建 sidecar）时这条回归测试没法跑。
+        if ensure_vst3_probe().is_err() {
+            eprintln!("未找到 vst3-host-probe，跳过。");
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!("ai-daw-broken-vst3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let broken = root.join("DefinitelyNotAPlugin.vst3");
+        std::fs::create_dir_all(&broken).expect("创建假插件包");
+
+        let report = scan_report_with(&[root.clone()], &[], &[]);
+        assert!(
+            report.error.is_none(),
+            "扫描器本身应当跑完：{:?}",
+            report.error
+        );
+        assert!(
+            !report.plugins.iter().any(|p| p.path.starts_with(&root)),
+            "坏插件不该出现在成功列表里"
+        );
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|skip| skip.path.starts_with(&root) && !skip.reason.is_empty()),
+            "坏插件应当被记入跳过名单并带原因：{:?}",
+            report.skipped
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_broken_clap_bundle_is_skipped_instead_of_failing_the_scan() {
+        // 没有探针（没构建 sidecar）时这条回归测试没法跑。
+        if ensure_clap_probe().is_none() {
+            eprintln!("未找到 clap-scan-probe，跳过。");
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!("ai-daw-broken-clap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("创建临时目录");
+        let broken = root.join("DefinitelyNotAClap.clap");
+        std::fs::write(&broken, b"not a clap plugin").expect("写入假插件");
+
+        let report = scan_report_with(&[], &[root.clone()], &[]);
+        assert!(
+            report.error.is_none(),
+            "扫描器本身应当跑完：{:?}",
+            report.error
+        );
+        assert!(
+            !report.plugins.iter().any(|p| p.path.starts_with(&root)),
+            "坏插件不该出现在成功列表里"
+        );
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|skip| skip.path.starts_with(&root) && !skip.reason.is_empty()),
+            "坏插件应当被记入跳过名单并带原因：{:?}",
+            report.skipped
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

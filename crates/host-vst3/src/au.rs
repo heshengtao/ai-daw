@@ -18,8 +18,9 @@ pub use macos::{AuEditorHandle, AuEditorWindow, AuHostedPlugin};
 
 /// 扫描本机 AU 插件（`.component`），额外扫描给定目录。
 ///
-/// 会读 `<bundle>/Contents/Info.plist` 的 `AudioComponents` 数组，并实例化探测有没有自带界面。
-/// 所以**不可**在音频线程调用。非 macOS 恒返回空。
+/// 只读 `<bundle>/Contents/Info.plist` 的 `AudioComponents` 数组与系统 `AudioComponent`
+/// 注册表，**不实例化插件**（`has_editor` 恒为 true），所以扫描阶段不会因为坏插件崩溃。
+/// 非 macOS 恒返回空。
 #[cfg(target_os = "macos")]
 pub fn scan(extra: &[PathBuf]) -> Vec<ScannedPlugin> {
     macos::scan(extra)

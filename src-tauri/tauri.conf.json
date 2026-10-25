@@ -29,7 +29,12 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "externalBin": ["binaries/aidaw", "binaries/vst3-host-helper"],
+    "externalBin": [
+      "binaries/aidaw",
+      "binaries/vst3-host-helper",
+      "binaries/vst3-host-probe",
+      "binaries/clap-scan-probe"
+    ],
     "resources": {
       "resources/articulation-maps": "articulation-maps",
       "resources/onnx/basic-pitch-nmp.onnx": "models/basic-pitch-nmp.onnx",

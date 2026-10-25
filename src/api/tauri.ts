@@ -68,6 +68,7 @@ import type {
   ProxyStatus,
   Section,
   Send,
+  PluginScanStatus,
   SoundMemorySummary,
   StoreNetwork,
   TransportSnapshot,
@@ -1197,10 +1198,16 @@ export function listPlugins(): Promise<CatalogPlugin[]> {
   return invoke<CatalogPlugin[]>("list_plugins");
 }
 
-/** 重新扫描本机插件（会 dlopen 每个插件，较慢）。 */
+/** 重新扫描本机插件（每个 VST3 都起一个探针子进程，较慢）。 */
 export function rescanPlugins(): Promise<CatalogPlugin[]> {
   if (mockEnabled()) return Promise.resolve(mockApi.rescanPlugins());
   return invoke<CatalogPlugin[]>("rescan_plugins");
+}
+
+/** 最近一次插件扫描的结果摘要（被跳过的插件 + 扫描器错误）。 */
+export function pluginScanStatus(): Promise<PluginScanStatus> {
+  if (mockEnabled()) return Promise.resolve({ skipped: [], error: null });
+  return invoke<PluginScanStatus>("plugin_scan_status");
 }
 
 /** 取某个插件的参数表（内置插件直接给，外部插件按目录加载）。 */

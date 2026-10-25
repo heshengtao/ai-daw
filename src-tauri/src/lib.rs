@@ -322,6 +322,12 @@ pub fn run() {
             // **必须在任何 ort 调用之前**（只决定「用哪个 EP」，不触发加载，所以放这儿安全）。
             crate::backends::init_runtime(app.handle());
             spawn_transport_ticker(app.handle().clone(), audio);
+            // 先用上次成功扫描的缓存把外部插件装上：这一轮扫描要给每个 VST3 起一个探针
+            // 子进程，可能很久，界面不该为此空着。后台扫描完成后会用最新结果覆盖。
+            let cached = crate::manager::cached_catalog(app.handle());
+            if !cached.is_empty() {
+                app.state::<AppState>().install_catalog(cached);
+            }
             spawn_plugin_scan(app.handle().clone());
             spawn_editor_ticker(app.handle().clone());
             // 后台预热插件注册表缓存：用户点开「插件管理器 → 可下载」时通常已命中缓存、秒开。
@@ -462,6 +468,7 @@ pub fn run() {
             commands::record_start,
             commands::record_stop,
             commands::list_plugins,
+            commands::plugin_scan_status,
             commands::rescan_plugins,
             commands::plugin_params,
             commands::add_effect,

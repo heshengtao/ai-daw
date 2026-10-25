@@ -12,6 +12,8 @@ vst3-host = "0.9"
 clack-host = "0.2"
 clack-extensions = { version = "0.2", features = ["params", "state", "gui", "thread-check", "clack-host"] }
 serde = { version = "1", features = ["derive"] }
+# CLAP 扫描探针与宿主之间的一行 JSON 协议。
+serde_json = "1"
 thiserror = "1"
 
 # AU（Audio Units）后端，仅 macOS：托管走 `AUAudioUnit`（统一 AUv2 与 AUv3，界面走
