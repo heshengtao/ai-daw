@@ -70,7 +70,7 @@ const SOURCE_PREFS: { id: ModelSourcePreference; labelKey: string }[] = [
   { id: "domestic", labelKey: "settings.store.sourceCn" },
 ];
 
-const APP_VERSION = "1.5.3";
+const APP_VERSION = "1.5.4";
 
 const router = useRouter();
 const active = ref<Section>("general");
