@@ -3,7 +3,7 @@
  * 底部条：三栏网格（minmax(0,1fr) / auto / minmax(0,1fr)），中栏因此严格居中，左右容器等宽。
  *
  * 按「功能相关」分三组：
- * - **左 · 编辑与工程读数**：撤销 / 重做 / 关键点 / 录音输入设备与电平表 / 输出设备 / 工程小节数；
+ * - **左 · 编辑与工程读数**：撤销 / 重做 / 关键点 / 录音输入设备（电平即框内底色）/ 输出设备 / 工程小节数；
  * - **中 · 传输**：回到起点、录音 ｜ 播放暂停 ｜ 停止、循环；
  * - **右 · 时间与节拍**：位置读数 / 拍号 / BPM / 节拍器，再加 AI 与引擎状态。
  *
@@ -272,12 +272,13 @@ function onRetryAudio(): void {
         {{ i18n.t("bottom.keyframe") }}
       </span>
 
-      <!-- 麦克风：上方一条极细电平条，下方图标 + 设备下拉。 -->
-      <span class="device-block">
-        <span class="level-meter" :class="{ idle: !transport.inputActive }" :title="i18n.t('bottom.recordLevel')">
-          <span class="level-fill" :style="{ width: levelPct }" />
-        </span>
-        <span class="pick-row">
+      <!--
+        麦克风 / 输出：图标与设备下拉同处一行，电平直接铺成下拉框**内部的底色**。
+        这样两个设备块与撤销、小节读数同高，整条底栏只剩一条水平线，
+        电平也不再单独占一行高度。
+      -->
+      <Tooltip class="device-tip" :text="i18n.t('bottom.recordLevel')" place="above" align="center">
+        <span class="device-block" :class="{ idle: !transport.inputActive }">
           <MicrophoneIcon class="pick-icon" />
           <Md3Select
             :model-value="transport.inputDevice ?? ''"
@@ -285,27 +286,30 @@ function onRetryAudio(): void {
             :label="i18n.t('bottom.recordInputLabel')"
             :placeholder="i18n.t('bottom.recordInputNone')"
             @update:model-value="onSelectInput"
-          />
+          >
+            <template #background>
+              <span class="level-fill" :style="{ width: levelPct }" aria-hidden="true" />
+            </template>
+          </Md3Select>
         </span>
-      </span>
+      </Tooltip>
 
       <span class="t-sep" />
 
-      <!-- 输出：同样在上方给电平条，和麦克风那一块上下对齐。 -->
-      <Tooltip :text="i18n.t('bottom.outputLabel')" place="above" align="center">
+      <!-- 输出：同一套结构；电平就是下拉框的底色，不再需要上方的细条。 -->
+      <Tooltip class="device-tip" :text="i18n.t('bottom.outputLevel')" place="above" align="center">
         <span class="device-block" @pointerdown="onPickOutput">
-          <span class="level-meter" :class="{ idle: !transport.playing }" :title="i18n.t('bottom.outputLevel')">
-            <span class="level-fill" :style="{ width: outputLevelPct }" />
-          </span>
-          <span class="pick-row">
-            <SpeakerWaveIcon class="pick-icon" />
-            <Md3Select
-              :model-value="transport.outputDevice ?? ''"
-              :options="outputOptions"
-              :label="i18n.t('bottom.outputLabel')"
-              @update:model-value="onSelectOutput"
-            />
-          </span>
+          <SpeakerWaveIcon class="pick-icon" />
+          <Md3Select
+            :model-value="transport.outputDevice ?? ''"
+            :options="outputOptions"
+            :label="i18n.t('bottom.outputLabel')"
+            @update:model-value="onSelectOutput"
+          >
+            <template #background>
+              <span class="level-fill" :style="{ width: outputLevelPct }" aria-hidden="true" />
+            </template>
+          </Md3Select>
         </span>
       </Tooltip>
 
@@ -643,57 +647,56 @@ function onRetryAudio(): void {
   box-shadow: 0 0 0 4px rgb(var(--md-error) / 0.25);
   transform: scale(1.1);
 }
-/* 设备选择块（输入 / 输出共用）：上方电平条 + 下方「图标 + 下拉」。
-   两块宽度一致、结构一致，底栏里上下自然对齐；固定宽度 + 单行省略号，
-   绝不撑大左栏（否则播放键会被挤偏）。 */
+/* Tooltip 的外壳默认按内容撑开、且带 `min-width:auto`；底栏变窄时它会把
+   两个设备块钉在 158px，宁可把撤销键挤出窗口也不肯收缩。这里放开下限，
+   让内部的 `.device-block` 继续按自己的规则缩。 */
+.device-tip {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+/* 设备块（输入 / 输出共用）：图标 + 下拉同处一行，与撤销、读数落在同一水平线上。
+   固定宽度 + 单行省略号，绝不撑大左栏（否则播放键会被挤偏）。 */
 .device-block {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  gap: 4px;
   width: 158px;
   min-width: 0;
   flex: 0 1 auto;
 }
-.pick-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-}
-.pick-row :deep(button) {
+.device-block :deep(.md3-select) {
   flex: 1 1 0;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .pick-icon {
   flex: 0 0 auto;
   width: 14px;
   height: 14px;
   opacity: 0.6;
+  transition: opacity 0.18s ease;
 }
-/* 电平条：贴在设备下拉上方的一条细线，宽度与下拉对齐（跳过左侧图标）。
-   填充宽度随峰值变化；输入用录音电平，输出用主输出示波器。 */
-.level-meter {
-  display: block;
-  height: 3px;
-  margin-left: 18px;
-  border-radius: 999px;
-  overflow: hidden;
-  background-color: rgb(var(--md-surface-container-high));
+/* 没有输入设备时把麦克风压暗（输出不压：图标变暗会被误读成「设备不可用」）。
+   电平本身没有信号时就是空的，不再额外保留一条底轨。 */
+.device-block.idle .pick-icon {
+  opacity: 0.32;
 }
+/* 电平：铺在下拉框**内部**的底色，从左侧随峰值长出来。
+   底色刻意压得很淡（0.14 → 0.26），设备名始终压在上面；右缘叠一条 1px 的亮边，
+   低电平时也能看清当前刻度落在哪里。亮边用 background 而不是 inset 阴影——
+   宽度为 0 时背景不会绘制，电平归零后不会在框内留下一个假的刻度点。 */
 .level-fill {
-  display: block;
-  height: 100%;
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 0;
   width: 0;
-  border-radius: inherit;
-  background-color: rgb(var(--md-primary));
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgb(var(--md-primary) / 0.45), rgb(var(--md-primary) / 0.45)),
+    linear-gradient(90deg, rgb(var(--md-primary) / 0.14), rgb(var(--md-primary) / 0.26));
+  background-size: 1px 100%, 100% 100%;
+  background-position: right center, left center;
+  background-repeat: no-repeat;
   transition: width 120ms linear;
-}
-/* 输入流没开 / 没在播放时压暗，提示电平表当前无信号。 */
-.level-meter.idle {
-  opacity: 0.35;
 }
 .play-btn:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
@@ -788,7 +791,7 @@ function onRetryAudio(): void {
    注意只隐藏**在线**指示（`.engine` 无 `fallback`）；离线状态是唯一可点的重试入口，
    在窄窗口上恰恰最需要可操作，不能一起藏掉。 */
 @media (max-width: 1180px) {
-  .device-block {
+  .device-tip {
     display: none;
   }
 }
@@ -820,6 +823,10 @@ function onRetryAudio(): void {
   .t-btn:not(:disabled):active,
   .audio-retry:active {
     transform: none;
+  }
+  /* 电平本来就是 120ms 一次的离散读数，去掉补间仍然读得懂。 */
+  .level-fill {
+    transition: none;
   }
 }
 </style>

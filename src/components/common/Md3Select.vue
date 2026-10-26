@@ -6,6 +6,9 @@
  * 「选一项 → 关掉」。
  *
  * 菜单 Teleport 到 body 并用 fixed 定位：检查器是可滚动容器，绝对定位的面板会被裁掉。
+ *
+ * `#background` 插槽铺在药丸**内部**、文字之下（例如底栏把输入/输出电平做成底色）。
+ * 插槽内容自己决定尺寸与动效；这里只负责定位、圆角裁切，并让文字压在它上面。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ArrowRightIcon, CheckIcon, ChevronDownIcon } from "@heroicons/vue/24/outline";
@@ -159,6 +162,7 @@ onUnmounted(() => {
     :aria-label="label"
     @click="toggle"
   >
+    <slot name="background" />
     <span class="value" :class="{ placeholder: !selected }">{{ text }}</span>
     <ChevronDownIcon class="caret" :class="{ up: open }" />
   </button>
@@ -209,6 +213,8 @@ onUnmounted(() => {
 
 <style scoped>
 .md3-select {
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -236,6 +242,8 @@ onUnmounted(() => {
   cursor: default;
 }
 .value {
+  position: relative;
+  z-index: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -245,6 +253,8 @@ onUnmounted(() => {
   color: rgb(var(--md-on-surface-variant));
 }
 .caret {
+  position: relative;
+  z-index: 1;
   width: 15px;
   height: 15px;
   flex: 0 0 auto;
