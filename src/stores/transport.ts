@@ -9,7 +9,7 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 import * as api from "@/api/tauri";
-import type { InputDeviceInfo, TransportSnapshot } from "@/api/types";
+import type { InputDeviceInfo, OutputDeviceInfo, TransportSnapshot } from "@/api/types";
 import { useLayoutStore } from "@/stores/layout";
 import { useProjectStore } from "@/stores/project";
 import { useTimelineStore } from "@/stores/timeline";
@@ -432,6 +432,49 @@ export const useTransportStore = defineStore("transport", () => {
     }
   }
 
+  // ---- 输出设备 ----
+
+  /** 可选的输出设备列表。 */
+  const outputDevices = ref<OutputDeviceInfo[]>([]);
+  /** 当前选中的输出设备名（null = 跟随系统默认设备）。 */
+  const outputDevice = ref<string | null>(null);
+
+  /** 拉取输出设备列表。 */
+  async function refreshOutputDevices(): Promise<void> {
+    try {
+      outputDevices.value = await api.listOutputDevices();
+    } catch {
+      outputDevices.value = [];
+    }
+  }
+
+  /** 选择输出设备（null = 跟随系统默认）。后端立刻重建流，可用性由传输事件推回。 */
+  async function selectOutput(device: string | null): Promise<void> {
+    outputDevice.value = device;
+    try {
+      await api.setOutputDevice(device);
+    } catch (err) {
+      layout.notify(String(err));
+    }
+  }
+
+  /** 输出电平表最近一帧的峰值（0..1）。 */
+  const outputLevelPeak = ref(0);
+
+  /** 读一次输出电平（主输出示波器缓冲）。没在播放时直接归零，不打扰后端。 */
+  async function pollOutputLevel(points = 64): Promise<void> {
+    if (!playing.value) {
+      outputLevelPeak.value = 0;
+      return;
+    }
+    try {
+      const samples = await api.scopeData(points);
+      outputLevelPeak.value = samples.reduce((peak, v) => Math.max(peak, Math.abs(v)), 0);
+    } catch {
+      outputLevelPeak.value = 0;
+    }
+  }
+
   /** 开始录音：记录起点并走带（后端会一并开始播放）。 */
   async function startRecording(track: number, startBeat: number): Promise<void> {
     try {
@@ -497,6 +540,12 @@ export const useTransportStore = defineStore("transport", () => {
     inputDevice,
     inputLevelPeak,
     inputActive,
+    outputDevices,
+    outputDevice,
+    outputLevelPeak,
+    refreshOutputDevices,
+    selectOutput,
+    pollOutputLevel,
     refreshInputDevices,
     selectInput,
     pollInputLevel,

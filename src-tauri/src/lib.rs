@@ -446,6 +446,8 @@ pub fn run() {
             commands::ops_reapply_to,
             commands::transport_status,
             commands::retry_audio,
+            commands::list_output_devices,
+            commands::set_output_device,
             commands::transport_play,
             commands::transport_pause,
             commands::transport_stop,

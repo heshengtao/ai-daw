@@ -3,7 +3,7 @@
  * 底部条：三栏网格（minmax(0,1fr) / auto / minmax(0,1fr)），中栏因此严格居中，左右容器等宽。
  *
  * 按「功能相关」分三组：
- * - **左 · 编辑与工程读数**：撤销 / 重做 / 关键点 / 录音输入设备与电平表 / 工程小节数；
+ * - **左 · 编辑与工程读数**：撤销 / 重做 / 关键点 / 录音输入设备与电平表 / 输出设备 / 工程小节数；
  * - **中 · 传输**：回到起点、录音 ｜ 播放暂停 ｜ 停止、循环；
  * - **右 · 时间与节拍**：位置读数 / 拍号 / BPM / 节拍器，再加 AI 与引擎状态。
  *
@@ -23,6 +23,8 @@ import {
   ArrowUturnRightIcon,
   ArrowPathIcon,
   XMarkIcon,
+  SpeakerWaveIcon,
+  MicrophoneIcon,
 } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
 import MetronomeIcon from "@/components/common/icons/MetronomeIcon.vue";
@@ -52,25 +54,56 @@ const aiEvents = useEngineEventsStore();
 /** 录音目标轨道：选中轨道，否则首轨。 */
 const recordTrack = computed(() => selection.trackId ?? store.project?.tracks[0]?.id ?? null);
 
-/** 输入设备下拉选项。带上连接类型 / 默认标记，避免「蓝牙耳机」这类设备看着像纯输出。 */
-const inputOptions = computed(() =>
-  transport.inputDevices.map((d) => {
+/**
+ * 输入设备下拉选项：首项固定「无输入设备」（id 为空串 = 关闭输入流、释放麦克风），
+ * 其后是本机设备。设备项带上连接类型 / 默认标记，避免「蓝牙耳机」这类设备看着像纯输出。
+ */
+const inputOptions = computed(() => [
+  {
+    id: "",
+    label: i18n.t("bottom.recordInputNone"),
+    hint: i18n.t("bottom.recordInputNoneHint"),
+  },
+  ...transport.inputDevices.map((d) => {
     const parts: string[] = [];
     if (d.transport) parts.push(i18n.t(`bottom.inputTransport.${d.transport}`));
     if (d.is_default) parts.push(i18n.t("bottom.inputDefault"));
     parts.push(`${d.sample_rate} Hz · ${d.channels}ch`);
     return { id: d.name, label: d.name, hint: parts.join(" · ") };
   }),
-);
+]);
 
 /** 电平表填充宽度（0..100%）。 */
 const levelPct = computed(() => `${Math.round(Math.min(1, transport.inputLevelPeak) * 100)}%`);
 
+/** 输出电平表填充宽度（0..100%）。 */
+const outputLevelPct = computed(() => `${Math.round(Math.min(1, transport.outputLevelPeak) * 100)}%`);
+
+/** 输出设备下拉：第一项固定「跟随系统默认」，其后是本机设备（带默认标记与规格）。 */
+const outputOptions = computed(() => [
+  { id: "", label: i18n.t("bottom.outputDefault"), hint: i18n.t("bottom.outputDefaultHint") },
+  ...transport.outputDevices.map((d) => {
+    const parts = [`${d.sample_rate} Hz · ${d.channels}ch`];
+    if (d.is_default) parts.push(i18n.t("bottom.inputDefault"));
+    return { id: d.name, label: d.name, hint: parts.join(" · ") };
+  }),
+]);
+
 let levelTimer: number | null = null;
 
-/** 切设备时重建输入流。 */
+/** 切设备时重建输入流；空 id（「无输入设备」）= 关闭输入流、释放麦克风。 */
 async function onSelectInput(name: string): Promise<void> {
-  await transport.selectInput(name);
+  await transport.selectInput(name === "" ? null : name);
+}
+
+/** 切输出设备（空 id = 跟随系统默认设备）。 */
+async function onSelectOutput(id: string): Promise<void> {
+  await transport.selectOutput(id === "" ? null : id);
+}
+
+/** 展开输出设备菜单前刷新一次：应用运行期间插上的设备也能被看到。 */
+function onPickOutput(): void {
+  void transport.refreshOutputDevices();
 }
 
 /** 录音开关：开始前把起点吸附到网格。 */
@@ -85,9 +118,12 @@ async function onToggleRecord(): Promise<void> {
 
 onMounted(async () => {
   // 只拉设备列表，**不自动打开输入流**：麦克风只在用户显式选设备或开始录音时才被占用。
-  await transport.refreshInputDevices();
-  // 电平表轮询：只在底部条存在时跑。输入流没开时 store 会直接归零，不发 IPC。
-  levelTimer = window.setInterval(() => void transport.pollInputLevel(), 120);
+  await Promise.all([transport.refreshInputDevices(), transport.refreshOutputDevices()]);
+  // 电平表轮询：只在底部条存在时跑。输入流没开 / 没在播放时 store 会直接归零，不发 IPC。
+  levelTimer = window.setInterval(() => {
+    void transport.pollInputLevel();
+    void transport.pollOutputLevel();
+  }, 120);
 });
 onUnmounted(() => {
   if (levelTimer !== null) window.clearInterval(levelTimer);
@@ -236,18 +272,42 @@ function onRetryAudio(): void {
         {{ i18n.t("bottom.keyframe") }}
       </span>
 
-      <span class="input-pick">
-        <Md3Select
-          :model-value="transport.inputDevice"
-          :options="inputOptions"
-          :label="i18n.t('bottom.recordInputLabel')"
-          :placeholder="i18n.t('bottom.recordInputNone')"
-          @update:model-value="onSelectInput"
-        />
+      <!-- 麦克风：上方一条极细电平条，下方图标 + 设备下拉。 -->
+      <span class="device-block">
+        <span class="level-meter" :class="{ idle: !transport.inputActive }" :title="i18n.t('bottom.recordLevel')">
+          <span class="level-fill" :style="{ width: levelPct }" />
+        </span>
+        <span class="pick-row">
+          <MicrophoneIcon class="pick-icon" />
+          <Md3Select
+            :model-value="transport.inputDevice ?? ''"
+            :options="inputOptions"
+            :label="i18n.t('bottom.recordInputLabel')"
+            :placeholder="i18n.t('bottom.recordInputNone')"
+            @update:model-value="onSelectInput"
+          />
+        </span>
       </span>
-      <span class="level-meter" :class="{ idle: !transport.inputActive }" :title="i18n.t('bottom.recordLevel')">
-        <span class="level-fill" :style="{ width: levelPct }" />
-      </span>
+
+      <span class="t-sep" />
+
+      <!-- 输出：同样在上方给电平条，和麦克风那一块上下对齐。 -->
+      <Tooltip :text="i18n.t('bottom.outputLabel')" place="above" align="center">
+        <span class="device-block" @pointerdown="onPickOutput">
+          <span class="level-meter" :class="{ idle: !transport.playing }" :title="i18n.t('bottom.outputLevel')">
+            <span class="level-fill" :style="{ width: outputLevelPct }" />
+          </span>
+          <span class="pick-row">
+            <SpeakerWaveIcon class="pick-icon" />
+            <Md3Select
+              :model-value="transport.outputDevice ?? ''"
+              :options="outputOptions"
+              :label="i18n.t('bottom.outputLabel')"
+              @update:model-value="onSelectOutput"
+            />
+          </span>
+        </span>
+      </Tooltip>
 
       <span class="t-sep" />
 
@@ -583,26 +643,42 @@ function onRetryAudio(): void {
   box-shadow: 0 0 0 4px rgb(var(--md-error) / 0.25);
   transform: scale(1.1);
 }
-/* 输入设备下拉：限宽 + 单行省略号，绝不撑大左栏（否则播放键会被挤偏）。 */
-.input-pick {
+/* 设备选择块（输入 / 输出共用）：上方电平条 + 下方「图标 + 下拉」。
+   两块宽度一致、结构一致，底栏里上下自然对齐；固定宽度 + 单行省略号，
+   绝不撑大左栏（否则播放键会被挤偏）。 */
+.device-block {
   display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 158px;
   min-width: 0;
-  max-width: 160px;
   flex: 0 1 auto;
 }
-.input-pick :deep(button) {
+.pick-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   min-width: 0;
-  max-width: 160px;
+}
+.pick-row :deep(button) {
+  flex: 1 1 0;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 输入电平表：一条细药丸，填充宽度随输入峰值。 */
-.level-meter {
-  display: inline-block;
-  width: 48px;
-  height: 8px;
+.pick-icon {
   flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  opacity: 0.6;
+}
+/* 电平条：贴在设备下拉上方的一条细线，宽度与下拉对齐（跳过左侧图标）。
+   填充宽度随峰值变化；输入用录音电平，输出用主输出示波器。 */
+.level-meter {
+  display: block;
+  height: 3px;
+  margin-left: 18px;
   border-radius: 999px;
   overflow: hidden;
   background-color: rgb(var(--md-surface-container-high));
@@ -611,12 +687,13 @@ function onRetryAudio(): void {
   display: block;
   height: 100%;
   width: 0;
+  border-radius: inherit;
   background-color: rgb(var(--md-primary));
   transition: width 120ms linear;
 }
-/* 输入流没开（未选设备且未录音）时压暗，提示电平表当前无输入。 */
+/* 输入流没开 / 没在播放时压暗，提示电平表当前无信号。 */
 .level-meter.idle {
-  opacity: 0.45;
+  opacity: 0.35;
 }
 .play-btn:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
@@ -711,8 +788,7 @@ function onRetryAudio(): void {
    注意只隐藏**在线**指示（`.engine` 无 `fallback`）；离线状态是唯一可点的重试入口，
    在窄窗口上恰恰最需要可操作，不能一起藏掉。 */
 @media (max-width: 1180px) {
-  .input-pick,
-  .level-meter {
+  .device-block {
     display: none;
   }
 }

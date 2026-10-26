@@ -38,6 +38,9 @@ pub enum RealtimeError {
     /// 系统没有可用的默认输出设备。
     #[error("no default output device available")]
     NoDevice,
+    /// 指定的输出设备不存在（被拔出/改名）。
+    #[error("output device \"{0}\" is unavailable")]
+    NoSuchDevice(String),
     /// 系统没有可用的输入设备（或指定名字的设备不存在）。
     #[error("no input device available")]
     NoInputDevice,
@@ -141,14 +144,72 @@ pub struct DeviceSignature {
     pub sample_rate: u32,
 }
 
+/// 一个输出设备的概况（供界面列选）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct OutputDeviceInfo {
+    /// 设备显示名。
+    pub name: String,
+    /// 默认输出采样率（Hz）。
+    pub sample_rate: u32,
+    /// 默认输出声道数。
+    pub channels: u16,
+    /// 是否系统默认输出设备。
+    pub is_default: bool,
+}
+
+/// 设备显示名。cpal 0.18 起 `DeviceTrait::name()` 被 `description()` 取代（返回结构化描述）。
+fn output_device_name(device: &cpal::Device) -> Option<String> {
+    device.description().ok().map(|d| d.name().to_owned())
+}
+
+/// 按名字取输出设备；`None` = 系统默认设备。名字对不上（设备已拔出/改名）时返回 `None`。
+pub fn find_output_device(name: Option<&str>) -> Option<cpal::Device> {
+    let host = cpal::default_host();
+    match name {
+        None => host.default_output_device(),
+        Some(name) => host
+            .output_devices()
+            .ok()?
+            .find(|device| output_device_name(device).as_deref() == Some(name)),
+    }
+}
+
+/// 指定输出设备的身份（`None` = 系统默认）；设备不存在（或查询失败）时 `None`。
+pub fn output_signature(name: Option<&str>) -> Option<DeviceSignature> {
+    let device = find_output_device(name)?;
+    let sample_rate = device.default_output_config().ok()?.sample_rate();
+    Some(DeviceSignature {
+        name: output_device_name(&device)?,
+        sample_rate,
+    })
+}
+
 /// 读取当前默认输出设备的身份；无设备（或查询失败）时 `None`。
 pub fn default_output_signature() -> Option<DeviceSignature> {
+    output_signature(None)
+}
+
+/// 本机所有输出设备（查询失败的设备被跳过）。
+pub fn list_output_devices() -> Vec<OutputDeviceInfo> {
     let host = cpal::default_host();
-    let device = host.default_output_device()?;
-    // cpal 0.18 起 `DeviceTrait::name()` 被 `description()` 取代（返回结构化描述）。
-    let name = device.description().ok()?.name().to_owned();
-    let sample_rate = device.default_output_config().ok()?.sample_rate();
-    Some(DeviceSignature { name, sample_rate })
+    let default_name = host
+        .default_output_device()
+        .and_then(|device| output_device_name(&device));
+    let Ok(devices) = host.output_devices() else {
+        return Vec::new();
+    };
+    devices
+        .filter_map(|device| {
+            let name = output_device_name(&device)?;
+            let supported = device.default_output_config().ok()?;
+            Some(OutputDeviceInfo {
+                is_default: default_name.as_deref() == Some(name.as_str()),
+                name,
+                sample_rate: supported.sample_rate(),
+                channels: supported.channels(),
+            })
+        })
+        .collect()
 }
 
 /// 设备是否发生变化：身份（名字或采样率）不同、或一侧有一侧无设备都算变化；
@@ -390,15 +451,20 @@ pub fn stall_polls_required(backoff: u32) -> u32 {
     STALL_POLLS.saturating_mul(1u32 << backoff.min(4))
 }
 
-/// 默认输出设备的采样率（Hz）；无法查询时返回 `None`（例如无音频设备的 CI 环境）。
+/// 指定输出设备的采样率（Hz）；`None` = 系统默认设备，无法查询时返回 `None`
+/// （例如无音频设备的 CI 环境）。
 ///
 /// 调度表以固定采样率定点，必须在构建之前知道设备采样率，因此需要一个不打开流的
 /// 探测入口。
-pub fn default_output_sample_rate() -> Option<u32> {
-    let host = cpal::default_host();
-    let device = host.default_output_device()?;
+pub fn output_sample_rate(name: Option<&str>) -> Option<u32> {
+    let device = find_output_device(name)?;
     let supported = device.default_output_config().ok()?;
     Some(supported.sample_rate())
+}
+
+/// 默认输出设备的采样率（Hz）；无法查询时返回 `None`。
+pub fn default_output_sample_rate() -> Option<u32> {
+    output_sample_rate(None)
 }
 
 /// 归一化设备报出的一段采样率区间，保证 `min_rate <= max_rate`。
@@ -413,7 +479,7 @@ fn normalise_rate_span(min_rate: u32, max_rate: u32) -> (u32, u32) {
 
 /// 把设备报告的可支持配置投影成纯数据；设备不报告范围（或查询失败）时返回空表。
 ///
-/// 空表会让 [`choose_output_format`] 返回 `None`，`AudioHost::start_with` 据此退回设备
+/// 空表会让 [`choose_output_format`] 返回 `None`，`AudioHost::start_on` 据此退回设备
 /// 默认配置——即「设备不报范围」时保持旧行为。
 fn supported_formats(device: &cpal::Device) -> Vec<OutputFormatRange> {
     let Ok(ranges) = device.supported_output_configs() else {
@@ -483,10 +549,25 @@ impl AudioHost {
         shared: SharedTransport,
         carried: ReusableInstances,
     ) -> Result<Self, RealtimeError> {
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or(RealtimeError::NoDevice)?;
+        Self::start_on(None, schedule, registry, options, shared, carried)
+    }
+
+    /// 与 [`AudioHost::start_with`] 相同，但可指定输出设备名（`None` = 系统默认设备）。
+    ///
+    /// 显式指定的设备不存在（被拔出/改名）时返回 [`RealtimeError::NoSuchDevice`]，
+    /// **不会**悄悄改用默认设备——否则界面选的是耳机、声音却从扬声器出来。
+    pub fn start_on(
+        device_name: Option<&str>,
+        schedule: ScheduledEvents,
+        registry: &PluginRegistry,
+        options: RealtimeOptions,
+        shared: SharedTransport,
+        carried: ReusableInstances,
+    ) -> Result<Self, RealtimeError> {
+        let device = find_output_device(device_name).ok_or_else(|| match device_name {
+            Some(name) => RealtimeError::NoSuchDevice(name.to_string()),
+            None => RealtimeError::NoDevice,
+        })?;
 
         let preferred_rate = schedule.sample_rate.round().max(1.0) as u32;
         let chosen = choose_output_format(&supported_formats(&device), preferred_rate);

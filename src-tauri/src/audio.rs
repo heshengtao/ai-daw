@@ -18,8 +18,8 @@ use ai_daw_engine::event::Event;
 use ai_daw_engine::model::{Project, TrackId};
 use ai_daw_engine::player::ReusableInstances;
 use ai_daw_engine::realtime::{
-    default_output_sample_rate, default_output_signature, device_changed, stall_polls_required,
-    stream_stalled, AudioHost, DeviceSignature, RealtimeOptions, SharedStatus, SharedTransport,
+    device_changed, output_sample_rate, output_signature, stall_polls_required, stream_stalled,
+    AudioHost, DeviceSignature, RealtimeOptions, SharedStatus, SharedTransport,
 };
 use ai_daw_engine::registry::PluginSlot;
 use ai_daw_engine::schedule::ScheduledEvents;
@@ -65,6 +65,8 @@ enum AudioMessage {
     SetCatalog(Vec<CatalogPlugin>),
     /// 立刻重新探测设备并重建宿主（界面上的「重试」，以及设备变化时的自动重建）。
     Retry,
+    /// 切换输出设备：`None` = 跟随系统默认设备。选定后立即重建宿主。
+    SetOutputDevice(Option<String>),
     /// 打开（或替换）输入设备；`None` = 用默认输入设备。
     /// 回复是否成功（`None` = 调用方不等待，见 `arm_input` 的 `wait` 参数）。
     ArmInput(Option<String>, Option<Sender<Result<(), String>>>),
@@ -180,6 +182,16 @@ impl AudioEngine {
     /// 由 `retry_audio` Tauri 命令调用：设备被拔掉后再插回，用户无需重启应用。
     pub fn retry_audio(&self) {
         let _ = self.tx.send(AudioMessage::Retry);
+    }
+
+    /// 选择输出设备（`None` = 跟随系统默认设备）；音频线程会立刻重建宿主。
+    ///
+    /// 不需要等音频线程确认：设备打不开时由 `snapshot()` 的 `available` / `error` 推回
+    /// 界面，轮询随后每秒自动重试；离线时这条命令同样有效——它正是用户换到可用设备的途径。
+    pub fn set_output_device(&self, device: Option<String>) -> Result<(), String> {
+        self.tx
+            .send(AudioMessage::SetOutputDevice(device))
+            .map_err(|_| "音频线程已退出".to_string())
     }
 
     /// 打开（或替换）输入设备；`None` = 用默认输入设备。选定后输入电平表即可工作。
@@ -482,13 +494,14 @@ fn take_instances(host: &mut Option<AudioHost>, available: &AtomicBool) -> Reusa
 ///
 /// `carried` 是上一个宿主交出来的插件实例：新播放器会复用 plugin id 仍匹配的那些，
 /// 插件状态与已打开的界面窗口因此跨重建保留。失败时记录原因并置 `available = false`，
-/// 返回 `None`。
+/// 返回 `None`。`output_device` 是用户显式选择的输出设备（`None` = 跟随系统默认）。
 #[allow(clippy::too_many_arguments)]
 fn start_host(
     project: &Project,
     catalog: &[CatalogPlugin],
     editor_handles: &EditorHandles,
     assets: &Arc<AssetCache>,
+    output_device: Option<&str>,
     shared: &SharedTransport,
     sample_rate: &AtomicU32,
     available: &AtomicBool,
@@ -497,7 +510,7 @@ fn start_host(
     scope: &Arc<ScopeBuffer>,
     carried: ReusableInstances,
 ) -> Option<AudioHost> {
-    let rate = match resolve_sample_rate(sample_rate) {
+    let rate = match resolve_sample_rate(sample_rate, output_device) {
         Ok(rate) => rate,
         Err(reason) => {
             available.store(false, Ordering::Relaxed);
@@ -517,7 +530,14 @@ fn start_host(
         scope: Arc::clone(scope),
         status: Arc::clone(status),
     };
-    match AudioHost::start_with(schedule, &registry, options, shared.clone(), carried) {
+    match AudioHost::start_on(
+        output_device,
+        schedule,
+        &registry,
+        options,
+        shared.clone(),
+        carried,
+    ) {
         Ok(host) => {
             available.store(true, Ordering::Relaxed);
             *error.lock().unwrap() = None;
@@ -544,6 +564,7 @@ fn rebuild(
     catalog: &[CatalogPlugin],
     editor_handles: &EditorHandles,
     assets: &Arc<AssetCache>,
+    output_device: Option<&str>,
     shared: &SharedTransport,
     status: &Arc<SharedStatus>,
     sample_rate: &AtomicU32,
@@ -564,6 +585,7 @@ fn rebuild(
         catalog,
         editor_handles,
         assets,
+        output_device,
         shared,
         sample_rate,
         available,
@@ -610,8 +632,10 @@ fn run_audio_thread(
 
     let mut host: Option<AudioHost> = None;
     let mut current: Option<Project> = None;
-    // 已知的默认输出设备身份：用来判断设备是否换了。每次重建后同步刷新。
-    let mut signature = default_output_signature();
+    // 用户显式选择的输出设备（`None` = 跟随系统默认设备）。切换时立即重建，轮询也按它判断。
+    let mut output_device: Option<String> = None;
+    // 已知的输出设备身份：用来判断设备是否换了。每次重建后同步刷新。
+    let mut signature = output_signature(output_device.as_deref());
     // 上一次看到的回调心跳与「连续停摆的轮询次数」：用来发现「流还活着但已经不出声」。
     let mut last_beats = status.heartbeats();
     let mut stalled_polls = 0u32;
@@ -661,6 +685,7 @@ fn run_audio_thread(
                     &catalog,
                     &editor_handles,
                     &assets,
+                    output_device.as_deref(),
                     &shared,
                     &status,
                     &sample_rate,
@@ -671,7 +696,7 @@ fn run_audio_thread(
                     carried,
                 );
                 restore_transport(&mut host, frame, was_playing);
-                signature = default_output_signature();
+                signature = output_signature(output_device.as_deref());
                 pending_signature = None;
                 last_beats = status.heartbeats();
                 stalled_polls = 0;
@@ -691,6 +716,7 @@ fn run_audio_thread(
                     &catalog,
                     &editor_handles,
                     &assets,
+                    output_device.as_deref(),
                     &shared,
                     &status,
                     &sample_rate,
@@ -703,7 +729,7 @@ fn run_audio_thread(
                 );
                 restore_transport(&mut host, frame, was_playing);
                 // 重建后记录当前设备身份，避免下一次轮询把同一设备误判为「变化」。
-                signature = default_output_signature();
+                signature = output_signature(output_device.as_deref());
                 pending_signature = None;
                 // 新流的基线：刚重建过，别把「还没跑第一块」当成停摆。
                 last_beats = status.heartbeats();
@@ -723,6 +749,7 @@ fn run_audio_thread(
                     &catalog,
                     &editor_handles,
                     &assets,
+                    output_device.as_deref(),
                     &shared,
                     &status,
                     &sample_rate,
@@ -733,11 +760,44 @@ fn run_audio_thread(
                     carried,
                 );
                 restore_transport(&mut host, frame, was_playing);
-                signature = default_output_signature();
+                signature = output_signature(output_device.as_deref());
                 pending_signature = None;
                 last_beats = status.heartbeats();
                 stalled_polls = 0;
                 // 用户/工程触发的重建是全新开始，退避清零。
+                stall_backoff = 0;
+            }
+            Ok(AudioMessage::SetOutputDevice(device)) => {
+                // 没变就不打断当前流：重复点击同名设备不该丢一声。
+                if output_device == device {
+                    continue;
+                }
+                output_device = device;
+                let was_playing = shared.is_playing();
+                let frame = shared.position_frames();
+                let carried = take_instances(&mut host, &available);
+                drop(host.take());
+                // 换了设备：采样率缓存必须失效，按新设备重新解析。
+                host = rebuild(
+                    &current,
+                    &catalog,
+                    &editor_handles,
+                    &assets,
+                    output_device.as_deref(),
+                    &shared,
+                    &status,
+                    &sample_rate,
+                    &available,
+                    &error,
+                    &scope,
+                    true,
+                    carried,
+                );
+                restore_transport(&mut host, frame, was_playing);
+                signature = output_signature(output_device.as_deref());
+                pending_signature = None;
+                last_beats = status.heartbeats();
+                stalled_polls = 0;
                 stall_backoff = 0;
             }
             Ok(AudioMessage::ArmInput(device, reply)) => {
@@ -779,7 +839,7 @@ fn run_audio_thread(
                 // 设备换了，或上次建流失败/流已死：重建一次（保留位置与播放状态）。
                 // `host.is_none()` 让建流失败后每秒自动重试；`status.dead()` 让「设备名
                 // 没变但流死了」也能救。
-                let now = default_output_signature();
+                let now = output_signature(output_device.as_deref());
                 // 「流还活着、但回调不再跑」是错误回调抓不到的失效：此时所有命令都排进
                 // 队列没人消费，界面看着在播却一点声音都没有，**只有重启应用才能恢复**。
                 // 靠回调心跳把它揪出来并重建——这正是「开独立面板后没声、重启也没声」的
@@ -837,6 +897,7 @@ fn run_audio_thread(
                     &catalog,
                     &editor_handles,
                     &assets,
+                    output_device.as_deref(),
                     &shared,
                     &status,
                     &sample_rate,
@@ -868,17 +929,20 @@ fn run_audio_thread(
 }
 
 /// 解析（并缓存）设备采样率；未知时探测一次。
-fn resolve_sample_rate(cache: &AtomicU32) -> Result<u32, String> {
+fn resolve_sample_rate(cache: &AtomicU32, device: Option<&str>) -> Result<u32, String> {
     let cached = cache.load(Ordering::Relaxed);
     if cached != 0 {
         return Ok(cached);
     }
-    match default_output_sample_rate() {
+    match output_sample_rate(device) {
         Some(rate) => {
             cache.store(rate, Ordering::Relaxed);
             Ok(rate)
         }
-        None => Err("未找到可用的音频输出设备".to_string()),
+        None => Err(match device {
+            Some(name) => format!("音频输出设备「{name}」不可用"),
+            None => "未找到可用的音频输出设备".to_string(),
+        }),
     }
 }
 

@@ -34,6 +34,7 @@ import type {
   ExportProgress,
   ImportProgress,
   InputDeviceInfo,
+  OutputDeviceInfo,
   ManagerInstallRequest,
   ManagerInstalled,
   ManagerRegistry,
@@ -1067,6 +1068,18 @@ export function listInputDevices(): Promise<InputDeviceInfo[]> {
 export function setInputDevice(device: string | null): Promise<void> {
   if (mockEnabled()) return Promise.resolve(mockApi.setInputDevice());
   return invoke<void>("set_input_device", { device });
+}
+
+/** 本机可用的音频输出设备。 */
+export function listOutputDevices(): Promise<OutputDeviceInfo[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.listOutputDevices());
+  return invoke<OutputDeviceInfo[]>("list_output_devices");
+}
+
+/** 选择输出设备（`null` = 跟随系统默认设备）。 */
+export function setOutputDevice(device: string | null): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setOutputDevice());
+  return invoke<void>("set_output_device", { device });
 }
 
 /** 输入电平表：最近 `points` 个采样。 */

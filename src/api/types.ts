@@ -800,6 +800,18 @@ export interface InputDeviceInfo {
   is_default: boolean;
 }
 
+/** 一个音频输出设备（与后端 `realtime::OutputDeviceInfo` 一一对应）。 */
+export interface OutputDeviceInfo {
+  /** 设备显示名。 */
+  name: string;
+  /** 默认输出采样率（Hz）。 */
+  sample_rate: number;
+  /** 默认输出声道数。 */
+  channels: number;
+  /** 是否系统默认输出设备。 */
+  is_default: boolean;
+}
+
 /** 输入设备的连接类型（后端的稳定短名）。 */
 export type InputTransport =
   | "builtin"

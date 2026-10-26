@@ -2399,6 +2399,18 @@ pub fn retry_audio(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// 本机可用的音频输出设备。
+#[tauri::command]
+pub fn list_output_devices() -> Vec<ai_daw_engine::realtime::OutputDeviceInfo> {
+    ai_daw_engine::realtime::list_output_devices()
+}
+
+/// 选择输出设备（`None` = 跟随系统默认设备）。音频线程会立刻重建流。
+#[tauri::command]
+pub fn set_output_device(state: State<'_, AppState>, device: Option<String>) -> Result<(), String> {
+    state.audio.set_output_device(device)
+}
+
 /// 开始播放。
 #[tauri::command]
 pub fn transport_play(state: State<'_, AppState>) -> Result<(), String> {

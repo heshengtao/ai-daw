@@ -181,7 +181,7 @@ pub fn detect() -> HardwareProfile {
 
     #[cfg(target_os = "windows")]
     {
-        if let Some(text) = run("wmic", &["path", "win32_VideoController", "get", "name"]) {
+        if let Some(text) = windows_adapters() {
             if let Some((vendor, name)) = pick_primary(&parse_windows_adapters(&text)) {
                 profile.gpu = Some(vendor);
                 profile.gpu_name = Some(name);
@@ -218,20 +218,61 @@ fn run(program: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Windows：从注册表读 NVIDIA 驱动版本（`DriverVersion`）。
+/// Windows：取显卡适配器名列表。
+///
+/// **优先 PowerShell + CIM**：`wmic` 从 Windows 11 24H2 起已被移除，只认它会让有独显的
+/// 机器也报「未检测到」。老系统上 PowerShell 被策略挡住时再回退 `wmic`。
+#[cfg(target_os = "windows")]
+fn windows_adapters() -> Option<String> {
+    run(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ProgressPreference='SilentlyContinue'; \
+             Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name",
+        ],
+    )
+    .filter(|text| !text.trim().is_empty())
+    .or_else(|| {
+        run("wmic", &["path", "win32_VideoController", "get", "name"])
+            .filter(|text| !text.trim().is_empty())
+    })
+}
+
+/// Windows：读 NVIDIA 驱动版本（`DriverVersion`）。
+///
+/// 通配条件用单引号，避免命令里再套一层双引号（PowerShell 的命令行转义容易翻车）。
 #[cfg(target_os = "windows")]
 fn windows_nvidia_driver() -> Option<String> {
     let text = run(
-        "wmic",
+        "powershell",
         &[
-            "path",
-            "win32_VideoController",
-            "where",
-            "name like '%NVIDIA%'",
-            "get",
-            "DriverVersion",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ProgressPreference='SilentlyContinue'; \
+             Get-CimInstance Win32_VideoController \
+             | Where-Object { $_.Name -like '*NVIDIA*' } \
+             | ForEach-Object { $_.DriverVersion }",
         ],
-    )?;
+    )
+    .filter(|text| !text.trim().is_empty())
+    .or_else(|| {
+        run(
+            "wmic",
+            &[
+                "path",
+                "win32_VideoController",
+                "where",
+                "name like '%NVIDIA%'",
+                "get",
+                "DriverVersion",
+            ],
+        )
+        .filter(|text| !text.trim().is_empty())
+    })?;
     text.lines()
         .map(|l| l.trim())
         .find(|l| !l.is_empty() && !l.eq_ignore_ascii_case("DriverVersion"))
@@ -293,6 +334,25 @@ mod tests {
         let (vendor, name) = pick_primary(&adapters).unwrap();
         assert_eq!(vendor, GpuVendor::Nvidia);
         assert_eq!(name, "NVIDIA GeForce RTX 4070");
+    }
+
+    /// PowerShell/CIM 的输出没有表头，且常混着虚拟显示适配器（远程桌面 / 投屏）。
+    #[test]
+    fn parses_headerless_cim_adapter_list() {
+        let text =
+            "Todesk Virtual Display Adapter\nNVIDIA GeForce RTX 4080\nLuminonCore IDDCX Adapter\n";
+        assert_eq!(
+            parse_windows_adapters(text),
+            vec![
+                "Todesk Virtual Display Adapter",
+                "NVIDIA GeForce RTX 4080",
+                "LuminonCore IDDCX Adapter",
+            ]
+        );
+        // 虚拟适配器只能算 `Other`，独显永远排在它前面。
+        let (vendor, name) = pick_primary(&parse_windows_adapters(text)).unwrap();
+        assert_eq!(vendor, GpuVendor::Nvidia);
+        assert_eq!(name, "NVIDIA GeForce RTX 4080");
     }
 
     /// 探测本身绝不能 panic —— 无论本机是什么，都得给出一个画像。

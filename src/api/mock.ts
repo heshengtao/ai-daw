@@ -29,6 +29,7 @@ import type {
   HistoryDepths,
   HistoryState,
   InputDeviceInfo,
+  OutputDeviceInfo,
   CliState,
   CliStatus,
   ForeignPlugin,
@@ -2436,6 +2437,11 @@ export const mockApi = {
     { name: "内置麦克风", sample_rate: 48000, channels: 1, transport: "builtin", is_default: true },
   ],
   setInputDevice: (): void => undefined,
+  listOutputDevices: (): OutputDeviceInfo[] => [
+    { name: "内置扬声器", sample_rate: 48000, channels: 2, is_default: true },
+    { name: "蓝牙耳机", sample_rate: 48000, channels: 2, is_default: false },
+  ],
+  setOutputDevice: (): void => undefined,
   inputLevel: (points: number): number[] =>
     Array.from({ length: Math.max(1, points) }, (_, i) => Math.sin(i / 6) * 0.3),
   recordStart: (): void => undefined,
