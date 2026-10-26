@@ -8,6 +8,7 @@
 //! `<id>.json` 里——列历史时不必把几十份工程全塞进 IPC 载荷。
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ai_daw_engine::model::Project;
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,11 @@ pub struct HistoryEntry {
     pub saved_at: i64,
     /// 当时对应的工程文件路径（未保存过为 `None`）。
     pub path: Option<String>,
+    /// 工程身份键：未保存的工程没有路径，靠它在多份快照之间认出「同一个工程」。
+    ///
+    /// 旧索引没有这个字段（空字符串）：这类条目各自成组，宁可多一张卡片也不误合并。
+    #[serde(default)]
+    pub project_key: String,
     /// 当时是否有未保存改动。
     pub dirty: bool,
     pub tempo: f64,
@@ -116,6 +122,7 @@ fn make_entry(
     project: &Project,
     saved: &Project,
     path: Option<String>,
+    project_key: String,
     saved_at: i64,
 ) -> HistoryEntry {
     let tracks: Vec<HistoryTrack> = project
@@ -152,6 +159,7 @@ fn make_entry(
         name: project.name.clone(),
         saved_at,
         path,
+        project_key,
         dirty: project != saved,
         tempo: project.transport.tempo,
         end_beat,
@@ -185,6 +193,7 @@ pub fn record(
     project: &Project,
     saved: &Project,
     path: Option<String>,
+    project_key: &str,
 ) -> Result<Option<HistoryEntry>, String> {
     if is_pristine(project, saved, &path) {
         return Ok(None);
@@ -193,10 +202,13 @@ pub fn record(
     let fp = fingerprint(project);
     // 同一份工程（内容 + 路径都相同）已经在历史里：把它挪到最前，不再存第二份。
     // 来回切换工程时历史不会堆成重复卡片。
-    if let Some(pos) = entries
-        .iter()
-        .position(|e| e.fingerprint == fp && e.path == path)
-    {
+    // 有路径时路径就是工程身份；未保存的工程才用 project_key 区分（否则两个
+    // 内容恰好相同的未保存工程会被并成一张卡片）。
+    if let Some(pos) = entries.iter().position(|e| {
+        e.fingerprint == fp
+            && e.path == path
+            && (path.is_some() || e.project_key == project_key)
+    }) {
         if pos > 0 {
             let existing = entries.remove(pos);
             entries.insert(0, existing);
@@ -213,7 +225,7 @@ pub fn record(
     };
     write_json(&dir.join(format!("{id}.json")), &snapshot)?;
 
-    let entry = make_entry(id, project, saved, path, saved_at);
+    let entry = make_entry(id, project, saved, path, project_key.to_string(), saved_at);
     entries.insert(0, entry.clone());
     while entries.len() > MAX_ENTRIES {
         // 优先丢弃「磁盘上已经有一份」的最旧条目（有路径且没有未保存改动）。
@@ -234,8 +246,11 @@ fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_ascii_digit() || c == '-')
 }
 
-/// 取出并移除一份历史（恢复后它就是当前工程了，不该再留在列表里）。
-pub fn take(dir: &Path, id: &str) -> Result<(HistorySnapshot, HistoryEntry), String> {
+/// 读取一份历史，**不删除**快照。
+///
+/// 恢复后当前工程会作为新的一份记进历史，靠内容指纹去重即可，不会变成重复卡片；
+/// 而保留旧版本，卡片上的版本下拉才能随时回到任意时刻。
+pub fn get(dir: &Path, id: &str) -> Result<(HistorySnapshot, HistoryEntry), String> {
     if !valid_id(id) {
         return Err("无效的历史工程 id".into());
     }
@@ -244,16 +259,22 @@ pub fn take(dir: &Path, id: &str) -> Result<(HistorySnapshot, HistoryEntry), Str
     let snapshot: HistorySnapshot =
         serde_json::from_str(&text).map_err(|e| format!("历史工程已损坏：{e}"))?;
 
-    let entries = load_index(dir);
-    let entry = entries
-        .iter()
+    let entry = load_index(dir)
+        .into_iter()
         .find(|e| e.id == id)
-        .cloned()
         .ok_or_else(|| "历史工程不存在".to_string())?;
-    let rest: Vec<HistoryEntry> = entries.into_iter().filter(|e| e.id != id).collect();
-    let _ = std::fs::remove_file(&file);
-    write_index(dir, &rest)?;
     Ok((snapshot, entry))
+}
+
+/// 生成一个工程身份键：同一工程在多次记录之间保持不变，未保存工程也能归到一张卡片。
+pub fn new_key() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    // 纳秒 + 进程内计数：即使连续新建工程也不会撞键（撞键会把两个未保存工程并成一张卡片）。
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("p-{stamp}-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
 /// 删除一份历史工程（索引项 + 快照文件）。
@@ -294,7 +315,9 @@ mod tests {
         let dir = temp_dir("pristine");
         let project = Project::new("untitled");
         let saved = project.clone();
-        assert!(record(&dir, &project, &saved, None).unwrap().is_none());
+        assert!(record(&dir, &project, &saved, None, "p-pristine")
+            .unwrap()
+            .is_none());
         assert!(load_index(&dir).is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -308,19 +331,29 @@ mod tests {
         let mut project = saved.clone();
         project.tracks[0].name = "Lead".into();
 
-        let entry = record(&dir, &project, &saved, Some("/tmp/demo.json".into()))
-            .unwrap()
-            .expect("应记下一条历史");
+        let entry = record(
+            &dir,
+            &project,
+            &saved,
+            Some("/tmp/demo.json".into()),
+            "p-roundtrip",
+        )
+        .unwrap()
+        .expect("应记下一条历史");
         assert_eq!(entry.name, "demo");
         assert!(entry.dirty, "工作副本与保存基线不同 → 未保存");
         assert_eq!(entry.track_count, project.tracks.len());
+        assert_eq!(entry.project_key, "p-roundtrip");
 
-        let (snapshot, taken) = take(&dir, &entry.id).unwrap();
+        let (snapshot, loaded) = get(&dir, &entry.id).unwrap();
         assert_eq!(snapshot.project.tracks[0].name, "Lead");
         assert_eq!(snapshot.saved.tracks[0].name, saved.tracks[0].name);
-        assert_eq!(taken.path.as_deref(), Some("/tmp/demo.json"));
-        assert!(load_index(&dir).is_empty(), "取出后不再留在列表里");
-        assert!(!dir.join(format!("{}.json", entry.id)).exists());
+        assert_eq!(loaded.path.as_deref(), Some("/tmp/demo.json"));
+        assert_eq!(load_index(&dir).len(), 1, "读取不该把快照从列表里拿走");
+        assert!(
+            dir.join(format!("{}.json", entry.id)).exists(),
+            "快照文件必须保留，版本下拉才能反复恢复"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -330,11 +363,41 @@ mod tests {
         let project = Project::new("demo");
         let saved = project.clone();
         let path = Some("/tmp/demo.json".to_string());
-        assert!(record(&dir, &project, &saved, path.clone())
+        assert!(record(&dir, &project, &saved, path.clone(), "p-dedupe")
             .unwrap()
             .is_some());
-        assert!(record(&dir, &project, &saved, path).unwrap().is_none());
+        assert!(record(&dir, &project, &saved, path, "p-dedupe")
+            .unwrap()
+            .is_none());
         assert_eq!(load_index(&dir).len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn keeps_unsaved_projects_apart_by_their_key() {
+        let dir = temp_dir("unsaved-keys");
+        let saved = ai_daw_engine::bus::Engine::new_project("untitled")
+            .project()
+            .clone();
+        let mut a = saved.clone();
+        a.tracks[0].name = "A".into();
+        let mut b = saved.clone();
+        b.tracks[0].name = "B".into();
+        record(&dir, &a, &saved, None, "p-unsaved-a").unwrap();
+        record(&dir, &b, &saved, None, "p-unsaved-b").unwrap();
+        assert_eq!(
+            load_index(&dir).len(),
+            2,
+            "内容相同但工程身份不同 → 不该并成一张卡片"
+        );
+
+        assert!(
+            record(&dir, &a, &saved, None, "p-unsaved-a")
+                .unwrap()
+                .is_none(),
+            "同一个未保存工程再次记录仍应去重"
+        );
+        assert_eq!(load_index(&dir).len(), 2);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -347,10 +410,10 @@ mod tests {
         let b = ai_daw_engine::bus::Engine::new_project("b")
             .project()
             .clone();
-        record(&dir, &a, &a, Some("/tmp/a.json".into())).unwrap();
-        record(&dir, &b, &b, Some("/tmp/b.json".into())).unwrap();
+        record(&dir, &a, &a, Some("/tmp/a.json".into()), "p-a").unwrap();
+        record(&dir, &b, &b, Some("/tmp/b.json".into()), "p-b").unwrap();
 
-        assert!(record(&dir, &a, &a, Some("/tmp/a.json".into()))
+        assert!(record(&dir, &a, &a, Some("/tmp/a.json".into()), "p-a")
             .unwrap()
             .is_none());
         let entries = load_index(&dir);
@@ -366,14 +429,21 @@ mod tests {
             let project = ai_daw_engine::bus::Engine::new_project(format!("saved-{i}"))
                 .project()
                 .clone();
-            record(&dir, &project, &project, Some(format!("/tmp/{i}.json"))).unwrap();
+            record(
+                &dir,
+                &project,
+                &project,
+                Some(format!("/tmp/{i}.json")),
+                &format!("p-saved-{i}"),
+            )
+            .unwrap();
         }
         let saved = ai_daw_engine::bus::Engine::new_project("unsaved")
             .project()
             .clone();
         let mut unsaved = saved.clone();
         unsaved.tracks[0].name = "changed".into();
-        record(&dir, &unsaved, &saved, None).unwrap();
+        record(&dir, &unsaved, &saved, None, "p-unsaved").unwrap();
 
         let entries = load_index(&dir);
         assert_eq!(entries.len(), MAX_ENTRIES);
@@ -396,7 +466,14 @@ mod tests {
         for i in 0..(MAX_ENTRIES + 3) {
             let project = Project::new(format!("song-{i}"));
             let saved = project.clone();
-            record(&dir, &project, &saved, Some(format!("/tmp/{i}.json"))).unwrap();
+            record(
+                &dir,
+                &project,
+                &saved,
+                Some(format!("/tmp/{i}.json")),
+                &format!("p-cap-{i}"),
+            )
+            .unwrap();
         }
         let entries = load_index(&dir);
         assert_eq!(entries.len(), MAX_ENTRIES);
@@ -413,8 +490,8 @@ mod tests {
     #[test]
     fn rejects_path_traversal_ids() {
         let dir = temp_dir("traversal");
-        assert!(take(&dir, "../session").is_err());
-        assert!(take(&dir, "1/2").is_err());
+        assert!(get(&dir, "../session").is_err());
+        assert!(get(&dir, "1/2").is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -427,10 +504,10 @@ mod tests {
         let b = ai_daw_engine::bus::Engine::new_project("b")
             .project()
             .clone();
-        let a_entry = record(&dir, &a, &a, Some("/tmp/a.json".into()))
+        let a_entry = record(&dir, &a, &a, Some("/tmp/a.json".into()), "p-a")
             .unwrap()
             .unwrap();
-        let b_entry = record(&dir, &b, &b, Some("/tmp/b.json".into()))
+        let b_entry = record(&dir, &b, &b, Some("/tmp/b.json".into()), "p-b")
             .unwrap()
             .unwrap();
 
@@ -450,7 +527,14 @@ mod tests {
         let project = ai_daw_engine::bus::Engine::new_project("demo")
             .project()
             .clone();
-        record(&dir, &project, &project, Some("/tmp/demo.json".into())).unwrap();
+        record(
+            &dir,
+            &project,
+            &project,
+            Some("/tmp/demo.json".into()),
+            "p-delete",
+        )
+        .unwrap();
 
         assert!(delete(&dir, "404").is_err());
         assert!(delete(&dir, "../session").is_err());

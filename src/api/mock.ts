@@ -575,6 +575,8 @@ let state: Project = starterProject();
 let dirty = false;
 /** 当前工程的文件路径（预览里的假路径）。 */
 let sessionPath: string | null = null;
+/** 当前工程的身份键（浏览器预览模拟后端 AppState 里的 project_key）。 */
+let projectKey = newMockProjectKey();
 
 /** 快照式撤销栈：浏览器预览里的撤销/重做与真实引擎行为一致。 */
 const undoStack: Project[] = [];
@@ -605,6 +607,11 @@ const HISTORY_MAX = 50;
 interface MockHistoryRecord {
   entry: ProjectHistoryEntry;
   project: Project;
+}
+
+/** 生成一个工程身份键；未保存工程靠它在多份快照之间认出自己。 */
+function newMockProjectKey(): string {
+  return `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function readHistory(): MockHistoryRecord[] {
@@ -643,6 +650,7 @@ function historyEntry(
     name: project.name,
     saved_at: savedAt,
     path,
+    project_key: projectKey,
     dirty: wasDirty,
     tempo: project.transport.tempo,
     end_beat: project.tracks
@@ -664,7 +672,10 @@ function recordHistory(): void {
   const records = readHistory();
   const fp = JSON.stringify(state);
   const existing = records.findIndex(
-    (record) => record.entry.fingerprint === fp && record.entry.path === sessionPath,
+    (record) =>
+      record.entry.fingerprint === fp &&
+      record.entry.path === sessionPath &&
+      (sessionPath !== null || record.entry.project_key === projectKey),
   );
   if (existing >= 0) {
     if (existing > 0) {
@@ -1451,9 +1462,10 @@ export const mockApi = {
     const next = commit(() => {
       state = starterProject(trackNames, tempo);
     });
-    // 新建的工程是干净的，也没有对应的文件。
+    // 新建的工程是干净的，也没有对应的文件；换一个新的工程身份。
     dirty = false;
     sessionPath = null;
+    projectKey = newMockProjectKey();
     emitTransport();
     return next;
   },
@@ -2278,18 +2290,15 @@ export const mockApi = {
   projectHistory: (): ProjectHistoryEntry[] => readHistory().map((record) => record.entry),
 
   restoreProjectHistory: (id: string): Project => {
-    // 当前工程先入历史；被恢复的那份从列表取出（它马上就是当前工程了）。
+    // 当前工程先入历史；被恢复的那份**留在列表里**（卡片还要能切回其他版本）。
     recordHistory();
-    const records = readHistory();
-    const index = records.findIndex((record) => record.entry.id === id);
-    if (index < 0) throw new Error("历史工程不存在");
-    const [record] = records.splice(index, 1);
-    writeHistory(records);
+    const record = readHistory().find((item) => item.entry.id === id);
     if (!record) throw new Error("历史工程不存在");
 
     state = clone(record.project);
     dirty = record.entry.dirty;
     sessionPath = record.entry.path;
+    projectKey = record.entry.project_key || newMockProjectKey();
     nextTrackId = state.tracks.reduce((max, track) => Math.max(max, track.id), 0) + 1;
     nextClipId = state.tracks
       .flatMap((track) => track.clips)
@@ -2317,6 +2326,7 @@ export const mockApi = {
 
   openProject: (): Project => {
     recordHistory();
+    projectKey = newMockProjectKey();
     state = sample();
     nextTrackId = 4;
     nextClipId = 4;

@@ -579,6 +579,8 @@ export interface ProjectHistoryEntry {
   saved_at: number;
   /** 当时的工程文件路径；未保存过为 `null`。 */
   path: string | null;
+  /** 工程身份键：没有路径的未保存工程靠它把多个版本归到同一张卡片。 */
+  project_key: string;
   /** 当时是否有未保存改动。 */
   dirty: boolean;
   tempo: number;

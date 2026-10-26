@@ -17,6 +17,9 @@ pub struct SessionFile {
     /// 当前工程对应的文件路径；尚未落盘时为 `None`。
     #[serde(default)]
     pub path: Option<String>,
+    /// 当前工程的身份键（历史卡片归并版本用）；旧缓存没有时留空，启动后重新生成。
+    #[serde(default)]
+    pub project_key: String,
     /// 工作副本（当前正在编辑的工程）。
     pub project: Project,
     /// 保存基线（最近一次保存/打开/新建时的工程）。
@@ -54,6 +57,7 @@ mod tests {
         let project = Project::new("demo");
         let session = SessionFile {
             path: Some("/tmp/song.json".into()),
+            project_key: "p-session".into(),
             project: project.clone(),
             saved: Project::new("older"),
         };

@@ -71,6 +71,9 @@ pub struct AppState {
     ///
     /// 这是界面「保存」要知道的目标；它随会话缓存一起持久化，下次启动能接着用。
     pub session_path: Mutex<Option<String>>,
+    /// 当前工程的身份键（未保存工程也稳定）：历史卡片按它归并同一工程的多个版本。
+    /// 新建 / 打开工程时换新键；从历史恢复时沿用那份快照的键。
+    pub project_key: Mutex<String>,
     /// 正在进行的一次录音的目标：`record_start` 记下，`record_stop` 取走。
     pub recording: Mutex<Option<RecordingTarget>>,
     /// 本地 AI 任务（后台线程 + 进度 + 取消）。
@@ -106,6 +109,7 @@ impl AppState {
             sound_memories: Mutex::new(SoundMemoryStore::load(None)),
             assets,
             session_path: Mutex::new(None),
+            project_key: Mutex::new(crate::history::new_key()),
             recording: Mutex::new(None),
             ai: AiRuntime::new(),
         }
@@ -129,6 +133,21 @@ impl AppState {
     /// 当前工程对应的文件路径。
     pub fn session_path(&self) -> Option<String> {
         self.session_path.lock().unwrap().clone()
+    }
+
+    /// 当前工程的身份键（写历史时一起记下，供界面按工程归并版本）。
+    pub fn project_key(&self) -> String {
+        self.project_key.lock().unwrap().clone()
+    }
+
+    /// 换上新工程（新建 / 打开）时重置身份键。
+    pub fn renew_project_key(&self) {
+        *self.project_key.lock().unwrap() = crate::history::new_key();
+    }
+
+    /// 恢复历史 / 会话时沿用原来的身份键。
+    pub fn set_project_key(&self, key: String) {
+        *self.project_key.lock().unwrap() = key;
     }
 
     /// 装上预设文件（启动时由 `setup` 调用；拿不到配置目录时只活在内存里）。
@@ -176,6 +195,9 @@ impl AppState {
         *self.engine.lock().unwrap() = Engine::restore(project.clone(), session.saved);
         self.audio.load(&project);
         *self.session_path.lock().unwrap() = session.path;
+        if !session.project_key.is_empty() {
+            *self.project_key.lock().unwrap() = session.project_key;
+        }
     }
 
     /// 取某条轨道某个槽位插件实例的编辑器句柄。

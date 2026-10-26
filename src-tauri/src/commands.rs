@@ -178,7 +178,8 @@ fn remember_snapshot(app: &tauri::AppHandle, state: &AppState) {
         let engine = state.engine.lock().unwrap();
         (engine.project().clone(), engine.saved().clone())
     };
-    if let Err(err) = crate::history::record(&dir, &project, &saved, state.session_path()) {
+    let key = state.project_key();
+    if let Err(err) = crate::history::record(&dir, &project, &saved, state.session_path(), &key) {
         eprintln!("记录历史工程失败：{err}");
     }
 }
@@ -206,7 +207,10 @@ fn remember_file_version(app: &tauri::AppHandle, path: &str) {
         return;
     };
     let saved = project.clone();
-    if let Err(err) = crate::history::record(&dir, &project, &saved, Some(path.to_string())) {
+    // 旧文件版本一定带路径，路径本身就是分组键，不需要工程身份键。
+    if let Err(err) =
+        crate::history::record(&dir, &project, &saved, Some(path.to_string()), "")
+    {
         eprintln!("记录旧版工程失败：{err}");
     }
 }
@@ -1205,6 +1209,7 @@ pub(crate) fn new_project_as(
     // 刚新建的工程没有任何未保存的改动，还没有对应的文件。
     state.engine.lock().unwrap().mark_saved();
     state.set_session_path(None);
+    state.renew_project_key();
     project
 }
 
@@ -1229,6 +1234,7 @@ pub(crate) fn new_project_exact_as(
     let project = run_agent_all_as(app, actor, commands).0;
     state.engine.lock().unwrap().mark_saved();
     state.set_session_path(None);
+    state.renew_project_key();
     project
 }
 
@@ -2512,12 +2518,14 @@ pub(crate) fn write_session(app: &tauri::AppHandle) -> Result<(), String> {
     // 会话缓存同样要记下插件实例的内部状态，下次启动才能还原外部插件的补丁。
     capture_plugin_states(&state);
     let path = state.session_path();
+    let project_key = state.project_key();
     let (project, saved) = {
         let engine = state.engine.lock().unwrap();
         (engine.project().clone(), engine.saved().clone())
     };
     let session = crate::session::SessionFile {
         path,
+        project_key,
         project,
         saved,
     };
@@ -2568,7 +2576,8 @@ pub(crate) fn restore_project_history_impl(
 ) -> Result<Project, String> {
     let state = app.state::<AppState>();
     let dir = crate::history_dir(app).ok_or_else(|| "拿不到应用配置目录".to_string())?;
-    let (snapshot, entry) = crate::history::take(&dir, id)?;
+    // 只读取、不删除：卡片上的版本下拉要能反复回到同一时刻。
+    let (snapshot, entry) = crate::history::get(&dir, id)?;
     remember_current(app, &state);
 
     let restored = normalize_project(snapshot.project);
@@ -2582,6 +2591,12 @@ pub(crate) fn restore_project_history_impl(
     // 整个工程被替换：已开的插件窗口一律作废。
     close_all_plugin_windows(app, &state);
     state.set_session_path(entry.path);
+    // 沿用这份快照的工程身份：未保存工程恢复后继续和它的其他版本归到一张卡片。
+    if entry.project_key.is_empty() {
+        state.renew_project_key();
+    } else {
+        state.set_project_key(entry.project_key);
+    }
     Ok(restored)
 }
 
@@ -2648,6 +2663,7 @@ pub(crate) fn open_project_impl(app: &tauri::AppHandle, path: &str) -> Result<Pr
     close_all_plugin_windows(app, &state);
     // 打开的工程即为「已保存」状态，并记下它的文件路径。
     state.set_session_path(Some(path.to_string()));
+    state.renew_project_key();
     Ok(snapshot)
 }
 
