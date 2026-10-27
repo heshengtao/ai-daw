@@ -373,14 +373,31 @@ fn probe() -> Probe {
     let link = install_dir().unwrap_or_default();
     let present = user_path_contains(&link).unwrap_or(false);
     Probe {
+        link_target: windows_link_target(present, bundled.as_deref(), &link),
         bundled,
-        link_target: present.then(|| link.clone()),
         link,
         link_exists: present,
         system_present: false,
         unsupported: is_dev_build().then_some(CliHint::DevBuild),
         manual_command: None,
     }
+}
+
+/// Windows：PATH 里放的是**目录**，不是指向 exe 的软链（Unix 那套）。
+///
+/// 目录在用户 PATH 上、且目录里真有包内那份 `aidaw.exe` ⇒ 它就是「我们挂的那份」，
+/// `link_target` 必须归一成那个 exe。**不能**把目录本身当 link_target：`classify` 会
+/// 拿它和 exe 做 `same_file`，目录 ≠ 文件永远不相等，于是挂载成功后状态一直读成
+/// [`CliState::Conflict`]，界面报「重名冲突」、`install()` 的回读校验还会假报
+/// 「挂载似乎没有生效」。
+#[cfg(windows)]
+fn windows_link_target(present: bool, bundled: Option<&Path>, dir: &Path) -> Option<PathBuf> {
+    if !present {
+        return None;
+    }
+    // 没有 sidecar 的构建没有可指向的 exe，退回目录本身：
+    // 这时 classify 报 conflict / unsupported 才是诚实的答案。
+    Some(bundled.map_or_else(|| dir.to_path_buf(), Path::to_path_buf))
 }
 
 // ---------------------------------------------------------------------------
@@ -782,5 +799,48 @@ mod tests {
         assert_eq!(status.state, CliState::Unsupported);
         assert_eq!(status.hint, Some(CliHint::NeedsManual));
         assert!(status.manual_command.is_some(), "手工命令要能复制给用户");
+    }
+}
+
+/// Windows 的「挂载」是**目录进 PATH**，不是软链——上面那批用例全按软链建模，
+/// 所以这条语义得单独钉住（真机曾把挂载成功读成「重名冲突」）。
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    /// 按 Windows 真实形状拼一个 Probe（目录 + 旁边的 sidecar + PATH 命中与否）。
+    fn windows_probe(bundled: Option<&str>, dir: &str, present: bool) -> Probe {
+        let dir = PathBuf::from(dir);
+        Probe {
+            link_target: windows_link_target(present, bundled.map(Path::new), &dir),
+            bundled: bundled.map(PathBuf::from),
+            link: dir,
+            link_exists: present,
+            system_present: false,
+            unsupported: None,
+            manual_command: None,
+        }
+    }
+
+    #[test]
+    fn a_path_entry_next_to_the_sidecar_reads_as_installed() {
+        let probe = windows_probe(Some(r"C:\AI DAW\aidaw.exe"), r"C:\AI DAW", true);
+        let status = classify(&probe);
+        assert_eq!(status.state, CliState::Installed);
+        // 「命令」那一行要显示真正被调用的 exe，而不是安装目录。
+        assert_eq!(status.target.as_deref(), Some(r"C:\AI DAW\aidaw.exe"));
+        assert_eq!(status.conflict, None);
+    }
+
+    #[test]
+    fn a_path_entry_without_a_sidecar_is_not_installed() {
+        let probe = windows_probe(None, r"C:\AI DAW", true);
+        assert_eq!(classify(&probe).state, CliState::Conflict);
+    }
+
+    #[test]
+    fn an_absent_path_entry_is_missing() {
+        let probe = windows_probe(Some(r"C:\AI DAW\aidaw.exe"), r"C:\AI DAW", false);
+        assert_eq!(classify(&probe).state, CliState::Missing);
     }
 }

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  只给 **test target** 用的应用清单（`build.rs` 通过 `rustc-link-arg-tests` 注入）。
+
+  为什么需要它：`tauri-plugin-dialog` 依赖的 `rfd` 在 Windows 上静态导入
+  `comctl32!TaskDialogIndirect`，而测试可执行文件默认没有任何应用清单，加载器于是
+  绑定 System32 里那份 comctl32 5.82——它没有 `TaskDialogIndirect`，进程在进入
+  `main` 之前就死了（STATUS_ENTRYPOINT_NOT_FOUND / 0xc0000139），`cargo test` 完全
+  不可用。声明 Common-Controls 6.0 依赖后，加载器改绑 WinSxS 里的 6.x，测试即可运行。
+
+  发布产物不受影响：正式 App 的清单由 `tauri-build` 负责。
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="ai-daw.test" version="1.0.0.0" processorArchitecture="*" />
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>
