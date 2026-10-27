@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/ipc", "crates/plugin-api", "crates/synth", "crates/instruments", "crates/effects", "crates/engine", "crates/asset", "crates/host-vst3", "crates/analysis", "crates/local-ai", "crates/mastering", "crates/aidaw", "crates/vst3-helper"]
 
 [workspace.package]
-version = "1.6.1"
+version = "1.6.2"
 edition = "2021"
 license = "Apache-2.0"
 
