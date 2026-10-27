@@ -25,6 +25,11 @@
 //! This binary is intentionally independent of the run-time isolation IPC
 //! (`vst3-host-helper`): it speaks no protocol, holds no state, and exits immediately.
 
+// 打包后的宿主是 **GUI 子系统**、自己没有控制台。探针若按控制台子系统启动，Windows 会给它
+// **另开一个控制台窗口**——扫描时每个插件闪一个黑窗。探针只走 stdin/stdout 管道，不需要控制台。
+// debug 构建保留控制台，方便在 `tauri dev` 的终端里看诊断输出。
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 

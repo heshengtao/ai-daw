@@ -45,26 +45,33 @@ pub fn backend() -> BackendKind {
     BackendKind::Cpu
 }
 
-/// 宿主启动时调用：探测、校验、定案并打印一行日志。
+/// 宿主启动时调用：校验、定案并打印一行日志。
 ///
 /// 返回最终生效的后端。选择与本机平台不符时（如 Intel Mac 上选 CoreML）**回落 CPU**。
+///
+/// **这里不探测 GPU**：可用性只看 OS + 架构，而完整硬件探测在 Windows 上要起一两个
+/// PowerShell（实测 1–3 s）。放在启动路径上会把首屏拖成黑屏，所以只做纯内存判断，
+/// 真正探测丢到后台线程预热（设置页要显示显卡型号时通常已经好了）。
 pub fn init() -> BackendKind {
-    let profile = detect::detect();
+    let profile = detect::platform_only();
     let requested = backend();
     let resolved = match catalog::by_kind(requested) {
         Some(entry) if entry.platform_ok(&profile) => requested,
         _ => BackendKind::Cpu,
     };
     set_backend(resolved);
+    detect::warm_in_background();
 
-    eprintln!(
-        "[backend] {} / {} · GPU={} → {}",
-        profile.os,
-        profile.arch,
-        profile.gpu_name.as_deref().unwrap_or("未检测到"),
-        resolved.label()
-    );
+    eprintln!("[backend] {} / {} → {}", profile.os, profile.arch, resolved.label());
     resolved
+}
+
+/// 缓存的本机硬件画像（含 GPU 型号）。
+///
+/// 第一次调用可能要等 1–3 s（Windows 上要起 PowerShell），**不要在界面线程上首次调用**；
+/// 启动时的 [`init`] 已经在后台预热，正常都命中了缓存。
+pub fn hardware() -> &'static detect::HardwareProfile {
+    detect::detect_cached()
 }
 
 #[cfg(test)]

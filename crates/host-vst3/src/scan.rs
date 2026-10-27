@@ -790,18 +790,40 @@ fn clap_probe_binary_name() -> &'static str {
     }
 }
 
+/// 子进程别再弹控制台窗口。
+///
+/// 打包后的宿主是 GUI 子系统、自己没有控制台；控制台子进程会被 Windows **另开一个黑窗**，
+/// 扫描时每个插件闪一下。探针自己也声明了 GUI 子系统（见 `bin/clap-scan-probe.rs`），
+/// 这里再兜一层：`AI_DAW_CLAP_PROBE_PATH` 指到别处（比如自己编译的调试版）时同样不闪。
+fn hide_console(command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW：不分配控制台窗口。
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = command;
+    }
+}
+
 /// 让探针读一个 `.clap`，带超时；插件崩溃 / 卡住只影响这个子进程。
 fn run_clap_probe(
     probe: &Path,
     plugin: &Path,
     timeout: Duration,
 ) -> Result<Vec<ClapScanEntry>, String> {
-    let mut child = Command::new(probe)
+    let mut command = Command::new(probe);
+    command
         .arg(plugin)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         // stderr 只用来诊断；插件日志可能很吵，直接丢掉。
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    hide_console(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|e| format!("无法启动 CLAP 扫描探针：{e}"))?;
 

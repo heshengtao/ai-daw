@@ -478,6 +478,22 @@ fn platform() -> &'static str {
     }
 }
 
+/// 起子进程时**不留控制台窗口**（Windows）。
+///
+/// 打包后的宿主是 GUI 子系统、自己没有控制台；控制台子进程（`reg` / `cmd` / `scutil`）
+/// 会被系统另开一个黑窗一闪而过——读一次系统代理就闪一下。
+fn hidden(program: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW：不分配控制台窗口。
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 fn arch() -> &'static str {
     match std::env::consts::ARCH {
         "aarch64" => "arm64",
@@ -1245,10 +1261,7 @@ fn scutil_value(text: &str, key: &str) -> Option<String> {
 /// （Clash / Surge 的 HTTP 端口本身就支持 CONNECT）。
 #[cfg(target_os = "macos")]
 fn macos_system_proxy() -> Option<String> {
-    let out = std::process::Command::new("scutil")
-        .arg("--proxy")
-        .output()
-        .ok()?;
+    let out = hidden("scutil").arg("--proxy").output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -1276,10 +1289,7 @@ fn macos_system_proxy() -> Option<String> {
 #[cfg(target_os = "windows")]
 fn windows_system_proxy() -> Option<String> {
     const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
-    let out = std::process::Command::new("reg")
-        .args(["query", KEY])
-        .output()
-        .ok()?;
+    let out = hidden("reg").args(["query", KEY]).output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -2105,7 +2115,7 @@ fn open_external(url: &str) -> Result<(), String> {
     #[cfg(all(unix, not(target_os = "macos")))]
     let (cmd, args): (&str, Vec<&str>) = ("xdg-open", vec![url]);
 
-    std::process::Command::new(cmd)
+    hidden(cmd)
         .args(args)
         .spawn()
         .map(|_| ())

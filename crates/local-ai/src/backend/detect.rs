@@ -4,6 +4,9 @@
 //! `parse_windows_adapters` / `parse_macos_chip` 都是纯函数，喂字符串就能单测；
 //! [`detect`] 才真正去调外部命令。**探测失败一律退化成「无 GPU」**（→ 推荐 CPU），
 //! 绝不因为拿不到型号就在启动路径上出错。
+//!
+//! **启动路径只用 [`platform_only`]**——它不碰任何子进程。完整探测走 [`detect_cached`]
+//! （带缓存），并由 [`warm_in_background`] 在后台预热；Windows 上那是 1–3 秒的开销。
 
 /// GPU 厂商（够用来选后端即可，不追求穷举）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,9 +212,54 @@ pub fn detect() -> HardwareProfile {
     profile
 }
 
+/// 缓存的本机画像：第一次 [`detect_cached`] 才真的起子进程探测，之后直接复用。
+///
+/// Windows 上探测要跑一两个 `powershell -Command Get-CimInstance …`（实测每个 0.9–1.5 s），
+/// **绝不能出现在启动路径上**——那会把首屏拖成几秒黑屏。
+static PROFILE: std::sync::OnceLock<HardwareProfile> = std::sync::OnceLock::new();
+
+/// 只含 OS / 架构的画像：**纯内存判断，不起任何子进程**。
+///
+/// 「这个后端在本机能不能用」只看 OS + 架构（见 [`super::catalog::BackendEntry::platform_ok`]），
+/// 所以启动时校验用户偏好用这份就够了；GPU 型号纯属展示信息。
+pub fn platform_only() -> HardwareProfile {
+    HardwareProfile::headless(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// 缓存版 [`detect`]：首次调用才真的探测（可能耗时 1–3 s），之后返回同一份结果。
+///
+/// 只应在**后台线程**上调用，或先用 [`warm_in_background`] 热上。
+pub fn detect_cached() -> &'static HardwareProfile {
+    PROFILE.get_or_init(detect)
+}
+
+/// 后台预热缓存：启动时调一次，等设置页真要显示显卡型号时通常已经算好了。
+pub fn warm_in_background() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("ai-daw-hw-detect".into())
+            .spawn(|| {
+                let _ = detect_cached();
+            });
+    });
+}
+
 /// 跑一个外部命令并返回 stdout（非零退出 / 找不到命令 → `None`）。
+///
+/// Windows 上必须带 `CREATE_NO_WINDOW`：打包后的宿主是 GUI 子系统、自己没有控制台，
+/// 控制台子进程（powershell / wmic）会被系统**另开一个黑窗**，一闪而过。
 fn run(program: &str, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new(program).args(args).output().ok()?;
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW：不分配控制台窗口。
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = command.output().ok()?;
     if !out.status.success() {
         return None;
     }

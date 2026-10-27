@@ -26,6 +26,11 @@
 //! exactly as before, just on the worker thread. On other platforms the helper stays a
 //! single-threaded stdin loop and GUI is not yet supported.
 
+// 打包后的宿主是 GUI 子系统、没有控制台。helper 是宿主用 `Command::new` 起的控制台程序，
+// 不声明 GUI 子系统的话 Windows 会给它**另开一个黑窗**（离线渲染 / 进程隔离时一闪而过）。
+// helper 只走 stdin/stdout 管道，不需要控制台；debug 构建保留控制台方便看诊断。
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::io::{self, BufRead, Write};
 use std::sync::{Arc, Mutex};
 

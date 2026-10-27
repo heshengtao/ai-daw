@@ -90,11 +90,13 @@ pub fn ai_set_backend(
 }
 
 fn info_of(app: &AppHandle) -> BackendInfo {
-    let profile = rt::detect::detect();
+    // 命中启动时的后台预热缓存；只有当设置页抢在预热完成前打开时，才会等这一次探测
+    // （Windows 上 1–3 s，所以在异步命令里跑，不占界面线程）。
+    let profile = rt::hardware();
     let preference = app.state::<StoreRuntime>().network().backend_preference;
     // 偏好在本机不支持时（如 Intel Mac 选了 CoreML），生效的是 CPU。
     let current = if rt::catalog::by_kind(preference.kind())
-        .map(|e| e.platform_ok(&profile))
+        .map(|e| e.platform_ok(profile))
         .unwrap_or(false)
     {
         preference.kind()
@@ -108,7 +110,7 @@ fn info_of(app: &AppHandle) -> BackendInfo {
             kind: entry.kind.as_str().to_string(),
             label: entry.name.to_string(),
             note: entry.note.to_string(),
-            available: entry.platform_ok(&profile),
+            available: entry.platform_ok(profile),
         })
         .collect();
 

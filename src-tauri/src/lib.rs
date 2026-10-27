@@ -336,6 +336,8 @@ pub fn run() {
         .on_window_event(|window, event| on_host_window_closing(window, event))
         .manage(AppState::new("untitled"))
         .setup(|app| {
+            // 启动耗时：`setup` 跑完才进事件循环，这一段越久，首屏越像「黑屏卡住」。
+            let setup_started = std::time::Instant::now();
             // 日志要最先装上：启动阶段的崩溃也得留下线索。
             crate::logging::init(app.handle());
             // 宿主 crate 的日志（哪个插件超时、哪条模块线程卡住）一并进同一份日志。
@@ -495,6 +497,11 @@ pub fn run() {
                         }
                     });
             }
+            // 这一段决定了「窗口出来之前黑了多久」：超过 ~300 ms 就值得查是谁拖的。
+            crate::logging::info(format!(
+                "[startup] setup 完成，用时 {} ms",
+                setup_started.elapsed().as_millis()
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
