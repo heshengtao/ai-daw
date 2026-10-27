@@ -32,3 +32,12 @@ objc2 = "0.6"
 # `renderBlock` / `scheduleMIDIEventBlock` 是 Objective-C block，用 block2 调用与构造。
 block2 = "0.6"
 plist = "1"
+
+# 专用插件线程 + 原生窗口管理：Windows 上要自己起线程并跑 Win32 消息循环
+# （插件的界面创建必须和实例创建同线程，而那条线程必须有消息泵），还要把插件窗口抬到最前。
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3", features = ["winuser", "windef", "minwindef", "processthreadsapi"] }
+
+# 仅供 examples 复现用：Tauri 的主线程是 STA（WebView2 要求），探针要能切到同样的状态。
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+winapi = { version = "0.3", features = ["combaseapi", "objbase", "winuser", "windef", "minwindef", "libloaderapi", "winnt"] }

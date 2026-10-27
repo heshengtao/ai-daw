@@ -23,6 +23,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# 运行日志的时间戳（已在依赖树里，不引入新包）。
+chrono = "0.4"
 tauri-plugin-dialog = "2"
 # 自动更新：桌面端从 GitHub Releases 的 `latest.json` 取新版本，验签后安装；
 # 装完用 `process` 插件重启到新版本。端点 / 公钥在 `tauri.conf.json` 的 `plugins.updater`。

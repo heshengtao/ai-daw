@@ -32,15 +32,21 @@ use ai_daw_plugin_api::MidiEvent;
 use crate::assets::AssetCache;
 use crate::plugins::build_registry;
 
-/// 一个槽位的编辑器句柄，连同它对应的 **plugin id**。
+/// 一个槽位的编辑器句柄，连同它对应的 **plugin id** 与**插件模块**。
 ///
 /// 带上 plugin id 是为了在重建播放器前**按 id** 把插件内部状态写回正确的实例：结构性变更
 /// （增删 / 移动效果器）会让链内下标整体前移，若按键里的下标写回就会串味。
+///
+/// 带上 module 是为了知道这扇界面归**哪条插件线程**管：VST3 的实例与界面只能在同一线程上
+/// 创建 / 销毁 / 泵消息（见 `host_vst3::plugin_thread`）；CLAP / AU 的 `None` 表示主线程。
+#[derive(Clone)]
 pub struct EditorSlot {
     /// 与音频线程共享的插件实例句柄。
     pub handle: EditorHandle,
     /// 该实例对应的插件 id（= 工程里的 `plugin_id`）。
     pub plugin_id: String,
+    /// VST3 的模块路径（这条槽位的「插件线程」按它查）；CLAP / AU 为 `None`。
+    pub module: Option<std::path::PathBuf>,
 }
 
 /// 「(轨道, 槽位) → 插件编辑器句柄」表（插件工厂在创建实例时登记）。

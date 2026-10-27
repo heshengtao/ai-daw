@@ -24,7 +24,9 @@ fn main() {
 
     for entry in claps {
         println!("== {} ==", entry.name);
-        let mut plugin = match ai_daw_host_vst3::load_catalog_plugin(entry) {
+        let mut plugin = match ai_daw_host_vst3::load_catalog_plugin_on_host(entry)
+            .map(|(plugin, _)| plugin)
+        {
             Ok(p) => p,
             Err(e) => {
                 println!("  加载失败：{e}");

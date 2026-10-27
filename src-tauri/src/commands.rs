@@ -208,9 +208,7 @@ fn remember_file_version(app: &tauri::AppHandle, path: &str) {
     };
     let saved = project.clone();
     // 旧文件版本一定带路径，路径本身就是分组键，不需要工程身份键。
-    if let Err(err) =
-        crate::history::record(&dir, &project, &saved, Some(path.to_string()), "")
-    {
+    if let Err(err) = crate::history::record(&dir, &project, &saved, Some(path.to_string()), "") {
         eprintln!("记录旧版工程失败：{err}");
     }
 }
@@ -374,58 +372,102 @@ fn is_structural(event: &Event) -> bool {
         )
 }
 
-/// 关掉指定槽位的插件窗口（须在主线程执行创建/销毁，所以走 `run_on_main_thread`）。
+/// 把「必须在进程主线程上做」的工作送进主线程，并等它跑完。
+///
+/// **已经站在主线程上时就地执行。** Tauri 的**同步**命令体是被 IPC 回调在**主线程**上同步
+/// 调进来的（Windows 上就是 WebView2 的 `WebMessageReceived` 事件回调）。这时若再用
+/// `AppHandle::run_on_main_thread` 投递、再阻塞等回执，就是「自己等自己」：投出去的闭包要
+/// 等主线程回到事件循环才会执行，而主线程正卡在 `recv()` 上——闭包永远不跑，`recv()` 永不
+/// 返回，整个界面当场卡死（Windows 事件日志里留下 `AppHangB1` /
+/// 「ai-daw.exe 已停止与 Windows 交互」）。
+///
+/// 走 `ai_daw_host_vst3::on_main_thread` 而不是自己拼 channel：它先判断「我是不是已经在主
+/// 线程上」，是就地跑，不是才派发。插件窗口的**打开 / 关闭 / 聚焦**都必须经过这里。
+fn on_ui_thread<R: std::marker::Send + 'static>(
+    task: impl FnOnce() -> R + std::marker::Send + 'static,
+) -> Result<R, String> {
+    ai_daw_host_vst3::on_main_thread(task).map_err(|error| error.to_string())
+}
+
+/// 关掉指定槽位的插件窗口（销毁必须在「开它的那条线程」上做）。
 ///
 /// 只清**这几个槽位**的编辑器句柄：别处的实例会被重建**复用**，句柄仍然有效，不能一起清。
 ///
-/// 清句柄**必须在主线程上做**：句柄可能正好是实例的最后一个引用，而释放会触发
-/// `clap_plugin.destroy()`——那是主线程专属调用。
+/// 清句柄**必须在开窗线程上做**：句柄可能正好是实例的最后一个引用，而释放会触发
+/// `clap_plugin.destroy()` / VST3 的界面拆卸——两者都是线程专属调用。
 fn close_plugin_windows_for(app: &tauri::AppHandle, keys: Vec<(u64, PluginSlot)>) {
     if keys.is_empty() {
         return;
     }
-    let (tx, rx) = std::sync::mpsc::channel();
-    let app_for_main = app.clone();
-    if app
-        .run_on_main_thread(move || {
-            let state = app_for_main.state::<AppState>();
-            with_editor_windows(|windows| {
-                for key in &keys {
-                    // 走 `close()` 而不是直接丢：它会先 hide + destroy 插件的界面。
-                    if let Some(window) = windows.remove(key) {
-                        window.close();
-                    }
-                }
-            });
-            // 嵌入模式的宿主窗口也一并收掉，别留下一扇空窗。
-            for key in &keys {
-                if state.host_windows.lock().unwrap().remove(key) {
-                    if let Some(window) =
-                        app_for_main.get_webview_window(&host_window_label(key.0, key.1))
-                    {
-                        let _ = window.close();
-                    }
-                }
-            }
-            {
-                let mut handles = state.editor_handles.lock().unwrap();
-                for key in &keys {
-                    handles.remove(key);
-                }
-            }
-            {
-                let mut open = state.open_editors.lock().unwrap();
-                let mut meta = state.editor_plugins.lock().unwrap();
-                for key in &keys {
-                    open.remove(key);
-                    meta.remove(key);
-                }
-            }
-            let _ = tx.send(());
-        })
-        .is_ok()
+    let state = app.state::<AppState>();
+    // 按「插件线程」分组：VST3 归它自己的模块线程，CLAP / AU 归主线程（`None`）。
+    let mut groups: HashMap<Option<std::path::PathBuf>, Vec<(u64, PluginSlot)>> = HashMap::new();
     {
-        let _ = rx.recv();
+        let handles = state.editor_handles.lock().unwrap();
+        for key in keys {
+            let module = handles.get(&key).and_then(|slot| slot.module.clone());
+            groups.entry(module).or_default().push(key);
+        }
+    }
+    for (module, group) in groups {
+        let app_for_work = app.clone();
+        match module {
+            Some(module) => {
+                let module_for_log = module.clone();
+                match ai_daw_host_vst3::run_on(
+                    &module,
+                    ai_daw_host_vst3::EDITOR_TIMEOUT,
+                    move || close_plugin_window_batch(&app_for_work, &group),
+                ) {
+                    Ok(()) => {}
+                    // 插件线程卡住：窗口先留着（记下原因），下次结构性变更再收。
+                    Err(error) => crate::logging::info(format!(
+                        "收插件窗口失败（模块 {}）：{error}",
+                        module_for_log.display()
+                    )),
+                }
+            }
+            None => {
+                let _ = on_ui_thread(move || close_plugin_window_batch(&app_for_work, &group));
+            }
+        }
+    }
+}
+
+/// 在某条线程上收掉一批插件窗口（调用方负责挑对线程）。
+fn close_plugin_window_batch(app: &tauri::AppHandle, keys: &[(u64, PluginSlot)]) {
+    let state = app.state::<AppState>();
+    with_editor_windows(|windows| {
+        for key in keys {
+            // 走 `close()` 而不是直接丢：它会先 hide + destroy 插件的界面。
+            if let Some(window) = windows.remove(key) {
+                window.close();
+            }
+        }
+    });
+    // 嵌入模式的宿主窗口也一并收掉，别留下一扇空窗。
+    for key in keys {
+        if state.host_windows.lock().unwrap().remove(key) {
+            if let Some(window) = app.get_webview_window(&host_window_label(key.0, key.1)) {
+                let _ = window.close();
+            }
+        }
+    }
+    {
+        let mut handles = state.editor_handles.lock().unwrap();
+        for key in keys {
+            handles.remove(key);
+        }
+    }
+    {
+        let mut open = state.open_editors.lock().unwrap();
+        let mut meta = state.editor_plugins.lock().unwrap();
+        let mut windows = state.editor_windows.lock().unwrap();
+        for key in keys {
+            open.remove(key);
+            meta.remove(key);
+            windows.remove(key);
+        }
     }
 }
 
@@ -3347,8 +3389,20 @@ pub struct PluginScanStatus {
 /// 「这些插件没扫到」，并允许重扫。`error` 用来区分「本机确实没有插件」与「扫描没跑起来」。
 #[tauri::command]
 pub fn plugin_scan_status(state: State<'_, AppState>) -> PluginScanStatus {
+    let mut skipped = state.scan_skipped_snapshot();
+    // 「加载超时被隔离」的插件也并进这份报告：界面本来就会提示「这些插件有问题，可重扫」，
+    // 用户点一下「重新扫描」就清空名单、立刻重试。
+    for entry in crate::quarantine::entries() {
+        skipped.push(SkippedPlugin {
+            path: entry.path,
+            reason: format!(
+                "上次加载未响应，已隔离（{}）。重新扫描插件即可重试",
+                entry.reason
+            ),
+        });
+    }
     PluginScanStatus {
-        skipped: state.scan_skipped_snapshot(),
+        skipped,
         error: state.scan_error_snapshot(),
     }
 }
@@ -3356,8 +3410,10 @@ pub fn plugin_scan_status(state: State<'_, AppState>) -> PluginScanStatus {
 /// 重新扫描本机插件（慢，放到阻塞线程池）；完成后广播事件。
 ///
 /// 一并扫描**插件管理器**的托管目录，所以「装完新插件点重扫」能看到新装的东西。
+/// 同时清空「加载未响应」的隔离名单：用户重扫通常正是因为修好了插件 / 放行了防火墙。
 #[tauri::command]
 pub async fn rescan_plugins(app: tauri::AppHandle) -> Result<Vec<CatalogPlugin>, String> {
+    crate::quarantine::clear();
     tauri::async_runtime::spawn_blocking(move || crate::manager::rescan_with_managed(&app))
         .await
         .map_err(|e| e.to_string())
@@ -3380,8 +3436,21 @@ pub(crate) fn plugin_params_with(
         .iter()
         .find(|e| e.id == plugin_id)
         .ok_or_else(|| format!("未知插件：{plugin_id}"))?;
-    let plugin = ai_daw_host_vst3::load_catalog_plugin(entry).map_err(|e| e.to_string())?;
-    Ok(plugin.params())
+    // 实例已经在这台机器上加载过：直接用它登记下来的参数表，**别再建第二个实例**。
+    // ACE Bridge 这类插件同时只允许一个实例，第二次实例化会弹框甚至卡在构造里。
+    if let Some(info) = crate::plugins::loaded_info(plugin_id) {
+        return Ok(info.params.clone());
+    }
+    if let Some(blocked) = crate::quarantine::get(&entry.path) {
+        return Err(format!(
+            "插件「{}」上次加载未响应，已隔离；重新扫描插件即可重试（{}）",
+            entry.name, blocked.reason
+        ));
+    }
+    // 走「插件自己的线程」实例化并就地释放：VST3 的 JUCE 静态状态会记住第一次碰到它的线程，
+    // 在 tokio 工作线程上直接建实例会让之后的加载 / 开界面去等一条早就不跑消息的线程。
+    ai_daw_host_vst3::inspect_catalog_plugin(entry, |plugin| plugin.params())
+        .map_err(|e| e.to_string())
 }
 
 /// 取某个插件的描述符（能力位在这里；内置从注册表，外部按目录加载）。
@@ -3398,8 +3467,17 @@ pub(crate) fn plugin_descriptor_with(
         .iter()
         .find(|e| e.id == plugin_id)
         .ok_or_else(|| format!("未知插件：{plugin_id}"))?;
-    let plugin = ai_daw_host_vst3::load_catalog_plugin(entry).map_err(|e| e.to_string())?;
-    Ok(plugin.descriptor())
+    if let Some(info) = crate::plugins::loaded_info(plugin_id) {
+        return Ok(info.descriptor.clone());
+    }
+    if let Some(blocked) = crate::quarantine::get(&entry.path) {
+        return Err(format!(
+            "插件「{}」上次加载未响应，已隔离；重新扫描插件即可重试（{}）",
+            entry.name, blocked.reason
+        ));
+    }
+    ai_daw_host_vst3::inspect_catalog_plugin(entry, |plugin| plugin.descriptor())
+        .map_err(|e| e.to_string())
 }
 
 /// MIDI 能力与「实际投递」报告：插件声明了什么、工程用了什么、哪些被降级。
@@ -3768,25 +3846,42 @@ fn track_name(state: &AppState, track: u64) -> String {
         .unwrap_or_else(|| format!("轨道 {track}"))
 }
 
-/// 把某个槽位已经开着的插件窗口带到最前面（**必须在主线程**）。
+/// 把某个槽位已经开着的插件窗口带到最前面。
 ///
-/// 原生窗口（VST3 的 `PluginWindow`、CLAP 的浮动窗口）由插件自己管理，没有统一的聚焦 API；
-/// 这里保证**嵌入模式的宿主窗口**被抬起，插件自己的窗口是否跟随交给插件。
-fn focus_plugin_window(app: &tauri::AppHandle, track: u64, slot: PluginSlot) {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let app_for_main = app.clone();
-    if app
-        .run_on_main_thread(move || {
-            if let Some(window) = app_for_main.get_webview_window(&host_window_label(track, slot)) {
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-            let _ = tx.send(());
-        })
-        .is_ok()
-    {
-        let _ = rx.recv();
+/// 插件自己开的原生窗口（VST3、CLAP 浮动）只能靠句柄抬——`vst3-host` 建窗时不会激活它，
+/// 所以新窗口默认待在最大化的主窗口后面。「嵌入模式」那扇是宿主自己建的 Tauri 窗口，走 Tauri
+/// 的聚焦接口。两条路都试过，用户点「打开界面」才不会是「毫无反应」。
+fn focus_plugin_window(app: &tauri::AppHandle, state: &AppState, track: u64, slot: PluginSlot) {
+    let native = state
+        .editor_windows
+        .lock()
+        .unwrap()
+        .get(&(track, slot))
+        .copied();
+    if let Some(native) = native {
+        ai_daw_host_vst3::native_window::raise(native);
+        return;
     }
+    let app_for_main = app.clone();
+    let _ = on_ui_thread(move || {
+        if let Some(window) = app_for_main.get_webview_window(&host_window_label(track, slot)) {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    });
+}
+
+/// 主窗口的原生句柄：插件窗口据此摆到同一块屏幕中央。
+#[cfg(target_os = "windows")]
+fn main_window_handle(app: &tauri::AppHandle) -> Option<ai_daw_host_vst3::NativeWindow> {
+    app.get_webview_window("main")
+        .and_then(|window| window.hwnd().ok())
+        .map(|hwnd| hwnd.0 as ai_daw_host_vst3::NativeWindow)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn main_window_handle(_app: &tauri::AppHandle) -> Option<ai_daw_host_vst3::NativeWindow> {
+    None
 }
 
 /// 按 plugin id 在**权威的**效果链里现算序号。
@@ -3809,8 +3904,8 @@ fn resolve_effect_index(state: &AppState, track: u64, plugin_id: &str) -> Result
 ///
 /// `plugin_id` 用来记录「这扇窗是为哪个插件开的」：重建后据此判断它是否还有效（插件没换就不关）。
 ///
-/// 窗口必须在主线程创建（macOS 的 `NSWindow` 只能在那里建），所以走 `run_on_main_thread`，
-/// 并把结果通过 channel 带回来。
+/// 窗口只能在**创建插件实例的那条线程**上开：VST3 归它自己的模块线程（实例就在那里加载的），
+/// CLAP / AU 归主线程（macOS 的 `NSWindow` 只能在那里建）。见 [`ai_daw_host_vst3::plugin_thread`]。
 fn open_slot_editor(
     app: tauri::AppHandle,
     state: &AppState,
@@ -3822,28 +3917,41 @@ fn open_slot_editor(
     let key = (track, slot);
     if state.open_editors.lock().unwrap().contains(&key) {
         // 已经开着：把它带到最前面，而不是无动作——否则用户点「打开界面」毫无反应。
-        focus_plugin_window(&app, track, slot);
+        focus_plugin_window(&app, state, track, slot);
         return Ok(());
     }
-    let handle = state
-        .editor_handle(track, slot)
+    let editor = state
+        .editor_slot(track, slot)
         .ok_or_else(|| "这个槽位没有可打开的插件界面".to_string())?;
     let title = format!("{} - {}", track_name(state, track), title);
+    let module = editor.module.clone();
+    let handle = editor.handle;
+    // 主窗口句柄：插件会在它的显示器中央弹出来，而不是缩在左上角被大窗口盖住。
+    let anchor = main_window_handle(&app);
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    let app_for_main = app.clone();
-    app.run_on_main_thread(move || {
+    let app_for_work = app.clone();
+    let work = move || -> Result<(), String> {
         // 问插件：它的界面需要宿主提供一扇窗吗？
         // KR-106 的 CLAP 就是这种——它的 GUI 只支持「嵌入」，得我们给它一个原生视图。
         let host_size = handle.host_window_size();
         let host_window = match host_size {
             Some((width, height)) => {
-                match build_host_window(&app_for_main, track, slot, &title, width, height) {
-                    Ok(window) => Some(window),
-                    Err(e) => {
-                        let _ = tx.send(Err(e));
-                        return;
-                    }
+                // 宿主窗口是 Tauri 窗口，只能在主线程建。
+                let app_for_window = app_for_work.clone();
+                let title_for_window = title.clone();
+                match on_ui_thread(move || {
+                    build_host_window(
+                        &app_for_window,
+                        track,
+                        slot,
+                        &title_for_window,
+                        width,
+                        height,
+                    )
+                }) {
+                    Ok(Ok(window)) => Some(window),
+                    Ok(Err(e)) => return Err(e),
+                    Err(e) => return Err(e),
                 }
             }
             None => None,
@@ -3854,8 +3962,7 @@ fn open_slot_editor(
             if let Some(window) = host_window {
                 let _ = window.close();
             }
-            let _ = tx.send(Err("该插件的界面需要宿主窗口，当前平台还没接上".to_string()));
-            return;
+            return Err("该插件的界面需要宿主窗口，当前平台还没接上".to_string());
         }
         // 嵌入模式下插件会自己决定界面多大——它通过 `request_resize` 告诉我们，我们改窗口。
         if let Some(window) = host_window.clone() {
@@ -3864,30 +3971,60 @@ fn open_slot_editor(
             }));
         }
 
-        let result = match handle.open(&title, host_view) {
+        match handle.open(&title, host_view, anchor) {
             Ok(window) => {
+                let native = window.native_handle();
                 with_editor_windows(|windows| {
                     windows.insert(key, window);
                 });
-                let state = app_for_main.state::<AppState>();
+                let state = app_for_work.state::<AppState>();
                 state.open_editors.lock().unwrap().insert(key);
                 state.editor_plugins.lock().unwrap().insert(key, plugin_id);
+                // 记下这扇窗的原生句柄：「已经开着」时靠它把窗口抬到最前。
+                {
+                    let mut windows = state.editor_windows.lock().unwrap();
+                    match native {
+                        Some(native) => {
+                            windows.insert(key, native);
+                        }
+                        None => {
+                            windows.remove(&key);
+                        }
+                    }
+                }
                 if host_size.is_some() {
                     state.host_windows.lock().unwrap().insert(key);
                 }
                 Ok(())
             }
             Err(e) => Err(e.to_string()),
-        };
-        let _ = tx.send(result);
-    })
-    .map_err(|e| e.to_string())?;
+        }
+    };
 
-    rx.recv().map_err(|e| e.to_string())?
+    let opened: Result<Result<(), String>, String> = match &module {
+        Some(module) => ai_daw_host_vst3::run_on(module, ai_daw_host_vst3::EDITOR_TIMEOUT, work)
+            .map_err(|error| error.to_string()),
+        None => on_ui_thread(work),
+    };
+    match &opened {
+        Ok(Ok(())) => crate::logging::info(format!(
+            "打开界面成功：轨 {track} 槽 {slot:?}（{}）",
+            if module.is_some() {
+                "插件线程"
+            } else {
+                "主线程"
+            }
+        )),
+        Ok(Err(error)) => {
+            crate::logging::info(format!("打开界面失败：轨 {track} 槽 {slot:?}：{error}"))
+        }
+        Err(error) => crate::logging::info(format!("打开界面派发失败：{error}")),
+    }
+    opened?
 }
 
 /// 为某条轨道打开**乐器**的原生界面（已经开着就聚焦）。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_plugin_window(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -3910,7 +4047,7 @@ pub fn open_plugin_window(
 /// 为某条轨道上的**某个效果器**打开它**自带的**原生界面（已经开着就聚焦）。
 ///
 /// 与 [`open_effect_window`]（内置面板窗口）不同：这条命令开的是插件自己的窗口。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_effect_plugin_window(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -3933,39 +4070,55 @@ pub fn open_effect_plugin_window(
 ///
 /// 与 [`close_plugin_windows_for`] 的区别：那个用于「实例已经不在」的收尾，会连句柄一并清掉。
 fn close_slot_window(app: &tauri::AppHandle, key: (u64, PluginSlot)) -> Result<(), String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let app_for_main = app.clone();
-    app.run_on_main_thread(move || {
+    // 窗口归哪条线程管：VST3 按模块查（实例登记时记下的），CLAP / AU 是主线程。
+    let module = {
+        let state = app.state::<AppState>();
+        state.editor_slot(key.0, key.1).and_then(|slot| slot.module)
+    };
+    let app_for_work = app.clone();
+    let work = move || {
         let window = with_editor_windows(|windows| windows.remove(&key));
         if let Some(window) = window {
             window.close();
         }
-        let state = app_for_main.state::<AppState>();
+        let state = app_for_work.state::<AppState>();
         state.open_editors.lock().unwrap().remove(&key);
         state.editor_plugins.lock().unwrap().remove(&key);
-        // 嵌入模式的界面住在我们建的宿主窗口里，一并收掉。
+        state.editor_windows.lock().unwrap().remove(&key);
+        // 嵌入模式的界面住在我们建的宿主窗口里，一并收掉（Tauri 窗口，任何线程请求都会转给主线程）。
         if state.host_windows.lock().unwrap().remove(&key) {
-            if let Some(window) = app_for_main.get_webview_window(&host_window_label(key.0, key.1))
+            if let Some(window) = app_for_work.get_webview_window(&host_window_label(key.0, key.1))
             {
                 let _ = window.close();
             }
         }
-        let _ = tx.send(());
-    })
-    .map_err(|e| e.to_string())?;
-
-    let _ = rx.recv();
-    Ok(())
+    };
+    match module {
+        Some(module) => {
+            crate::logging::info(format!(
+                "关闭界面：轨 {} 槽 {:?}（模块 {}）",
+                key.0,
+                key.1,
+                module.display()
+            ));
+            ai_daw_host_vst3::run_on(&module, ai_daw_host_vst3::EDITOR_TIMEOUT, work)
+                .map_err(|error| error.to_string())
+        }
+        None => {
+            crate::logging::info(format!("关闭界面：轨 {} 槽 {:?}（主线程）", key.0, key.1));
+            on_ui_thread(work)
+        }
+    }
 }
 
 /// 关闭某条轨道的**乐器**窗口（保留编辑器句柄，之后还能再开）。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn close_plugin_window(app: tauri::AppHandle, track: u64) -> Result<(), String> {
     close_slot_window(&app, (track, PluginSlot::Instrument))
 }
 
 /// 关闭某条轨道上某个**效果器**的原生窗口（保留编辑器句柄，之后还能再开）。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn close_effect_plugin_window(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -4023,25 +4176,16 @@ async fn open_panel_window(
     }
 
     // 建窗口必须在主线程上做。
-    let (tx, rx) = std::sync::mpsc::channel();
     let app_for_main = app.clone();
-    app.run_on_main_thread(move || {
-        let result = tauri::WebviewWindowBuilder::new(
-            &app_for_main,
-            &label,
-            tauri::WebviewUrl::App(url.into()),
-        )
-        .title(title)
-        .inner_size(size.0, size.1)
-        .min_inner_size(min.0, min.1)
-        .build()
-        .map(|_| ())
-        .map_err(|e| e.to_string());
-        let _ = tx.send(result);
-    })
-    .map_err(|e| e.to_string())?;
-
-    rx.recv().map_err(|e| e.to_string())?
+    on_ui_thread(move || {
+        tauri::WebviewWindowBuilder::new(&app_for_main, &label, tauri::WebviewUrl::App(url.into()))
+            .title(title)
+            .inner_size(size.0, size.1)
+            .min_inner_size(min.0, min.1)
+            .build()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })?
 }
 
 /// 打开内置合成器的**独立窗口**（已经开着就聚焦过去）。

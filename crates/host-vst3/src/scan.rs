@@ -241,6 +241,61 @@ pub fn load_catalog_plugin(entry: &CatalogPlugin) -> Result<Box<dyn Plugin>, Hos
     load_catalog_plugin_with_editor(entry).map(|(plugin, _)| plugin)
 }
 
+/// 按目录条目加载插件（已适配成引擎的 [`Plugin`]），并保证 **VST3 在它自己的插件线程上实例化**。
+///
+/// 应用里所有「要一个能用 / 能开界面的实例」的路径都必须走这里，别直接调
+/// [`load_catalog_plugin_with_editor_mode`]：VST3 的 JUCE 静态状态会记住**第一次碰到这个 DLL 的
+/// 线程**，换一条线程再建实例或开界面，插件就会去等一条早就不跑消息的线程（表现为加载 / 开界面
+/// 永久卡住）。同一个模块永远落在同一条线程上，这条约束才算成立。
+pub fn load_catalog_plugin_on_host(
+    entry: &CatalogPlugin,
+) -> Result<(Box<dyn Plugin>, Option<EditorHandle>), HostError> {
+    match entry.format.as_str() {
+        "vst3" => {
+            let entry = entry.clone();
+            let module = entry.path.clone();
+            crate::plugin_thread::run_on(&module, crate::plugin_thread::LOAD_TIMEOUT, move || {
+                load_catalog_plugin_with_editor_mode(&entry, false)
+            })
+            .and_then(|result| result)
+        }
+        // CLAP 的 init / 参数枚举必须主线程（`load_clap_plugin` 内部会派发）；AU 同理。
+        _ => load_catalog_plugin_with_editor_mode(entry, false),
+    }
+}
+
+/// 加载一个插件、现场读一点东西（参数表 / 描述符），**读完就地释放**。
+///
+/// 关键在「就地」：实例只在它自己的插件线程上创建与销毁，绝不跨线程搬运。界面里的参数面板、
+/// MCP 的 `describe_plugin` 都走这条路——它们以前直接在 tokio 工作线程上实例化 VST3，正是
+/// 「先点一下插件、之后界面就打不开」的根因。
+pub fn inspect_catalog_plugin<R, F>(entry: &CatalogPlugin, inspect: F) -> Result<R, HostError>
+where
+    R: Send + 'static,
+    F: FnOnce(&mut dyn Plugin) -> R + Send + 'static,
+{
+    match entry.format.as_str() {
+        "vst3" => {
+            let entry = entry.clone();
+            let module = entry.path.clone();
+            crate::plugin_thread::run_on(&module, crate::plugin_thread::LOAD_TIMEOUT, move || {
+                let (mut plugin, _) = load_catalog_plugin_with_editor_mode(&entry, false)?;
+                Ok(inspect(&mut *plugin))
+            })
+            .and_then(|result| result)
+        }
+        _ => {
+            // CLAP / AU：整段派到主线程，连实例的释放也在主线程上。
+            let entry = entry.clone();
+            crate::dispatch::on_main_thread(move || {
+                let (mut plugin, _) = load_catalog_plugin_with_editor_mode(&entry, false)?;
+                Ok(inspect(&mut *plugin))
+            })
+            .and_then(|result| result)
+        }
+    }
+}
+
 /// 同 [`load_catalog_plugin`]，另外把编辑器句柄带出来。
 ///
 /// 宿主据此把「轨道 → 编辑器句柄」登记下来，界面才能为该轨道打开原生窗口。
@@ -289,6 +344,11 @@ pub fn load_catalog_plugin_with_editor_mode(
 /// helper 的查找由 `vst3-host` 负责：先看 `VST3_HOST_HELPER_PATH`，再看主程序旁边
 /// （Tauri 的 `externalBin` 会把 sidecar 放在那里），最后是 cargo target 目录。
 fn load_vst3_plugin(path: &Path, isolate: bool) -> Result<vst3_host::Plugin, HostError> {
+    // 先钉住模块：插件会在自己的线程上留隐藏消息窗口，模块一卸载，那些窗口过程就成了
+    // 指向已解除映射内存的野指针（`0xC0000005`，崩溃模块显示 `xxx.vst3_unloaded`）。
+    // 见 `module_pin` 的说明。
+    crate::module_pin::pin(path);
+
     let mut host = Vst3Host::builder()
         // 与 `vst3_host::simple::load_plugin` 的默认配置保持一致；真实采样率/块大小由
         // `Vst3HostedPlugin::prepare` 通过 `reconfigure` 再告诉插件。

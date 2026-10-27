@@ -76,7 +76,7 @@ fn main() {
                 Err(err) => check(false, &format!("状态回写失败：{err}")),
             }
 
-            match limiter.editor_handle().open("AUPeakLimiter") {
+            match limiter.editor_handle().open("AUPeakLimiter", None, None) {
                 Ok(window) => {
                     check(true, "打开原生界面");
                     // 让 AppKit 真正跑一次建窗 / CA 提交，再关——更接近应用里的顺序。
@@ -87,7 +87,7 @@ fn main() {
                     check(true, "关闭原生界面");
 
                     // 关掉之后再开一次：AU 通常只肯给一次视图控制器，宿主必须自己缓存它。
-                    match limiter.editor_handle().open("AUPeakLimiter（再开）") {
+                    match limiter.editor_handle().open("AUPeakLimiter（再开）", None, None) {
                         Ok(window) => {
                             check(true, "关闭后能再次打开原生界面");
                             window.close();

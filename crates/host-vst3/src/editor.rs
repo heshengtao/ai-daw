@@ -9,6 +9,8 @@
 //! - **CLAP**：插件的 GUI 扩展支持「浮动窗口」——窗口完全由插件自己创建与管理，宿主只需
 //!   `create` + `show`，然后定期泵它的主线程回调。
 
+use std::time::{Duration, Instant};
+
 use crate::clap::{ClapEditorHandle, ClapGuiWindow};
 use crate::error::HostError;
 use crate::vst3::Vst3EditorHandle;
@@ -51,12 +53,16 @@ impl EditorHandle {
     ///
     /// 在控制侧线程调用即可：CLAP 会自行派发到主线程，VST3 直接在当前线程取。
     /// 插件不支持状态存取（或读取失败）时返回空——空状态在恢复时会被忽略。
+    ///
+    /// VST3 的实例锁由音频线程按块持有，正常情况下几十微秒就能拿到。但插件线程可能正卡在
+    /// 插件自己的调用里、一直不放锁——所以这里**最多等 [`STATE_LOCK_TIMEOUT`]**：宁可这一次
+    /// 抢救不到状态，也不能让整个界面命令跟着卡死。
     pub fn save_state(&self) -> Vec<u8> {
         match self {
-            EditorHandle::Vst3(handle) => handle
-                .lock()
-                .map(|plugin| plugin.save_state().unwrap_or_default())
-                .unwrap_or_default(),
+            EditorHandle::Vst3(handle) => match lock_plugin(handle, STATE_LOCK_TIMEOUT) {
+                Some(plugin) => plugin.save_state().unwrap_or_default(),
+                None => Vec::new(),
+            },
             EditorHandle::Clap(handle) => handle.save_state(),
             #[cfg(target_os = "macos")]
             EditorHandle::Au(handle) => handle.save_state(),
@@ -78,26 +84,73 @@ impl EditorHandle {
     /// `host_view` 是宿主原生视图的句柄（macOS 的 NSView / Windows 的 HWND），
     /// 只有需要嵌入的插件用得上——见 [`Self::host_window_size`]。
     ///
+    /// `anchor` 是宿主主窗口的原生句柄：插件自己开的那扇原生窗口会被摆到它所在显示器的中央，
+    /// 并**抬到最前**。不这么做，窗口只会落在左上角、被最大化的主窗口整扇盖住。
+    ///
     /// **必须在主 / UI 线程调用。**
-    pub fn open(&self, title: &str, host_view: Option<usize>) -> Result<PluginEditorWindow, HostError> {
+    pub fn open(
+        &self,
+        title: &str,
+        host_view: Option<usize>,
+        anchor: Option<isize>,
+    ) -> Result<PluginEditorWindow, HostError> {
+        // 开窗前后各拍一张快照：差集里那扇就是插件刚建的原生窗口。
+        // VST3 由 `vst3-host` 建窗，CLAP 浮动窗口由插件自己建——两条路都靠这一手认出来。
+        let before = crate::native_window::snapshot();
         let kind = match self {
             EditorHandle::Vst3(handle) => {
-                if !handle.lock().map(|p| p.has_editor()).unwrap_or(false) {
-                    return Err(HostError::NoEditor);
+                if let Some(plugin) = lock_plugin(handle, Duration::from_millis(500)) {
+                    if !plugin.has_editor() {
+                        return Err(HostError::NoEditor);
+                    }
                 }
                 let mut window = vst3_host::PluginWindow::new(handle.clone());
-                window.open().map_err(|e| HostError::Editor(e.to_string()))?;
+                window
+                    .open()
+                    .map_err(|e| HostError::Editor(e.to_string()))?;
                 WindowKind::Vst3(window)
             }
-            EditorHandle::Clap(handle) => {
-                WindowKind::Clap(handle.open_window(title, host_view)?)
-            }
+            EditorHandle::Clap(handle) => WindowKind::Clap(handle.open_window(title, host_view)?),
             #[cfg(target_os = "macos")]
             EditorHandle::Au(handle) => WindowKind::Au(handle.open(title)?),
         };
-        Ok(PluginEditorWindow { kind })
+        let window = PluginEditorWindow {
+            kind,
+            native: crate::native_window::find_opened(&before),
+        };
+        // 摆到用户眼前：标题用宿主给的「轨道名 - 插件名」，位置居中，Z 序抬到最前。
+        if let Some(native) = window.native {
+            crate::native_window::present(native, title, anchor);
+        }
+        Ok(window)
     }
 }
+
+/// 拿 VST3 实例锁，最多等 `timeout`。拿不到返回 `None`，**绝不无限等**。
+///
+/// 音频线程每块都会短暂持锁；插件线程可能正卡在插件自己的调用里一直不放锁。调用方（界面命令、
+/// 状态抢救）都不能因此挂住——等不到就跳过这一次，下一拍再来。
+fn lock_plugin<'a>(
+    handle: &'a Vst3EditorHandle,
+    timeout: Duration,
+) -> Option<std::sync::MutexGuard<'a, vst3_host::Plugin>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match handle.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(std::sync::TryLockError::Poisoned(poison)) => return Some(poison.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+    }
+}
+
+/// VST3 实例锁的最长等待（见 [`EditorHandle::save_state`]）。
+const STATE_LOCK_TIMEOUT: Duration = Duration::from_millis(800);
 
 /// 打开的窗口内部是哪种。
 enum WindowKind {
@@ -110,9 +163,23 @@ enum WindowKind {
 /// 一个已打开的插件窗口。
 pub struct PluginEditorWindow {
     kind: WindowKind,
+    /// 插件自己开的那扇原生窗口句柄（嵌入宿主窗口的插件没有）。
+    native: Option<crate::native_window::NativeWindow>,
 }
 
 impl PluginEditorWindow {
+    /// 这扇窗口的原生句柄（供宿主把它抬到最前 / 查询状态）。
+    pub fn native_handle(&self) -> Option<crate::native_window::NativeWindow> {
+        self.native
+    }
+
+    /// 把窗口抬到最前（已打开时用户再点「打开界面」走这里）。
+    pub fn focus(&self) {
+        if let Some(native) = self.native {
+            crate::native_window::raise(native);
+        }
+    }
+
     /// 每帧调用：把插件发起的窗口级事件（缩放、DPI、主线程回调）送进插件。
     ///
     /// 非阻塞：插件正被音频线程加锁处理时它会直接返回，下一帧再补。

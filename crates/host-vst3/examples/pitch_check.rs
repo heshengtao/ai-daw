@@ -60,7 +60,7 @@ fn main() {
 
     let mut failures = 0usize;
     for rate in [44_100.0f64, 48_000.0, 96_000.0] {
-        let plugin = ai_daw_host_vst3::load_catalog_plugin(&entry);
+        let plugin = ai_daw_host_vst3::load_catalog_plugin_on_host(&entry).map(|(plugin, _)| plugin);
         let measured = match plugin {
             Ok(mut plugin) => measure_pitch(&mut *plugin, rate),
             Err(err) => {

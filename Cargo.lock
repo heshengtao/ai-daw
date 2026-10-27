@@ -70,6 +70,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "vst3-host",
+ "winapi",
 ]
 
 [[package]]

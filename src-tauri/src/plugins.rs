@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use ai_daw_engine::model::Project;
 use ai_daw_engine::registry::{missing_plugin, PluginRegistry, PluginSlot};
-use ai_daw_host_vst3::{load_catalog_plugin_with_editor_mode, CatalogPlugin};
+use ai_daw_host_vst3::{CatalogPlugin, HostError};
 
 use crate::audio::EditorSlot;
 
@@ -16,6 +16,41 @@ use crate::audio::EditorSlot;
 /// 渲染不能因为一个坏插件就整首失败：工厂退回静音占位，把原因记在这里，调用方（MCP /
 /// 导出 / 预览）再决定怎么呈现。
 pub type LoadWarnings = Arc<Mutex<Vec<String>>>;
+
+/// 「这个插件长什么样」的静态信息：参数表 + 能力描述符。
+///
+/// 只为了**不再为了看一眼参数去建第二个实例**。ACE Bridge 这类「同一时刻只允许一个实例」的
+/// 插件，第二次实例化会弹「Bridge Exist」甚至卡在构造里——而参数表在第一件实例加载时就拿到了。
+#[derive(Clone)]
+pub struct LoadedPlugin {
+    pub params: Vec<ai_daw_plugin_api::ParamInfo>,
+    pub descriptor: ai_daw_plugin_api::PluginDescriptor,
+}
+
+/// 已成功加载过的插件（plugin id → 静态信息）。
+fn loaded() -> &'static Mutex<HashMap<String, Arc<LoadedPlugin>>> {
+    static LOADED: std::sync::OnceLock<Mutex<HashMap<String, Arc<LoadedPlugin>>>> =
+        std::sync::OnceLock::new();
+    LOADED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 记下某个插件实例的参数表与描述符（同一个 id 只记第一次）。
+fn remember_loaded(plugin_id: &str, plugin: &dyn ai_daw_plugin_api::Plugin) {
+    let info = Arc::new(LoadedPlugin {
+        params: plugin.params(),
+        descriptor: plugin.descriptor(),
+    });
+    loaded()
+        .lock()
+        .unwrap()
+        .entry(plugin_id.to_string())
+        .or_insert(info);
+}
+
+/// 取已加载插件的静态信息（没加载过时返回 `None`，调用方才去建临时实例）。
+pub fn loaded_info(plugin_id: &str) -> Option<Arc<LoadedPlugin>> {
+    loaded().lock().unwrap().get(plugin_id).map(Arc::clone)
+}
 
 /// 依据扫描目录构建注册表：内置合成器 + 外部插件工厂 + 缺失占位。
 ///
@@ -63,19 +98,73 @@ fn build_registry_with(
         let handles = Arc::clone(&editor_handles);
         let warnings = warnings.clone();
         registry.register(&id, move |track, slot| {
-            match load_catalog_plugin_with_editor_mode(&entry, isolate_vst3) {
-                Ok((plugin, Some(handle))) => {
-                    handles.lock().unwrap().insert(
-                        (track.0, slot),
-                        EditorSlot {
-                            handle,
-                            plugin_id: plugin_id.clone(),
-                        },
-                    );
+            // VST3 的实例必须在**它自己的插件线程**上创建：之后它的界面也只能在那条线程上开
+            // （见 `host_vst3::plugin_thread`）。CLAP / AU 仍旧在主线程上初始化。
+            //
+            // 离线渲染（`isolate_vst3`）的实例只喂音频、不开界面，而且跑在 helper 子进程里，
+            // 留在渲染线程上加载即可，免得把渲染和界面串起来。
+            let on_plugin_thread = !isolate_vst3 && entry.format == "vst3";
+            crate::logging::info(format!(
+                "加载插件「{display_name}」（{}，轨 {} 槽 {slot:?}，线程={}）",
+                entry.format,
+                track.0,
+                if on_plugin_thread { "插件" } else { "主" }
+            ));
+
+            // 上次把加载线程卡死过的插件：这一轮直接静音占位，**绝不再陪它卡一次**。
+            // 用户点「重新扫描插件」会清空隔离名单，修好之后立刻重试。
+            if !isolate_vst3 {
+                if let Some(blocked) = crate::quarantine::get(&entry.path) {
+                    crate::logging::info(format!(
+                        "插件「{display_name}」已隔离，跳过加载：{}（重新扫描插件可重试）",
+                        blocked.reason
+                    ));
+                    if let Some(warnings) = &warnings {
+                        warnings.lock().unwrap().push(format!(
+                            "插件「{display_name}」（{fallback_id}）上次加载未响应，已隔离并按静音处理：{}",
+                            blocked.reason
+                        ));
+                    }
+                    return missing_plugin(&fallback_id);
+                }
+            }
+
+            let loaded = if isolate_vst3 {
+                ai_daw_host_vst3::load_catalog_plugin_with_editor_mode(&entry, true)
+            } else {
+                ai_daw_host_vst3::load_catalog_plugin_on_host(&entry)
+            };
+            match loaded {
+                Ok((plugin, handle)) => {
+                    // 加载成功：这条插件要是以前被隔离过，现在可以解除。
+                    crate::quarantine::forget(&entry.path);
+                    remember_loaded(&plugin_id, plugin.as_ref());
+                    if let Some(handle) = handle {
+                        crate::logging::info(format!("插件「{display_name}」就绪（含界面）"));
+                        handles.lock().unwrap().insert(
+                            (track.0, slot),
+                            EditorSlot {
+                                handle,
+                                plugin_id: plugin_id.clone(),
+                                // 只有进程内的 VST3 才有「模块线程」；离线隔离与 CLAP / AU 没有。
+                                module: on_plugin_thread.then(|| entry.path.clone()),
+                            },
+                        );
+                    } else {
+                        crate::logging::info(format!("插件「{display_name}」就绪（无界面）"));
+                    }
                     plugin
                 }
-                Ok((plugin, None)) => plugin,
                 Err(err) => {
+                    // 超时 = 插件卡死：记进隔离名单，下次启动不再为它等待。
+                    if matches!(err, HostError::Timeout(_)) && !isolate_vst3 {
+                        crate::quarantine::note(
+                            &entry.path,
+                            &display_name,
+                            &err.to_string(),
+                        );
+                    }
+                    crate::logging::info(format!("插件「{display_name}」加载失败：{err}"));
                     // 一个坏插件只让**这条轨道**静音；把原因留给调用方（MCP 会写进分析结果）。
                     if let Some(warnings) = &warnings {
                         warnings.lock().unwrap().push(format!(

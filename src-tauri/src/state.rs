@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use ai_daw_engine::bus::Engine;
 use ai_daw_engine::model::TrackId;
 use ai_daw_engine::registry::PluginSlot;
-use ai_daw_host_vst3::{CatalogPlugin, EditorHandle, PluginEditorWindow, SkippedPlugin};
+use ai_daw_host_vst3::{CatalogPlugin, PluginEditorWindow, SkippedPlugin};
 
 use crate::ai::AiRuntime;
 use crate::assets::AssetCache;
@@ -17,12 +17,18 @@ use crate::sound_memories::SoundMemoryStore;
 thread_local! {
     /// 已打开的插件原生窗口。
     ///
-    /// **只在主线程访问**：`PluginWindow` 持有 `NSWindow`（macOS），本来就是 `!Send`，
-    /// 而且创建/销毁/泵事件都必须在主线程做，所以放在主线程局部而不是共享状态里。
+    /// **只在「开这扇窗的那条线程」上访问**：`PluginWindow` 持有原生句柄，创建 / 销毁 /
+    /// 泵事件都必须在同一条线程做（插件把创建实例的那条线程当成消息线程），所以放在
+    /// thread-local 而不是共享状态里。
+    ///
+    /// 于是这张表实际有多份：VST3 的按**模块**各一份（见 `host_vst3::plugin_thread`），
+    /// CLAP / AU 的在主线程上。哪一扇归谁，由 [`EditorSlot::module`] 记着。
     static EDITOR_WINDOWS: RefCell<HashMap<(u64, PluginSlot), PluginEditorWindow>> = RefCell::new(HashMap::new());
 }
 
-/// 在主线程里操作「(轨道, 槽位) → 插件窗口」表。
+/// 在**当前线程**上操作「(轨道, 槽位) → 插件窗口」表。
+///
+/// 调用前先确认当前线程就是开这扇窗的那条（VST3 → 插件线程；CLAP / AU → 主线程）。
 pub fn with_editor_windows<R>(
     f: impl FnOnce(&mut HashMap<(u64, PluginSlot), PluginEditorWindow>) -> R,
 ) -> R {
@@ -61,6 +67,11 @@ pub struct AppState {
     pub editor_plugins: Arc<Mutex<HashMap<(u64, PluginSlot), String>>>,
     /// 其中哪些 (轨道, 槽位) 的窗口是**宿主建的**（插件只支持嵌入模式）。用户关掉那扇窗就等于关界面。
     pub host_windows: Arc<Mutex<HashSet<(u64, PluginSlot)>>>,
+    /// 插件自己开出来的那扇原生窗口句柄（供「已经开着就把它抬到最前」用）。
+    ///
+    /// 窗口对象本身是 thread-local（只能在开它的线程上碰），句柄可以跨线程用——
+    /// `SetForegroundWindow` 本来就允许别的线程调用。
+    pub editor_windows: Arc<Mutex<HashMap<(u64, PluginSlot), ai_daw_host_vst3::NativeWindow>>>,
     /// 用户预设（跨工程；文件位置由 `init_presets` 装上）。
     pub presets: Mutex<PresetStore>,
     /// 音色记忆库（跨工程；文件位置由 `init_sound_memories` 装上）。
@@ -105,6 +116,7 @@ impl AppState {
             open_editors: Arc::new(Mutex::new(HashSet::new())),
             editor_plugins: Arc::new(Mutex::new(HashMap::new())),
             host_windows: Arc::new(Mutex::new(HashSet::new())),
+            editor_windows: Arc::new(Mutex::new(HashMap::new())),
             presets: Mutex::new(PresetStore::load(None)),
             sound_memories: Mutex::new(SoundMemoryStore::load(None)),
             assets,
@@ -200,13 +212,13 @@ impl AppState {
         }
     }
 
-    /// 取某条轨道某个槽位插件实例的编辑器句柄。
-    pub fn editor_handle(&self, track: u64, slot: PluginSlot) -> Option<EditorHandle> {
+    /// 取某条轨道某个槽位插件实例的编辑器句柄（连同它的 plugin id 与所属插件线程）。
+    pub fn editor_slot(&self, track: u64, slot: PluginSlot) -> Option<EditorSlot> {
         self.editor_handles
             .lock()
             .unwrap()
             .get(&(track, slot))
-            .map(|entry| entry.handle.clone())
+            .cloned()
     }
 }
 

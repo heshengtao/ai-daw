@@ -144,7 +144,7 @@ fn main() {
     eprintln!("  开界面前已响 {} 个音", before.len());
 
     eprintln!("  打开界面…");
-    let window = match handle.open("KR-106", None) {
+    let window = match handle.open("KR-106", None, None) {
         Ok(w) => w,
         Err(e) => {
             eprintln!("  开界面失败（无显示环境时会这样）：{e}");

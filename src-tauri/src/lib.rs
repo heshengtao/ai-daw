@@ -11,6 +11,7 @@ mod commands;
 mod cue_sheet;
 mod factory_presets;
 mod history;
+mod logging;
 mod main_thread;
 mod manager;
 mod mcp;
@@ -18,6 +19,7 @@ mod models;
 mod plugin_info;
 mod plugins;
 mod presets;
+mod quarantine;
 mod session;
 mod sound_memories;
 mod state;
@@ -137,94 +139,129 @@ fn on_host_window_closing(window: &tauri::Window, event: &tauri::WindowEvent) {
     state.host_windows.lock().unwrap().remove(&key);
 }
 
-/// 启动插件窗口轮询线程：窗口级的事件（缩放、DPI）必须在主线程泵进插件。
+/// 启动插件窗口轮询线程：窗口级的事件（缩放、DPI）必须在**开窗口的那条线程**上泵进插件。
+///
+/// VST3 的窗口按**模块**分线程（见 `host_vst3::plugin_thread`），CLAP / AU 的窗口住在主线程。
+/// 每拍给「有实例的模块」各排一次服务任务——**不等待**：某个模块的插件卡住时，它那条线程上的
+/// 任务会排队/跳过，别的模块与主线程照常跑。
 fn spawn_editor_ticker(app: tauri::AppHandle) {
     thread::Builder::new()
         .name("ai-daw-editors".into())
         .spawn(move || loop {
             thread::sleep(EDITOR_TICK);
-            let app_for_main = app.clone();
-            let dispatched = app.run_on_main_thread(move || {
-                let state = app_for_main.state::<AppState>();
-                let mut open = state.open_editors.lock().unwrap();
-                let hosts = state.host_windows.clone();
-                // 需要连带关掉的宿主窗口，等到借用结束之后再关（见下面的说明）。
-                let mut close_hosts: Vec<(u64, PluginSlot)> = Vec::new();
-                crate::state::with_editor_windows(|windows| {
-                    for window in windows.values() {
-                        window.service();
-                    }
-                    // 结束的两种情况：插件自己关了窗口；或者我们给「嵌入模式」插件开的那扇
-                    // 宿主窗口被用户关掉了（那时插件不会通知我们）。
-                    let doomed: Vec<(u64, PluginSlot)> = windows
-                        .iter()
-                        .filter(|(key, w)| {
-                            if w.closed_by_user() {
-                                return true;
-                            }
-                            let is_host = hosts.lock().unwrap().contains(*key);
-                            is_host
-                                && app_for_main
-                                    .get_webview_window(&crate::commands::host_window_label(
-                                        key.0, key.1,
-                                    ))
-                                    .is_none()
-                        })
-                        .map(|(key, _)| *key)
-                        .collect();
-                    for key in doomed {
-                        // 必须走 `close()` 而不是直接丢：它先 hide + destroy 插件的界面。
-                        // 直接丢会把插件的原生视图留成悬空指针，之后一碰就崩。
-                        if let Some(window) = windows.remove(&key) {
-                            window.close();
-                        }
-                        // 界面住在宿主窗口里的话，那扇窗也要收掉；插件自己关了界面时它
-                        // 更会剩在那里变成一扇空窗。
-                        if hosts.lock().unwrap().remove(&key) {
-                            close_hosts.push(key);
-                        }
-                    }
-                    open.clear();
-                    open.extend(windows.keys().copied());
-                    // 窗口记录同样只保留活着的（用户自己关掉的那扇要一并忘掉）。
-                    state
-                        .editor_plugins
-                        .lock()
-                        .unwrap()
-                        .retain(|key, _| windows.contains_key(key));
-                });
 
-                // 关宿主窗口必须在 `with_editor_windows` 的借用**之外**做：关窗会触发
-                // `CloseRequested`，我们的处理器又要去借同一个 RefCell——嵌套借用会 panic。
-                for key in close_hosts {
-                    if let Some(window) = app_for_main
-                        .get_webview_window(&crate::commands::host_window_label(key.0, key.1))
-                    {
-                        let _ = window.close();
-                    }
-                }
-
-                // 插件可能在自己的线程上请求「叫我的主线程回调」（`request_callback`）。
-                // 这件事**与窗口是否打开无关**，不服务它插件那边可能一直等下去，所以对每个
-                // 登记过的实例都服务一次。先 clone 出来再锁插件实例，避免与音频线程登记
-                // 句柄时的加锁顺序相反。
-                let handles: Vec<EditorHandle> = state
-                    .editor_handles
-                    .lock()
-                    .unwrap()
+            let modules: Vec<std::path::PathBuf> = {
+                let state = app.state::<AppState>();
+                let handles = state.editor_handles.lock().unwrap();
+                let mut modules: Vec<std::path::PathBuf> = handles
                     .values()
-                    .map(|entry| entry.handle.clone())
+                    .filter_map(|slot| slot.module.clone())
                     .collect();
-                for handle in handles {
-                    handle.service_requests();
-                }
-            });
+                modules.sort();
+                modules.dedup();
+                modules
+            };
+            for module in modules {
+                let app_for_plugin = app.clone();
+                ai_daw_host_vst3::post_service(&module, move || {
+                    service_editor_windows(&app_for_plugin, true);
+                });
+            }
+
+            let app_for_main = app.clone();
+            let dispatched =
+                app.run_on_main_thread(move || service_editor_windows(&app_for_main, false));
             if dispatched.is_err() {
                 // 主窗口已销毁，收工。
                 break;
             }
         })
         .expect("failed to spawn editor ticker");
+}
+
+/// 在**当前线程**上服务归它管的那批插件窗口。
+///
+/// `plugin_thread` 只用来区分「这一趟是不是插件线程那趟」：CLAP 的 `request_callback`
+/// 必须在主线程上服务，与窗口是否打开无关。
+fn service_editor_windows(app: &tauri::AppHandle, plugin_thread: bool) {
+    let state = app.state::<AppState>();
+    let hosts = state.host_windows.clone();
+    // 需要连带关掉的宿主窗口，等到借用结束之后再关（见下面的说明）。
+    let mut close_hosts: Vec<(u64, PluginSlot)> = Vec::new();
+    let mut doomed: Vec<(u64, PluginSlot)> = Vec::new();
+
+    crate::state::with_editor_windows(|windows| {
+        for window in windows.values() {
+            window.service();
+        }
+        // 结束的两种情况：插件自己关了窗口；或者我们给「嵌入模式」插件开的那扇
+        // 宿主窗口被用户关掉了（那时插件不会通知我们）。
+        doomed = windows
+            .iter()
+            .filter(|(key, w)| {
+                if w.closed_by_user() {
+                    return true;
+                }
+                let is_host = hosts.lock().unwrap().contains(*key);
+                is_host
+                    && app
+                        .get_webview_window(&crate::commands::host_window_label(key.0, key.1))
+                        .is_none()
+            })
+            .map(|(key, _)| *key)
+            .collect();
+        for key in &doomed {
+            // 必须走 `close()` 而不是直接丢：它先 hide + destroy 插件的界面。
+            // 直接丢会把插件的原生视图留成悬空指针，之后一碰就崩。
+            if let Some(window) = windows.remove(key) {
+                window.close();
+            }
+            // 界面住在宿主窗口里的话，那扇窗也要收掉；插件自己关了界面时它
+            // 更会剩在那里变成一扇空窗。
+            if hosts.lock().unwrap().remove(key) {
+                close_hosts.push(*key);
+            }
+        }
+    });
+
+    // 关宿主窗口必须在 `with_editor_windows` 的借用**之外**做：关窗会触发
+    // `CloseRequested`，我们的处理器又要去借同一个 RefCell——嵌套借用会 panic。
+    for key in close_hosts {
+        if let Some(window) =
+            app.get_webview_window(&crate::commands::host_window_label(key.0, key.1))
+        {
+            let _ = window.close();
+        }
+    }
+
+    // 镜像只清这一趟负责的 key——另一个模块线程的窗口不归这里管。
+    {
+        let mut open = state.open_editors.lock().unwrap();
+        let mut meta = state.editor_plugins.lock().unwrap();
+        let mut native = state.editor_windows.lock().unwrap();
+        for key in &doomed {
+            open.remove(key);
+            meta.remove(key);
+            native.remove(key);
+        }
+    }
+
+    if !plugin_thread {
+        // 插件可能在自己的线程上请求「叫我的主线程回调」（`request_callback`）。
+        // 这件事**与窗口是否打开无关**，不服务它插件那边可能一直等下去，所以对每个
+        // 登记过的实例都服务一次。先 clone 出来再锁插件实例，避免与音频线程登记
+        // 句柄时的加锁顺序相反。
+        let handles: Vec<EditorHandle> = state
+            .editor_handles
+            .lock()
+            .unwrap()
+            .values()
+            .map(|entry| entry.handle.clone())
+            .collect();
+        for handle in handles {
+            handle.service_requests();
+        }
+    }
 }
 
 /// 预设文件的位置：应用配置目录下的 `presets.json`。
@@ -299,11 +336,24 @@ pub fn run() {
         .on_window_event(|window, event| on_host_window_closing(window, event))
         .manage(AppState::new("untitled"))
         .setup(|app| {
+            // 日志要最先装上：启动阶段的崩溃也得留下线索。
+            crate::logging::init(app.handle());
+            // 宿主 crate 的日志（哪个插件超时、哪条模块线程卡住）一并进同一份日志。
+            ai_daw_host_vst3::set_log_sink(|line| crate::logging::info(format!("[host] {line}")));
+            // 「加载未响应」的插件隔离名单：下次启动不再为它等一次超时。
+            crate::quarantine::init(
+                app.path()
+                    .app_config_dir()
+                    .ok()
+                    .map(|dir| dir.join("plugin-quarantine.json")),
+            );
             // CLAP 插件会问宿主「这是主线程吗」——必须在真正的主线程上登记一次。
             ai_daw_host_vst3::mark_main_thread();
             // 还得给它一个「把活派到主线程」的手：CLAP 的 init / 参数枚举 / activate 都只能
             // 在主线程做，而这些调用发生在音频线程构建 Player 的时候。
             crate::main_thread::TauriMainThread::install(app.handle());
+            // 插件线程不需要预先启动：每个 VST3 模块在第一次用到时各自起一条（带消息循环），
+            // 于是一个插件卡住只影响它自己。见 `host_vst3::plugin_thread`。
             build_main_window(app.handle())?;
             // 会话缓存：把上次退出时的工作状态读回来（没有或损坏就保持默认新工程）。
             if let Some(file) = session_file(app.handle()) {
@@ -366,6 +416,84 @@ pub fn run() {
                     extra.push(dir.join("models"));
                 }
                 ai_daw_local_ai::models::set_extra_dirs(extra);
+            }
+            // 诊断开关：`AIDAW_EDITOR_SELFTEST` 驱动一条不依赖鼠标的插件界面回归链路。
+            //
+            // - `1`      启动 12 秒后给 1 号轨道开一次界面（默认）；
+            // - `cycle`  开 → 等 2 秒 → 关；
+            // - `switch` RdPiano ↔ ACE 反复切换，**每次先关界面再切**（旧路径）；
+            // - `stress` RdPiano ↔ ACE 反复切换，**界面一直开着**——用户报的那条路径：
+            //            换乐器的同时要收旧窗、建新实例、开新窗。
+            //
+            // 「打开插件界面卡死 / 一个坏插件拖垮全部」在无头环境里很难复现，用它可以一键走完
+            // 同一条链路：Tauri 命令 → 插件线程 → 插件的 `IPlugView::attached`。
+            if let Ok(mode) = std::env::var("AIDAW_EDITOR_SELFTEST") {
+                let handle = app.handle().clone();
+                let _ = thread::Builder::new()
+                    .name("editor-selftest".into())
+                    .spawn(move || {
+                        std::thread::sleep(Duration::from_secs(12));
+
+                        let open = |title: &str| {
+                            let state = handle.state::<AppState>();
+                            crate::commands::open_plugin_window(
+                                handle.clone(),
+                                state,
+                                1,
+                                title.to_string(),
+                            )
+                        };
+                        let close = || crate::commands::close_plugin_window(handle.clone(), 1);
+                        let select = |plugin_id: &str| {
+                            let state = handle.state::<AppState>();
+                            crate::commands::set_track_instrument(
+                                handle.clone(),
+                                state,
+                                1,
+                                plugin_id.to_string(),
+                            );
+                        };
+
+                        if mode == "switch" || mode == "stress" {
+                            let keep_open = mode == "stress";
+                            let plugins = [
+                                ("RdPiano", "vst3:ABCDEF019182FAEB476C5A735244504E"),
+                                ("ACE", "vst3:ABCDEF019182FAEB546D646D42726467"),
+                            ];
+                            for round in 0..4 {
+                                for (name, id) in plugins {
+                                    let at = std::time::Instant::now();
+                                    select(id);
+                                    eprintln!(
+                                        "[{mode} r{round}] {name} select in {:?}",
+                                        at.elapsed()
+                                    );
+                                    std::thread::sleep(Duration::from_secs(1));
+                                    let at = std::time::Instant::now();
+                                    let opened = open(name);
+                                    eprintln!(
+                                        "[{mode} r{round}] {name} open -> {opened:?} in {:?}",
+                                        at.elapsed()
+                                    );
+                                    if !keep_open {
+                                        std::thread::sleep(Duration::from_millis(1500));
+                                        let closed = close();
+                                        eprintln!("[{mode} r{round}] {name} close -> {closed:?}");
+                                    }
+                                }
+                            }
+                            return;
+                        }
+
+                        let at = std::time::Instant::now();
+                        let result = open("selftest");
+                        eprintln!("[selftest] open -> {result:?} in {:?}", at.elapsed());
+                        if mode == "cycle" {
+                            std::thread::sleep(Duration::from_secs(2));
+                            let closed = close();
+                            eprintln!("[selftest] close -> {closed:?}");
+                        }
+                    });
             }
             Ok(())
         })
