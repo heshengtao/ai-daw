@@ -43,7 +43,9 @@ pub struct ScannedPlugin {
 /// 可持久化的插件目录条目（不含任何不可序列化的句柄）。
 ///
 /// 扫描很慢，所以结果缓存成它、存到磁盘；重开工程时按 `id` + `path` 重新加载。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `PartialEq` 供宿主判断「这次扫描结果与已装目录是否一致」：一致就不必重建音频宿主。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CatalogPlugin {
     /// 全局唯一 id（`vst3:<uid>` / `clap:<plugin_id>`）。
     pub id: String,

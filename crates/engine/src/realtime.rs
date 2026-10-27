@@ -564,10 +564,15 @@ impl AudioHost {
         shared: SharedTransport,
         carried: ReusableInstances,
     ) -> Result<Self, RealtimeError> {
+        // 启动诊断：`AIDAW_STARTUP_TRACE=1` 时把建流各阶段打到 stderr。默认不输出，
+        // 避免每次编辑重建播放器都刷一行。
+        let trace = std::env::var_os("AIDAW_STARTUP_TRACE").is_some();
+        let boot = std::time::Instant::now();
         let device = find_output_device(device_name).ok_or_else(|| match device_name {
             Some(name) => RealtimeError::NoSuchDevice(name.to_string()),
             None => RealtimeError::NoDevice,
         })?;
+        let device_ms = boot.elapsed().as_millis();
 
         let preferred_rate = schedule.sample_rate.round().max(1.0) as u32;
         let chosen = choose_output_format(&supported_formats(&device), preferred_rate);
@@ -619,6 +624,7 @@ impl AudioHost {
             buffer_size: cpal::BufferSize::Fixed(max_block as u32),
             ..config
         };
+        let probe_at = std::time::Instant::now();
         let buffer_size = match device.build_output_stream(
             probe_config,
             |_data: &mut [f32], _info: &cpal::OutputCallbackInfo| {},
@@ -632,6 +638,7 @@ impl AudioHost {
             }
             Err(_) => cpal::BufferSize::Default,
         };
+        let probe_ms = probe_at.elapsed().as_millis();
         config.buffer_size = buffer_size;
 
         // 声道数与采样率取自最终的 `config`：回调里的交错写回必须与设备实际声道数一致
@@ -655,6 +662,7 @@ impl AudioHost {
         let yield_sink: YieldSink = Arc::new(Mutex::new(None));
         // `Player` 的 scratch 全部按 `max_block` 预分配：回调内不分配、不加锁。
         // 调度表按值移交：回调只建一份，不再需要为「可能的第二次尝试」克隆一份。
+        let player_at = std::time::Instant::now();
         let mut player = Player::with_carried(
             schedule,
             registry,
@@ -663,6 +671,7 @@ impl AudioHost {
             carried,
             Arc::clone(&yield_sink),
         );
+        let player_ms = player_at.elapsed().as_millis();
         // 重建宿主时延续循环开关：界面不必重新订阅，用户看到的状态也不会因编辑而复位。
         player.apply_command(TransportCommand::SetLoop(shared.is_looping()));
         // 节拍器同理：它是运行时开关，重建（如编辑后）不该把它悄悄关掉。
@@ -734,6 +743,7 @@ impl AudioHost {
         };
 
         // 真正的流只建一次，用上面选定的块大小；失败原样向上抛 `RealtimeError::Cpal`。
+        let stream_at = std::time::Instant::now();
         let stream = device
             .build_output_stream(config, on_data, on_error, None)
             .map_err(|e| RealtimeError::Cpal(e.to_string()))?;
@@ -741,6 +751,14 @@ impl AudioHost {
         stream
             .play()
             .map_err(|e| RealtimeError::Cpal(e.to_string()))?;
+        let stream_ms = stream_at.elapsed().as_millis();
+
+        if trace {
+            eprintln!(
+                "[startup] 引擎建流：找设备 {device_ms} ms / 探测流 {probe_ms} ms / Player+插件 {player_ms} ms / 正式流 {stream_ms} ms（共 {} ms）",
+                boot.elapsed().as_millis()
+            );
+        }
 
         Ok(AudioHost {
             stream,

@@ -108,6 +108,17 @@ opt-level = 3
 [profile.dev.package.rten-vecmath]
 opt-level = 3
 
+# 内置采样音色（SF3）的 Ogg Vorbis 解码：纯浮点 / 位流运算，debug 下慢一个数量级。
+# 第一次用到采样乐器要解一遍 PCM；未优化时 `builtin.piano` / `builtin.nylon_guitar`
+# 各自能吃掉 1~2 秒，加起来就是用户说的「启动卡顿」。与上面 rten 同理：本 crate 是
+# 独立 workspace，仓库根的同名段落在 `tauri dev` 的构建里不生效，必须在这里再写一遍。
+[profile.dev.package.lewton]
+opt-level = 3
+[profile.dev.package.ogg]
+opt-level = 3
+[profile.dev.package.rustysynth-ext]
+opt-level = 3
+
 # Opt out of the repository-root Cargo workspace: this crate is its own
 # workspace root and is therefore not built by `cargo test --workspace`.
 [workspace]

@@ -24,9 +24,9 @@ mod session;
 mod sound_memories;
 mod state;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::{Emitter, Manager};
 
@@ -42,12 +42,34 @@ const TRANSPORT_TICK: Duration = Duration::from_millis(33);
 /// 插件窗口的轮询周期：把插件发起的窗口事件送进去，并清理被用户关掉的窗口。
 const EDITOR_TICK: Duration = Duration::from_millis(80);
 
+/// 进程入口时刻：所有「启动到哪一步花了多久」都以此为基准写进日志。
+static BOOT: OnceLock<Instant> = OnceLock::new();
+
+/// 距进程入口（`run()` 第一行）过了多少毫秒。
+pub(crate) fn boot_ms() -> u128 {
+    BOOT.get().map(|t| t.elapsed().as_millis()).unwrap_or(0)
+}
+
 /// 创建主窗口，去掉系统自绘的标题栏：
 /// - macOS：Overlay 风格（保留原生红黄绿，去掉系统标题栏，内容延伸到顶部）
 /// - Windows / Linux：完全无边框，窗口按钮由前端自绘
 fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWindow> {
     let config = &app.config().app.windows[0];
-    let mut builder = tauri::WebviewWindowBuilder::from_config(app, config)?;
+    let mut builder = tauri::WebviewWindowBuilder::from_config(app, config)?.on_page_load(
+        |window, payload| {
+            let stage = match payload.event() {
+                tauri::webview::PageLoadEvent::Started => "开始加载",
+                tauri::webview::PageLoadEvent::Finished => "加载完成",
+            };
+            crate::logging::info(format!(
+                "[startup] webview {stage}（进程入口 +{} ms）",
+                boot_ms()
+            ));
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                start_audio_after_first_paint(&window.app_handle());
+            }
+        },
+    );
 
     #[cfg(target_os = "macos")]
     {
@@ -62,6 +84,21 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWind
     }
 
     builder.build()
+}
+
+/// 首帧上屏之后，再把工程装进音频宿主。
+///
+/// AU / CLAP 的 `init` / `activate` 只能在主线程上跑。启动时立刻装载的话，插件实例化会和
+/// 「建窗口 + 加载页面」抢同一条主线程——窗口先出来、内容却要等它跑完（几秒白屏）。
+/// 这里让一拍（约一帧多）再装载：用户先看到界面，随后才有声音。
+fn start_audio_after_first_paint(app: &tauri::AppHandle) {
+    let app = app.clone();
+    let _ = thread::Builder::new()
+        .name("ai-daw-first-load".into())
+        .spawn(move || {
+            thread::sleep(Duration::from_millis(120));
+            app.state::<AppState>().start_audio();
+        });
 }
 
 /// 启动传输状态推送线程。
@@ -111,6 +148,15 @@ fn spawn_plugin_scan(app: tauri::AppHandle) {
     thread::Builder::new()
         .name("ai-daw-scan".into())
         .spawn(move || {
+            // 先等首次装载把宿主建起来：扫描会起一串探针子进程、大量读盘，和首屏 /
+            // 首次发声抢 CPU 只会把启动拖得更长。目录已经用缓存装好了，晚几秒扫描
+            // 不影响可用性；最多等 5 秒（没有音频设备时也照常往下走）。
+            for _ in 0..50 {
+                if app.state::<AppState>().audio.snapshot().available {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
             crate::manager::rescan_with_managed(&app);
         })
         .expect("failed to spawn plugin scan thread");
@@ -328,18 +374,22 @@ fn agent_sessions_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _ = BOOT.set(Instant::now());
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         // 自动更新：`updater` 负责检查 / 下载 / 验签安装，`process` 负责装完重启。
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .on_window_event(|window, event| on_host_window_closing(window, event))
-        .manage(AppState::new("untitled"))
         .setup(|app| {
             // 启动耗时：`setup` 跑完才进事件循环，这一段越久，首屏越像「黑屏卡住」。
             let setup_started = std::time::Instant::now();
             // 日志要最先装上：启动阶段的崩溃也得留下线索。
             crate::logging::init(app.handle());
+            crate::logging::info(format!(
+                "[startup] setup 开始（进程入口 +{} ms）",
+                boot_ms()
+            ));
             // 宿主 crate 的日志（哪个插件超时、哪条模块线程卡住）一并进同一份日志。
             ai_daw_host_vst3::set_log_sink(|line| crate::logging::info(format!("[host] {line}")));
             // 「加载未响应」的插件隔离名单：下次启动不再为它等一次超时。
@@ -354,15 +404,23 @@ pub fn run() {
             // 还得给它一个「把活派到主线程」的手：CLAP 的 init / 参数枚举 / activate 都只能
             // 在主线程做，而这些调用发生在音频线程构建 Player 的时候。
             crate::main_thread::TauriMainThread::install(app.handle());
+            // 会话缓存与插件目录都要在**建状态之前**读出来：`AppState::bootstrap` 会让音频线程
+            // 一次性装载「最终工程 + 已缓存目录」。以前是常驻的默认工程先装一遍、会话再装一遍、
+            // 目录到位又各重建一次——默认模板的采样音色解码就白白吃掉启动时最显眼的几秒。
+            let session = session_file(app.handle()).and_then(|file| session::read_session(&file));
+            let cached = crate::manager::cached_catalog(app.handle());
+            app.manage(AppState::bootstrap(session, cached));
+            crate::logging::info(format!(
+                "[startup] 会话与插件缓存装载完成（进程入口 +{} ms）",
+                boot_ms()
+            ));
             // 插件线程不需要预先启动：每个 VST3 模块在第一次用到时各自起一条（带消息循环），
             // 于是一个插件卡住只影响它自己。见 `host_vst3::plugin_thread`。
             build_main_window(app.handle())?;
-            // 会话缓存：把上次退出时的工作状态读回来（没有或损坏就保持默认新工程）。
-            if let Some(file) = session_file(app.handle()) {
-                if let Some(session) = session::read_session(&file) {
-                    app.state::<AppState>().restore_session(session);
-                }
-            }
+            crate::logging::info(format!(
+                "[startup] 主窗口创建完成（进程入口 +{} ms）",
+                boot_ms()
+            ));
             let state = app.state::<AppState>();
             state.init_presets(preset_file(app.handle()));
             state.init_sound_memories(sound_memory_file(app.handle()));
@@ -374,12 +432,21 @@ pub fn run() {
             // **必须在任何 ort 调用之前**（只决定「用哪个 EP」，不触发加载，所以放这儿安全）。
             crate::backends::init_runtime(app.handle());
             spawn_transport_ticker(app.handle().clone(), audio);
-            // 先用上次成功扫描的缓存把外部插件装上：这一轮扫描要给每个 VST3 起一个探针
-            // 子进程，可能很久，界面不该为此空着。后台扫描完成后会用最新结果覆盖。
-            let cached = crate::manager::cached_catalog(app.handle());
-            if !cached.is_empty() {
-                app.state::<AppState>().install_catalog(cached);
+            // 正常的装载由 `webview 加载完成` 触发（见 `start_audio_after_first_paint`）。
+            // 页面加载事件万一没来（dev server 没起、页面报错），也不能永远没声音：
+            // 兜底定时器与页面事件共用同一个一次性开关，谁先到算谁的。留 3 秒是给慢机器
+            // 的页面加载让路——正常路径约 0.4 秒就装好了，这个定时器根本轮不到。
+            {
+                let handle = app.handle().clone();
+                let _ = thread::Builder::new()
+                    .name("ai-daw-first-load-fallback".into())
+                    .spawn(move || {
+                        thread::sleep(Duration::from_millis(3000));
+                        handle.state::<AppState>().start_audio();
+                    });
             }
+            // 插件目录已随 `AppState::bootstrap` 交给音频线程了；这里只启动后台扫描，
+            // 扫描结果与缓存一致时 `install_catalog` 不会再重建宿主（见那里的说明）。
             spawn_plugin_scan(app.handle().clone());
             spawn_editor_ticker(app.handle().clone());
             // 后台预热插件注册表缓存：用户点开「插件管理器 → 可下载」时通常已命中缓存、秒开。
@@ -499,8 +566,9 @@ pub fn run() {
             }
             // 这一段决定了「窗口出来之前黑了多久」：超过 ~300 ms 就值得查是谁拖的。
             crate::logging::info(format!(
-                "[startup] setup 完成，用时 {} ms",
-                setup_started.elapsed().as_millis()
+                "[startup] setup 完成，用时 {} ms（进程入口 +{} ms）",
+                setup_started.elapsed().as_millis(),
+                boot_ms()
             ));
             Ok(())
         })

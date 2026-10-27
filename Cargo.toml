@@ -29,3 +29,13 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.rten-vecmath]
 opt-level = 3
+
+# 内置采样音色（SF3）的 Ogg Vorbis 解码：纯浮点 / 位流运算，debug 下比 release 慢一个数量级。
+# 启动时第一次用到采样乐器要在这里解一遍 PCM，未优化时能占掉好几秒——dev 里「打开应用
+# 卡一下」主要就是它。解码器本身不是本仓库的代码，调高 opt-level 不影响增量编译体验。
+[profile.dev.package.lewton]
+opt-level = 3
+[profile.dev.package.ogg]
+opt-level = 3
+[profile.dev.package.rustysynth-ext]
+opt-level = 3

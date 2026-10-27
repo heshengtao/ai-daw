@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ai_daw_engine::bus::Engine;
@@ -87,29 +88,87 @@ pub struct AppState {
     pub project_key: Mutex<String>,
     /// 正在进行的一次录音的目标：`record_start` 记下，`record_stop` 取走。
     pub recording: Mutex<Option<RecordingTarget>>,
+    /// 「工程已经装进音频宿主」的一次性开关：见 [`AppState::start_audio`]。
+    audio_started: AtomicBool,
     /// 本地 AI 任务（后台线程 + 进度 + 取消）。
     pub ai: AiRuntime,
 }
 
 impl AppState {
     /// 以给定工程名新建共享状态（初始工程带默认分轨模板，且不带历史）。
+    ///
+    /// 只用于测试：真正的启动路径走 [`AppState::bootstrap`]，它会先读会话缓存，
+    /// 免得先装一遍默认模板、再装一遍会话工程。
+    #[cfg(test)]
     pub fn new(name: &str) -> Self {
-        let engine = Engine::new_project(name);
+        Self::from_engine(Engine::new_project(name), Vec::new(), true)
+    }
+
+    /// 启动时的共享状态：把「最终要用的工程」和「上次扫描的插件目录」**一次**交给音频线程。
+    ///
+    /// 有会话缓存时直接用还原出来的工程，不再先装载默认分轨模板：模板里的钢琴 / 吉他 /
+    /// 贝斯 / 鼓组会各自解码一整套内嵌采样音色（SF3 的 Ogg Vorbis，冷启动要几秒），
+    /// 而它们马上就会被会话里的工程替换掉——那几秒是纯浪费，用户看到的就是「启动卡住」。
+    ///
+    /// 插件目录也一并带上：否则默认工程先建一次宿主、装目录后再建一次，等于白跑一遍。
+    ///
+    /// 装载本身推迟到 [`AppState::start_audio`]（首屏之后）：外部乐器实例化要占主线程，
+    /// 放在建窗口的同一条线程上会把首屏堵住。
+    pub fn bootstrap(
+        session: Option<crate::session::SessionFile>,
+        catalog: Vec<CatalogPlugin>,
+    ) -> Self {
+        let engine = match &session {
+            Some(session) => Engine::restore(session.project.clone(), session.saved.clone()),
+            None => Engine::new_project("untitled"),
+        };
+        let state = Self::from_engine(engine, catalog, false);
+        if let Some(session) = session {
+            *state.session_path.lock().unwrap() = session.path;
+            if !session.project_key.is_empty() {
+                *state.project_key.lock().unwrap() = session.project_key;
+            }
+        }
+        state
+    }
+
+    /// 把当前工程装进音频宿主——**只在启动时调一次**。
+    ///
+    /// 重复调用无副作用（第二次直接返回）。首屏画出来之前就装载的话，AU / CLAP 的实例化
+    /// 会和「建窗口 + 加载页面」抢同一条主线程，用户看到的是「窗口出来了几秒还是白的」。
+    pub fn start_audio(&self) -> bool {
+        if self.audio_started.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        let project = self.engine.lock().unwrap().project().clone();
+        self.audio.load(&project);
+        true
+    }
+
+    /// 用给定工程（与插件目录）装配共享状态；`start_audio` 决定是否立刻装载。
+    fn from_engine(engine: Engine, catalog: Vec<CatalogPlugin>, start_audio: bool) -> Self {
         let editor_handles: Arc<Mutex<HashMap<(u64, PluginSlot), EditorSlot>>> =
             Arc::new(Mutex::new(HashMap::new()));
         // 素材缓存要先于音频引擎建好：音频线程重建宿主时要靠它把音频片段接上真实 PCM。
         let assets = Arc::new(AssetCache::new());
-        // 目录稍后由后台扫描补齐；先用空目录启动，避免卡住窗口。
-        let audio = Arc::new(AudioEngine::new(
-            engine.project(),
-            Vec::new(),
-            Arc::clone(&editor_handles),
-            Arc::clone(&assets),
-        ));
+        let audio = if start_audio {
+            AudioEngine::new(
+                engine.project(),
+                catalog.clone(),
+                Arc::clone(&editor_handles),
+                Arc::clone(&assets),
+            )
+        } else {
+            AudioEngine::idle(
+                catalog.clone(),
+                Arc::clone(&editor_handles),
+                Arc::clone(&assets),
+            )
+        };
         AppState {
             engine: Mutex::new(engine),
-            audio,
-            catalog: Mutex::new(Vec::new()),
+            audio: Arc::new(audio),
+            catalog: Mutex::new(catalog),
             scan_skipped: Mutex::new(Vec::new()),
             scan_error: Mutex::new(None),
             editor_handles,
@@ -123,6 +182,7 @@ impl AppState {
             session_path: Mutex::new(None),
             project_key: Mutex::new(crate::history::new_key()),
             recording: Mutex::new(None),
+            audio_started: AtomicBool::new(start_audio),
             ai: AiRuntime::new(),
         }
     }
@@ -172,10 +232,23 @@ impl AppState {
         *self.sound_memories.lock().unwrap() = SoundMemoryStore::load(path);
     }
 
-    /// 安装（或更新）插件目录：写入共享状态并让音频线程重建注册表。
+    /// 安装（或更新）插件目录：写入共享状态，内容真的变了才让音频线程重建注册表。
+    ///
+    /// 启动时缓存目录与后台扫描的结果通常一模一样，无脑重建会再走一遍「建流 + 激活插件」，
+    /// 白花几十到上百毫秒，还会让已打开的插件界面闪一下。
     pub fn install_catalog(&self, catalog: Vec<CatalogPlugin>) {
-        *self.catalog.lock().unwrap() = catalog.clone();
-        self.audio.set_catalog(catalog);
+        let changed = {
+            let mut current = self.catalog.lock().unwrap();
+            if *current == catalog {
+                false
+            } else {
+                *current = catalog.clone();
+                true
+            }
+        };
+        if changed {
+            self.audio.set_catalog(catalog);
+        }
     }
 
     /// 当前插件目录的快照。
@@ -197,19 +270,6 @@ impl AppState {
     /// 最近一次扫描整体失败的原因（正常为 `None`）。
     pub fn scan_error_snapshot(&self) -> Option<String> {
         self.scan_error.lock().unwrap().clone()
-    }
-
-    /// 用会话缓存恢复工作状态（启动时调用）。
-    ///
-    /// 工作副本与保存基线一起恢复，因此带着未保存改动退出的工程，下次打开依旧显示「未保存」。
-    pub fn restore_session(&self, session: crate::session::SessionFile) {
-        let project = session.project;
-        *self.engine.lock().unwrap() = Engine::restore(project.clone(), session.saved);
-        self.audio.load(&project);
-        *self.session_path.lock().unwrap() = session.path;
-        if !session.project_key.is_empty() {
-            *self.project_key.lock().unwrap() = session.project_key;
-        }
     }
 
     /// 取某条轨道某个槽位插件实例的编辑器句柄（连同它的 plugin id 与所属插件线程）。

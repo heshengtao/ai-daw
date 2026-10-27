@@ -130,6 +130,20 @@ impl AudioEngine {
         editor_handles: EditorHandles,
         assets: Arc<AssetCache>,
     ) -> Self {
+        let engine = Self::idle(catalog, editor_handles, assets);
+        engine.load(project);
+        engine
+    }
+
+    /// 只起音频线程，先不装载工程。
+    ///
+    /// 启动时用它把「第一次装载」推迟到首屏之后：外部乐器（AU / CLAP）的实例化必须在
+    /// 主线程上做，紧挨着建窗口会把首屏堵住好几秒。之后调 [`AudioEngine::load`] 即可。
+    pub fn idle(
+        catalog: Vec<CatalogPlugin>,
+        editor_handles: EditorHandles,
+        assets: Arc<AssetCache>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         let shared = SharedTransport::new();
         let sample_rate = Arc::new(AtomicU32::new(0));
@@ -168,8 +182,6 @@ impl AudioEngine {
             })
             .expect("failed to spawn audio thread");
 
-        // 首次装载：打开设备并让界面尽快知道实时播放是否可用。
-        engine.load(project);
         engine
     }
 
@@ -516,6 +528,7 @@ fn start_host(
     scope: &Arc<ScopeBuffer>,
     carried: ReusableInstances,
 ) -> Option<AudioHost> {
+    let started = std::time::Instant::now();
     let rate = match resolve_sample_rate(sample_rate, output_device) {
         Ok(rate) => rate,
         Err(reason) => {
@@ -524,11 +537,16 @@ fn start_host(
             return None;
         }
     };
+    let rate_ms = started.elapsed().as_millis();
 
+    let at = std::time::Instant::now();
     let registry = build_registry(catalog, project, Arc::clone(editor_handles));
+    let registry_ms = at.elapsed().as_millis();
     // 素材必须在这里（**音频回调之外**）就加载好：回调里绝不解码、不分配。
     // 缺失的素材会被跳过 → 该片段静音（与「缺失插件用静音占位」同一策略）。
+    let at = std::time::Instant::now();
     let samples = assets.snapshot_for(&project.audio_paths());
+    let assets_ms = at.elapsed().as_millis();
     let schedule = ScheduledEvents::from_project_with_assets(project, rate as f64, &samples);
     let options = RealtimeOptions {
         max_block: MAX_BLOCK,
@@ -536,14 +554,27 @@ fn start_host(
         scope: Arc::clone(scope),
         status: Arc::clone(status),
     };
-    match AudioHost::start_on(
+    let at = std::time::Instant::now();
+    let built = AudioHost::start_on(
         output_device,
         schedule,
         &registry,
         options,
         shared.clone(),
         carried,
-    ) {
+    );
+    let host_ms = at.elapsed().as_millis();
+    // 启动期的「界面已经出来、却要等好几秒才有声音 / 才能动插件」多半就花在这里。
+    crate::logging::info(format!(
+        "[startup] 音频宿主：设备 {} ms / 注册表 {} ms / 素材 {} ms / 建流+插件 {} ms（共 {} ms，进程入口 +{} ms）",
+        rate_ms,
+        registry_ms,
+        assets_ms,
+        host_ms,
+        started.elapsed().as_millis(),
+        crate::boot_ms()
+    ));
+    match built {
         Ok(host) => {
             available.store(true, Ordering::Relaxed);
             *error.lock().unwrap() = None;
@@ -678,6 +709,11 @@ fn run_audio_thread(
             }
             // 目录更新（启动时扫描完成）：重建注册表，重新装载当前工程。
             Ok(AudioMessage::SetCatalog(new_catalog)) => {
+                crate::logging::info(format!(
+                    "[startup] 音频线程收到目录更新（{} 条），开始重建宿主（进程入口 +{} ms）",
+                    new_catalog.len(),
+                    crate::boot_ms()
+                ));
                 catalog = new_catalog;
                 // 重建前后尽量保持听感连续：记住位置与播放状态。
                 let was_playing = shared.is_playing();
@@ -710,6 +746,13 @@ fn run_audio_thread(
                 stall_backoff = 0;
             }
             Ok(AudioMessage::Load(project)) => {
+                // 只在启动窗口内记一行；之后每次编辑都会装载工程，不能刷日志。
+                if crate::boot_ms() < 20_000 {
+                    crate::logging::info(format!(
+                        "[startup] 音频线程收到工程装载，开始重建宿主（进程入口 +{} ms）",
+                        crate::boot_ms()
+                    ));
+                }
                 current = Some((*project).clone());
                 let was_playing = shared.is_playing();
                 let frame = shared.position_frames();

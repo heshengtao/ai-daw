@@ -8,6 +8,7 @@
 
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ai_daw_host_vst3::MainThreadDispatch;
 use tauri::AppHandle;
@@ -32,12 +33,14 @@ impl TauriMainThread {
 
 impl MainThreadDispatch for TauriMainThread {
     fn dispatch(&self, task: Box<dyn FnOnce() + Send + 'static>) -> bool {
+        let started = std::time::Instant::now();
         let (tx, rx) = mpsc::channel();
         let handed = self
             .app
             .run_on_main_thread(move || {
+                let began = std::time::Instant::now();
                 task();
-                let _ = tx.send(());
+                let _ = tx.send(began.elapsed());
             })
             .is_ok();
         if !handed {
@@ -45,6 +48,17 @@ impl MainThreadDispatch for TauriMainThread {
             return false;
         }
         // 阻塞等主线程跑完——调用方（音频控制线程 / 渲染池线程）本来就不是实时线程。
-        rx.recv().is_ok()
+        let task_time = rx.recv().ok();
+        let waited = started.elapsed();
+        // 主线程忙时这里会明显变长：启动期的「等主线程」几乎都是这一步。
+        if waited > Duration::from_millis(150) {
+            crate::logging::info(format!(
+                "[startup] 主线程派发等待 {} ms（任务本身 {} ms，进程入口 +{} ms）",
+                waited.as_millis(),
+                task_time.map(|t| t.as_millis()).unwrap_or(0),
+                crate::boot_ms()
+            ));
+        }
+        task_time.is_some()
     }
 }

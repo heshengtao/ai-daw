@@ -288,9 +288,19 @@ static SYNTH_STRINGS_2_FONT: OnceLock<Option<Arc<SoundFont>>> = OnceLock::new();
 
 fn load_font(kind: Kind) -> Option<Arc<SoundFont>> {
     let asset = kind.asset();
+    let at = std::time::Instant::now();
     let mut cursor = Cursor::new(asset.bytes());
     match SoundFont::new(&mut cursor) {
-        Ok(font) => Some(Arc::new(font)),
+        Ok(font) => {
+            // SF3 的采样是 Ogg Vorbis，**第一次用到**才在这里解成 PCM。冷启动时这几行
+            // 就是「采样乐器要等几秒才出声」的耗时来源；debug 构建尤其明显。
+            eprintln!(
+                "[instruments] {} 解码完成，用时 {} ms",
+                kind.id(),
+                at.elapsed().as_millis()
+            );
+            Some(Arc::new(font))
+        }
         Err(err) => {
             // 资产是编译期内嵌的；走到这里说明构建产物坏了。不要 panic：
             // 返回 None，轨道静音，但工程仍能打开。
