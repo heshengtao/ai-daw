@@ -254,11 +254,16 @@ pub fn model_remove(app: AppHandle, id: String) -> Result<(), String> {
 #[tauri::command]
 pub fn model_reveal(app: AppHandle, id: String) -> Result<(), String> {
     let entry = catalog::by_id(&id).ok_or_else(|| format!("未知模型：{id}"))?;
-    // 组条目：整组是一个目录，reveal 目录本身（挑单个文件反而看不全）。
-    let target = match entry.dir {
-        Some(_) => entry_dir_path(&app, entry)?,
+    // 权重不一定躺在下载目录里：随包的在资源目录、开发时可能在仓库 `models/`、
+    // 也可能被 `AIDAW_MODELS` 指到别处。`installed_path` 会在全部搜索路径里找，
+    // 所以**已就位时一律以它为准**——按下载落点算会出现「路径不存在 → open -R 静默失败」。
+    let target = match catalog::installed_path(entry) {
+        Some(path) => path,
+        // 没就位：退回落点目录（缺失就建出来，至少能看见「该往哪儿放」）。
         None => {
-            catalog::installed_path(entry).unwrap_or_else(|| models_dir(&app).unwrap_or_default())
+            let dir = entry_dir_path(&app, entry)?;
+            fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            dir
         }
     };
     reveal_in_file_manager(&target)
@@ -551,10 +556,14 @@ fn finish(app: &AppHandle, entry: &ModelEntry, result: Result<(), String>) {
 }
 
 /// 在系统文件管理器里定位一个文件（沿用它所在平台的原生命令）。
+///
+/// 命令是**等它跑完并检查退出码**的：`open` / `explorer` 找不到路径时只会在 stderr 里
+/// 抱怨、退出码非 0，以前 `spawn()` 完就不管，界面就会「点了没反应」。
 fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut c = std::process::Command::new("open");
+        // `-R` 在访达里选中它（对目录 = 在其父目录里选中该目录）。
         c.arg("-R").arg(path);
         c
     };
@@ -567,13 +576,23 @@ fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), String> {
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut command = {
         // Linux：没有统一「选中文件」接口，直接打开所在目录。
-        let dir = path.parent().unwrap_or(path);
+        let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
         let mut c = std::process::Command::new("xdg-open");
         c.arg(dir);
         c
     };
-    command.spawn().map_err(|e| e.to_string())?;
-    Ok(())
+    let output = command
+        .output()
+        .map_err(|e| format!("启动文件管理器失败（{}）：{e}", path.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(if stderr.is_empty() {
+        format!("文件管理器打不开：{}", path.display())
+    } else {
+        format!("文件管理器打不开：{stderr}")
+    })
 }
 
 #[cfg(test)]
