@@ -928,6 +928,7 @@ mod tests {
                 volume: 127,
                 offset: 0.0,
                 legato: false,
+                lyric: None,
             }],
             audio: None,
         });

@@ -133,6 +133,38 @@ pub(crate) struct DetectTempoArgs {
     track: u64,
 }
 
+/// 歌声合成：指定 MIDI 轨 / 片段 + 歌词 + 参考音色。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SingSongArgs {
+    /// MIDI 轨道 id（用它的第一个带音符的片段）。
+    track: u64,
+    /// 指定片段 id；省略 = 这条轨上第一个有音符的 MIDI 片段。
+    #[serde(default)]
+    clip: Option<u64>,
+    /// 整串歌词：一字一音（中文汉字），`-` 表示连音，标点/空格跳过；歌词不够时多出的音沿用前一字。
+    /// 音符自己的 `lyric` 优先于这里（逐音改词后不会被整串歌词覆盖）。
+    #[serde(default)]
+    lyrics: String,
+    /// 参考音色：音频文件路径（与 `reference_track` 二选一）。
+    #[serde(default)]
+    reference: Option<String>,
+    /// 参考音色：用这条轨道的第一个音频片段。
+    #[serde(default)]
+    reference_track: Option<u64>,
+    /// 参考音色：人声音色库条目 id（`list_voices` 返回；优先级最高）。
+    #[serde(default)]
+    reference_voice: Option<String>,
+    /// 采样步数（缺省 32；16 更快、质量略降）。
+    #[serde(default)]
+    steps: Option<u32>,
+    /// 噪声种子（同输入 + 同种子 = 同一条输出）。
+    #[serde(default)]
+    seed: Option<u64>,
+    /// 新轨道名（缺省 `<源轨名> · 歌声`）。
+    #[serde(default)]
+    name: Option<String>,
+}
+
 /// 降噪：`mode` 决定走语音模型还是内置 DSP。
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct EnhanceArgs {
@@ -154,6 +186,49 @@ pub(crate) struct RecordStartArgs {
     /// 输入设备名（缺省 = 系统默认设备）。
     #[serde(default)]
     device: Option<String>,
+}
+
+/// 人声音色库：保存一条参考声线。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SaveVoiceArgs {
+    /// 展示名（缺省用轨道名 / 文件名）。
+    #[serde(default)]
+    name: Option<String>,
+    /// 工程内音频轨 id（取它的第一段音频）。
+    #[serde(default)]
+    track: Option<u64>,
+    /// 音频文件路径（与 `track` 二选一）。
+    #[serde(default)]
+    path: Option<String>,
+    /// 一句话描述。
+    #[serde(default)]
+    description: Option<String>,
+    /// 标签（「男声」「气声」…）。
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+/// 人声音色库：按 id 操作。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct VoiceIdArgs {
+    /// 音色 id（`list_voices` 返回）。
+    id: String,
+}
+
+/// 人声音色库：改元数据。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct UpdateVoiceArgs {
+    /// 音色 id。
+    id: String,
+    /// 新名字；缺省 = 不改。
+    #[serde(default)]
+    name: Option<String>,
+    /// 新描述；缺省 = 不改。
+    #[serde(default)]
+    description: Option<String>,
+    /// 新标签（整体替换）；缺省 = 不改。
+    #[serde(default)]
+    tags: Option<Vec<String>>,
 }
 
 /// 选择 / 关闭输入设备。
@@ -450,6 +525,9 @@ pub(crate) struct NoteArgs {
     /// 音高表达（推弦 / 揉弦 / 滑音）；缺省 = 无。
     #[serde(default)]
     expr: Option<ExprArg>,
+    /// 歌词音节（歌声合成用）：一个汉字（可带 `1..5` 强制声调）或 `-`（连音）。
+    #[serde(default)]
+    lyric: Option<String>,
     /// 放置吸附：`off`（缺省，原样写入）/ `bar` / `1/4` / `1/8` / `1/16` / `1/12` / `1/24` / `1/32`。
     /// **只吸起点**。
     #[serde(default)]
@@ -997,6 +1075,9 @@ pub(crate) struct NoteInput {
     /// 音高表达（推弦 / 揉弦 / 滑音）；缺省 = 无。
     #[serde(default)]
     expr: Option<ExprArg>,
+    /// 歌词音节（歌声合成用）：一个汉字（可带 `1..5` 强制声调）或 `-`（连音）。
+    #[serde(default)]
+    lyric: Option<String>,
 }
 
 fn default_velocity() -> u8 {
@@ -1025,6 +1106,7 @@ impl NoteInput {
                 .as_ref()
                 .map(ExprArg::to_expr)
                 .unwrap_or(PitchExpression::NONE),
+            lyric: self.lyric.clone(),
         }
     }
 }
@@ -1140,6 +1222,7 @@ impl NotePatchInput {
             channel: self.channel,
             pressure: self.pressure,
             expr: self.expr.as_ref().map(ExprArg::to_expr),
+            lyric: None,
         }
     }
 }
@@ -3228,6 +3311,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
                 .as_ref()
                 .map(ExprArg::to_expr)
                 .unwrap_or(PitchExpression::NONE),
+            lyric: args.lyric.clone(),
         };
         snap_note_starts(
             &project,
@@ -3243,7 +3327,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             Command::AddNote {
                 track: TrackId(args.track),
                 clip: ClipId(args.clip),
-                note,
+                note: note.clone(),
             },
         );
         let summary = clip_summary(&project, args.track, args.clip)?;
@@ -5253,6 +5337,87 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         crate::ai::detect_tempo_track(app, args.track)
     }
 
+    /// 人声音色库：列出全部条目。
+    pub(crate) fn list_voices(app: &AppHandle) -> Result<String, String> {
+        let list = crate::voices::voice_list(app.state());
+        Ok(serde_json::to_string(&list).unwrap_or_else(|_| "[]".into()))
+    }
+
+    /// 人声音色库：把一条参考声线存下来（跨工程复用）。
+    pub(crate) fn save_voice(app: &AppHandle, args: SaveVoiceArgs) -> Result<String, String> {
+        if args.track.is_none() && args.path.is_none() {
+            return Err("需要 track（工程内音频轨）或 path（音频文件）之一".into());
+        }
+        let request = crate::voices::VoiceSaveArgs {
+            name: args.name,
+            description: args.description,
+            tags: args.tags,
+            track: args.track,
+            path: args.path,
+        };
+        let entry = crate::voices::voice_save(app.clone(), app.state(), request)?;
+        Ok(format!(
+            "已存入人声音色库「{}」：{} 秒（id {}）。之后用 sing_song 的 reference_voice 引用它。",
+            entry.name,
+            entry.seconds.round(),
+            entry.id
+        ))
+    }
+
+    /// 人声音色库：改名字 / 描述 / 标签。
+    pub(crate) fn update_voice(app: &AppHandle, args: UpdateVoiceArgs) -> Result<String, String> {
+        let entry = crate::voices::voice_update(
+            app.state(),
+            args.id,
+            args.name,
+            args.description,
+            args.tags,
+        )?;
+        Ok(format!("已更新人声音色「{}」", entry.name))
+    }
+
+    /// 人声音色库：删除。
+    pub(crate) fn delete_voice(app: &AppHandle, args: VoiceIdArgs) -> Result<String, String> {
+        crate::voices::voice_delete(app.state(), args.id.clone())?;
+        Ok(format!("已删除人声音色 {}", args.id))
+    }
+
+    /// 歌声合成：MIDI + 歌词 + 参考音色 → 新音频轨（一次事务）。
+    pub(crate) fn sing_song(app: &AppHandle, args: SingSongArgs) -> Result<String, String> {
+        if !crate::singing::model_ready() {
+            return Err(
+                "未安装歌声合成模型（SoulX-Singer，约 1.4 GB）。请先在「管理器 → 模型」下载 soulx-singer-fp16。"
+                    .into(),
+            );
+        }
+        // 参考音色是 zero-shot 音色的唯一来源：没有它模型只能给一段噪声感的「中性」声音。
+        // 界面上也是必填，这里提前挡住，别让代理以为随便就能出人声。
+        let has_reference = args.reference.is_some()
+            || args.reference_track.is_some()
+            || args
+                .reference_voice
+                .as_deref()
+                .is_some_and(|id| !id.is_empty());
+        if !has_reference {
+            return Err(
+                "需要参考声线：用 `reference_voice`（音色库 id）、`reference_track`（某轨第一段音频）或 `reference`（音频文件路径）；3–10 秒人声最佳。"
+                    .into(),
+            );
+        }
+        let request = crate::singing::SingArgs {
+            track: args.track,
+            clip: args.clip,
+            lyrics: args.lyrics,
+            reference: args.reference,
+            reference_track: args.reference_track,
+            reference_voice: args.reference_voice,
+            steps: args.steps,
+            seed: args.seed,
+            name: args.name,
+        };
+        crate::singing::render_blocking(app, &request)
+    }
+
     pub(crate) fn transcribe_audio(app: &AppHandle, args: TrackArgs) -> Result<String, String> {
         crate::ai::transcribe_track(app, args.track)
     }
@@ -5771,6 +5936,11 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("master_project", "对整个工程做一次母带处理（响度归一 + 真峰值限幅 + 立体声宽度），把结果写成 WAV 文件；返回处理前后的响度与真峰值，以及写入路径。", MasterExportArgs),
             tool_def!("separate_stems", "音源分离：把指定轨道的第一段音频拆成多条分轨，插到源轨道下面（一次事务，可整体撤销）。`model` 缺省为 4 分轨的 `htdemucs-ort-v1`；`htdemucs-6s` 出 6 分轨（+吉他/钢琴）。需要已安装对应模型（在「管理器 → 可下载」下载）。", SeparateArgs),
             tool_def!("detect_tempo", "节拍检测：对指定轨道的第一段音频跑 Beat This!，推出单一全局 BPM + 拍号写入工程，并把该片段对齐到小节线。需要已安装 Beat This! 模型。", DetectTempoArgs),
+            tool_def!("list_voices", "人声音色库：列出全部条目（id / 名字 / 描述 / 标签 / 时长）。唱歌前先看这里有没有现成声线。"),
+            tool_def!("save_voice", "人声音色库：把一条参考声线存下来（`track` 取工程内音频轨的第一段，或 `path` 给音频文件）。存成**单声道 24 kHz**，跨工程可用；之后 `sing_song` 用 `reference_voice` 直接引用。", SaveVoiceArgs),
+            tool_def!("update_voice", "人声音色库：改名字 / 描述 / 标签（不动音频）。", UpdateVoiceArgs),
+            tool_def!("delete_voice", "人声音色库：删除一条（连音频一起删）。", VoiceIdArgs),
+            tool_def!("sing_song", "歌声合成（SoulX-Singer ONNX）：把一条 MIDI 轨的旋律 + 一行歌词 + 一条参考声线渲染成**新音频轨**（插在源轨下面，一次撤销可整体去掉）。歌词可以逐音写在音符的 `lyric` 上（优先级更高），也可以用 `lyrics` 整串给（一字一音，`-` 连音，标点跳过，不够时沿用前一字）。参考音色用 `reference`（音频文件）或 `reference_track`（某轨的第一段音频）；换音色 = 换参考重渲染。需要已安装 SoulX-Singer 模型（约 1.4 GB，管理器 → 模型）。渲染是离线的：10 秒歌声在 CPU 上约 2–4 分钟（16 步约一半）。", SingSongArgs),
             tool_def!("transcribe_audio", "音频转 MIDI：对指定轨道的第一段音频做音高检测（有 Basic Pitch 模型就用，否则内置 DSP），把结果写成**源轨道下面的新 MIDI 轨**（一次撤销）。", TrackArgs),
             tool_def!("enhance_audio", "降噪：对指定轨道的第一段音频降噪，把结果写成**源轨道下面的新音频轨**（原轨不动，便于 A/B）。`mode=voice`（缺省，人声/去混响，优先 LocalVQE 模型）或 `mode=music`（乐器底噪，内置 DSP）。", EnhanceArgs),
             tool_def!("import_audio", "把本机的一个音频文件导入成音频片段（wav/flac/mp3/ogg/m4a）；返回新片段 id。", ImportAudioArgs),
@@ -5906,6 +6076,11 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             "master_project" => master_project(app, parse_args(args)?),
             "separate_stems" => separate_stems(app, parse_args(args)?),
             "detect_tempo" => detect_tempo(app, parse_args(args)?),
+            "sing_song" => sing_song(app, parse_args(args)?),
+            "list_voices" => list_voices(app),
+            "save_voice" => save_voice(app, parse_args(args)?),
+            "update_voice" => update_voice(app, parse_args(args)?),
+            "delete_voice" => delete_voice(app, parse_args(args)?),
             "transcribe_audio" => transcribe_audio(app, parse_args(args)?),
             "enhance_audio" => enhance_audio(app, parse_args(args)?),
             "import_audio" => import_audio(app, actor, parse_args(args)?),
@@ -6816,6 +6991,51 @@ impl DawMcpServer {
             .map_err(fail)
     }
 
+    #[tool(description = "人声音色库：列出全部条目（id / 名字 / 描述 / 标签 / 时长）。")]
+    async fn list_voices(&self) -> Result<String, ErrorData> {
+        tools::list_voices(&self.app).map_err(fail)
+    }
+
+    #[tool(
+        description = "人声音色库：把一条参考声线存下来（`track` 取工程内音频轨的第一段，或 `path` 给音频文件）。存成**单声道 24 kHz**，跨工程可用；之后 `sing_song` 用 `reference_voice` 直接引用。"
+    )]
+    async fn save_voice(
+        &self,
+        Parameters(args): Parameters<SaveVoiceArgs>,
+    ) -> Result<String, ErrorData> {
+        tools::save_voice(&self.app, args).map_err(fail)
+    }
+
+    #[tool(description = "人声音色库：改名字 / 描述 / 标签（不动音频）。")]
+    async fn update_voice(
+        &self,
+        Parameters(args): Parameters<UpdateVoiceArgs>,
+    ) -> Result<String, ErrorData> {
+        tools::update_voice(&self.app, args).map_err(fail)
+    }
+
+    #[tool(description = "人声音色库：删除一条（连音频一起删）。")]
+    async fn delete_voice(
+        &self,
+        Parameters(args): Parameters<VoiceIdArgs>,
+    ) -> Result<String, ErrorData> {
+        tools::delete_voice(&self.app, args).map_err(fail)
+    }
+
+    #[tool(
+        description = "歌声合成（SoulX-Singer ONNX）：把一条 MIDI 轨的旋律 + 一行歌词 + 一条参考声线渲染成**新音频轨**（插在源轨下面，一次撤销可整体去掉）。歌词可以逐音写在音符的 `lyric` 上（优先级更高），也可以用 `lyrics` 整串给（一字一音，`-` 连音，标点跳过，不够时沿用前一字）。参考音色用 `reference`（音频文件）或 `reference_track`（某轨的第一段音频）；换音色 = 换参考重渲染。需要已安装 SoulX-Singer 模型（约 1.4 GB）。渲染是离线的：10 秒歌声在 CPU 上约 2–4 分钟（16 步约一半）。"
+    )]
+    async fn sing_song(
+        &self,
+        Parameters(args): Parameters<SingSongArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::sing_song(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
     #[tool(
         description = "音频转 MIDI：对指定轨道的第一段音频做音高检测（有 Basic Pitch 模型就用，否则内置 DSP），把结果写成**源轨道下面的新 MIDI 轨**（一次撤销）。"
     )]
@@ -7304,6 +7524,7 @@ mod tests {
 
         let summary = |id: &str, name: &str, tags: &[&str], inst: &str, effects: &[&str]| {
             SoundMemorySummary {
+                voice: None,
                 id: id.into(),
                 name: name.into(),
                 description: format!("{name} description"),
@@ -7505,6 +7726,11 @@ mod tests {
             "master_project",
             "separate_stems",
             "detect_tempo",
+            "sing_song",
+            "list_voices",
+            "save_voice",
+            "update_voice",
+            "delete_voice",
             "transcribe_audio",
             "enhance_audio",
             "import_audio",
@@ -7906,6 +8132,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: PitchExpression::NONE,
+            lyric: None,
         }
     }
 

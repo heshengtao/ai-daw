@@ -94,6 +94,7 @@ fn schedule() -> ScheduledEvents {
                     vibrato_rate: 5.5,
                     ..ai_daw_engine::model::PitchExpression::NONE
                 },
+                lyric: None,
             }],
             audio: None,
         }],

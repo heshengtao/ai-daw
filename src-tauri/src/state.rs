@@ -92,6 +92,8 @@ pub struct AppState {
     audio_started: AtomicBool,
     /// 本地 AI 任务（后台线程 + 进度 + 取消）。
     pub ai: AiRuntime,
+    /// 歌声合成任务（独立的进度 / 取消；模型是另一组权重，不该和 AI 面板抢一个槽位）。
+    pub singing: crate::singing::SingingRuntime,
 }
 
 impl AppState {
@@ -184,6 +186,7 @@ impl AppState {
             recording: Mutex::new(None),
             audio_started: AtomicBool::new(start_audio),
             ai: AiRuntime::new(),
+            singing: crate::singing::SingingRuntime::new(),
         }
     }
 
@@ -229,7 +232,15 @@ impl AppState {
 
     /// 装上音色记忆文件（启动时由 `setup` 调用；拿不到配置目录时只活在内存里）。
     pub fn init_sound_memories(&self, path: Option<PathBuf>) {
-        *self.sound_memories.lock().unwrap() = SoundMemoryStore::load(path);
+        let mut store = SoundMemoryStore::load(path);
+        // 老版本可能把整首歌存成了人声参考：启动时就地裁成 10 秒（幂等）。
+        let trimmed = store.trim_long_voices(12.0);
+        if trimmed > 0 {
+            crate::logging::info(format!(
+                "[sound-memories] 已把 {trimmed} 条过长的人声参考裁成 10 秒"
+            ));
+        }
+        *self.sound_memories.lock().unwrap() = store;
     }
 
     /// 安装（或更新）插件目录：写入共享状态，内容真的变了才让音频线程重建注册表。

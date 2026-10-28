@@ -47,6 +47,12 @@ export interface Note {
   pressure?: number;
   /** 音高表达（推弦 / 揉弦 / 滑音）；缺省 = 无。 */
   expr?: PitchExpression;
+  /**
+   * **歌词音节**（歌声合成用）：一个汉字（可带 `1..5` 强制声调）或 `-`（连音）。
+   *
+   * 缺省 = 这个音没有逐音歌词：歌声合成会退回「整串歌词按顺序贴」的分配方式。
+   */
+  lyric?: string;
 }
 
 /** 按 id 定位的音符改写项：只带要改的字段。 */
@@ -66,6 +72,8 @@ export interface NotePatch {
   pressure?: number;
   /** 音高表达；给了就整体替换，`{}` = 清除。 */
   expr?: PitchExpression;
+  /** 新的歌词音节；空字符串 = 清除该音的音节。缺省 = 保持原值。 */
+  lyric?: string;
 }
 
 /** 片段内拍范围（左闭右开）：批量变换只作用于起点落在其中的音符。 */
@@ -694,8 +702,24 @@ export interface SoundMemorySummary {
   effect_plugin_ids: string[];
   mixer: SoundMixer;
   source_project: string | null;
+  /** 人声参考；`null` = 普通乐器 / 效果链音色。 */
+  voice: VoiceAsset | null;
   created_at: number;
   updated_at: number;
+}
+
+/** 人声参考素材（音色记忆的 `voice` 字段）。 */
+export interface VoiceAsset {
+  /** WAV 绝对路径。 */
+  path: string;
+  /** 时长（秒）。 */
+  seconds: number;
+  /** 采样率（固定 24000）。 */
+  sample_rate: number;
+  /** 帧数。 */
+  frames: number;
+  /** 这段参考取自原音频的第几秒（自动裁剪的起点）。 */
+  offset_seconds?: number;
 }
 
 /** 一条完整的音色记忆。 */
@@ -709,6 +733,8 @@ export interface SoundMemory {
   effects: PluginSnapshot[];
   mixer: SoundMixer;
   source_project: string | null;
+  /** 人声参考；`null` = 普通乐器 / 效果链音色。 */
+  voice: VoiceAsset | null;
   created_at: number;
   updated_at: number;
 }
@@ -852,6 +878,89 @@ export interface AiModels {
   separate: boolean;
   /** Beat This!（节拍 / 速度检测）权重是否就位。 */
   beat_this: boolean;
+}
+
+/** 人声音色库条目（与后端 `voices::VoiceEntry` 一一对应）。 */
+export interface VoiceEntry {
+  /** 稳定 id（`v-…`）。 */
+  id: string;
+  /** 展示名。 */
+  name: string;
+  /** 一句话描述。 */
+  description: string;
+  /** 标签。 */
+  tags: string[];
+  /** 时长（秒）。 */
+  seconds: number;
+  /** 采样率（固定 24000）。 */
+  sample_rate: number;
+  /** 帧数。 */
+  frames: number;
+  /** 创建时间（Unix 毫秒）。 */
+  created_at: number;
+  /** 这段参考取自原音频的第几秒（自动裁剪的起点）。 */
+  offset_seconds: number;
+}
+
+/** 保存人声音色：工程内轨道或音频文件二选一，外加名字 / 描述 / 标签。 */
+export interface VoiceSaveArgs {
+  /** 展示名（缺省用轨道名 / 文件名）。 */
+  name?: string | null;
+  /** 一句话描述。 */
+  description?: string | null;
+  /** 标签。 */
+  tags?: string[];
+  /** 工程内音频轨 id。 */
+  track?: number | null;
+  /** 音频文件路径。 */
+  path?: string | null;
+}
+
+/** 歌声合成任务状态（与后端 `singing::SingingStatus` 一一对应）。 */
+export interface SingingStatus {
+  /** 是否正在合成。 */
+  running: boolean;
+  /** 进度（0..1）。模型加载占前 25%，之后按区段推进。 */
+  progress: number;
+  /** 结束后的摘要或错误。 */
+  message: string | null;
+}
+
+/** 歌声合成的模型状态（9 张 ONNX 图整组）。 */
+export interface SingingModels {
+  /** 整组权重是否齐备。 */
+  installed: boolean;
+  /** 模型目录；未安装时为 null。 */
+  dir: string | null;
+  /** 需要下载的字节数。 */
+  approx_bytes: number;
+}
+
+/**
+ * 歌声合成参数（与后端 `singing::SingArgs` 一一对应）。
+ *
+ * 歌词规则：中文汉字一字一音，`-` 连音，标点与空格跳过；歌词比音符少时，
+ * 多出来的音沿用前一个音节。
+ */
+export interface SingingArgs {
+  /** MIDI 轨道 id（用它的第一个带音符的片段）。 */
+  track: number;
+  /** 指定片段 id；省略 = 第一个有音符的 MIDI 片段。 */
+  clip?: number | null;
+  /** 整串歌词（可省略：音符自己的 `lyric` 优先，没填的音才用这串文字按顺序补）。 */
+  lyrics?: string;
+  /** 参考音色：音频文件路径。 */
+  reference?: string | null;
+  /** 参考音色：用这条轨道的第一个音频片段。 */
+  reference_track?: number | null;
+  /** 参考音色：人声音色库 id（优先级最高）。 */
+  reference_voice?: string | null;
+  /** 采样步数（缺省 32）。 */
+  steps?: number | null;
+  /** 噪声种子（缺省 0）。 */
+  seed?: number | null;
+  /** 新轨道名。 */
+  name?: string | null;
 }
 
 /**

@@ -6,6 +6,9 @@ license.workspace = true
 
 [dependencies]
 ort = "2.0.0-rc.13"
+# 半精度张量：fp16 导出的 9 张图（歌声合成）在边界上要 f16 ↔ f32 转换。
+# 只是 API 层，不改变 `ort` 下载的预编译二进制，因此不影响各平台的零下载回落。
+half = "2"
 # 频谱：窗函数 + FFT（与 `crates/analysis` 同一个库，MIT OR Apache-2.0）。
 rustfft = "6"
 # 节拍 / 重拍检测：Beat This!（ISMIR 2024，MIT）的 Rust 移植。默认后端 `rten`
@@ -23,9 +26,9 @@ beat-this = { version = "1", default-features = false }
 # 但 resolve 要求特性集**精确匹配**（symmetric difference == 0），在缺少对应构建的平台上开
 # 会构建失败，所以不能无条件写进 [dependencies]。
 [target.'cfg(target_os = "macos")'.dependencies]
-ort = { version = "2.0.0-rc.13", features = ["coreml"] }
+ort = { version = "2.0.0-rc.13", features = ["coreml", "half"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-ort = { version = "2.0.0-rc.13", features = ["directml"] }
+ort = { version = "2.0.0-rc.13", features = ["directml", "half"] }
 
 [dev-dependencies]

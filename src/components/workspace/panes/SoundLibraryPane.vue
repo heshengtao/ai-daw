@@ -4,7 +4,7 @@
  *
  * 保存入口不在这里——用户让 AI「记住这个音色」时才写入；本面板只做查看与清理。
  */
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   BookmarkSquareIcon,
   PencilSquareIcon,
@@ -50,6 +50,26 @@ function dateLabel(ms: number): string {
   return new Date(ms).toLocaleDateString();
 }
 
+/** 保留标签 `vocal` 在界面上按当前语言显示（筛选仍用原始值）。 */
+function tagLabel(tag: string): string {
+  return tag === "vocal" ? t("sounds.voiceTag") : tag;
+}
+
+/** 这条记忆是不是人声参考（没有乐器 / 效果链，只有一段 WAV）。 */
+function isVoice(memory: SoundMemorySummary): boolean {
+  return Boolean(memory.voice);
+}
+
+/** 人声条目只显示时长（以及自动裁剪的起点），不显示乐器链。 */
+function voiceLabel(memory: SoundMemorySummary): string {
+  const base = t("sounds.voiceMeta", { seconds: Math.round(memory.voice?.seconds ?? 0) });
+  const offset = memory.voice?.offset_seconds ?? 0;
+  if (offset < 1) return base;
+  const mm = Math.floor(offset / 60);
+  const ss = String(Math.round(offset % 60)).padStart(2, "0");
+  return `${base} · ${t("sounds.voiceFrom", { time: `${mm}:${ss}` })}`;
+}
+
 async function apply(memory: SoundMemorySummary): Promise<void> {
   const target = track.value;
   if (!target) {
@@ -65,6 +85,12 @@ async function apply(memory: SoundMemorySummary): Promise<void> {
   } finally {
     busyId.value = null;
   }
+}
+
+/** 在音色库里把人声直接选作歌声参考：切到 AI 面板，并带过去这条 id。 */
+function useVoice(memory: SoundMemorySummary): void {
+  sounds.pickVoice(memory.id);
+  layout.openTab("ai");
 }
 
 function startEdit(memory: SoundMemorySummary): void {
@@ -107,6 +133,14 @@ async function remove(memory: SoundMemorySummary): Promise<void> {
   }
 }
 
+// 切换「乐器 / 人声」时清掉上一类的标签过滤，免得列表被一个不存在的标签筛空。
+watch(
+  () => sounds.kind,
+  () => {
+    sounds.activeTag = "";
+  },
+);
+
 onMounted(() => {
   void sounds.refresh();
   stop = sounds.watchChanges();
@@ -121,6 +155,29 @@ onUnmounted(() => stop?.());
       <div class="head-text">
         <h2>{{ t("sounds.title") }}</h2>
         <p>{{ t("sounds.count", { count: sounds.filtered.length }) }}</p>
+      </div>
+      <!-- 乐器 / 人声二选一：同一个库，两套东西 -->
+      <div class="kind-switch" role="tablist" :aria-label="t('sounds.kindLabel')">
+        <button
+          class="kind-btn"
+          :class="{ on: sounds.kind === 'instrument' }"
+          type="button"
+          role="tab"
+          :aria-selected="sounds.kind === 'instrument'"
+          @click="sounds.kind = 'instrument'"
+        >
+          {{ t("sounds.kindInstrument") }}
+        </button>
+        <button
+          class="kind-btn"
+          :class="{ on: sounds.kind === 'voice' }"
+          type="button"
+          role="tab"
+          :aria-selected="sounds.kind === 'voice'"
+          @click="sounds.kind = 'voice'"
+        >
+          {{ t("sounds.kindVoice") }}
+        </button>
       </div>
     </header>
 
@@ -148,15 +205,17 @@ onUnmounted(() => stop?.());
         :class="{ active: sounds.activeTag === tag }"
         @click="sounds.activeTag = tag"
       >
-        {{ tag }}
+        {{ tagLabel(tag) }}
       </button>
     </div>
 
     <div class="list">
       <div v-if="sounds.loading" class="empty">{{ t("common.loading") }}</div>
       <div v-else-if="sounds.filtered.length === 0" class="empty">
-        <p>{{ t("sounds.emptyTitle") }}</p>
-        <p class="hint">{{ t("sounds.emptyHint") }}</p>
+        <p>{{ t(sounds.kind === "voice" ? "sounds.emptyVoiceTitle" : "sounds.emptyTitle") }}</p>
+        <p class="hint">
+          {{ t(sounds.kind === "voice" ? "sounds.emptyVoiceHint" : "sounds.emptyHint") }}
+        </p>
       </div>
 
       <article v-for="memory in sounds.filtered" :key="memory.id" class="card">
@@ -188,6 +247,57 @@ onUnmounted(() => stop?.());
           </div>
         </template>
 
+        <template v-else-if="isVoice(memory)">
+          <!-- 与乐器卡片同一副骨架：标题行 + 元信息 + 标签 + 页脚 + 操作行，只是元信息换成
+               「人声参考 · N 秒」。不另起一套头像/底色，免得两边风格分裂。 -->
+          <div class="card-head">
+            <h3>{{ memory.name }}</h3>
+          </div>
+          <p v-if="memory.description" class="desc">{{ memory.description }}</p>
+          <p class="meta">{{ voiceLabel(memory) }}</p>
+          <div v-if="memory.tags.length" class="tag-row">
+            <button
+              v-for="tag in memory.tags"
+              :key="tag"
+              class="pill"
+              type="button"
+              :title="t('sounds.filterByTag')"
+              @click="sounds.activeTag = tag"
+            >
+              {{ tagLabel(tag) }}
+            </button>
+          </div>
+          <p class="foot">
+            <span>
+              {{ t("sounds.savedAt", { date: dateLabel(memory.updated_at || memory.created_at) }) }}
+            </span>
+          </p>
+          <div class="actions">
+            <button class="btn primary" type="button" @click="useVoice(memory)">
+              {{ t("sounds.useVoice") }}
+            </button>
+            <button class="icon-btn" :title="t('sounds.edit')" @click="startEdit(memory)">
+              <PencilSquareIcon />
+            </button>
+            <button
+              v-if="confirmingId !== memory.id"
+              class="icon-btn"
+              :title="t('sounds.delete')"
+              @click="confirmingId = memory.id"
+            >
+              <TrashIcon />
+            </button>
+            <button
+              v-else
+              class="btn danger"
+              :disabled="busyId === memory.id"
+              @click="remove(memory)"
+            >
+              {{ t("sounds.deleteConfirm") }}
+            </button>
+          </div>
+        </template>
+
         <template v-else>
           <div class="card-head">
             <h3>{{ memory.name }}</h3>
@@ -207,7 +317,16 @@ onUnmounted(() => stop?.());
             }}
           </p>
           <div v-if="memory.tags.length" class="tag-row">
-            <span v-for="tag in memory.tags" :key="tag" class="pill">{{ tag }}</span>
+            <button
+              v-for="tag in memory.tags"
+              :key="tag"
+              class="pill"
+              type="button"
+              :title="t('sounds.filterByTag')"
+              @click="sounds.activeTag = tag"
+            >
+              {{ tagLabel(tag) }}
+            </button>
           </div>
           <p class="foot">
             <span>
@@ -281,6 +400,29 @@ onUnmounted(() => stop?.());
   font-size: 11px;
   color: rgb(var(--md-on-surface-variant));
 }
+.kind-switch {
+  margin-left: auto;
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 999px;
+  background-color: rgb(var(--md-surface-container-high) / 0.7);
+}
+.kind-btn {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  color: rgb(var(--md-on-surface-variant));
+  cursor: pointer;
+}
+.kind-btn.on {
+  background-color: rgb(var(--md-primary) / 0.18);
+  color: rgb(var(--md-on-surface));
+  font-weight: 600;
+}
 .toolbar {
   padding: 0 12px 8px;
 }
@@ -295,6 +437,8 @@ onUnmounted(() => stop?.());
 }
 .chip,
 .pill {
+  cursor: pointer;
+  font: inherit;
   border: 1px solid rgb(var(--md-outline-variant) / 0.7);
   border-radius: 999px;
   background: transparent;
@@ -304,6 +448,10 @@ onUnmounted(() => stop?.());
 }
 .chip {
   cursor: pointer;
+}
+.pill:hover {
+  background-color: rgb(var(--md-primary) / 0.12);
+  color: rgb(var(--md-on-surface));
 }
 .chip.active {
   border-color: transparent;
@@ -331,6 +479,8 @@ onUnmounted(() => stop?.());
   opacity: 0.8;
 }
 .card {
+  width: 100%;
+  box-sizing: border-box;
   border: 1px solid rgb(var(--md-outline-variant) / 0.6);
   border-radius: 10px;
   padding: 10px;

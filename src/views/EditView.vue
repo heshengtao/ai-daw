@@ -15,10 +15,11 @@
  * - 左键点击音符 → 选中；Ctrl/Cmd+点击 → 加入 / 移出选择；
  * - Shift/Alt + 左键拖动 → 框选（顶栏的鼠标模式也能切换默认左键行为）；
  * - 分隔模式（顶栏 / 快捷键 3）：左键点击 → 在该拍把当前片段切成两段（razor）；
+ * - 歌词模式（顶栏 / 快捷键 4）：点音符 → 就地输入歌词，Enter 提交并跳到下一个音；
  * - 右键点击音符 → 删除；右键拖动 → 框选批量删除；
  * - Ctrl/Cmd + 滚轮 → 缩放（锚点在指针下，两个视图同步）。
  */
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
@@ -36,8 +37,9 @@ import { capturePointer } from "@/utils/pointer";
 import { shouldDeferToBrowser } from "@/utils/editable";
 import { automationTargetsFor, curateTargets, defaultBoundKeys } from "@/utils/automation";
 import { auditionNote } from "@/api/tauri";
+import { splitLyrics } from "@/utils/lyrics";
 import { useI18n } from "@/i18n";
-import type { AutomationPoint, Note, NoteEdit } from "@/api/types";
+import type { AutomationPoint, Note, NoteEdit, NotePatch } from "@/api/types";
 
 const store = useProjectStore();
 const i18n = useI18n();
@@ -227,6 +229,114 @@ function noteStyle(note: Note): Record<string, string> {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 歌词模式：点音符就地填词
+// ---------------------------------------------------------------------------
+
+/** 正在编辑的音符（内联输入框的位置与草稿）。 */
+const lyricEdit = ref<{
+  id: number;
+  value: string;
+  top: number;
+  left: number;
+  width: number;
+} | null>(null);
+const lyricInput = ref<HTMLInputElement | null>(null);
+
+/** 打开某个音符的内联歌词输入框（`index` 是片段内序号）。 */
+async function openLyricEditor(index: number): Promise<void> {
+  const c = clip.value;
+  if (!c) return;
+  const note = c.notes[index];
+  if (!note || typeof note.id !== "number") return;
+  selection.selectNote(index);
+  lyricEdit.value = {
+    id: note.id,
+    value: note.lyric ?? "",
+    top: (HIGH - note.pitch) * ROW_H,
+    left: (clipStart.value + note.start) * timeline.zoom,
+    width: Math.max(72, note.duration * timeline.zoom),
+  };
+  await nextTick();
+  lyricInput.value?.focus();
+  lyricInput.value?.select();
+}
+
+/** 提交歌词；`advance` = 跳到下一个该填的音符（Enter 的行为）。
+ *
+ * 一个音只唱**一个记号**（汉字 + 可选声调 / 一个英文词）。一次输入了多个记号时，
+ * 第一个留在这个音，剩下的**按起点顺序自动填到后面的音符上**——「一句歌词打进去」是
+ * 最自然的操作。返回/跳转都停在最后一个被填的音符之后。
+ */
+async function commitLyric(advance: boolean): Promise<void> {
+  const edit = lyricEdit.value;
+  lyricEdit.value = null;
+  if (!edit) return;
+  const t = trackId.value;
+  const c0 = clip.value;
+  if (t === null || !c0) return;
+  const clipId = c0.id;
+
+  const tokens = splitLyrics(edit.value);
+  const first = tokens[0] ?? "";
+  const patches: NotePatch[] = [];
+  const before = c0.notes.find((n) => n.id === edit.id);
+  if (before && (before.lyric ?? "") !== first) patches.push({ id: edit.id, lyric: first });
+
+  // 溢出：按起点（同起点按音高）排序，接在当前音后面依次填。
+  let lastFilled = edit.id;
+  if (tokens.length > 1) {
+    const order = [...c0.notes]
+      .filter((n) => typeof n.id === "number")
+      .sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+    const at = order.findIndex((n) => n.id === edit.id);
+    for (let k = 1; k < tokens.length; k += 1) {
+      const target = order[at + k];
+      const targetId = target?.id;
+      if (!target || typeof targetId !== "number") break;
+      lastFilled = targetId;
+      if ((target.lyric ?? "") === tokens[k]) continue;
+      patches.push({ id: targetId, lyric: tokens[k] });
+    }
+  }
+
+  if (patches.length > 0) {
+    try {
+      await store.updateNotes(t, clipId, patches);
+    } catch (err) {
+      layout.notify(i18n.t("error.updateNotes", { error: String(err) }));
+      return;
+    }
+  }
+  if (!advance) return;
+
+  const c = clip.value;
+  if (!c) return;
+  const order = [...c.notes]
+    .filter((n) => typeof n.id === "number")
+    .sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+  const at = order.findIndex((n) => n.id === lastFilled);
+  const nextNote = order[at + 1];
+  if (!nextNote) return;
+  const nextIndex = c.notes.findIndex((n) => n.id === nextNote.id);
+  if (nextIndex >= 0) await openLyricEditor(nextIndex);
+}
+
+// 切走鼠标模式时收起内联输入（避免浮框留在别的工具上）。
+watch(
+  () => layout.tool,
+  (tool) => {
+    if (tool !== "lyric") lyricEdit.value = null;
+  },
+);
+
+/** Enter：输入法组词中的回车不算提交。 */
+function onLyricEnter(e: KeyboardEvent): void {
+  if (e.isComposing) return;
+  e.preventDefault();
+  void commitLyric(true);
+}
+
 /**
  * 音符的悬浮说明：基础信息 + 扫弦偏移 / 连奏（都只在非缺省时才写出来）。
  *
@@ -245,6 +355,7 @@ function noteTitle(note: Note): string {
   if (note.legato) parts.push(i18n.t("edit.noteLegato"));
   if (note.channel != null) parts.push(i18n.t("edit.noteChannel", { n: note.channel + 1 }));
   if (note.pressure != null) parts.push(i18n.t("edit.notePressure", { value: note.pressure }));
+  if (note.lyric) parts.push(i18n.t("edit.noteLyric", { text: note.lyric }));
   const expr = note.expr;
   if (expr) {
     const bits: string[] = [];
@@ -282,6 +393,13 @@ function onNotePointerDown(e: PointerEvent, index: number): void {
   if (e.button !== 0) return;
   e.stopPropagation();
 
+  // 歌词模式：点音符 → 就地输入；不进入拖动。
+  if (layout.tool === "lyric") {
+    e.preventDefault();
+    void openLyricEditor(index);
+    return;
+  }
+
   // 分隔模式：点音符也按「切开片段」处理。
   if (layout.tool === "split") {
     void splitCurrentAt(e.clientX, e.clientY);
@@ -310,7 +428,7 @@ function onNotePointerDown(e: PointerEvent, index: number): void {
 }
 
 function onResizePointerDown(e: PointerEvent, index: number, note: Note): void {
-  if (e.button !== 0) return;
+  if (e.button !== 0 || layout.tool === "lyric") return;
   e.stopPropagation();
   selection.selectNote(index);
   capturePointer(e.currentTarget, e.pointerId);
@@ -338,6 +456,12 @@ function onRollPointerDown(e: PointerEvent): void {
   // 分隔模式：在点击处切分当前片段。
   if (layout.tool === "split") {
     void splitCurrentAt(e.clientX, e.clientY);
+    return;
+  }
+
+  // 歌词模式：点空白 = 收起输入框。
+  if (layout.tool === "lyric") {
+    void commitLyric(false);
     return;
   }
 
@@ -1005,12 +1129,36 @@ onUnmounted(() => {
             @pointerdown="onNotePointerDown($event, i)"
             @contextmenu="onNoteContextMenu($event, i)"
           >
+            <span v-if="noteOf(i, n).lyric" class="note-lyric" aria-hidden="true">
+              {{ noteOf(i, n).lyric }}
+            </span>
             <span
               class="note-handle"
               aria-hidden="true"
               @pointerdown="onResizePointerDown($event, i, n)"
             />
           </div>
+
+          <!-- 歌词模式的内联输入：浮在音符上方，Enter 提交并跳到下一个音 -->
+          <input
+            v-if="lyricEdit"
+            ref="lyricInput"
+            v-model="lyricEdit.value"
+            class="lyric-edit"
+            type="text"
+            maxlength="24"
+            spellcheck="false"
+            :title="i18n.t('edit.lyricInputHint')"
+            :style="{
+              top: `${lyricEdit.top - 6}px`,
+              left: `${lyricEdit.left}px`,
+              width: `${lyricEdit.width}px`,
+            }"
+            @pointerdown.stop
+            @blur="commitLyric(false)"
+            @keydown.enter="onLyricEnter"
+            @keydown.esc.stop="lyricEdit = null"
+          />
 
           <div class="playhead" :style="{ left: `${playheadPx}px` }" />
         </div>
@@ -1238,6 +1386,36 @@ onUnmounted(() => {
 /* 连奏：右边缘画成虚线——表示「这个音的 NoteOff 会一直延到下一个同音高」 */
 .roll-note.legato {
   border-right: 3px dashed rgb(var(--md-surface) / 0.75);
+}
+/* 音符上的歌词：12px 高的音符里塞 9px 字，放不下就截断（完整内容在 tooltip 里）。
+   用 `pointer-events: none` 保证点音符、拖时长的手势都不受影响。 */
+.note-lyric {
+  position: absolute;
+  inset: 0;
+  padding: 0 4px 0 3px;
+  font-size: 9px;
+  line-height: 12px;
+  color: rgb(var(--md-on-primary));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+/* 歌词模式的内联输入框：压在音符上方，带一点阴影好跟网格分开。 */
+.lyric-edit {
+  position: absolute;
+  z-index: 30;
+  height: 22px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: none;
+  border-radius: 7px;
+  outline: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: rgb(var(--md-on-surface));
+  background-color: rgb(var(--md-surface-container-highest));
+  box-shadow: 0 0 0 1px rgb(var(--md-primary)), var(--md-elevation-2);
 }
 /* 右边缘的时长热区 */
 .note-handle {

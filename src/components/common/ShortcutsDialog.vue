@@ -59,6 +59,7 @@ const groups = computed<Group[]>(() => [
       { keys: ["1"], labelKey: "shortcuts.toolDraw" },
       { keys: ["2"], labelKey: "shortcuts.toolSelect" },
       { keys: ["3"], labelKey: "shortcuts.toolSplit" },
+      { keys: ["4"], labelKey: "shortcuts.toolLyric" },
       { keys: [mod, i18n.t("shortcuts.wheel")], labelKey: "shortcuts.zoom" },
       { keys: [mod, shift, "D"], labelKey: "shortcuts.devLog" },
     ],

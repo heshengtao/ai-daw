@@ -30,7 +30,9 @@ pub fn set_backend(kind: BackendKind) {
 
 /// 环境变量覆盖（`AIDAW_BACKEND=cpu|coreml|directml`）；给探针 / 无头排障用。
 fn env_backend() -> Option<BackendKind> {
-    std::env::var("AIDAW_BACKEND").ok().and_then(|v| BackendKind::parse(&v))
+    std::env::var("AIDAW_BACKEND")
+        .ok()
+        .and_then(|v| BackendKind::parse(&v))
 }
 
 /// 当前生效的后端。优先级：`AIDAW_BACKEND` 环境变量 > [`set_backend`] 设的值 > **CPU**。
@@ -62,7 +64,15 @@ pub fn init() -> BackendKind {
     set_backend(resolved);
     detect::warm_in_background();
 
-    eprintln!("[backend] {} / {} → {}", profile.os, profile.arch, resolved.label());
+    // 不要用 `eprintln!`：它写 stderr 失败会 panic（终端/管道被关时启动即崩）。
+    use std::io::Write as _;
+    let _ = writeln!(
+        std::io::stderr(),
+        "[backend] {} / {} → {}",
+        profile.os,
+        profile.arch,
+        resolved.label()
+    );
     resolved
 }
 

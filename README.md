@@ -41,7 +41,7 @@ Being small is a feature, not a compromise.
 
 - **A lightweight footprint** — no Electron, no cloud, no bundled model zoo. The macOS app is about 38 MB — for reference, mainstream DAWs such as Ableton Live, Logic Pro, and FL Studio typically install at 1–3 GB, making AI DAW **95%+ smaller**.
 - **Fast to start** — nothing heavyweight loads at boot; AI models are pulled in only when you use them.
-- **Heavy AI stays where it belongs** — high-compute work such as music generation and timbre transfer is deliberately **not** integrated locally. Your AI harness generates audio, and the result can be imported straight into the DAW for editing, mixing, and mastering.
+- **Big models on demand, never in the installer** — heavy work such as music generation is not integrated by default. **Singing voice** (SoulX-Singer, 1.4 GB) is an opt-in model in Manager → Models: download it when you want it, and it costs no disk until then.
 - **Built to be extended** — interfaces for plugging external AI models into the workflow are on the roadmap.
 
 ## Drive it from any AI harness
@@ -116,6 +116,7 @@ The AI features are built for real sessions, not demos. Point them at a track an
 - **Audio-to-MIDI** — Basic Pitch turns a recorded performance into editable notes
 - **Voice cleanup** — LocalVQE reduces noise and reverb on vocal takes
 - **Stem separation** — HTDemucs v4 splits a track into 4 or 6 stems, ready to remix
+- **Singing voice** — a MIDI melody, lyrics and a reference voice become an editable vocal take (SoulX-Singer zero-shot timbre cloning). Lyrics can be edited per note in the piano roll (`-` slurs), and reference voices live in a **voice library** shared across projects — changing the timbre is just picking another one
 - **Offline by design** — no account, no API key, no uploads
 
 <p align="center">

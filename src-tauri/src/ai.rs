@@ -388,6 +388,7 @@ fn transcribe_input(
             offset: 0.0,
             legato: false,
             expr: ai_daw_engine::model::PitchExpression::NONE,
+            lyric: None,
         })
         .collect();
     let count = notes.len();

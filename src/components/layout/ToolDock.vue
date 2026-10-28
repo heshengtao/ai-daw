@@ -7,7 +7,7 @@
  */
 import { computed } from "vue";
 import { useRoute } from "vue-router";
-import { PaintBrushIcon } from "@heroicons/vue/24/outline";
+import { LanguageIcon, PaintBrushIcon } from "@heroicons/vue/24/outline";
 import Tooltip from "@/components/common/Tooltip.vue";
 import PanelIcon from "@/components/common/PanelIcon.vue";
 import MarqueeIcon from "@/components/common/icons/MarqueeIcon.vue";
@@ -58,6 +58,7 @@ const toolOptions: { id: Tool; icon: unknown; labelKey: string }[] = [
   { id: "draw", icon: PaintBrushIcon, labelKey: "topbar.toolDraw" },
   { id: "select", icon: MarqueeIcon, labelKey: "topbar.toolSelect" },
   { id: "split", icon: SplitIcon, labelKey: "topbar.toolSplit" },
+  { id: "lyric", icon: LanguageIcon, labelKey: "topbar.toolLyric" },
 ];
 </script>
 

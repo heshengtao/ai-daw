@@ -91,3 +91,20 @@ dependency is scoped to those two crates in `deny.toml`. The licence text is ava
 at https://www.gnu.org/licenses/lgpl-3.0.html and in the crate's own source
 distribution.
 --------------------------------------------------------------------------------
+
+SoulX-Singer (https://github.com/Soul-AILab/SoulX-Singer)
+Copyright Soul AI Lab. Licensed under the Apache License, Version 2.0.
+
+The singing-voice feature (`crates/local-ai/src/singing/`) runs an ONNX export of
+the SoulX-Singer zero-shot singing model. The weights are **not** distributed with
+this project: users download them on demand through Manager → Models
+(`soulx-singer-fp16`, ~1.4 GB) under the Apache License, Version 2.0. The ONNX
+graph split is the community export published on ModelScope
+(`syxppp/SoulX-Singer-onnx-directml-fp16`), redistributed byte-identically.
+
+The phoneme vocabulary `crates/local-ai/assets/phone_set.txt` (3033 tokens) is
+transcribed from that model's phone set (via SXSEditor, MIT). The Mandarin
+character → pinyin table `crates/local-ai/assets/zh_pinyin_map.tsv` was generated
+with pinyin-pro (https://github.com/zh-lx/pinyin-pro, MIT), which itself is built
+on pinyin-data (MIT).
+--------------------------------------------------------------------------------

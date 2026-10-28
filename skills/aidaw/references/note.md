@@ -143,3 +143,7 @@
   轨道有对应奏法映射（导入或手写）时会改变播放。
 - 一次性写法：`analyze_harmony(ornaments=[{track, clip, id}])`，不写回工程。
 - 都不传时，分析用「≤ 1/16 拍 + 后接相邻和弦音」的启发式。
+
+**歌词（`lyric`）**：`add_note` / `add_notes` / `update_notes` 都支持 `lyric`——一个汉字（可带
+`1..5` 强制声调）、`-`（连音，延续前一个音节）或 `<SP>`（休止）。它是**逐音**的，优先于
+`sing_song` 的整串 `lyrics`；`update_notes` 里传空字符串表示清除该音的音节。

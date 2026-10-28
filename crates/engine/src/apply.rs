@@ -233,7 +233,7 @@ pub fn apply(project: &mut Project, event: &Event) {
         } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 // 事件里的 id 正常由命令层发放；手写 / 旧事件可能带 0，就地补一个。
-                let mut note = Note::normalize(*note);
+                let mut note = Note::normalize(note.clone());
                 if note.id == 0 {
                     note.id = c.next_note_id();
                 }
@@ -249,7 +249,7 @@ pub fn apply(project: &mut Project, event: &Event) {
                 let mut seen: std::collections::HashSet<u64> =
                     c.notes.iter().map(|n| n.id).collect();
                 for note in notes {
-                    let mut note = Note::normalize(*note);
+                    let mut note = Note::normalize(note.clone());
                     if note.id == 0 || !seen.insert(note.id) {
                         note.id = next;
                         next += 1;
@@ -267,7 +267,7 @@ pub fn apply(project: &mut Project, event: &Event) {
                 c.notes = notes
                     .iter()
                     .map(|note| {
-                        let mut note = Note::normalize(*note);
+                        let mut note = Note::normalize(note.clone());
                         if note.id == 0 {
                             note.id = next;
                         }
@@ -298,7 +298,7 @@ pub fn apply(project: &mut Project, event: &Event) {
         } => {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 if let Some(slot) = c.notes.get_mut(*index) {
-                    *slot = Note::normalize(*note);
+                    *slot = Note::normalize(note.clone());
                 }
             }
         }
@@ -311,7 +311,7 @@ pub fn apply(project: &mut Project, event: &Event) {
             if let Some(c) = find_clip_mut(project, *track, *clip) {
                 for entry in entries {
                     if let Some(slot) = c.notes.get_mut(entry.index) {
-                        *slot = Note::normalize(entry.note);
+                        *slot = Note::normalize(entry.note.clone());
                     }
                 }
             }
@@ -680,6 +680,7 @@ mod tests {
                     offset: 0.0,
                     legato: false,
                     expr: crate::model::PitchExpression::NONE,
+                    lyric: None,
                 },
             },
         );
@@ -816,6 +817,7 @@ mod tests {
                         offset: 0.0,
                         legato: false,
                         expr: crate::model::PitchExpression::NONE,
+                        lyric: None,
                     },
                 },
             );
@@ -839,10 +841,11 @@ mod tests {
                     offset: 0.0,
                     legato: false,
                     expr: crate::model::PitchExpression::NONE,
+                    lyric: None,
                 },
             },
         );
-        let n = p.track(t).unwrap().clips[0].notes[1];
+        let n = p.track(t).unwrap().clips[0].notes[1].clone();
         assert_eq!(n.pitch, 127);
         // 音符起点是**相对片段起点**的拍，允许为负（左边缘收起时被裁掉的音符要留着）。
         assert_eq!(n.start, -1.0);

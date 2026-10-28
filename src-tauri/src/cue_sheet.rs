@@ -837,6 +837,7 @@ pub(crate) fn build_plan(
                             offset: 0.0,
                             legato: false,
                             expr: PitchExpression::NONE,
+                            lyric: None,
                         });
                     }
                 }

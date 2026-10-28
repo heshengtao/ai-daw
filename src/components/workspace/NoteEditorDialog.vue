@@ -18,12 +18,13 @@ import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
 import { useI18n } from "@/i18n";
 import { formatSemitones } from "@/utils/pitch";
+import { firstLyricToken, splitLyrics } from "@/utils/lyrics";
 import type { Note, NotePatch, PitchExpression } from "@/api/types";
 
 const props = withDefaults(
   defineProps<{
     open: boolean;
-    initialTab?: "strum" | "expr" | "midi";
+    initialTab?: "strum" | "expr" | "midi" | "lyric";
   }>(),
   { initialTab: "expr" },
 );
@@ -35,7 +36,13 @@ const selection = useSelectionStore();
 const layout = useLayoutStore();
 const i18n = useI18n();
 
-const tab = ref<"strum" | "expr" | "midi">("expr");
+const tab = ref<"strum" | "expr" | "midi" | "lyric">("expr");
+
+/** 音名（歌词行左侧的元信息）。 */
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+function noteName(pitch: number): string {
+  return `${NOTE_NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}`;
+}
 
 watch(
   () => props.open,
@@ -63,10 +70,11 @@ function startKey(startBeat: number): string {
 const clip = computed(() => selection.clip);
 const track = computed(() => selection.track);
 
-const tabs = computed<{ id: "strum" | "expr" | "midi"; label: string }[]>(() => [
+const tabs = computed<{ id: "strum" | "expr" | "midi" | "lyric"; label: string }[]>(() => [
   { id: "strum", label: i18n.t("noteEditor.tabStrum") },
   { id: "expr", label: i18n.t("noteEditor.tabExpr") },
   { id: "midi", label: i18n.t("noteEditor.tabMidi") },
+  { id: "lyric", label: i18n.t("noteEditor.tabLyric") },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -375,12 +383,77 @@ async function applyMidi(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// 歌词
+// ---------------------------------------------------------------------------
+
+/** 选中音符的歌词草稿（按 id 存，避免快照刷新冲掉未应用的编辑）。 */
+const lyricDraft = ref<Record<number, string>>({});
+/** 「按顺序填入」用的一行文本。 */
+const lyricFill = ref("");
+
+/** 按起点排序的选中音符（逐音填词就是按演唱顺序）。 */
+const lyricRows = computed(() =>
+  [...pickedNotes.value]
+    .sort((a, b) => a.note.start - b.note.start)
+    .map((entry) => ({
+      id: entry.id,
+      pitch: entry.note.pitch,
+      start: entry.note.start,
+      value: lyricDraft.value[entry.id] ?? entry.note.lyric ?? "",
+    })),
+);
+
+watch(
+  // 打开状态 + 选中音符 id 的字符串（不用数组，理由同上面几个 watcher）。
+  () => `${props.open}:${pickedNotes.value.map((p) => p.id).join(",")}`,
+  () => {
+    if (!props.open) return;
+    lyricFill.value = "";
+    const next: Record<number, string> = {};
+    for (const p of pickedNotes.value) next[p.id] = p.note.lyric ?? "";
+    lyricDraft.value = next;
+  },
+  { immediate: true },
+);
+
+/** 把一行歌词按顺序填进选中音符（够不着的音符保持原样）。 */
+function distributeLyrics(): void {
+  const tokens = splitLyrics(lyricFill.value);
+  if (tokens.length === 0) return;
+  const rows = lyricRows.value;
+  const next = { ...lyricDraft.value };
+  for (let i = 0; i < rows.length; i += 1) next[rows[i].id] = tokens[i] ?? "";
+  lyricDraft.value = next;
+}
+
+async function applyLyrics(): Promise<void> {
+  const c = clip.value;
+  const t = track.value;
+  if (!c || !t || pickedNotes.value.length === 0) return;
+  const patches: NotePatch[] = [];
+  for (const entry of pickedNotes.value) {
+    // 一个音只唱一个记号：多写的字由「按顺序填入」处理，逐音输入这里只取第一个。
+    const next = firstLyricToken(lyricDraft.value[entry.id] ?? "");
+    const prev = entry.note.lyric ?? "";
+    if (next !== prev) patches.push({ id: entry.id, lyric: next });
+  }
+  if (patches.length === 0) return;
+  try {
+    await store.updateNotes(t.id, c.id, patches);
+    layout.notify(i18n.t("noteEditor.lyricApplied", { count: patches.length }));
+  } catch (err) {
+    layout.notify(i18n.t("error.updateNotes", { error: String(err) }));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 应用当前标签页
 // ---------------------------------------------------------------------------
 
 async function applyActive(): Promise<void> {
   if (tab.value === "strum") await applyStrum();
   else if (tab.value === "expr") await applyExpr();
+  else if (tab.value === "lyric") await applyLyrics();
   else await applyMidi();
   emit("update:open", false);
 }
@@ -617,6 +690,61 @@ async function applyActive(): Promise<void> {
       </section>
     </div>
 
+    <!-- 歌词（歌声合成） -->
+    <div v-else-if="tab === 'lyric'" class="m3-dialog-body">
+      <p class="m3-hint">{{ i18n.t("noteEditor.lyricLead") }}</p>
+
+      <section class="m3-card">
+        <div class="m3-card-head">
+          <span class="m3-card-title">{{ i18n.t("noteEditor.tabLyric") }}</span>
+          <span class="m3-card-sub">{{ i18n.t("noteEditor.lyricScope", { count: lyricRows.length }) }}</span>
+        </div>
+
+        <div class="m3-row">
+          <div class="m3-row-main">
+            <span class="m3-row-label">{{ i18n.t("noteEditor.lyricFill") }}</span>
+            <span class="m3-row-sub">{{ i18n.t("noteEditor.lyricFillHint") }}</span>
+          </div>
+          <div class="m3-row-control lyric-fill">
+            <input
+              v-model="lyricFill"
+              class="lyric-input"
+              type="text"
+              spellcheck="false"
+              :placeholder="i18n.t('noteEditor.lyricFillPlaceholder')"
+              @keydown.enter.prevent="distributeLyrics"
+            />
+            <button class="m3-btn text" type="button" @click="distributeLyrics">
+              {{ i18n.t("noteEditor.lyricFillAction") }}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="m3-card">
+        <div class="m3-card-head">
+          <span class="m3-card-title">{{ i18n.t("noteEditor.lyricPerNote") }}</span>
+          <span class="m3-card-sub">{{ i18n.t("noteEditor.lyricPerNoteHint") }}</span>
+        </div>
+        <div class="lyric-list">
+          <div v-for="row in lyricRows" :key="row.id" class="lyric-row">
+            <span class="lyric-meta">{{ noteName(row.pitch) }} · {{ row.start.toFixed(2) }}</span>
+            <input
+              v-model="lyricDraft[row.id]"
+              class="lyric-input"
+              type="text"
+              spellcheck="false"
+              maxlength="24"
+              :placeholder="i18n.t('noteEditor.lyricPlaceholder')"
+            />
+          </div>
+          <p v-if="lyricRows.length === 0" class="m3-hint">{{ i18n.t("noteEditor.noNotes") }}</p>
+        </div>
+      </section>
+
+      <p class="m3-hint">{{ i18n.t("noteEditor.lyricTip") }}</p>
+    </div>
+
     <!-- MIDI -->
     <div v-else class="m3-dialog-body">
       <p class="m3-hint">{{ i18n.t("noteEditor.midiLead") }}</p>
@@ -696,6 +824,46 @@ async function applyActive(): Promise<void> {
 
 .select-control {
   width: 210px;
+}
+
+/* 歌词：与面板其它输入保持同一密度。 */
+.lyric-fill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lyric-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.lyric-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.lyric-meta {
+  flex: 0 0 96px;
+  font-size: 11px;
+  color: rgb(var(--md-on-surface-variant));
+  font-variant-numeric: tabular-nums;
+}
+.lyric-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 9px;
+  border: none;
+  border-radius: 8px;
+  outline: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: rgb(var(--md-on-surface));
+  background-color: rgb(var(--md-surface-container-high) / 0.7);
+}
+.lyric-input:focus {
+  box-shadow: inset 0 0 0 1px rgb(var(--md-primary) / 0.6);
 }
 
 .presets {

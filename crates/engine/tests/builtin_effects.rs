@@ -56,6 +56,7 @@ fn project(effects: Vec<PluginInstance>) -> Project {
                 offset: 0.0,
                 legato: false,
                 expr: ai_daw_engine::model::PitchExpression::NONE,
+                lyric: None,
             }],
             audio: None,
         }],

@@ -423,6 +423,11 @@ function onKey(e: KeyboardEvent): void {
     layout.setTool("split");
     return;
   }
+  if (!mod && e.key === "4") {
+    e.preventDefault();
+    layout.setTool("lyric");
+    return;
+  }
   // 快捷键速查表：`?` 或 Ctrl/Cmd+/。
   if (!mod && e.key === "?") {
     e.preventDefault();

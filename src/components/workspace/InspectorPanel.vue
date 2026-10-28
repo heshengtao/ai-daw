@@ -280,6 +280,14 @@ const selectedPitchLabel = computed(() => {
   return names.length > 6 ? `${names.slice(0, 6).join(" · ")} …` : names.join(" · ");
 });
 
+/** 选中音符的歌词摘要（逐音歌词；没有就是「未填」）。 */
+const lyricSummary = computed(() => {
+  const values = pickedNotes.value.map((p) => p.note.lyric?.trim()).filter(Boolean) as string[];
+  if (values.length === 0) return i18n.t("inspector.noteLyricNone");
+  const text = values.slice(0, 12).join(" ");
+  return values.length > 12 ? `${text} …` : text;
+});
+
 /** 把选中的音符整体设为 / 取消连奏。 */
 async function setLegato(on: boolean): Promise<void> {
   const c = selection.clip;
@@ -306,7 +314,7 @@ function openTechniques(): void {
   techniqueDialogTab.value = configured ? "techniques" : "library";
   techniqueDialogOpen.value = true;
 }
-const noteEditorTab = ref<"strum" | "expr" | "midi">("expr");
+const noteEditorTab = ref<"strum" | "expr" | "midi" | "lyric">("expr");
 
 const techniqueOptions = computed<SelectOption[]>(() => [
   { id: "", label: i18n.t("inspector.articulationNone") },
@@ -383,7 +391,7 @@ const exprSummary = computed(() => {
   return bits.length > 0 ? bits.join(" · ") : i18n.t("inspector.exprNone");
 });
 
-function openNoteEditor(tab: "strum" | "expr" | "midi"): void {
+function openNoteEditor(tab: "strum" | "expr" | "midi" | "lyric"): void {
   noteEditorTab.value = tab;
   noteEditorOpen.value = true;
 }
@@ -563,6 +571,14 @@ function openNoteEditor(tab: "strum" | "expr" | "midi"): void {
             <span class="row-label">{{ i18n.t("inspector.pitchExpr") }}</span>
             <span class="row-value expr-summary">{{ exprSummary }}</span>
             <button class="open-editor small" @click="openNoteEditor('expr')">
+              {{ i18n.t("inspector.edit") }}
+            </button>
+          </div>
+
+          <div class="row">
+            <span class="row-label">{{ i18n.t("inspector.noteLyric") }}</span>
+            <span class="row-value expr-summary">{{ lyricSummary }}</span>
+            <button class="open-editor small" @click="openNoteEditor('lyric')">
               {{ i18n.t("inspector.edit") }}
             </button>
           </div>

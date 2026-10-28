@@ -163,7 +163,7 @@ pub struct PitchSpan {
 }
 
 /// 调度期的一颗音符：先把所有音符的起止算出来，再统一分配通道。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct NotePlan {
     note: Note,
     /// 所属片段（查奏法标签用）。
@@ -392,7 +392,7 @@ impl ScheduledEvents {
                         (onset + note.duration).min(box_end)
                     };
                     note_plans.push(NotePlan {
-                        note: *note,
+                        note: note.clone(),
                         clip: clip.id,
                         onset,
                         off,
@@ -419,7 +419,7 @@ impl ScheduledEvents {
                 .unwrap_or_default();
 
             for plan in &note_plans {
-                let note = plan.note;
+                let note = plan.note.clone();
                 let channel = match note.channel {
                     Some(c) => {
                         let c = c.min(15);
@@ -744,6 +744,7 @@ mod tests {
                     offset: 0.0,
                     legato: false,
                     expr: crate::model::PitchExpression::NONE,
+                    lyric: None,
                 }],
                 audio: None,
             }],
@@ -790,6 +791,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: crate::model::PitchExpression::NONE,
+            lyric: None,
         });
         // 第 1 拍那个音符拉长到第 6 拍 → 越过框尾，应截断在第 4 拍。
         p.tracks[0].clips[0].notes[0].duration = 5.0;
@@ -933,6 +935,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: crate::model::PitchExpression::NONE,
+            lyric: None,
         });
 
         let s = ScheduledEvents::from_project(&p, 48_000.0);
@@ -966,6 +969,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: crate::model::PitchExpression::NONE,
+            lyric: None,
         });
         let s2 = ScheduledEvents::from_project(&p2, 48_000.0);
         let first_off = s2.tracks[0]
@@ -1069,6 +1073,7 @@ mod tests {
                     offset: 0.0,
                     legato: false,
                     expr: crate::model::PitchExpression::NONE,
+                    lyric: None,
                 }],
                 audio: None,
             }],
@@ -1234,6 +1239,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: crate::model::PitchExpression::NONE,
+            lyric: None,
         });
         let s = ScheduledEvents::from_project(&p, 48_000.0);
         let channels: Vec<u8> = s.tracks[0]
@@ -1270,6 +1276,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: crate::model::PitchExpression::NONE,
+            lyric: None,
         };
         p.tracks[0].clips[0].notes = vec![note(60), note(64), note(67)];
         let s = ScheduledEvents::from_project(&p, 48_000.0);

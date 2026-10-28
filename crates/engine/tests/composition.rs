@@ -28,6 +28,7 @@ fn note(pitch: u8, start: f64, duration: f64, velocity: u8) -> Note {
         offset: 0.0,
         legato: false,
         expr: ai_daw_engine::model::PitchExpression::NONE,
+        lyric: None,
     }
 }
 
@@ -182,6 +183,7 @@ fn update_and_remove_by_stable_id() {
                 channel: None,
                 pressure: None,
                 expr: None,
+                lyric: None,
             }],
         },
         agent(),

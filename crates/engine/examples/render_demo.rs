@@ -54,6 +54,7 @@ fn main() {
                     offset: 0.0,
                     legato: false,
                     expr: ai_daw_engine::model::PitchExpression::NONE,
+                    lyric: None,
                 },
             },
             Actor::Human,

@@ -41,7 +41,7 @@ https://github.com/user-attachments/assets/e0da890d-854d-4727-9cfb-3eb82c2a9bd1
 
 - **体积小**——没有 Electron、不依赖云、不打包模型全家桶。macOS 版整包约 38 MB；作为参照，Ableton Live、Logic Pro、FL Studio 这类主流 DAW 的安装体积通常在 1–3 GB，AI DAW 只有它们的 2%–4%，**体积缩小了 95% 以上**。
 - **启动快**——开机不加载任何重东西，AI 模型只在你用到时才引入。
-- **高算力的活交给该干的地方**——音乐生成、音色转换这类重模型**刻意不做**本地集成。由你的 AI Harness 生成音频，产物可以直接导入 DAW，做编辑、混音与母带后处理。
+- **重模型按需下载，不塞进安装包**——音乐生成、音色转换这类大模型不做默认集成；**歌声合成**（SoulX-Singer，1.4 GB）作为可选项放在「管理器 → 模型」里，点一下才下载，不用就一点磁盘都不占。
 - **生来可扩展**——让外部 AI 模型接进工作流的接入接口已在路线图上。
 
 ## 用任意 AI Harness 驱动它
@@ -116,10 +116,11 @@ AI DAW 支持 **VST3** 与 **CLAP** 插件（Windows / macOS / Linux），在 ma
 - **音频转 MIDI** —— Basic Pitch 把录下的演奏变成可编辑的音符
 - **人声降噪 / 去混响** —— LocalVQE 处理人声素材
 - **音源分离** —— HTDemucs v4 拆成 4 / 6 条分轨，方便重新配比
+- **歌声合成** —— 一段 MIDI 旋律 + 歌词 + 一条参考声线，变出一条能继续编辑的歌声轨（SoulX-Singer，zero-shot 音色克隆）。歌词可以逐音写在钢琴卷帘里（`-` 连音），参考声线能存进**人声音色库**跨工程复用——换音色就是换一条参考
 - **生来离线** —— 不要账号、不要 API Key、不上传任何东西
 
 <p align="center">
-  <img src="./assets/screenshots/05-ai-panel.png" width="100%" alt="AI 面板：MCP 服务器状态，以及音频转 MIDI、人声降噪、音源分离、节拍检测的入口">
+  <img src="./assets/screenshots/05-ai-panel.png" width="100%" alt="AI 面板：MCP 服务器状态，以及音频转 MIDI、人声降噪、音源分离、节拍检测、歌声合成的入口">
 </p>
 
 ### 🔌 MCP 服务器 —— 让 AI 代理在你的工程里干活

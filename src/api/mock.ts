@@ -14,6 +14,11 @@ import type {
   AgentSessionSummary,
   AiModels,
   AiStatus,
+  SingingArgs,
+  SingingModels,
+  SingingStatus,
+  VoiceEntry,
+  VoiceSaveArgs,
   AnalysisReport,
   AutomationPoint,
   BackendInfo,
@@ -149,9 +154,31 @@ function mockCliStatus(): CliStatus {
 /** 预览版的本地 AI：没有真实处理，模拟一段进度供界面演示进度条与停止。 */
 let aiState: AiStatus = { running: false, kind: null, progress: 0, message: null };
 let aiTimer: number | null = null;
+let singingState: SingingStatus = { running: false, progress: 0, message: null };
+/** 浏览器预览的人声条目也存在「音色记忆」里（与真实后端一致：一个库，靠 voice 字段区分）。 */
+function readVoices(): VoiceEntry[] {
+  return readSoundMemories()
+    .filter((m) => m.voice)
+    .map((m) => ({
+      id: m.id,
+      name: m.name,
+      description: m.description,
+      tags: m.tags,
+      seconds: m.voice!.seconds,
+      sample_rate: m.voice!.sample_rate,
+      frames: m.voice!.frames,
+      created_at: m.created_at,
+      offset_seconds: m.voice!.offset_seconds ?? 0,
+    }));
+}
+let singingTimer: number | null = null;
 
 function emitAi(): void {
   window.dispatchEvent(new CustomEvent("ai-daw-mock-ai", { detail: { ...aiState } }));
+}
+
+function emitSinging(): void {
+  window.dispatchEvent(new CustomEvent("ai-daw-mock-singing", { detail: { ...singingState } }));
 }
 
 /** 插件管理器预览里的下载进度定时器（一次只跑一个）。 */
@@ -809,6 +836,7 @@ function toSoundSummary(memory: SoundMemory): SoundMemorySummary {
     effect_plugin_ids: memory.effects.map((fx) => fx.plugin_id),
     mixer: memory.mixer,
     source_project: memory.source_project,
+    voice: memory.voice ?? null,
     created_at: memory.created_at,
     updated_at: memory.updated_at,
   };
@@ -2494,6 +2522,101 @@ export const mockApi = {
       if (aiTimer !== null) {
         window.clearInterval(aiTimer);
         aiTimer = null;
+      }
+    };
+  },
+
+  // ---- 人声音色库（预览：内存里存个假的，不写 WAV）----
+
+  voiceList: (): VoiceEntry[] => readVoices(),
+  voiceSave: (args?: VoiceSaveArgs): VoiceEntry => {
+    const now = Date.now();
+    const tagList = [...(args?.tags ?? [])];
+    if (!tagList.some((t) => t.toLowerCase() === "vocal")) tagList.push("vocal");
+    const memory: SoundMemory = {
+      id: `s${now}`,
+      name: args?.name?.trim() || (args?.track ? `轨道 ${args.track}` : "预览人声"),
+      description: args?.description ?? "",
+      tags: tagList,
+      role: "vocal",
+      instrument: null,
+      effects: [],
+      mixer: { gain_db: 0, pan: 0 },
+      source_project: null,
+      voice: { path: "mock://voice.wav", seconds: 8, sample_rate: 24000, frames: 192000, offset_seconds: 0 },
+      created_at: now,
+      updated_at: now,
+    };
+    writeSoundMemories([...readSoundMemories(), memory]);
+    return {
+      id: memory.id,
+      name: memory.name,
+      description: memory.description,
+      tags: memory.tags,
+      seconds: 8,
+      sample_rate: 24000,
+      frames: 192000,
+      created_at: now,
+      offset_seconds: 0,
+    };
+  },
+  voiceUpdate: (id: string, patch: { name?: string; description?: string; tags?: string[] }): VoiceEntry => {
+    const all = readSoundMemories();
+    const found = all.find((m) => m.id === id && m.voice);
+    if (!found) throw new Error("音色库里没有这条人声");
+    if (patch.name !== undefined) found.name = patch.name;
+    if (patch.description !== undefined) found.description = patch.description;
+    if (patch.tags !== undefined) found.tags = [...patch.tags];
+    found.updated_at = Date.now();
+    writeSoundMemories(all);
+    return {
+      id: found.id,
+      name: found.name,
+      description: found.description,
+      tags: found.tags,
+      seconds: found.voice!.seconds,
+      sample_rate: found.voice!.sample_rate,
+      frames: found.voice!.frames,
+      created_at: found.created_at,
+      offset_seconds: found.voice!.offset_seconds ?? 0,
+    };
+  },
+  voiceDelete: (id: string): void => {
+    writeSoundMemories(readSoundMemories().filter((m) => m.id !== id));
+  },
+
+  // ---- 歌声合成（预览：模拟进度，不真正推理）----
+
+  singingModels: (): SingingModels => ({ installed: false, dir: null, approx_bytes: 1_448_313_001 }),
+  singingStatus: (): SingingStatus => ({ ...singingState }),
+  singingRender: (_args?: SingingArgs): void => {
+    if (singingTimer !== null) return;
+    singingState = { running: true, progress: 0, message: null };
+    emitSinging();
+    singingTimer = window.setInterval(() => {
+      singingState.progress = Math.min(1, singingState.progress + 0.04);
+      if (singingState.progress >= 1) {
+        window.clearInterval(singingTimer!);
+        singingTimer = null;
+        singingState = { running: false, progress: 0, message: "浏览器预览：未做真实合成" };
+      }
+      emitSinging();
+    }, 200);
+  },
+  singingCancel: (): void => {
+    if (singingTimer !== null) {
+      window.clearInterval(singingTimer);
+      singingTimer = null;
+    }
+    singingState = { running: false, progress: 0, message: "已停止" };
+    emitSinging();
+  },
+  onSingingEvent: (): (() => void) => {
+    window.setTimeout(emitSinging, 0);
+    return () => {
+      if (singingTimer !== null) {
+        window.clearInterval(singingTimer);
+        singingTimer = null;
       }
     };
   },

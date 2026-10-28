@@ -66,17 +66,27 @@ impl HardwareProfile {
 /// 从一段显卡型号里判厂商。
 pub fn vendor_of_adapter(name: &str) -> Option<GpuVendor> {
     let n = name.to_ascii_lowercase();
-    if n.contains("nvidia") || n.contains("geforce") || n.contains("rtx") || n.contains("gtx")
-        || n.contains("quadro") || n.contains("tesla") || n.contains("cuda")
+    if n.contains("nvidia")
+        || n.contains("geforce")
+        || n.contains("rtx")
+        || n.contains("gtx")
+        || n.contains("quadro")
+        || n.contains("tesla")
+        || n.contains("cuda")
     {
         Some(GpuVendor::Nvidia)
-    } else if n.contains("apple") || n.contains("m1") || n.contains("m2") || n.contains("m3")
+    } else if n.contains("apple")
+        || n.contains("m1")
+        || n.contains("m2")
+        || n.contains("m3")
         || n.contains("m4")
     {
         Some(GpuVendor::Apple)
     } else if n.contains("amd") || n.contains("radeon") || n.contains("advanced micro devices") {
         Some(GpuVendor::Amd)
-    } else if n.contains("intel") || n.contains("iris") || n.contains("uhd graphics")
+    } else if n.contains("intel")
+        || n.contains("iris")
+        || n.contains("uhd graphics")
         || n.contains("arc ")
     {
         Some(GpuVendor::Intel)
@@ -125,7 +135,10 @@ pub fn parse_nvidia_smi(text: &str) -> Option<(String, Option<String>)> {
         if name.is_empty() {
             continue;
         }
-        let driver = parts.next().filter(|d| !d.is_empty() && *d != "[N/A]").map(|d| d.to_string());
+        let driver = parts
+            .next()
+            .filter(|d| !d.is_empty() && *d != "[N/A]")
+            .map(|d| d.to_string());
         return Some((name, driver));
     }
     None
@@ -199,7 +212,10 @@ pub fn detect() -> HardwareProfile {
     {
         if let Some(text) = run(
             "nvidia-smi",
-            &["--query-gpu=name,driver_version", "--format=csv,noheader,nounits"],
+            &[
+                "--query-gpu=name,driver_version",
+                "--format=csv,noheader,nounits",
+            ],
         ) {
             if let Some((name, driver)) = parse_nvidia_smi(&text) {
                 profile.gpu = vendor_of_adapter(&name).or(Some(GpuVendor::Nvidia));
@@ -333,11 +349,23 @@ mod tests {
 
     #[test]
     fn vendor_detection_covers_the_common_adapters() {
-        assert_eq!(vendor_of_adapter("NVIDIA GeForce RTX 4090"), Some(GpuVendor::Nvidia));
+        assert_eq!(
+            vendor_of_adapter("NVIDIA GeForce RTX 4090"),
+            Some(GpuVendor::Nvidia)
+        );
         assert_eq!(vendor_of_adapter("Apple M4"), Some(GpuVendor::Apple));
-        assert_eq!(vendor_of_adapter("AMD Radeon RX 7900 XTX"), Some(GpuVendor::Amd));
-        assert_eq!(vendor_of_adapter("Intel(R) UHD Graphics 770"), Some(GpuVendor::Intel));
-        assert_eq!(vendor_of_adapter("Microsoft Basic Display Adapter"), Some(GpuVendor::Other));
+        assert_eq!(
+            vendor_of_adapter("AMD Radeon RX 7900 XTX"),
+            Some(GpuVendor::Amd)
+        );
+        assert_eq!(
+            vendor_of_adapter("Intel(R) UHD Graphics 770"),
+            Some(GpuVendor::Intel)
+        );
+        assert_eq!(
+            vendor_of_adapter("Microsoft Basic Display Adapter"),
+            Some(GpuVendor::Other)
+        );
         assert_eq!(vendor_of_adapter("something unrecognizable"), None);
     }
 

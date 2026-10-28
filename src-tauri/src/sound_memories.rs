@@ -56,6 +56,30 @@ impl PluginSnapshot {
     }
 }
 
+/// 人声参考素材：歌声合成用的「音色」。
+///
+/// 和乐器快照存在**同一个音色库**里（只是 tags 里多一个「人声」，`voice` 非空），
+/// 这样侧边栏的音色库就能统一浏览 / 改名 / 删除 / 按标签筛选，不需要第二套库。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceAsset {
+    /// WAV 的绝对路径（单声道 24 kHz，存在 `<配置目录>/sound-memory-audio/`）。
+    pub path: String,
+    /// 时长（秒）。
+    pub seconds: f64,
+    /// 采样率（固定 24000）。
+    pub sample_rate: u32,
+    /// 帧数。
+    pub frames: u64,
+    /// 这段参考取自原音频的第几秒（自动裁剪的起点；0 = 从头）。
+    #[serde(default)]
+    pub offset_seconds: f64,
+}
+
+/// 人声参考的采样率（与歌声合成模型一致）。
+pub const VOICE_RATE: u32 = 24_000;
+/// 自动打上的标签：侧边栏按它筛选「人声」。
+pub const VOICE_TAG: &str = "vocal";
+
 #[derive(Debug, Clone, Default)]
 pub struct MemoryMeta {
     pub name: String,
@@ -90,6 +114,9 @@ pub struct SoundMemory {
     pub mixer: SoundMixer,
     #[serde(default)]
     pub source_project: Option<String>,
+    /// 人声参考素材；`Some` 时这条记忆是「人声音色」，没有乐器 / 效果链。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<VoiceAsset>,
     #[serde(default)]
     pub created_at: u64,
     #[serde(default)]
@@ -108,6 +135,7 @@ impl SoundMemory {
             effect_plugin_ids: self.effects.iter().map(|e| e.plugin_id.clone()).collect(),
             mixer: self.mixer.clone(),
             source_project: self.source_project.clone(),
+            voice: self.voice.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
@@ -125,6 +153,8 @@ pub struct SoundMemorySummary {
     pub effect_plugin_ids: Vec<String>,
     pub mixer: SoundMixer,
     pub source_project: Option<String>,
+    /// 人声参考（`Some` = 这条是人声音色）。
+    pub voice: Option<VoiceAsset>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -175,12 +205,150 @@ impl SoundMemoryStore {
             effects: snapshot.effects,
             mixer: snapshot.mixer,
             source_project: snapshot.source_project,
+            voice: None,
             created_at: now,
             updated_at: now,
         };
         self.memories.push(memory.clone());
         self.flush()?;
         Ok(memory)
+    }
+
+    /// 存一条**人声音色**：写 WAV + 一条带 `voice` 的音色记忆（自动加「人声」标签）。
+    ///
+    /// `samples` 必须是单声道 24 kHz；入库前做峰值归一（与乐器链的存法一样，跨工程听起来
+    /// 电平一致）。WAV 落在 `sound-memory-audio/<id>.wav`。
+    pub fn create_voice(
+        &mut self,
+        meta: MemoryMeta,
+        samples: &[f32],
+        offset_seconds: f64,
+    ) -> Result<SoundMemory, String> {
+        if samples.is_empty() {
+            return Err("参考音频是空的".into());
+        }
+        let mut meta = normalize_meta(meta)?;
+        if !meta.tags.iter().any(|t| t.eq_ignore_ascii_case(VOICE_TAG)) {
+            meta.tags.push(VOICE_TAG.to_string());
+        }
+        let now = now_millis();
+        let id = unique_id(&self.memories, now);
+
+        let dir = self.audio_dir().ok_or("拿不到音色库目录")?;
+        fs::create_dir_all(&dir).map_err(|e| format!("创建人声目录失败：{e}"))?;
+        let path = dir.join(format!("{id}.wav"));
+
+        let peak = samples.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        let gain = if peak > 0.0 { 0.891 / peak } else { 1.0 };
+        let max_frames = (VOICE_RATE as usize) * 600;
+        let mut pcm: Vec<f32> = samples.iter().take(max_frames).map(|v| v * gain).collect();
+        if pcm.is_empty() {
+            return Err("参考音频太短".into());
+        }
+        let mut buffer = ai_daw_engine::audio::AudioBuffer::silence(1, pcm.len());
+        buffer.data_mut().copy_from_slice(&pcm);
+        ai_daw_engine::wav::write_wav(&path, &buffer, VOICE_RATE)
+            .map_err(|e| format!("写人声音色失败：{e}"))?;
+        pcm.clear();
+
+        let memory = SoundMemory {
+            id,
+            name: meta.name,
+            description: meta.description,
+            tags: meta.tags,
+            role: meta.role,
+            instrument: None,
+            effects: Vec::new(),
+            mixer: SoundMixer {
+                gain_db: 0.0,
+                pan: 0.0,
+            },
+            source_project: None,
+            voice: Some(VoiceAsset {
+                path: path.to_string_lossy().into_owned(),
+                seconds: (buffer.frames() as f64) / VOICE_RATE as f64,
+                sample_rate: VOICE_RATE,
+                frames: buffer.frames() as u64,
+                offset_seconds: offset_seconds.max(0.0),
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+        self.memories.push(memory.clone());
+        if let Err(err) = self.flush() {
+            let _ = fs::remove_file(&path);
+            self.memories.retain(|m| m.id != memory.id);
+            return Err(err);
+        }
+        Ok(memory)
+    }
+
+    /// 把**过长的人声参考**裁成 10 秒（自动挑一段最像人声的）。
+    ///
+    /// 早期版本允许把整首歌存进音色库（例如 4 分 49 秒）；那既占空间，又让 prompt 落进
+    /// 前奏/间奏。启动时做一次就地迁移：解码 → 选段 → 覆写同一个 WAV → 更新时长 / 起点。
+    /// 已经 ≤ `max_seconds` 的条目不动。返回迁移了几条。
+    pub fn trim_long_voices(&mut self, max_seconds: f64) -> usize {
+        let mut changed = 0usize;
+        for memory in &mut self.memories {
+            let Some(voice) = &mut memory.voice else {
+                continue;
+            };
+            if voice.seconds <= max_seconds {
+                continue;
+            }
+            let path = PathBuf::from(&voice.path);
+            let Ok(audio) = ai_daw_asset::decode(&path) else {
+                continue;
+            };
+            let mono = if audio.channels == 1 {
+                audio.samples.to_vec()
+            } else {
+                audio
+                    .samples
+                    .chunks_exact(audio.channels)
+                    .map(|frame| frame.iter().sum::<f32>() / audio.channels as f32)
+                    .collect()
+            };
+            let rate = if audio.sample_rate > 0.0 {
+                audio.sample_rate
+            } else {
+                VOICE_RATE as f64
+            };
+            let (picked, choice) =
+                ai_daw_local_ai::singing::reference::trim_to_best(&mono, rate, 10.0);
+            if picked.is_empty() {
+                continue;
+            }
+            let mut buffer = ai_daw_engine::audio::AudioBuffer::silence(1, picked.len());
+            buffer.data_mut().copy_from_slice(&picked);
+            if ai_daw_engine::wav::write_wav(&path, &buffer, rate.round().max(1.0) as u32).is_err()
+            {
+                continue;
+            }
+            voice.seconds = picked.len() as f64 / rate;
+            voice.sample_rate = rate.round().max(1.0) as u32;
+            voice.frames = picked.len() as u64;
+            voice.offset_seconds = choice.start_sec;
+            changed += 1;
+        }
+        if changed > 0 {
+            let _ = self.flush();
+        }
+        changed
+    }
+
+    /// 人声 WAV 的存放目录（与 `sound-memories.json` 同级）。
+    fn audio_dir(&self) -> Option<PathBuf> {
+        let path = self.path.as_ref()?;
+        Some(path.parent()?.join("sound-memory-audio"))
+    }
+
+    /// 人声参考的音频路径（`None` = 不是人声条目）。
+    pub fn voice_path(&self, id: &str) -> Option<PathBuf> {
+        self.get(id)
+            .and_then(|m| m.voice)
+            .map(|v| PathBuf::from(v.path))
     }
 
     pub fn replace(
@@ -195,6 +363,13 @@ impl SoundMemoryStore {
             .iter_mut()
             .find(|m| m.id == id)
             .ok_or_else(|| format!("音色记忆不存在：{id}"))?;
+        // 人声条目没有乐器 / 效果链；用轨道快照「覆盖」它只会造出一条四不像。
+        if memory.voice.is_some() {
+            return Err(
+                "这是一条人声音色，不能用轨道的乐器快照覆盖；请改名 / 改标签，或者删掉重存。"
+                    .into(),
+            );
+        }
         memory.name = meta.name;
         memory.description = meta.description;
         memory.tags = meta.tags;
@@ -203,6 +378,7 @@ impl SoundMemoryStore {
         memory.effects = snapshot.effects;
         memory.mixer = snapshot.mixer;
         memory.source_project = snapshot.source_project;
+        // 乐器链的「覆盖」不动人声字段；人声条目走 `update_metadata`。
         memory.updated_at = now_millis();
         let updated = memory.clone();
         self.flush()?;
@@ -250,9 +426,17 @@ impl SoundMemoryStore {
 
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
         let before = self.memories.len();
+        let voice = self
+            .memories
+            .iter()
+            .find(|m| m.id == id)
+            .and_then(|m| m.voice.clone());
         self.memories.retain(|m| m.id != id);
         if self.memories.len() == before {
             return Err(format!("音色记忆不存在：{id}"));
+        }
+        if let Some(voice) = voice {
+            let _ = fs::remove_file(voice.path);
         }
         self.flush()
     }
@@ -344,6 +528,91 @@ mod tests {
             tags: vec!["pad".into(), "Warm".into(), "warm".into(), " ".into()],
             role: Some("pad".into()),
         }
+    }
+
+    #[test]
+    fn voice_memory_roundtrips_and_deletes_its_audio() {
+        let dir = std::env::temp_dir().join(format!("aidaw-voice-mem-{}", now_millis()));
+        let path = dir.join("sound-memories.json");
+        let mut store = SoundMemoryStore::load(Some(path));
+        let samples: Vec<f32> = (0..VOICE_RATE as usize)
+            .map(|i| (i as f32 * 0.05).sin() * 0.5)
+            .collect();
+        let memory = store
+            .create_voice(
+                MemoryMeta {
+                    name: "测试人声".into(),
+                    description: "清亮".into(),
+                    tags: vec!["女声".into()],
+                    role: None,
+                },
+                &samples,
+                3.5,
+            )
+            .expect("存人声失败");
+
+        // 自动补「人声」标签，并且带 voice 素材与来源偏移。
+        assert!(memory.tags.iter().any(|t| t == VOICE_TAG));
+        let voice = memory.voice.clone().expect("voice 素材");
+        assert!(std::path::Path::new(&voice.path).is_file());
+        assert!((voice.seconds - 1.0).abs() < 0.01);
+        assert_eq!(voice.sample_rate, VOICE_RATE);
+        assert!((voice.offset_seconds - 3.5).abs() < 0.01);
+
+        // 重新加载：元数据与音频都在。
+        let mut reopened = SoundMemoryStore::load(Some(dir.join("sound-memories.json")));
+        let summaries = reopened.summaries();
+        assert_eq!(summaries.len(), 1);
+        assert!(summaries[0].voice.is_some());
+
+        // 删除：连音频一起删。
+        reopened.remove(&memory.id).expect("删除失败");
+        assert!(!std::path::Path::new(&voice.path).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn long_voice_references_are_trimmed_to_ten_seconds() {
+        let dir = std::env::temp_dir().join(format!("aidaw-voice-trim-{}", now_millis()));
+        let path = dir.join("sound-memories.json");
+        let mut store = SoundMemoryStore::load(Some(path));
+        // 2 秒静音 + 20 秒 220 Hz 音：应裁到有声段，且只剩 10 秒。
+        let mut samples = vec![0.0f32; (VOICE_RATE as usize) * 2];
+        let tone: Vec<f32> = (0..(VOICE_RATE as usize) * 20)
+            .map(|i| {
+                (std::f64::consts::TAU * 220.0 * i as f64 / VOICE_RATE as f64).sin() as f32 * 0.5
+            })
+            .collect();
+        samples.extend(tone);
+        let memory = store
+            .create_voice(
+                MemoryMeta {
+                    name: "整首歌".into(),
+                    description: String::new(),
+                    tags: Vec::new(),
+                    role: None,
+                },
+                &samples,
+                0.0,
+            )
+            .expect("存人声失败");
+        assert!(memory.voice.as_ref().unwrap().seconds > 20.0);
+
+        let changed = store.trim_long_voices(12.0);
+        assert_eq!(changed, 1);
+        let voice = store
+            .get(&memory.id)
+            .and_then(|m| m.voice.clone())
+            .expect("voice 仍在");
+        assert!(
+            (voice.seconds - 10.0).abs() < 0.2,
+            "应裁成 10 秒：{}",
+            voice.seconds
+        );
+        assert!(voice.offset_seconds > 1.0, "应跳过头部的静音");
+        let after = ai_daw_asset::decode(&voice.path).unwrap();
+        assert!(after.frames() < (VOICE_RATE as usize) * 11);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

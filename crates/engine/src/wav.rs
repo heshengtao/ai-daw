@@ -111,6 +111,7 @@ mod tests {
                     offset: 0.0,
                     legato: false,
                     expr: crate::model::PitchExpression::NONE,
+                    lyric: None,
                 },
             },
             Actor::Human,

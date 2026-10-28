@@ -317,6 +317,7 @@ fn audio_and_instrument_sum_on_the_same_track() {
             offset: 0.0,
             legato: false,
             expr: ai_daw_engine::model::PitchExpression::NONE,
+            lyric: None,
         }],
         audio: None,
     });

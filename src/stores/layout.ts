@@ -26,10 +26,10 @@ export type PaneId =
  *
  * 三者共用同一个手势，只能靠模式区分，因此必须由用户显式选择。
  */
-export type Tool = "draw" | "select" | "split";
+export type Tool = "draw" | "select" | "split" | "lyric";
 
 /** 全部鼠标模式（顺序即顶栏里的展示顺序）。 */
-export const TOOLS: Tool[] = ["draw", "select", "split"];
+export const TOOLS: Tool[] = ["draw", "select", "split", "lyric"];
 
 /** 全部可用面板的元数据（供"新建标签"选择器展示）。文案是 i18n key，渲染时翻译。 */
 export const PANES: { id: PaneId; labelKey: string; hintKey: string }[] = [

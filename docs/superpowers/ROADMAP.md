@@ -146,6 +146,54 @@
   默认 **CPU**；设置页新增「AI」分区，用分段控件在**本机平台支持**的项里选
   （Intel Mac 无 CoreML、非 Windows 无 DirectML）。改设置立即生效（会话每次现建，无需重启）。
 
+- **第十七次修订（2026-10-28）**：**歌声合成（Stage G6）落地** —— MIDI 旋律 + 一行歌词 +
+  一条参考声线 → 24 kHz 歌声轨。实现 `crates/local-ai/src/singing/`（phones / seq / soulx 三层：
+  音素表与中文 G2P、token / F0 / mel2token 的纯计算、SoulX-Singer 的 9 张 ONNX 图），
+  宿主 `src-tauri/src/singing.rs`（后台线程 + `engine://singing` 进度 + 可取消 + 一次事务建轨），
+  MCP 工具 `sing_song`（**103 → 104**），AI 面板新增「歌声合成」卡片。
+  模型 `soulx-singer-fp16`（16 个文件、1.44 GB）进模型清单：多文件组、sha256 硬门禁、不随包；
+  **国内外双源**：国内=魔搭，国际=`ailm32442/SoulX-Singer-onnx-fp16`（HF，逐文件 sha256 一致）。
+  设计见 `specs/2026-10-28-singing-voice-design.md`。换音色 = 换参考声线重渲染（zero-shot）；
+  真·SVC（`model-svc.pt`）没有 ONNX 导出，列入后续。
+
+- **第十八次修订（2026-10-28）**：**逐音歌词 + 人声音色进音色库**。① `Note` 新增
+  `lyric: Option<String>`（旧工程兼容，缺省不写 JSON），音符不再是 `Copy`；歌声合成优先用
+  逐音歌词、没填的音才由整串歌词按顺序补。② **人声复用音色记忆库**：`SoundMemory` 增加
+  `voice` 素材（单声道 24 kHz，落 `sound-memory-audio/`），自动打 `vocal` 标签；
+  侧边栏「音色库」统一管理（改名 / 删除 / 标签筛选 / 「导入人声…」），人声条目隐藏「应用」。
+  命令 `voice_list/save/update/delete` 是音色记忆的投影，MCP 四个对应工具（**104 → 108**），
+  `sing_song` 新增 `reference_voice`；`apply_sound_memory` 对人声条目明确报错。
+  ③ 顺手修掉 `host-vst3` 的 `au_smoke` 示例，`cargo test --workspace` 恢复全绿。
+- **第十九次修订（2026-10-28）**：按试用反馈重做歌声合成的交互。① 钢琴卷帘新增**歌词鼠标模式**
+  （快捷键 4）：点音符就地输入，Enter 提交并跳到下一个音，Esc 取消——不再要求进对话框。
+  ② AI 面板删掉重复的「整串歌词」输入框，只留「去填词」入口（选中 MIDI 片段并切到歌词模式）。
+  ③ 参考声线拆成「参考来源（工程内音频轨 / 人声音色库）+ 具体声线」两步，不再把所有来源
+  混在一个分组下拉里；「管理音色库…」改为打开侧边栏音色库。④ 清理测试遗留的失效素材引用。
+  设计见 `specs/2026-10-28-singing-voice-design.md` §5 / §5.1。
+
+- **第二十次修订（2026-10-28）**：歌词与音色库的第二轮交互修正。① 歌词鼠标模式支持**溢出
+  自动续写**：一个音只留一个记号，多写的字按起点顺序填到后面的音符（`utils/lyrics.ts` 与后端
+  同一套切词规则）；逐音输入框的提示写明这个行为。② 侧边栏「音色库」标题右侧加**乐器 / 人声**
+  二选一切换（`soundMemories.kind`），标签列表与空态跟着切；从唱歌卡片进来默认落在人声。
+  ③ 「导入人声…」从侧边栏移到唱歌卡片、放在「管理音色库…」左边，与「存入音色库」互补。
+  ④ 修掉 `local-ai` 里两条会互相踩 `UNSUPPORTED` 静态位的测试（加锁 + 用例开头清零），
+  `cargo test --workspace` 稳定全绿。
+- **第二十一次修订（2026-10-28）**：音色库的两处观感 / 交互问题。① 人声卡片右上角的 raw
+  `role`（vocal）原来是纯文本、点了没反应——去掉；标签 chip 改成**可点击筛选**（点「女声」
+  直接按该标签过滤）。② 人声卡片按 MD3 列表卡重做：圆形 tonal 头像、标题 / 支持文本层级、
+  主按钮「用作参考」（把 id 交给 AI 面板并切过去，只消费一次）+ 改名 / 删除图标。
+  ③ 「乐器 / 人声」切换、标签筛选、空态文案保持；误杀 `ai-cut` 的 vite 后已按 1430 重启。
+- **第二十二次修订（2026-10-28）**：**参考声线自动裁剪**。整首歌存进音色库时不再原样保留：
+  `singing::reference::trim_to_best` 用「能量 × 周期性 × 音调性」挑 10 秒人声段（FFT 自相关，
+  4 分钟约数十毫秒），入库与直接给文件都生效；旧的长条目在启动时 `trim_long_voices` 就地迁移。
+  `VoiceAsset` 记 `offset_seconds`，卡片显示「取自 3:36」。用用户存的孙燕姿（4:49）实测：
+  自动选中 216.06 秒（89% 有声帧），8 个音全部音高正确（HPS 检测），输出与参考的 MFCC
+  余弦 0.95（对比另一条参考 0.48），6 秒 WAV 在 `/tmp/svs-sunyanzi.wav`。
+  新增开发工具 `cargo run -p ai-daw-local-ai --example svs_demo -- --ref …`。
+- **第二十三次修订（2026-10-28）**：人声卡片**统一到乐器卡片的骨架**——去掉头像、底色与
+  更大的圆角（那套让它和乐器卡片风格分裂、内容也不占满整行），改成同样的边框 / 圆角 /
+  内边距 + `width: 100%`；标题、元信息、标签、页脚、操作行的排布与乐器卡片一致，主按钮
+  仍是「用作参考」。标签 chip 可点筛选、类型切换、`取自 M:SS` 都保留。
 ## 1. 现状总览
 
 | 编号 | 范围 | 状态 | 证据 / 说明 |
@@ -167,7 +215,7 @@
 | 新增 | 母带处理（纯 DSP） | ✅ 完成 | `crates/mastering`：响度归一 + **真峰值限幅（4× 过采样 + 前瞻）** + 立体声宽度；`ai.rs` 的 `kind = "master"` 任务（结果落到一条新轨道）+ MCP 工具 `master_project`；AI 面板一张卡片。**不依赖任何模型**。设计见 `specs/2026-10-10-local-ai-models-design.md` §6 |
 | 品牌 | 应用图标 / favicon | ✅ 完成 | `src-tauri/app-icon.svg`（薰衣草紫，与 `common/Logo.vue` 同图形）→ `tauri icon` 生成 `src-tauri/icons/*`；`public/logo.svg` 作网页 favicon |
 | 新方向 | skills 文档包 + `aidaw` CLI（AI harness 可挂载） | ✅ F1–F4 | **skills 包 + `aidaw_help` 网关（F3）**、**`aidaw` CLI（`crates/aidaw`，MCP 薄客户端 `tools`/`call`/`status`/`start`）+ 运行时发现文件 `mcp-url`（F1/F2）**、**随包分发并接进 PATH（F4，Ollama 式）**；F5 无 Tauri 运行时暂缓 |
-| 新方向 | 本地 AI 能力（转 MIDI / 降噪 / 音源分离） | 🟢 三项已接入 | **Basic Pitch（转 MIDI）+ LocalVQE（降噪）+ HTDemucs v4（音源分离）**（`crates/local-ai/src/models/`，`ort` rc.13 进程内、后台线程、可取消）；转 MIDI/降噪**权重缺失时退回内置 DSP**，音源分离无兜底。**模型分发基建 ✅**：清单 `models/catalog.rs` + 下载器 `src-tauri/src/models.rs`（多源 + sha256 + 断点续传 + 取消）+ 「管理器 → 模型」标签。**小模型随包**，大模型按需下载。AI 面板 ✅（G3） |
+| 新方向 | 本地 AI 能力（转 MIDI / 降噪 / 音源分离 / 歌声合成） | 🟢 四项已接入 | **Basic Pitch（转 MIDI）+ LocalVQE（降噪）+ HTDemucs v4（音源分离）**（`crates/local-ai/src/models/`，`ort` rc.13 进程内、后台线程、可取消）；转 MIDI/降噪**权重缺失时退回内置 DSP**，音源分离无兜底。**模型分发基建 ✅**：清单 `models/catalog.rs` + 下载器 `src-tauri/src/models.rs`（多源 + sha256 + 断点续传 + 取消）+ 「管理器 → 模型」标签。**小模型随包**，大模型按需下载。**SoulX-Singer 歌声合成（G6）✅**：MIDI + 歌词 + 参考声线 → 新音频轨（9 张 ONNX 图，1.44 GB 按需下载）。AI 面板 ✅（G3） |
 
 ### 近期已提交、尚无设计文档的改动（commit `38ef87b`，2026-10-10）
 

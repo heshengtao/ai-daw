@@ -827,6 +827,10 @@ pub(crate) fn apply_sound_memory_inner(
     memory: &SoundMemory,
     actor: Actor,
 ) -> Result<(Project, Vec<Event>), String> {
+    // 人声音色不是「乐器 + 效果链」，应用不到轨道上；它在歌声合成里当参考声线用。
+    if memory.voice.is_some() {
+        return Err("这是人声音色，不能应用到轨道；请在歌声合成里把它选作「参考声线」。".into());
+    }
     capture_plugin_states(state);
     let mut engine = state.engine.lock().unwrap();
     if !engine.project().tracks.iter().any(|t| t.id == track) {
@@ -1145,6 +1149,7 @@ pub(crate) fn trim_clip_as(
                         offset: 0.0,
                         legato: false,
                         expr: ai_daw_engine::model::PitchExpression::NONE,
+                        lyric: None,
                     },
                 })
                 .collect();
@@ -2668,7 +2673,7 @@ fn normalize_project(mut project: Project) -> Project {
             clip.start = ai_daw_engine::model::Clip::normalize_start(clip.start);
             clip.length = ai_daw_engine::model::Clip::normalize_length(clip.length);
             for note in clip.notes.iter_mut() {
-                *note = Note::normalize(*note);
+                *note = Note::normalize(note.clone());
             }
         }
     }
@@ -4667,6 +4672,7 @@ mod tests {
         assert_eq!(snapshot.mixer.pan, 0.2);
 
         let memory = SoundMemory {
+            voice: None,
             id: "s1".into(),
             name: "test".into(),
             description: String::new(),

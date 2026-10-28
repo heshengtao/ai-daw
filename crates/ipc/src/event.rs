@@ -456,6 +456,7 @@ mod tests {
                     offset: 0.0,
                     legato: false,
                     expr: crate::model::PitchExpression::NONE,
+                    lyric: None,
                 },
             },
             Event::NoteRemoved {
@@ -482,6 +483,7 @@ mod tests {
                         offset: 0.0,
                         legato: false,
                         expr: crate::model::PitchExpression::NONE,
+                        lyric: None,
                     },
                 }],
             },

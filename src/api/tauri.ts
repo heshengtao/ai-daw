@@ -15,6 +15,11 @@ import type {
   AgentSessionSummary,
   AiModels,
   AiStatus,
+  SingingArgs,
+  SingingModels,
+  SingingStatus,
+  VoiceEntry,
+  VoiceSaveArgs,
   AnalysisReport,
   AutomationPoint,
   BackendInfo,
@@ -82,6 +87,8 @@ export const EVENT_ENGINE = "engine://event";
 export const EVENT_TRANSPORT = "engine://transport";
 /** 本地 AI 状态广播通道名，与后端 `ai::EVENT_AI` 保持一致。 */
 export const EVENT_AI = "engine://ai";
+/** 歌声合成状态广播通道名，与后端 `singing::EVENT_SINGING` 保持一致。 */
+export const EVENT_SINGING = "engine://singing";
 
 /** 插件管理器进度广播通道名，与后端 `manager::EVENT_MANAGER` 保持一致。 */
 export const EVENT_MANAGER = "engine://manager";
@@ -1138,6 +1145,88 @@ export function aiStart(
 export function aiCancel(): Promise<void> {
   if (mockEnabled()) return Promise.resolve(mockApi.aiCancel());
   return invoke<void>("ai_cancel");
+}
+
+// ---------------------------------------------------------------------------
+// 人声音色库（跨工程）
+// ---------------------------------------------------------------------------
+
+/** 列出人声音色库。 */
+export function voiceList(): Promise<VoiceEntry[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.voiceList());
+  return invoke<VoiceEntry[]>("voice_list");
+}
+
+/** 把一条参考声线存进音色库（从工程内轨道或音频文件）。 */
+export function voiceSave(args: VoiceSaveArgs): Promise<VoiceEntry> {
+  if (mockEnabled()) return Promise.resolve(mockApi.voiceSave(args));
+  return invoke<VoiceEntry>("voice_save", { args });
+}
+
+/** 改名字 / 描述 / 标签。 */
+export function voiceUpdate(
+  id: string,
+  patch: { name?: string; description?: string; tags?: string[] },
+): Promise<VoiceEntry> {
+  if (mockEnabled()) return Promise.resolve(mockApi.voiceUpdate(id, patch));
+  return invoke<VoiceEntry>("voice_update", {
+    id,
+    name: patch.name ?? null,
+    description: patch.description ?? null,
+    tags: patch.tags ?? null,
+  });
+}
+
+/** 删除一条音色。 */
+export function voiceDelete(id: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.voiceDelete(id));
+  return invoke<void>("voice_delete", { id });
+}
+
+// ---------------------------------------------------------------------------
+// 歌声合成（SoulX-Singer ONNX）
+// ---------------------------------------------------------------------------
+
+/** 歌声合成模型是否就位。 */
+export function singingModels(): Promise<SingingModels> {
+  if (mockEnabled()) return Promise.resolve(mockApi.singingModels());
+  return invoke<SingingModels>("singing_models");
+}
+
+/** 当前歌声合成任务状态。 */
+export function singingStatus(): Promise<SingingStatus> {
+  if (mockEnabled()) return Promise.resolve(mockApi.singingStatus());
+  return invoke<SingingStatus>("singing_status");
+}
+
+/**
+ * 开始合成：MIDI 轨 + 歌词 + 参考音色 → 新音频轨（插在源轨下面，一次撤销）。
+ *
+ * 渲染是离线的：10 秒大约 40–90 秒 CPU 时间；进度走 `onSingingEvent`。
+ */
+export function singingRender(args: SingingArgs): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.singingRender());
+  return invoke<void>("singing_render", { args });
+}
+
+/** 停止当前合成（还没落地的结果直接丢弃）。 */
+export function singingCancel(): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.singingCancel());
+  return invoke<void>("singing_cancel");
+}
+
+/** 订阅歌声合成状态。 */
+export function onSingingEvent(handler: (status: SingingStatus) => void): Promise<UnlistenFn> {
+  if (mockEnabled()) {
+    const onMock = (e: Event): void => handler((e as CustomEvent<SingingStatus>).detail);
+    window.addEventListener("ai-daw-mock-singing", onMock);
+    const off = mockApi.onSingingEvent();
+    return Promise.resolve(() => {
+      window.removeEventListener("ai-daw-mock-singing", onMock);
+      off();
+    });
+  }
+  return listen<SingingStatus>(EVENT_SINGING, (e) => handler(e.payload));
 }
 
 /** 订阅 AI 任务状态。 */

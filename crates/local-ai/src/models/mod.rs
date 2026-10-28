@@ -155,6 +155,8 @@ pub struct Availability {
     pub htdemucs: Option<PathBuf>,
     /// Beat This! 主模型（`final0`）路径 —— **仅当 log-mel 前端也在位时**才算可用。
     pub beat_this: Option<PathBuf>,
+    /// 歌声合成（SoulX-Singer 9 图整组）的目录 —— 整组齐备才算可用。
+    pub singing: Option<PathBuf>,
 }
 
 impl Availability {
@@ -164,6 +166,7 @@ impl Availability {
             || self.localvqe.is_some()
             || self.htdemucs.is_some()
             || self.beat_this.is_some()
+            || self.singing.is_some()
     }
 }
 
@@ -179,6 +182,7 @@ pub fn availability() -> Availability {
         localvqe: find(LOCALVQE_FILE),
         htdemucs: find(HTDEMUCS_FILE),
         beat_this,
+        singing: crate::singing::model_dir(),
     }
 }
 

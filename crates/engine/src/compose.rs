@@ -97,7 +97,7 @@ pub fn transpose(clip: &Clip, semitones: i32, range: Option<NoteRange>) -> Trans
             .filter(|(_, n)| in_range(n, range))
             .map(|(i, n)| {
                 let pitch = (n.pitch as i32 + semitones).clamp(0, 127) as u8;
-                (i, Note { pitch, ..*n })
+                (i, Note { pitch, ..n.clone() })
             }),
     )
 }
@@ -108,7 +108,7 @@ pub fn update_by_id(clip: &Clip, updates: &[NotePatch]) -> Transform {
         clip,
         updates.iter().filter_map(|patch| {
             let index = clip.note_index(patch.id)?;
-            Some((index, patch.apply_to(clip.notes[index])))
+            Some((index, patch.apply_to(clip.notes[index].clone())))
         }),
     )
 }
@@ -155,7 +155,7 @@ pub fn set_velocity(
     collect(
         clip,
         selected.into_iter().map(|i| {
-            let note = clip.notes[i];
+            let note = clip.notes[i].clone();
             let velocity = match shape {
                 VelocityShape::Fixed(v) => v as f64,
                 VelocityShape::Scale(f) => note.velocity as f64 * f,
@@ -232,7 +232,7 @@ pub fn quantize(
                     Note {
                         start,
                         duration,
-                        ..*n
+                        ..n.clone()
                     },
                 )
             }),
@@ -288,7 +288,7 @@ pub fn strum(
             }
         });
         for (rank, index) in ordered.iter().enumerate() {
-            let note = clip.notes[*index];
+            let note = clip.notes[*index].clone();
             updates.push((
                 *index,
                 Note {
@@ -344,17 +344,17 @@ pub fn swing(
             .filter(|(_, n)| in_range(n, range))
             .map(|(i, n)| {
                 if n.start < 0.0 {
-                    return (i, *n);
+                    return (i, n.clone());
                 }
                 // 落在第几个子拍；偶数位（第一个子拍）不动。
                 let slot = (n.start / subdivision).floor() as i64;
                 if slot % 2 == 0 {
-                    return (i, *n);
+                    return (i, n.clone());
                 }
                 let pair_start = (slot - 1) as f64 * subdivision;
                 let target = pair_start + ratio * pair;
                 let start = n.start + (target - n.start) * strength;
-                (i, Note { start, ..*n })
+                (i, Note { start, ..n.clone() })
             }),
     )
 }
@@ -448,7 +448,7 @@ pub fn humanize(
             Note {
                 start,
                 velocity: vel,
-                ..*n
+                ..n.clone()
             },
         ));
     }
@@ -498,7 +498,7 @@ pub fn fit_to_range(
     }
     let mut transform = Transform::default();
     for index in selected {
-        let note = clip.notes[index];
+        let note = clip.notes[index].clone();
         if (lo..=hi).contains(&note.pitch) {
             continue;
         }
@@ -512,7 +512,10 @@ pub fn fit_to_range(
         }
         // 音域窄于八度 / 已经贴边：只能夹到最近的边界（音级会变，但至少合法）。
         let pitch = pitch.clamp(lo as i32, hi as i32) as u8;
-        let edited = Note { pitch, ..note };
+        let edited = Note {
+            pitch,
+            ..note.clone()
+        };
         if edited != note {
             transform.edits.push(NoteEdit {
                 index,
@@ -871,6 +874,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: crate::model::PitchExpression::NONE,
+            lyric: None,
         }
     }
 
@@ -1076,12 +1080,13 @@ mod tests {
                 offset: 0.0,
                 legato: false,
                 expr: crate::model::PitchExpression::NONE,
+                lyric: None,
             }],
             4.0,
         );
         let t = quantize(&c, 1.0, 1.0, None, false);
         assert_eq!(t.clamped, 1);
-        let n = t.edits[0].note;
+        let n = t.edits[0].note.clone();
         assert!((n.start + n.duration - 4.0).abs() < 1e-9, "{n:?}");
     }
 
@@ -1147,6 +1152,7 @@ mod tests {
                 offset: 0.0,
                 legato: false,
                 expr: crate::model::PitchExpression::NONE,
+                lyric: None,
             }],
             4.0,
         );
@@ -1199,6 +1205,7 @@ mod tests {
                     offset: -0.04,
                     legato: false,
                     expr: crate::model::PitchExpression::NONE,
+                    lyric: None,
                 },
                 note(2, 64, 1.0),
             ],
@@ -1242,6 +1249,7 @@ mod tests {
                 offset: 0.0,
                 legato: false,
                 expr: crate::model::PitchExpression::NONE,
+                lyric: None,
             },
             Note {
                 id: 2,
@@ -1255,6 +1263,7 @@ mod tests {
                 offset: 0.0,
                 legato: false,
                 expr: crate::model::PitchExpression::NONE,
+                lyric: None,
             },
         ]);
         let stats = note_stats(&t, None, 4.0);
@@ -1273,6 +1282,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: crate::model::PitchExpression::NONE,
+            lyric: None,
         }]);
         let mut b = track(vec![Note {
             id: 1,
@@ -1286,6 +1296,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: crate::model::PitchExpression::NONE,
+            lyric: None,
         }]);
         b.id = TrackId(2);
         let overlap = track_overlap(&a, &b, None);
@@ -1313,6 +1324,7 @@ mod tests {
                 offset: 0.0,
                 legato: false,
                 expr: crate::model::PitchExpression::NONE,
+                lyric: None,
             },
             Note {
                 id: 2,
@@ -1326,6 +1338,7 @@ mod tests {
                 offset: 0.0,
                 legato: false,
                 expr: crate::model::PitchExpression::NONE,
+                lyric: None,
             },
             Note {
                 id: 3,
@@ -1339,6 +1352,7 @@ mod tests {
                 offset: 0.0,
                 legato: false,
                 expr: crate::model::PitchExpression::NONE,
+                lyric: None,
             },
         ]);
         let s = note_stats(&t, None, 4.0);
@@ -1366,6 +1380,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: crate::model::PitchExpression::NONE,
+            lyric: None,
         }]);
         let mut b = track(vec![Note {
             id: 1,
@@ -1379,6 +1394,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: crate::model::PitchExpression::NONE,
+            lyric: None,
         }]);
         b.id = TrackId(2);
         b.meta = Some(TrackMeta {

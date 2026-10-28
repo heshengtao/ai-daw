@@ -487,7 +487,7 @@ impl Engine {
                         actor: actor.clone(),
                         track,
                         clip,
-                        note: crate::model::Note::normalize(*note),
+                        note: crate::model::Note::normalize(note.clone()),
                     });
                 }
                 events
@@ -678,21 +678,21 @@ impl Engine {
                 for n in &existing.notes {
                     let n_end = n.start + n.duration;
                     if n_end <= rel + eps {
-                        left_notes.push(*n);
+                        left_notes.push(n.clone());
                     } else if n.start >= rel - eps {
                         right_notes.push(crate::model::Note {
                             start: n.start - rel,
-                            ..*n
+                            ..n.clone()
                         });
                     } else {
                         left_notes.push(crate::model::Note {
                             duration: rel - n.start,
-                            ..*n
+                            ..n.clone()
                         });
                         right_notes.push(crate::model::Note {
                             start: 0.0,
                             duration: n_end - rel,
-                            ..*n
+                            ..n.clone()
                         });
                     }
                 }
@@ -755,7 +755,7 @@ impl Engine {
                     actor: actor.clone(),
                     track: *track,
                     clip: *clip,
-                    note: notes[0],
+                    note: notes[0].clone(),
                 }]
             }
             Command::SetNote {
@@ -769,7 +769,7 @@ impl Engine {
                     track: *track,
                     clip: *clip,
                     index: *index,
-                    note: crate::model::Note::normalize(*note),
+                    note: crate::model::Note::normalize(note.clone()),
                 }]
             }
             Command::SetNotes {
@@ -788,7 +788,7 @@ impl Engine {
                         .iter()
                         .map(|e| crate::model::NoteEdit {
                             index: e.index,
-                            note: crate::model::Note::normalize(e.note),
+                            note: crate::model::Note::normalize(e.note.clone()),
                         })
                         .collect(),
                 }]
@@ -1248,7 +1248,7 @@ impl Engine {
                     for n in &c.notes {
                         merged.push(crate::model::Note {
                             start: n.start + offset,
-                            ..*n
+                            ..n.clone()
                         });
                         tags.push(self.project.note_tag(*track, c.id, n.id).cloned());
                     }
@@ -1633,7 +1633,7 @@ fn assign_ids(
     notes
         .iter()
         .map(|note| {
-            let mut note = crate::model::Note::normalize(*note);
+            let mut note = crate::model::Note::normalize(note.clone());
             if note.id == 0 || !seen.insert(note.id) {
                 note.id = next;
                 next += 1;
@@ -1884,6 +1884,7 @@ mod tests {
                     offset: 0.0,
                     legato: false,
                     expr: crate::model::PitchExpression::NONE,
+                    lyric: None,
                 },
             },
             Actor::Human,
@@ -2220,6 +2221,7 @@ mod tests {
                     offset: 0.0,
                     legato: false,
                     expr: crate::model::PitchExpression::NONE,
+                    lyric: None,
                 }],
                 audio: None,
             }],
@@ -2437,6 +2439,7 @@ mod tests {
                         offset: 0.0,
                         legato: false,
                         expr: crate::model::PitchExpression::NONE,
+                        lyric: None,
                     }],
                 }],
             }],
@@ -2660,6 +2663,7 @@ mod tests {
                         offset: 0.0,
                         legato: false,
                         expr: crate::model::PitchExpression::NONE,
+                        lyric: None,
                     },
                 },
                 Actor::Human,
@@ -2682,6 +2686,7 @@ mod tests {
                     offset: 0.0,
                     legato: false,
                     expr: crate::model::PitchExpression::NONE,
+                    lyric: None,
                 },
             },
             Actor::Human,
@@ -2775,6 +2780,7 @@ mod tests {
                         offset: 0.0,
                         legato: false,
                         expr: crate::model::PitchExpression::NONE,
+                        lyric: None,
                     },
                 },
                 Actor::Human,
@@ -2797,6 +2803,7 @@ mod tests {
                     offset: 0.0,
                     legato: false,
                     expr: crate::model::PitchExpression::NONE,
+                    lyric: None,
                 },
             })
             .collect();
@@ -2885,6 +2892,7 @@ mod tests {
                 offset: 0.0,
                 legato: false,
                 expr: crate::model::PitchExpression::NONE,
+                lyric: None,
             },
         };
     }
@@ -3288,6 +3296,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: crate::model::PitchExpression::NONE,
+            lyric: None,
         };
         e.execute(
             Command::AddNote {
@@ -3442,6 +3451,7 @@ mod tests {
                 offset: 0.0,
                 legato: false,
                 expr: crate::model::PitchExpression::NONE,
+                lyric: None,
             },
             Note {
                 id: 0,
@@ -3455,6 +3465,7 @@ mod tests {
                 offset: 0.0,
                 legato: false,
                 expr: crate::model::PitchExpression::NONE,
+                lyric: None,
             },
         ];
         e.execute(

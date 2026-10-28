@@ -129,11 +129,17 @@ mod tests {
             supported(&profile("macos", "aarch64")),
             vec![BackendKind::Cpu, BackendKind::CoreMl]
         );
-        assert_eq!(supported(&profile("macos", "x86_64")), vec![BackendKind::Cpu]);
+        assert_eq!(
+            supported(&profile("macos", "x86_64")),
+            vec![BackendKind::Cpu]
+        );
         assert_eq!(
             supported(&profile("windows", "x86_64")),
             vec![BackendKind::Cpu, BackendKind::DirectMl]
         );
-        assert_eq!(supported(&profile("linux", "x86_64")), vec![BackendKind::Cpu]);
+        assert_eq!(
+            supported(&profile("linux", "x86_64")),
+            vec![BackendKind::Cpu]
+        );
     }
 }

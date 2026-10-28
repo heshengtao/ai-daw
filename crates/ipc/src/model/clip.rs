@@ -147,7 +147,7 @@ fn is_zero_f32(value: &f32) -> bool {
 /// `id` 是**片段内稳定**的标识：批量工具（`update_notes` / `remove_notes`）靠它定位，
 /// 而不是靠数组下标——删掉一个音符不该让后面所有音符的定位全部漂移。旧工程没有这个字段，
 /// 读入时按片段顺序补齐（见 `Project::ensure_note_ids`）。
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Note {
     /// 片段内唯一标识。旧工程 / 手写 JSON 缺这个字段时按 0 读入，由引擎补号。
     #[serde(default)]
@@ -180,6 +180,12 @@ pub struct Note {
     /// 音高表达（推弦 / 揉弦 / 滑音）。缺省 = 无，且不写进 JSON。
     #[serde(default, skip_serializing_if = "PitchExpression::is_none")]
     pub expr: PitchExpression,
+    /// **歌词音节**（歌声合成用）：一个汉字（可带 `1..5` 强制声调）或 `-`（连音）。
+    ///
+    /// 缺省 = 没有逐音歌词：歌声合成会退回「整串歌词按顺序贴」的分配方式。
+    /// 空字符串写进来会被归一化成 `None`（清空该音的音节）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lyric: Option<String>,
 }
 
 /// 旧工程文件（以及手写的 JSON）可能没有 `volume` 字段——按「不衰减」读入，
@@ -191,6 +197,19 @@ fn default_note_volume() -> u8 {
 /// 是否为 `false`（`legato` 缺省）——为假时不写进 JSON。
 fn is_false(v: &bool) -> bool {
     !*v
+}
+
+/// 歌词音节的归一化：去掉首尾空白、折叠内部空白，空串 → `None`。
+///
+/// 上限 24 个字符：一个音节最多是「汉字 + 声调」或一个英文单词的注音写法；更长的东西
+/// 基本是误粘贴，截断比整条拒绝更好（用户还能在钢琴卷帘里改）。
+pub fn normalize_lyric(value: Option<String>) -> Option<String> {
+    let text = value?;
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    Some(collapsed.chars().take(24).collect())
 }
 
 impl Note {
@@ -239,6 +258,7 @@ impl Note {
             offset: clamp_signed_beats(note.offset, Self::MAX_OFFSET_BEATS),
             legato: note.legato,
             expr: note.expr.normalize(),
+            lyric: normalize_lyric(note.lyric),
         }
     }
 
@@ -369,7 +389,7 @@ pub struct ClipPlacement {
 /// 一次带上全部项，才能保证「改 10 个音符」只产生一条撤销记录。
 ///
 /// 界面（多选拖动、属性面板）继续用它；AI 侧的新工具改用 [`NotePatch`]（按稳定 id 定位）。
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NoteEdit {
     pub index: usize,
     pub note: Note,
@@ -379,7 +399,7 @@ pub struct NoteEdit {
 ///
 /// 与 [`NoteEdit`] 的差别只在定位方式——批量工具需要「删掉几个之后仍然指得准」，
 /// 数组下标做不到，稳定 id 可以。
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NotePatch {
     /// 目标音符的 id（片段内唯一）。
     pub id: u64,
@@ -408,12 +428,19 @@ pub struct NotePatch {
     /// 新的音高表达；`Some(PitchExpression::NONE)` = 清除。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expr: Option<PitchExpression>,
+    /// 新的歌词音节；空字符串 = 清除该音的音节。缺省 = 保持原值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lyric: Option<String>,
 }
 
 impl NotePatch {
     /// 把改写项落到一个音符上；未给出的字段保持不变。
     pub fn apply_to(&self, note: Note) -> Note {
         Note {
+            lyric: match &self.lyric {
+                Some(text) => normalize_lyric(Some(text.clone())),
+                None => note.lyric.clone(),
+            },
             id: note.id,
             channel: self
                 .channel
@@ -651,6 +678,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: PitchExpression::NONE,
+            lyric: None,
         });
         assert_eq!(n.pitch, 127);
         // 起点是**相对片段起点**的拍，允许为负（收起时被裁掉的音符要留着）。
@@ -674,6 +702,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: PitchExpression::NONE,
+            lyric: None,
         });
         // 非有限的起点回落到 0；非有限的时长回落到最短时长（而不是让它永远挂着）。
         assert_eq!(n.start, 0.0);
@@ -695,11 +724,12 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: PitchExpression::NONE,
+            lyric: None,
         };
         assert_eq!(
             Note::normalize(Note {
                 offset: 99.0,
-                ..base
+                ..base.clone()
             })
             .offset,
             Note::MAX_OFFSET_BEATS
@@ -707,7 +737,7 @@ mod tests {
         assert_eq!(
             Note::normalize(Note {
                 offset: -99.0,
-                ..base
+                ..base.clone()
             })
             .offset,
             -Note::MAX_OFFSET_BEATS
@@ -715,7 +745,7 @@ mod tests {
         assert_eq!(
             Note::normalize(Note {
                 offset: f64::NAN,
-                ..base
+                ..base.clone()
             })
             .offset,
             0.0
@@ -778,6 +808,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: PitchExpression::NONE,
+            lyric: None,
         };
         let json = serde_json::to_string(&plain).unwrap();
         assert!(!json.contains("expr"), "没有表达时不该写出 expr：{json}");
@@ -912,6 +943,7 @@ mod tests {
                 offset: 0.0,
                 legato: false,
                 expr: PitchExpression::NONE,
+                lyric: None,
             }],
             audio: Some(AudioSource {
                 path: "/tmp/kick.wav".into(),
@@ -1015,6 +1047,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: PitchExpression::NONE,
+            lyric: None,
         };
         let json = serde_json::to_string(&plain).unwrap();
         assert!(!json.contains("channel"), "缺省通道不该出现：{json}");
@@ -1043,9 +1076,61 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: PitchExpression::NONE,
+            lyric: None,
         });
         assert_eq!(n.channel, Some(Note::MAX_CHANNEL));
         assert_eq!(n.pressure, Some(Note::MAX_PRESSURE));
+    }
+
+    #[test]
+    fn note_patch_sets_and_clears_lyric() {
+        let note = Note {
+            id: 7,
+            channel: None,
+            pressure: None,
+            pitch: 60,
+            start: 0.0,
+            duration: 1.0,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: PitchExpression::NONE,
+            lyric: Some("春".into()),
+        };
+        let mut patch = NotePatch {
+            id: 7,
+            pitch: None,
+            start: None,
+            duration: None,
+            velocity: None,
+            volume: None,
+            offset: None,
+            legato: None,
+            channel: None,
+            pressure: None,
+            expr: None,
+            lyric: Some("江4".into()),
+        };
+        assert_eq!(patch.apply_to(note.clone()).lyric.as_deref(), Some("江4"));
+        // 空字符串 = 清除。
+        patch.lyric = Some("   ".into());
+        assert_eq!(patch.apply_to(note.clone()).lyric, None);
+        // 缺省 = 保持原值（含已经有歌词的音）。
+        patch.lyric = None;
+        assert_eq!(patch.apply_to(note.clone()).lyric.as_deref(), Some("春"));
+    }
+
+    #[test]
+    fn lyric_normalization_trims_and_caps() {
+        assert_eq!(
+            normalize_lyric(Some("  春  ".into())).as_deref(),
+            Some("春")
+        );
+        assert_eq!(normalize_lyric(Some("   ".into())), None);
+        assert_eq!(normalize_lyric(None), None);
+        let long = "字".repeat(40);
+        assert_eq!(normalize_lyric(Some(long)).unwrap().chars().count(), 24);
     }
 
     #[test]
@@ -1062,6 +1147,7 @@ mod tests {
             offset: 0.0,
             legato: false,
             expr: PitchExpression::NONE,
+            lyric: None,
         };
         let patch = NotePatch {
             id: 1,
@@ -1075,6 +1161,7 @@ mod tests {
             channel: Some(9),
             pressure: Some(64),
             expr: None,
+            lyric: None,
         };
         let out = patch.apply_to(note);
         assert_eq!((out.channel, out.pressure), (Some(9), Some(64)));

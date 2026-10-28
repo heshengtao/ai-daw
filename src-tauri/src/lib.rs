@@ -21,8 +21,10 @@ mod plugins;
 mod presets;
 mod quarantine;
 mod session;
+mod singing;
 mod sound_memories;
 mod state;
+mod voices;
 
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -733,6 +735,14 @@ pub fn run() {
             ai::ai_models,
             ai::ai_start,
             ai::ai_cancel,
+            voices::voice_list,
+            voices::voice_save,
+            voices::voice_update,
+            voices::voice_delete,
+            singing::singing_models,
+            singing::singing_status,
+            singing::singing_render,
+            singing::singing_cancel,
             models::model_catalog,
             models::model_download,
             models::model_cancel,

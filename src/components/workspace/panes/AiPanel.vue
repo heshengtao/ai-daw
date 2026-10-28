@@ -20,14 +20,39 @@ import { useRouter } from "vue-router";
 import { BoltIcon, ClipboardDocumentIcon } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
-import { aiCancel, aiModels, aiStart, aiStatus, mcpStatus, onAiEvent, setMcpConfig } from "@/api/tauri";
-import type { AiModels, AiStatus, McpStatus, ModelStatus } from "@/api/types";
+import {
+  aiCancel,
+  aiModels,
+  aiStart,
+  aiStatus,
+  mcpStatus,
+  onAiEvent,
+  onSingingEvent,
+  setMcpConfig,
+  singingCancel,
+  singingModels,
+  singingRender,
+  singingStatus,
+  voiceList,
+  voiceSave,
+} from "@/api/tauri";
+import type {
+  AiModels,
+  AiStatus,
+  McpStatus,
+  ModelStatus,
+  SingingModels,
+  SingingStatus,
+  VoiceEntry,
+} from "@/api/types";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
 import { useModelsStore } from "@/stores/models";
+import { useSoundMemoriesStore } from "@/stores/soundMemories";
 import { useI18n } from "@/i18n";
 import { copyText } from "@/utils/clipboard";
+import { pickAudioToOpen } from "@/api/dialogs";
 import { humanSize, missingBytes, modelName } from "@/utils/models";
 
 const KIND_MIDI = "to_midi";
@@ -43,6 +68,7 @@ const project = useProjectStore();
 const selection = useSelectionStore();
 const layout = useLayoutStore();
 const modelsStore = useModelsStore();
+const soundMemories = useSoundMemoriesStore();
 const i18n = useI18n();
 
 // ---- MCP ----
@@ -90,6 +116,8 @@ const models = ref<AiModels>({
 let unlisten: (() => void) | null = null;
 /** 模型下载进度订阅的取消函数。 */
 let stopModel: (() => void) | null = null;
+/** 歌声合成状态订阅的取消函数。 */
+let stopSingingEvent: (() => void) | null = null;
 
 /** 目标轨道（选中轨道，否则首轨）与「有音频片段」。 */
 const track = computed(() => {
@@ -200,6 +228,239 @@ async function cancelModelDownload(): Promise<void> {
   await modelsStore.cancel();
 }
 
+// ---- 歌声合成（SoulX-Singer）：MIDI + 歌词 + 参考声线 → 新音频轨 ----
+const singing = ref<SingingStatus>({ running: false, progress: 0, message: null });
+const singingInfo = ref<SingingModels>({ installed: false, dir: null, approx_bytes: 0 });
+const singModel = computed(
+  () => modelsStore.catalog.find((m) => m.feature === "sing") ?? null,
+);
+/** 有音符的 MIDI 轨道（歌声合成的输入）。 */
+const midiTracks = computed(() =>
+  (project.project?.tracks ?? []).filter(
+    (t) => !t.clips.every((c) => c.audio) && t.clips.some((c) => (c.notes?.length ?? 0) > 0),
+  ),
+);
+/** 有音频片段的轨道（可当参考声线）。 */
+const audioTracks = computed(() =>
+  (project.project?.tracks ?? []).filter((t) => t.clips.some((c) => c.audio)),
+);
+/** 下拉用**字符串 id**（`Md3Select` 是字符串模型）；参考声线是 `voice:<id>` / `track:<id>`。 */
+const singTrackId = ref<string | null>(null);
+const singRef = ref<string>("");
+const singSteps = ref(32);
+/** 人声音色库（跨工程）。 */
+const voices = ref<VoiceEntry[]>([]);
+/** 参考声线的来源：工程内轨道 / 人声音色库。 */
+const refSource = ref<"track" | "voice">("track");
+const singBusy = computed(() => singing.value.running);
+const singDownloading = computed(() =>
+  singModel.value ? modelsStore.installing(singModel.value.id) : false,
+);
+const singProgressPct = computed(() => `${Math.round(singing.value.progress * 100)}%`);
+const singReady = computed(() => singingInfo.value.installed);
+const singTrack = computed(
+  () => midiTracks.value.find((t) => String(t.id) === singTrackId.value) ?? midiTracks.value[0] ?? null,
+);
+const singOptions = computed(() =>
+  midiTracks.value.map((t) => ({ id: String(t.id), label: t.name })),
+);
+const sourceOptions = computed(() => [
+  { id: "track", label: i18n.t("ai.refSourceTrack") },
+  { id: "voice", label: i18n.t("ai.refSourceVoice") },
+]);
+const sourceChoice = computed({
+  get: () => refSource.value,
+  set: (v: string) => {
+    refSource.value = v === "voice" ? "voice" : "track";
+    // 换来源时立刻落到该来源的第一条，避免下拉显示空值。
+    singRef.value =
+      refSource.value === "voice"
+        ? (voices.value[0] ? `voice:${voices.value[0].id}` : "")
+        : (audioTracks.value[0] ? `track:${audioTracks.value[0].id}` : "");
+  },
+});
+
+/** 当前来源下可选的参考（轨道 / 音色库）。 */
+const refOptions = computed(() =>
+  refSource.value === "voice"
+    ? voices.value.map((v) => ({
+        id: `voice:${v.id}`,
+        label: v.name,
+        hint: `${Math.round(v.seconds)}s${v.description ? ` · ${v.description}` : ""}`,
+      }))
+    : audioTracks.value.map((t) => ({ id: `track:${t.id}`, label: t.name })),
+);
+const singRefVoiceId = computed(() =>
+  singRef.value.startsWith("voice:") ? singRef.value.slice("voice:".length) : null,
+);
+const singRefTrackId = computed(() =>
+  singRef.value.startsWith("track:") ? Number(singRef.value.slice("track:".length)) : null,
+);
+/** 当前选中的音色库条目。 */
+const singVoice = computed(() =>
+  voices.value.find((v) => v.id === singRefVoiceId.value) ?? null,
+);
+/** 有可用的参考声线（选中的那条还在）。 */
+const hasTone = computed(() => refOptions.value.some((o) => o.id === singRef.value));
+
+const stepOptions = [
+  { id: "16", label: "16" },
+  { id: "24", label: "24" },
+  { id: "32", label: "32" },
+  { id: "48", label: "48" },
+];
+const stepChoice = computed({
+  get: () => String(singSteps.value),
+  set: (v: string) => {
+    singSteps.value = Number(v);
+  },
+});
+
+// ---- 存进 / 移出人声音色库 ----
+const voiceSaveOpen = ref(false);
+const voiceDraftName = ref("");
+/** 待保存的来源：工程内轨道，或一个刚选的音频文件。 */
+const voiceSource = ref<{ track?: number; path?: string } | null>(null);
+
+async function refreshVoices(): Promise<void> {
+  try {
+    voices.value = await voiceList();
+  } catch {
+    voices.value = [];
+  }
+}
+
+/** 把当前选中的工程内轨道存成音色（默认用轨道名）。 */
+function beginSaveVoice(): void {
+  if (refSource.value !== "track") return;
+  const track = audioTracks.value.find((t) => t.id === singRefTrackId.value);
+  voiceSource.value = track ? { track: track.id } : null;
+  voiceDraftName.value = track?.name ?? i18n.t("ai.voiceDefaultName");
+  voiceSaveOpen.value = true;
+}
+
+async function confirmSaveVoice(): Promise<void> {
+  const source = voiceSource.value;
+  const name = voiceDraftName.value.trim();
+  if (!source || !name) return;
+  try {
+    const entry = await voiceSave({
+      track: source.track ?? null,
+      path: source.path ?? null,
+      name,
+    });
+    await refreshVoices();
+    refSource.value = "voice";
+    singRef.value = `voice:${entry.id}`;
+    voiceSaveOpen.value = false;
+    voiceSource.value = null;
+    layout.notify(i18n.t("ai.voiceSaved", { name: entry.name }));
+  } catch (err) {
+    layout.notify(String(err));
+  }
+}
+
+/** 打开侧边栏的「音色库」：人声和乐器在同一个库里，只靠标签区分。 */
+function openVoiceLibrary(): void {
+  soundMemories.kind = "voice";
+  layout.openTab("sounds");
+}
+
+/** 从音频文件直接存一条人声音色（与「存入音色库」互补：一个从文件、一个从工程轨道）。 */
+async function importVoice(): Promise<void> {
+  if (singBusy.value) return;
+  try {
+    const path = await pickAudioToOpen();
+    if (!path) return;
+    const stem = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "";
+    const entry = await voiceSave({ path, name: stem || i18n.t("ai.voiceDefaultName") });
+    await refreshVoices();
+    refSource.value = "voice";
+    singRef.value = `voice:${entry.id}`;
+    layout.notify(i18n.t("ai.voiceSaved", { name: entry.name }));
+  } catch (err) {
+    layout.notify(String(err));
+  }
+}
+
+/** 跳到钢琴卷帘的歌词模式，并把当前 MIDI 片段选中。 */
+function openLyricsEditor(): void {
+  const t = singTrack.value;
+  if (!t) return;
+  const clip = t.clips.find((c) => !c.audio && (c.notes?.length ?? 0) > 0);
+  selection.selectTrack(t.id);
+  if (clip) selection.selectClip(t.id, clip.id);
+  layout.setTool("lyric");
+  void router.push("/edit");
+}
+
+/** 选中轨变化后把 MIDI 轨与参考声线的默认值收敛到合法值。 */
+watch(
+  () =>
+    [
+      midiTracks.value.map((t) => t.id).join(","),
+      audioTracks.value.map((t) => t.id).join(","),
+      voices.value.map((v) => v.id).join(","),
+      selection.trackId,
+    ].join("|"),
+  () => {
+    if (!midiTracks.value.some((t) => String(t.id) === singTrackId.value)) {
+      const selected = midiTracks.value.find((t) => t.id === selection.trackId);
+      singTrackId.value = String((selected ?? midiTracks.value[0])?.id ?? "") || null;
+    }
+    // 所选来源下没有可选条目时，自动切到另一边（用户可能刚导入第一条人声）。
+    if (refSource.value === "voice" && voices.value.length === 0 && audioTracks.value.length > 0) {
+      refSource.value = "track";
+    } else if (
+      refSource.value === "track" &&
+      audioTracks.value.length === 0 &&
+      voices.value.length > 0
+    ) {
+      refSource.value = "voice";
+    }
+    if (!hasTone.value) {
+      singRef.value = refOptions.value[0]?.id ?? "";
+    }
+  },
+  { immediate: true },
+);
+
+/** 点「生成」：模型缺就弹确认框（下载后跳到管理器），否则直接渲染。 */
+async function runSinging(): Promise<void> {
+  const t = singTrack.value;
+  if (!t || singBusy.value) return;
+  if (!singReady.value) {
+    if (!singModel.value) return;
+    pendingModel.value = singModel.value;
+    promptOpen.value = true;
+    return;
+  }
+  if (!hasTone.value) {
+    layout.notify(i18n.t("ai.singingNeedsTone"));
+    return;
+  }
+  try {
+    await singingRender({
+      track: t.id,
+      reference_voice: singRefVoiceId.value,
+      reference_track: singRefTrackId.value,
+      steps: singSteps.value,
+      seed: 0,
+    });
+  } catch (err) {
+    layout.notify(String(err));
+  }
+}
+
+async function stopSinging(): Promise<void> {
+  try {
+    await singingCancel();
+  } catch {
+    // 状态事件会纠正。
+  }
+}
+
+
 // ---- 节拍检测：只依赖一个模型（Beat This! final0），缺权重时同样先问再下载 ----
 /** 清单里节拍检测的模型（`feature = detect_tempo`）。 */
 const tempoModel = computed(
@@ -243,6 +504,9 @@ watch(
     }
     void aiModels()
       .then((m) => (models.value = m))
+      .catch(() => {});
+    void singingModels()
+      .then((m) => (singingInfo.value = m))
       .catch(() => {});
   },
   { immediate: true },
@@ -296,6 +560,16 @@ onMounted(async () => {
   ai.value = await aiStatus().catch(() => ai.value);
   models.value = await aiModels().catch(() => models.value);
   unlisten = await onAiEvent((s) => (ai.value = s));
+  singing.value = await singingStatus().catch(() => singing.value);
+  singingInfo.value = await singingModels().catch(() => singingInfo.value);
+  await refreshVoices();
+  // 从音色库点「用作参考」过来：直接落在刚选的那条人声上（只消费一次）。
+  const picked = soundMemories.consumeVoicePick();
+  if (picked) {
+    refSource.value = "voice";
+    singRef.value = `voice:${picked}`;
+  }
+  stopSingingEvent = await onSingingEvent((s) => (singing.value = s));
   // 分离卡片的「未安装 → 下载」需要知道模型清单与下载进度。
   void modelsStore.load();
   stopModel = modelsStore.watchProgress();
@@ -303,7 +577,16 @@ onMounted(async () => {
 onUnmounted(() => {
   unlisten?.();
   stopModel?.();
+  stopSingingEvent?.();
 });
+
+// 合成跑完时把摘要 / 错误作为通知弹一次。
+watch(
+  () => singing.value.running,
+  (running, wasRunning) => {
+    if (wasRunning && !running && singing.value.message) layout.notify(singing.value.message);
+  },
+);
 </script>
 
 <template>
@@ -522,6 +805,161 @@ onUnmounted(() => {
         </div>
       </li>
 
+      <!-- 歌声合成：SoulX-Singer 的 9 张 ONNX 图（MIDI + 歌词 + 参考声线 → 新音频轨） -->
+      <li class="item" :class="{ busy: singBusy || singDownloading }">
+        <div class="item-row">
+          <div class="item-main">
+            <span class="item-name">
+              {{ i18n.t("ai.singing") }}
+              <span class="badge" :class="{ on: singReady }">
+                {{ i18n.t(singReady ? "ai.backendModel" : "ai.modelMissing") }}
+              </span>
+            </span>
+            <span class="item-note">
+              {{
+                singDownloading
+                  ? i18n.t("ai.downloadingModel")
+                  : singBusy
+                    ? i18n.t("ai.singingBusy")
+                    : singReady
+                      ? i18n.t("ai.singingNote")
+                      : i18n.t("ai.singingNeedsModel")
+              }}
+            </span>
+            <span v-if="!midiTracks.length" class="item-hint">
+              {{ i18n.t("ai.singingNeedsMidi") }}
+            </span>
+            <span v-else-if="!audioTracks.length" class="item-hint">
+              {{ i18n.t("ai.singingNeedsTone") }}
+            </span>
+            <span v-else class="item-hint">{{ i18n.t("ai.singingToneHint") }}</span>
+          </div>
+
+          <button v-if="singDownloading" class="run-btn" @click="cancelModelDownload">
+            {{ i18n.t("ai.stop") }}
+          </button>
+          <button v-else-if="singBusy" class="run-btn" @click="stopSinging">
+            {{ i18n.t("ai.stop") }}
+          </button>
+          <button v-else class="run-btn" :disabled="!singTrack || !hasTone" @click="runSinging">
+            {{ singReady ? i18n.t("ai.runSinging") : i18n.t("ai.downloadAndSing") }}
+          </button>
+        </div>
+
+        <!-- 输入：MIDI 轨 / 歌词入口 / 参考声线 / 步数 -->
+        <div class="param-field">
+          <span class="param-name">{{ i18n.t("ai.singingTrack") }}</span>
+          <Md3Select
+            v-model="singTrackId"
+            :options="singOptions"
+            :label="i18n.t('ai.singingTrack')"
+            :empty="i18n.t('ai.singingNeedsMidi')"
+            :disabled="singBusy"
+          />
+        </div>
+
+        <!-- 歌词在钢琴卷帘里逐音填（这里只放入口，不再重复一个整串歌词框） -->
+        <div class="param-field">
+          <span class="param-name">{{ i18n.t("ai.lyrics") }}</span>
+          <span class="item-hint lyric-hint">{{ i18n.t("ai.lyricsInEditor") }}</span>
+          <button
+            class="iface-btn"
+            :disabled="!singTrack || singBusy"
+            @click="openLyricsEditor"
+          >
+            {{ i18n.t("ai.goFillLyrics") }}
+          </button>
+        </div>
+
+        <!-- 参考声线：先选来源（工程轨道 / 音色库），再选具体那条 -->
+        <div class="param-field">
+          <span class="param-name">{{ i18n.t("ai.refSource") }}</span>
+          <Md3Select
+            v-model="sourceChoice"
+            :options="sourceOptions"
+            :label="i18n.t('ai.refSource')"
+            :disabled="singBusy"
+          />
+        </div>
+        <div class="param-field">
+          <span class="param-name">{{ i18n.t("ai.singingTone") }}</span>
+          <Md3Select
+            v-model="singRef"
+            :options="refOptions"
+            :label="i18n.t('ai.singingTone')"
+            :empty="
+              refSource === 'voice' ? i18n.t('ai.voiceLibraryEmpty') : i18n.t('ai.singingNeedsTone')
+            "
+            :disabled="singBusy"
+          />
+        </div>
+
+        <div class="tone-actions">
+          <span class="item-hint">
+            <template v-if="refSource === 'track'">
+              {{ i18n.t("ai.voiceSaveHint") }}
+            </template>
+            <template v-else-if="singVoice">
+              {{ i18n.t("ai.voiceFromLibrary", { seconds: Math.round(singVoice.seconds) }) }}
+            </template>
+            <template v-else>{{ i18n.t("ai.voiceLibraryEmpty") }}</template>
+          </span>
+          <div class="tone-buttons">
+            <button
+              v-if="refSource === 'track'"
+              class="iface-btn"
+              :disabled="singBusy || !singRefTrackId"
+              @click="beginSaveVoice"
+            >
+              {{ i18n.t("ai.voiceSave") }}
+            </button>
+            <button class="iface-btn" :disabled="singBusy" @click="importVoice">
+              {{ i18n.t("ai.voiceImport") }}
+            </button>
+            <button class="iface-btn" :disabled="singBusy" @click="openVoiceLibrary">
+              {{ i18n.t("ai.manageVoices") }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 存进音色库：内联命名，不弹窗 -->
+        <div v-if="voiceSaveOpen" class="param-field">
+          <span class="param-name">{{ i18n.t("ai.voiceName") }}</span>
+          <input
+            v-model="voiceDraftName"
+            class="voice-name"
+            type="text"
+            maxlength="60"
+            spellcheck="false"
+            :placeholder="i18n.t('ai.voiceDefaultName')"
+            @keydown.enter.prevent="confirmSaveVoice"
+          />
+          <button class="iface-btn" @click="confirmSaveVoice">{{ i18n.t("common.save") }}</button>
+          <button class="iface-btn" @click="voiceSaveOpen = false">{{ i18n.t("common.cancel") }}</button>
+        </div>
+        <div class="param-field">
+          <span class="param-name">{{ i18n.t("ai.steps") }}</span>
+          <Md3Select
+            v-model="stepChoice"
+            :options="stepOptions"
+            :label="i18n.t('ai.steps')"
+            :disabled="singBusy"
+          />
+        </div>
+
+        <!-- 进度条：模型下载 或 合成，贴在条目下边缘 -->
+        <div v-if="singDownloading" class="progress">
+          <div
+            class="progress-fill"
+            :class="{ indeterminate: modelsStore.progressPct === null }"
+            :style="modelsStore.progressPct === null ? undefined : { width: `${modelsStore.progressPct}%` }"
+          />
+        </div>
+        <div v-else-if="singBusy" class="progress">
+          <div class="progress-fill" :style="{ width: singProgressPct }" />
+        </div>
+      </li>
+
     </ul>
 
     <!-- 「是否下载该模型」用应用内 MD3 模态框（不用系统原生框）。 -->
@@ -630,6 +1068,68 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 歌词输入：多行、等宽感、与面板的整体密度一致。 */
+.lyrics-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 10px;
+  outline: none;
+  resize: vertical;
+  min-height: 66px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgb(var(--md-on-surface));
+  background-color: rgb(var(--md-surface-container-high) / 0.6);
+}
+.lyrics-input:focus {
+  box-shadow: inset 0 0 0 1px rgb(var(--md-primary) / 0.6);
+}
+.lyrics-input:disabled {
+  opacity: 0.6;
+}
+/* 参考声线下面的一行动作（存进音色库 / 删除）。 */
+.lyric-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tone-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.tone-actions .item-hint {
+  width: 100%;
+}
+.tone-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.voice-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 10px;
+  outline: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: rgb(var(--md-on-surface));
+  background-color: rgb(var(--md-surface-container-high) / 0.6);
+}
+.voice-name:focus {
+  box-shadow: inset 0 0 0 1px rgb(var(--md-primary) / 0.6);
 }
 /* 进度条贴在条目**下边缘**。 */
 .progress {

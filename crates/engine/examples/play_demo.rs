@@ -54,6 +54,7 @@ fn main() {
                     duration: 0.5,
                     velocity: 100,
                     volume: 127,
+                    lyric: None,
                 },
             },
             Actor::Human,

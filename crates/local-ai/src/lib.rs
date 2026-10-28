@@ -13,7 +13,10 @@
 //! 权重不进仓库：跑 `tools/fetch-models.sh` 把它们放进 `models/` 即可生效
 //! （[`models::availability`] 可查当前状态）。采样率转换见 [`resample`]。
 //!
-//! 两件事都跑在**后台工作线程**里（宿主用 `spawn_blocking`），带**进度回调**与**取消**
+//! 另有 **歌声合成**（[`singing`]）：MIDI 音符 + 歌词 + 参考音色 → 24 kHz 歌声，
+//! 走 SoulX-Singer 的 9 张 ONNX 图（1.4 GB，按需下载）。
+//!
+//! 这些事都跑在**后台工作线程**里（宿主用 `spawn_blocking`），带**进度回调**与**取消**
 //! （回调返回 `false` 即尽快中止）。**不在音频回调路径上**，因此可以自由分配。
 
 pub mod backend;
@@ -21,6 +24,7 @@ pub mod denoise;
 pub mod models;
 pub mod pitch;
 pub mod resample;
+pub mod singing;
 
 /// 处理进度回调：参数为 0.0..=1.0；返回 `false` 表示**取消**，调用方应尽快返回已完成的部分。
 pub type Progress<'a> = &'a dyn Fn(f32) -> bool;

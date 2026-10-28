@@ -55,6 +55,8 @@ pub enum GraphRole {
     Demucs,
     /// HTDemucs 6 分轨。
     Demucs6s,
+    /// SoulX-Singer 歌声合成（9 张图共用，见 [`crate::singing`]）。
+    Svs,
 }
 
 impl GraphRole {
@@ -65,6 +67,7 @@ impl GraphRole {
             GraphRole::LocalVqe => "LocalVQE",
             GraphRole::Demucs => "音源分离",
             GraphRole::Demucs6s => "6 分轨",
+            GraphRole::Svs => "歌声合成",
         }
     }
 
@@ -75,6 +78,7 @@ impl GraphRole {
             GraphRole::LocalVqe => "localvqe",
             GraphRole::Demucs => "demucs",
             GraphRole::Demucs6s => "demucs6s",
+            GraphRole::Svs => "svs",
         }
     }
 
@@ -128,7 +132,9 @@ pub fn build(path: &Path, role: GraphRole) -> Result<Session, String> {
     let started = std::time::Instant::now();
     let result = build_for(kind, path, role);
     if timing_on() {
-        eprintln!(
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stderr(),
             "  [timing] {:<12} {:<8} 建会话 {:>9.2?} → {}",
             role.label(),
             kind.label(),
@@ -156,7 +162,9 @@ fn build_for(kind: BackendKind, path: &Path, role: GraphRole) -> Result<Session,
             if kind == BackendKind::CoreMl {
                 mark_unsupported(role);
             }
-            eprintln!(
+            use std::io::Write as _;
+            let _ = writeln!(
+                std::io::stderr(),
                 "  [backend] {}：{} 不可用（{e}），回落 CPU EP",
                 role.label(),
                 kind.label()
@@ -248,9 +256,19 @@ fn register_directml(
 mod tests {
     use super::*;
 
+    /// `UNSUPPORTED` 是进程级静态量；下面两条用例都会改它，必须串行跑。
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn locked() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// 默认所有角色都允许走 CoreML；被学习进「不支持」集合的才被排除。
     #[test]
     fn coreml_is_allowed_by_default() {
+        let _guard = locked();
+        // 这个静态量是进程级的：先把「学习到的失败」清空，用例才不依赖跑过哪些用例。
+        UNSUPPORTED.store(0, Ordering::Relaxed);
         assert!(coreml_allowed(GraphRole::BasicPitch));
         assert!(coreml_allowed(GraphRole::LocalVqe));
         assert!(coreml_allowed(GraphRole::Demucs));
@@ -264,16 +282,21 @@ mod tests {
             GraphRole::LocalVqe,
             GraphRole::Demucs,
             GraphRole::Demucs6s,
+            GraphRole::Svs,
         ] {
             assert!(!role.label().is_empty());
             // cache_key 要能当目录名：纯 ASCII、无空格。
-            assert!(role.cache_key().chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+            assert!(role
+                .cache_key()
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-'));
         }
     }
 
     /// 运行时学习：某张图 CoreML 失败一次后，后续不再尝试（但仍不影响别的图）。
     #[test]
     fn unsupported_graphs_are_learned_once() {
+        let _guard = locked();
         assert!(coreml_allowed(GraphRole::Demucs6s));
         mark_unsupported(GraphRole::Demucs6s);
         assert!(!coreml_allowed(GraphRole::Demucs6s));

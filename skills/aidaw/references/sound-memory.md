@@ -3,6 +3,10 @@
 用户捏出满意的音色后，可以把**整条音色链**存进记忆库：乐器参数 + 有序效果链 +
 轨道增益/声像。记忆跨工程；下次做同类音色先查这里，别从零重捏。
 
+**人声也在这个库里**：歌声合成的参考声线存成带 `voice` 字段、`vocal` 标签的条目
+（`list_voices` / `save_voice` 是它的投影）。人声条目没有乐器/效果链，**不能** `apply_sound_memory`
+到轨道；要唱歌就在 `sing_song` 里用 `reference_voice` 引用。
+
 ## 工具
 
 | 工具 | 用途 |
@@ -12,7 +16,7 @@
 | `save_sound_memory(track, name, description?, tags?, id?)` | 从**当前轨道**抓快照；传 `id` = 覆盖已有记忆的内容 |
 | `update_sound_memory(id, name?, description?, tags?, role?)` | 只改元数据，不动声音 |
 | `delete_sound_memory(id)` | 删除 |
-| `apply_sound_memory(id, track)` | 应用到轨道（一个撤销步） |
+| `apply_sound_memory(id, track)` | 应用到轨道（一个撤销步）；人声条目会被拒绝 |
 
 `save_sound_memory` **不需要**传参数或效果链：后端直接读轨道，参数再多也不会漏。
 
