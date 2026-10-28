@@ -36,8 +36,8 @@ pub enum Precision {
 }
 
 impl Precision {
-    /// 全部档位，**高精度在前**：「自动」优先选它就位的那一档。
-    pub const ALL: [Precision; 2] = [Precision::Fp32, Precision::Fp16];
+    /// 全部档位（界面 / 清单的展示顺序：轻量档在前）。
+    pub const ALL: [Precision; 2] = [Precision::Fp16, Precision::Fp32];
 
     /// 清单条目 id（也是组目录名）。
     pub fn id(self) -> &'static str {
@@ -60,13 +60,15 @@ impl Precision {
         self.id()
     }
 
-    /// 从字符串解析：`auto` / 空 = 自动（返回 `None`，由调用方按已安装挑）。
-    pub fn parse(raw: &str) -> Result<Option<Self>, String> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "" | "auto" => Ok(None),
-            "fp16" => Ok(Some(Precision::Fp16)),
-            "fp32" => Ok(Some(Precision::Fp32)),
-            other => Err(format!("未知精度 `{other}`（可选 auto / fp16 / fp32）")),
+    /// 从「模型」标识解析：清单 id（`soulx-singer-fp16` / `soulx-singer-fp32`），
+    /// 也接受 `fp16` / `fp32` 简写。没有「自动」——模型必须明确选一个。
+    pub fn from_model(raw: &str) -> Result<Self, String> {
+        match raw.trim() {
+            "soulx-singer-fp16" | "fp16" => Ok(Precision::Fp16),
+            "soulx-singer-fp32" | "fp32" => Ok(Precision::Fp32),
+            other => Err(format!(
+                "未知歌声合成模型 `{other}`（可选 soulx-singer-fp16 / soulx-singer-fp32）"
+            )),
         }
     }
 }
@@ -114,6 +116,67 @@ pub const DEFAULT_STEPS: u32 = 32;
 pub const CFG_STRENGTH: f32 = 3.0;
 /// CFG rescale 权重。
 pub const CFG_RESCALE: f32 = 0.7;
+/// 动态阈值的逐帧分位（Imagen 论文默认 0.995；SXSEditor 同值）。
+pub const DYNAMIC_THRESHOLD_PERCENTILE: f32 = 0.995;
+/// STORK-2 的 RKG sub-stage 数（SXSEditor 对音频用的默认值；s=1 退化为 Euler）。
+pub const STORK_SUBSTAGES: usize = 8;
+
+/// ODE 求解器（flow-matching 的速度场积分）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sampler {
+    /// 一阶显式，中点时间。作为对照保留。
+    Euler,
+    /// 二阶 RKG 递推（STORK-2）：1 次模型评估/步，稳定性域约 2s² 倍。
+    Stork2,
+}
+
+/// 默认求解器：与 SXSEditor 一致。
+pub const SAMPLER: Sampler = Sampler::Stork2;
+
+/// Runge-Kutta-Gegenbauer 二阶系数（闭式）。
+fn b_coeff(j: usize) -> f32 {
+    match j {
+        0 => 1.0,
+        1 => 1.0 / 3.0,
+        _ => {
+            let jf = j as f32;
+            4.0 * (jf - 1.0) * (jf + 4.0) / (3.0 * jf * (jf + 1.0) * (jf + 2.0) * (jf + 3.0))
+        }
+    }
+}
+
+/// 动态阈值：逐帧把速度场压到 `percentile` 分位（且不低于该帧均值），保留符号。
+fn dynamic_threshold(values: &mut [f32], frames: usize, percentile: f32) {
+    if !(percentile > 0.0 && percentile < 1.0) {
+        return;
+    }
+    let mut abs = [0.0f32; MEL_DIM];
+    for f in 0..frames {
+        let off = f * MEL_DIM;
+        let mut sum = 0.0f32;
+        for (d, slot) in abs.iter_mut().enumerate() {
+            *slot = values[off + d].abs();
+            sum += *slot;
+        }
+        let mean = sum / MEL_DIM as f32;
+        abs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let pos = percentile * (MEL_DIM as f32 - 1.0);
+        let lo = pos.floor() as usize;
+        let hi = pos.ceil() as usize;
+        let frac = pos - lo as f32;
+        let quantile = abs[lo] * (1.0 - frac) + abs[hi] * frac;
+        let threshold = mean.max(quantile);
+        if threshold < 1e-8 {
+            continue;
+        }
+        for d in 0..MEL_DIM {
+            let x = values[off + d];
+            if x.abs() > threshold {
+                values[off + d] = x.signum() * threshold;
+            }
+        }
+    }
+}
 
 /// 某一档模型所在目录（整组齐备才算）。
 pub fn model_dir_for(precision: Precision) -> Option<PathBuf> {
@@ -121,50 +184,51 @@ pub fn model_dir_for(precision: Precision) -> Option<PathBuf> {
     crate::models::catalog::group_dir(entry)
 }
 
-/// 已安装的档位，按 [`Precision::ALL`] 的顺序（高精度优先）。
+/// 已安装的档位，按 [`Precision::ALL`] 的顺序（fp16 在前）。
 pub fn installed_precisions() -> impl Iterator<Item = Precision> {
     Precision::ALL
         .into_iter()
         .filter(|p| model_dir_for(*p).is_some())
 }
 
-/// 自动选档：已就位的高精度档优先，其次 fp16。
-pub fn auto_precision() -> Option<Precision> {
+/// 没显式指定模型时用哪个：fp16 优先（SXSEditor 也把 fp16 标为推荐档）。
+pub fn default_precision() -> Option<Precision> {
     installed_precisions().next()
 }
 
-/// 解析「要用的档」：显式指定就必须已安装；`auto` 按已安装挑。
+/// 解析「要用的模型」：显式指定就必须已安装；没指定就取默认已安装档。
 ///
-/// 返回目录，方便调用方直接喂给 [`Runner::load`]。
-pub fn resolve(precision: Option<Precision>) -> Result<(Precision, PathBuf), String> {
-    let Some(p) = precision else {
-        let p = auto_precision().ok_or_else(|| {
+/// 返回（档位，目录），方便调用方直接喂给 [`Runner::load`]。
+pub fn resolve(model: Option<&str>) -> Result<(Precision, PathBuf), String> {
+    let p = match model {
+        Some(raw) => Precision::from_model(raw)?,
+        None => default_precision().ok_or_else(|| {
             "未安装歌声合成模型。到「管理器 → 模型」下载 SoulX-Singer（fp16 约 1.44 GB，fp32 约 2.85 GB）"
                 .to_string()
-        })?;
-        return Ok((p, model_dir_for(p).expect("已安装就有目录")));
+        })?,
     };
     match model_dir_for(p) {
         Some(dir) => Ok((p, dir)),
-        None => Err(format!(
-            "未安装 SoulX-Singer 的 {} 档。到「管理器 → 模型」下载，或改用已安装的档（{}）",
-            p.label(),
-            installed_precisions()
-                .map(|x| x.label())
-                .collect::<Vec<_>>()
-                .join(" / ")
-        )),
+        None => {
+            let installed: Vec<&str> = installed_precisions().map(|x| x.label()).collect();
+            let hint = if installed.is_empty() {
+                "到「管理器 → 模型」下载".to_string()
+            } else {
+                format!("到「管理器 → 模型」下载，或改用已安装的 {}", installed.join(" / "))
+            };
+            Err(format!("未安装模型 {}（{} 档）：{}", p.id(), p.label(), hint))
+        }
     }
 }
 
-/// 默认档（fp16）的目录；没装 fp16 时退回任意已安装档。
+/// 默认已安装档的目录。
 pub fn model_dir() -> Option<PathBuf> {
-    auto_precision().and_then(model_dir_for)
+    default_precision().and_then(model_dir_for)
 }
 
 /// 模型是否就位（任意一档）。
 pub fn installed() -> bool {
-    auto_precision().is_some()
+    default_precision().is_some()
 }
 
 /// 某一档是否就位。
@@ -420,6 +484,14 @@ impl Runner {
         let uncond_cond = vec![0.0f32; total * COND_DIM];
         let mut v = vec![0.0f32; frames * MEL_DIM];
         let dt = 1.0 / steps as f32;
+        // STORK-2 的跨步状态：上一拍的速度场 + 三个 Y 缓冲。首步没有历史速度，退化为 Euler。
+        let mut v_prev: Option<Vec<f32>> = None;
+        let mut delta = vec![0.0f32; frames * MEL_DIM];
+        let mut y1 = vec![0.0f32; frames * MEL_DIM];
+        let mut y2 = vec![0.0f32; frames * MEL_DIM];
+        let mut cur = vec![0.0f32; frames * MEL_DIM];
+        let mut v_deriv = vec![0.0f32; frames * MEL_DIM];
+        let n = frames * MEL_DIM;
 
         for step in 0..steps {
             if !progress((step as f32 + 0.5) / steps as f32) {
@@ -465,9 +537,9 @@ impl Runner {
                 mean_c += c[i];
                 mean_v += v[i];
             }
-            let n = v.len() as f32;
-            mean_c /= n;
-            mean_v /= n;
+            let nf = v.len() as f32;
+            mean_c /= nf;
+            mean_v /= nf;
             let (mut var_c, mut var_v) = (0.0f32, 0.0f32);
             for i in 0..v.len() {
                 let dc = c[i] - mean_c;
@@ -475,12 +547,83 @@ impl Runner {
                 var_c += dc * dc;
                 var_v += dv * dv;
             }
-            let std_c = (var_c / (n - 1.0).max(1.0)).sqrt();
-            let std_v = (var_v / (n - 1.0).max(1.0)).sqrt();
+            let std_c = (var_c / (nf - 1.0).max(1.0)).sqrt();
+            let std_v = (var_v / (nf - 1.0).max(1.0)).sqrt();
             let rescale = std_c / (std_v + 1e-8);
+            // 动态阈值（Imagen, arXiv:2205.11487）：逐帧把 CFG 后的速度场压到 99.5 分位，
+            // 保留符号。rescale 仍用**阈值前**的标准差——SXSEditor 的 combine 也是这个顺序。
+            dynamic_threshold(&mut v, frames, DYNAMIC_THRESHOLD_PERCENTILE);
             let scale = CFG_RESCALE * rescale + 1.0 - CFG_RESCALE;
-            for i in 0..xt.len() {
-                xt[i] += v[i] * scale * dt;
+            for i in 0..n {
+                v[i] *= scale;
+            }
+
+            // 求解器：STORK-2（二阶 RKG 递推，1 次模型评估/步）。
+            match SAMPLER {
+                Sampler::Euler => {
+                    for i in 0..n {
+                        delta[i] = v[i] * dt;
+                    }
+                }
+                Sampler::Stork2 => {
+                    if let Some(prev) = v_prev.as_ref() {
+                        let inv_h = 1.0 / dt;
+                        for i in 0..n {
+                            v_deriv[i] = (prev[i] - v[i]) * inv_h;
+                        }
+                        y1.copy_from_slice(&xt);
+                        y2.copy_from_slice(&xt);
+                        let s_f = STORK_SUBSTAGES as f32;
+                        let mu_base = 6.0 / ((s_f + 4.0) * (s_f - 1.0));
+                        let frac_denom = s_f * s_f + s_f - 2.0;
+                        for j in 1..=STORK_SUBSTAGES {
+                            if j == 1 {
+                                for i in 0..n {
+                                    cur[i] = y1[i] + dt * mu_base * v[i];
+                                }
+                            } else {
+                                let jf = j as f32;
+                                let bj = b_coeff(j);
+                                let bj1 = b_coeff(j - 1);
+                                let bj2 = b_coeff(j - 2);
+                                let mu = (2.0 * jf + 1.0) * bj / (jf * bj1);
+                                let nu = -(jf + 1.0) * bj / (jf * bj2);
+                                let mu_t = mu * mu_base;
+                                let gamma_t = -mu_t * (1.0 - jf * (jf + 1.0) * bj1 / 2.0);
+                                let fraction = if j == 2 {
+                                    4.0 / (3.0 * frac_denom)
+                                } else {
+                                    ((jf - 1.0) * (jf - 1.0) + (jf - 1.0) - 2.0) / frac_denom
+                                };
+                                let diff = -fraction * dt;
+                                let one = 1.0 - mu - nu;
+                                for i in 0..n {
+                                    let v_taylor = v[i] + diff * v_deriv[i];
+                                    cur[i] = mu * y1[i]
+                                        + nu * y2[i]
+                                        + one * xt[i]
+                                        + dt * mu_t * v_taylor
+                                        + dt * gamma_t * v[i];
+                                }
+                            }
+                            // 滚动 Y 缓冲：prev1 <- cur, prev2 <- 旧 prev1, cur <- 旧 prev2。
+                            std::mem::swap(&mut y1, &mut cur);
+                            std::mem::swap(&mut y2, &mut cur);
+                        }
+                        for i in 0..n {
+                            delta[i] = y1[i] - xt[i];
+                        }
+                        v_prev.as_mut().expect("首步之后就有历史速度").copy_from_slice(&v);
+                    } else {
+                        for i in 0..n {
+                            delta[i] = v[i] * dt;
+                        }
+                        v_prev = Some(v.clone());
+                    }
+                }
+            }
+            for i in 0..n {
+                xt[i] += delta[i];
             }
 
             if !xt.iter().all(|x| x.is_finite()) {
@@ -598,19 +741,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn precision_parses_labels_and_auto() {
-        assert_eq!(Precision::parse("auto").unwrap(), None);
-        assert_eq!(Precision::parse("").unwrap(), None);
-        assert_eq!(Precision::parse(" FP32 ").unwrap(), Some(Precision::Fp32));
-        assert_eq!(Precision::parse("fp16").unwrap(), Some(Precision::Fp16));
-        assert!(Precision::parse("fp64").is_err(), "未知精度要报错，不能静默降级");
+    fn sampler_coefficients_match_the_paper() {
+        assert_eq!(b_coeff(0), 1.0);
+        assert!((b_coeff(1) - 1.0 / 3.0).abs() < 1e-7);
+        // b(2) = 4·1·6 / (3·2·3·4·5) = 1/15
+        assert!((b_coeff(2) - 1.0 / 15.0).abs() < 1e-7);
+        // 默认求解器与 SXSEditor 对齐。
+        assert_eq!(SAMPLER, Sampler::Stork2);
+        assert!(STORK_SUBSTAGES >= 2, "s=1 会除零，也不能带来稳定性增益");
+    }
+
+    #[test]
+    fn dynamic_threshold_clips_frame_outliers_only() {
+        let mut values = vec![0.0f32; 2 * MEL_DIM];
+        // 第一帧：一个离谱的尖峰 + 一堆小值；第二帧：全零。
+        values[0] = 100.0;
+        for i in 1..MEL_DIM {
+            values[i] = 0.01;
+        }
+        dynamic_threshold(&mut values, 2, DYNAMIC_THRESHOLD_PERCENTILE);
+        assert!(values[0] < 100.0, "尖峰应被压到分位阈值");
+        assert!(values[0] > 0.0, "符号与量级要保留");
+        assert_eq!(values[0], values[0].abs());
+        // 小值基本不动（阈值取 max(均值, 分位)，远大于 0.01）。
+        assert!((values[1] - 0.01).abs() < 1e-6);
+        // 全零帧保持全零。
+        assert!(values[MEL_DIM..].iter().all(|v| *v == 0.0));
+    }
+
+    #[test]
+    fn model_ids_map_to_tiers() {
+        assert_eq!(Precision::from_model("soulx-singer-fp16").unwrap(), Precision::Fp16);
+        assert_eq!(Precision::from_model("soulx-singer-fp32").unwrap(), Precision::Fp32);
+        assert_eq!(Precision::from_model(" fp32 ").unwrap(), Precision::Fp32);
+        assert!(Precision::from_model("fp64").is_err(), "未知模型要报错，不能静默降级");
+        assert!(Precision::from_model("auto").is_err(), "没有「自动」档，模型必须明确指定");
         // 两档各自对应清单里的一条，且 id 就是目录名。
         for p in Precision::ALL {
             assert!(crate::models::catalog::by_id(p.id()).is_some(), "{} 缺清单条目", p.label());
             assert_eq!(p.dir(), p.id());
         }
-        // 高精度在前：「自动」要优先选 fp32。
-        assert_eq!(Precision::ALL[0], Precision::Fp32);
+        // 默认档是 fp16（清单/界面的顺序也是 fp16 在前）。
+        assert_eq!(Precision::ALL[0], Precision::Fp16);
     }
 
     #[test]

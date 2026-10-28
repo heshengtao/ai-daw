@@ -202,6 +202,12 @@
   auto 优先已装的高精度档；管理器里两档都能下载 / 删除。② `voice_save` 从同步命令改成
   `async` + `spawn_blocking`：解码 + 重采样 + FFT 挑参考段不再占主线程（之前导入人声会让
   窗口转圈、界面点不动），面板补了「导入中…」的按钮态。
+- **第二十五次修订（2026-10-28）**：**歌声合成改成「选模型」，采样侧向 SXSEditor 对齐**。
+  ① 去掉「精度 / 自动」：AI 面板与 MCP 都直接选模型 `soulx-singer-fp16` / `soulx-singer-fp32`
+  （与音源分离同一套下拉，未下载的档选中后会提示下载），省略时用已安装的默认档（fp16 优先）。
+  ② 采样器换成 **STORK-2**（RKG 二阶、s=8、1 NFE/步，首步 Euler），并补上 **dynamic
+  thresholding**（逐帧 99.5 分位裁剪，rescale 用阈值前标准差）——两项都与 SXSEditor 的
+  `samplers/stork2.js` 与 `combine()` 顺序一致。声码器块间仍是 Hann 淡化、响度仍是峰值归一（定位不同，暂不对齐）。
 
 ## 1. 现状总览
 

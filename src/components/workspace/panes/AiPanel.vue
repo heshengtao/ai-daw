@@ -30,7 +30,6 @@ import {
   onSingingEvent,
   setMcpConfig,
   singingCancel,
-  singingModels,
   singingRender,
   singingStatus,
   voiceList,
@@ -41,7 +40,6 @@ import type {
   AiStatus,
   McpStatus,
   ModelStatus,
-  SingingModels,
   SingingStatus,
   VoiceEntry,
 } from "@/api/types";
@@ -230,24 +228,14 @@ async function cancelModelDownload(): Promise<void> {
 
 // ---- 歌声合成（SoulX-Singer）：MIDI + 歌词 + 参考声线 → 新音频轨 ----
 const singing = ref<SingingStatus>({ running: false, progress: 0, message: null });
-const singingInfo = ref<SingingModels>({
-  installed: false,
-  active: null,
-  dir: null,
-  approx_bytes: 0,
-  precisions: [],
-});
-/** 重量精度：auto（已装 fp32 就用它）/ fp16 / fp32。 */
-const singPrecision = ref<"auto" | "fp16" | "fp32">("auto");
-/** 当前精度对应的清单条目（下载提示 / 下载进度都用它）。 */
-const singModel = computed(() => {
-  const id = `soulx-singer-${singPrecision.value === "auto" ? "fp16" : singPrecision.value}`;
-  return (
-    modelsStore.catalog.find((m) => m.id === id) ??
-    modelsStore.catalog.find((m) => m.feature === "sing") ??
-    null
-  );
-});
+/** 歌声合成可选的模型（fp16 / fp32，与「音源分离」同一套选择方式，没有「自动」）。 */
+const singModels = computed(() => modelsStore.catalog.filter((m) => m.feature === "sing"));
+/** 当前选中的模型 id；`null` = 还没定，由下面的 watcher 按「谁已下载」选。 */
+const singModelId = ref<string | null>(null);
+/** 当前选中的模型条目（清单没加载出来时为 null）。 */
+const singModel = computed(
+  () => singModels.value.find((m) => m.id === singModelId.value) ?? singModels.value[0] ?? null,
+);
 /** 有音符的 MIDI 轨道（歌声合成的输入）。 */
 const midiTracks = computed(() =>
   (project.project?.tracks ?? []).filter(
@@ -271,12 +259,18 @@ const singDownloading = computed(() =>
   singModel.value ? modelsStore.installing(singModel.value.id) : false,
 );
 const singProgressPct = computed(() => `${Math.round(singing.value.progress * 100)}%`);
-/** 当前选中的精度是否已就位（auto = 任意一档已装）。 */
-const singReady = computed(() => {
-  if (singPrecision.value === "auto") return singingInfo.value.installed;
-  const row = singingInfo.value.precisions.find((p) => p.label === singPrecision.value);
-  return !!row?.installed;
-});
+/** 选中模型是否就位。 */
+const singReady = computed(() => singModel.value?.installed ?? false);
+/** 下拉选项：模型名 + 「已下载 / 需下载 · 体积」。 */
+const singModelOptions = computed(() =>
+  singModels.value.map((m) => ({
+    id: m.id,
+    label: modelName(m),
+    hint: m.installed
+      ? i18n.t("ai.modelReady")
+      : i18n.t("ai.modelNeedsDownload", { size: humanSize(m.approx_bytes) }),
+  })),
+);
 const singTrack = computed(
   () => midiTracks.value.find((t) => String(t.id) === singTrackId.value) ?? midiTracks.value[0] ?? null,
 );
@@ -321,27 +315,6 @@ const singVoice = computed(() =>
 );
 /** 有可用的参考声线（选中的那条还在）。 */
 const hasTone = computed(() => refOptions.value.some((o) => o.id === singRef.value));
-
-/** 精度下拉：自动 + 两档（未下载的也列出来，选中后会提示下载）。 */
-const precisionOptions = computed(() => {
-  const rows = singingInfo.value.precisions.map((p) => ({
-    id: p.label,
-    label: p.label,
-    hint: p.installed ? i18n.t("ai.precisionInstalled") : humanSize(p.approx_bytes),
-  }));
-  const auto = {
-    id: "auto",
-    label: i18n.t("ai.precisionAuto"),
-    hint: singingInfo.value.active ?? undefined,
-  };
-  return [auto, ...rows];
-});
-const precisionChoice = computed({
-  get: () => singPrecision.value,
-  set: (v: string) => {
-    singPrecision.value = v === "fp16" || v === "fp32" ? v : "auto";
-  },
-});
 
 const stepOptions = [
   { id: "16", label: "16" },
@@ -493,7 +466,7 @@ async function runSinging(): Promise<void> {
       track: t.id,
       reference_voice: singRefVoiceId.value,
       reference_track: singRefTrackId.value,
-      precision: singPrecision.value,
+      model: singModel.value?.id ?? null,
       steps: singSteps.value,
       seed: 0,
     });
@@ -546,6 +519,12 @@ async function runTempo(): Promise<void> {
 watch(
   () => modelsStore.catalog.map((m) => `${m.id}:${m.installed}`).join(","),
   () => {
+    const singing = singModels.value;
+    const currentSing = singing.find((m) => m.id === singModelId.value);
+    // 选中的已就位就留着；否则优先跟着已下载的那个，都没有再退回第一个。
+    if (!currentSing?.installed && singing.length > 0) {
+      singModelId.value = (singing.find((m) => m.installed) ?? singing[0])!.id;
+    }
     const list = separateModels.value;
     const current = list.find((m) => m.id === sepModelId.value);
     // 选中的已就位就留着；否则优先跟着已下载的那个，都没有再退回第一个。
@@ -554,9 +533,6 @@ watch(
     }
     void aiModels()
       .then((m) => (models.value = m))
-      .catch(() => {});
-    void singingModels()
-      .then((m) => (singingInfo.value = m))
       .catch(() => {});
   },
   { immediate: true },
@@ -611,7 +587,6 @@ onMounted(async () => {
   models.value = await aiModels().catch(() => models.value);
   unlisten = await onAiEvent((s) => (ai.value = s));
   singing.value = await singingStatus().catch(() => singing.value);
-  singingInfo.value = await singingModels().catch(() => singingInfo.value);
   await refreshVoices();
   // 从音色库点「用作参考」过来：直接落在刚选的那条人声上（只消费一次）。
   const picked = soundMemories.consumeVoicePick();
@@ -988,11 +963,11 @@ watch(
           <button class="iface-btn" @click="voiceSaveOpen = false">{{ i18n.t("common.cancel") }}</button>
         </div>
         <div class="param-field">
-          <span class="param-name">{{ i18n.t("ai.singingPrecision") }}</span>
+          <span class="param-name">{{ i18n.t("ai.singingModel") }}</span>
           <Md3Select
-            v-model="precisionChoice"
-            :options="precisionOptions"
-            :label="i18n.t('ai.singingPrecision')"
+            v-model="singModelId"
+            :options="singModelOptions"
+            :label="i18n.t('ai.singingModel')"
             :disabled="singBusy"
           />
         </div>

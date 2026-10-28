@@ -301,7 +301,8 @@ pub fn synthesize(
     synthesize_with(notes, bpm, steps, seed, reference, None, progress)
 }
 
-/// 同 [`synthesize`]，但可以指定重量精度（`None` = 自动：fp32 优先，其次 fp16）。
+/// 同 [`synthesize`]，但可以指定模型（`soulx-singer-fp16` / `soulx-singer-fp32`；
+/// `None` = 已安装的默认档，fp16 优先）。
 #[allow(clippy::too_many_arguments)]
 pub fn synthesize_with(
     notes: &[SingNote],
@@ -309,10 +310,10 @@ pub fn synthesize_with(
     steps: u32,
     seed: u64,
     reference: Option<(&[f32], f64)>,
-    precision: Option<soulx::Precision>,
+    model: Option<&str>,
     progress: Progress<'_>,
 ) -> Result<Take, String> {
-    let (precision, dir) = soulx::resolve(precision)?;
+    let (precision, dir) = soulx::resolve(model)?;
     if notes.is_empty() {
         return Err("没有音符可唱".into());
     }
