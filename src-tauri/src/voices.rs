@@ -10,6 +10,7 @@
 //! 存储：`<配置目录>/sound-memories.json`（元数据）+ `sound-memory-audio/<id>.wav`。
 
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 
 use ai_daw_engine::model::TrackId;
 
@@ -246,13 +247,21 @@ pub fn voice_list(state: tauri::State<'_, AppState>) -> Vec<VoiceEntry> {
 }
 
 /// 把一条参考声线存进音色库（单声道 24 kHz，峰值归一，自动带「人声」标签）。
+///
+/// **异步 + 阻塞线程池**：这里要做解码、重采样、还有一遍 FFT 找「最适合当参考的 10 秒」，
+/// 一首 4 分钟的歌是几百毫秒到几秒的活。以前是同步命令（Tauri 的同步命令跑在主线程），
+/// 于是导入时窗口直接转圈、界面点不动。
 #[tauri::command]
-pub fn voice_save(
+pub async fn voice_save(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
     args: VoiceSaveArgs,
 ) -> Result<VoiceEntry, String> {
-    save(&app, &state, args)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        save(&app, &state, args)
+    })
+    .await
+    .map_err(|e| format!("保存人声音色失败：{e}"))?
 }
 
 /// 改名字 / 描述 / 标签。

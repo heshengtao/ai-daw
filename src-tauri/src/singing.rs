@@ -91,25 +91,62 @@ impl SingingRuntime {
     }
 }
 
+/// 一档重量（界面画「精度」选择器用）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SingingPrecision {
+    /// 清单条目 id（= 目录名）。
+    pub id: String,
+    /// 展示名：`fp16` / `fp32`。
+    pub label: String,
+    /// 这一档是否已就位。
+    pub installed: bool,
+    /// 这一档的目录（没装时是 `None`）。
+    pub dir: Option<String>,
+    /// 整组体积（下载提示用）。
+    pub approx_bytes: u64,
+}
+
 /// 模型是否就位（界面据此决定「生成」按钮是否可用）。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SingingModels {
-    /// 9 张图整组是否齐备。
+    /// 任意一档是否齐备。
     pub installed: bool,
+    /// 「自动」会选中的那一档（高精度优先）。
+    pub active: Option<String>,
     /// 模型目录（没装时是 `None`）。
     pub dir: Option<String>,
-    /// 需要下载的字节数（界面提示用）。
+    /// 需要下载的字节数（界面提示用；这里是 fp16 的体积）。
     pub approx_bytes: u64,
+    /// 两档的安装状态（高精度在前）。
+    pub precisions: Vec<SingingPrecision>,
 }
 
 /// 查询模型状态。
 #[tauri::command]
 pub fn singing_models() -> SingingModels {
-    let entry = ai_daw_local_ai::models::catalog::by_id(singing::soulx::DIR);
+    use ai_daw_local_ai::models::catalog;
+    let precisions: Vec<SingingPrecision> = singing::soulx::Precision::ALL
+        .into_iter()
+        .map(|p| {
+            let entry = catalog::by_id(p.id());
+            SingingPrecision {
+                id: p.id().to_string(),
+                label: p.label().to_string(),
+                installed: singing::soulx::installed_for(p),
+                dir: singing::soulx::model_dir_for(p).map(|d| d.to_string_lossy().into_owned()),
+                approx_bytes: entry.map(|e| e.total_bytes()).unwrap_or(0),
+            }
+        })
+        .collect();
+    let active = singing::soulx::auto_precision();
     SingingModels {
-        installed: singing::installed(),
+        installed: active.is_some(),
+        active: active.map(|p| p.label().to_string()),
         dir: singing::model_dir().map(|p| p.to_string_lossy().into_owned()),
-        approx_bytes: entry.map(|e| e.total_bytes()).unwrap_or(0),
+        approx_bytes: catalog::by_id(singing::soulx::Precision::Fp16.id())
+            .map(|e| e.total_bytes())
+            .unwrap_or(0),
+        precisions,
     }
 }
 
@@ -141,6 +178,8 @@ pub struct SingArgs {
     pub reference_track: Option<u64>,
     /// 参考音色：人声音色库条目 id（优先级最高）。
     pub reference_voice: Option<String>,
+    /// 重量精度：`auto`（默认，fp32 优先）/ `fp16` / `fp32`。
+    pub precision: Option<String>,
     /// 采样步数（32 默认；16 更快、质量略降）。
     pub steps: Option<u32>,
     /// 噪声种子（同一份输入 + 同一个种子 = 同一条输出）。
@@ -160,6 +199,11 @@ impl SingArgs {
     /// 种子（缺省 0：可复现）。
     pub fn seed(&self) -> u64 {
         self.seed.unwrap_or(0)
+    }
+
+    /// 重量精度（`auto` / `fp16` / `fp32`）。
+    pub fn precision(&self) -> Result<Option<singing::Precision>, String> {
+        singing::Precision::parse(self.precision.as_deref().unwrap_or("auto"))
     }
 }
 
@@ -287,6 +331,9 @@ fn render(
     }
 
     // ---- 4. 合成 ----
+    // 精度先解析：没装的那一档要立刻报错，别等到加载完 1.4 GB 才说。
+    let precision = args.precision()?;
+    singing::soulx::resolve(precision)?;
     let runtime_cb = runtime.clone();
     let app_cb = app.clone();
     let progress = move |p: f32| -> bool {
@@ -296,20 +343,22 @@ fn render(
     };
     let started = std::time::Instant::now();
     let take = match reference {
-        Some((samples, rate)) => singing::synthesize(
+        Some((samples, rate)) => singing::synthesize_with(
             &notes,
             snapshot.bpm,
             args.steps(),
             args.seed(),
             Some((&samples, rate)),
+            precision,
             &progress,
         ),
-        None => singing::synthesize(
+        None => singing::synthesize_with(
             &notes,
             snapshot.bpm,
             args.steps(),
             args.seed(),
             None,
+            precision,
             &progress,
         ),
     };
@@ -369,10 +418,11 @@ fn render(
         .map(|s| format!("，参考取自 {:.0} 秒", s))
         .unwrap_or_default();
     Ok(format!(
-        "已生成「{name}」：{} 秒歌声、{} 个音、{} 段（{}{reference}，用时 {seconds:.0} 秒）",
+        "已生成「{name}」：{} 秒歌声、{} 个音、{} 段，{} 精度（{}{reference}，用时 {seconds:.0} 秒）",
         take.seconds.round(),
         take.notes,
         take.segments,
+        take.precision.label(),
         report.summary(),
     ))
 }

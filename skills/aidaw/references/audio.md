@@ -12,7 +12,7 @@
 | `record_stop` | — | 停带、写 WAV，并把录音作为一条可撤销的音频片段挂到轨道上。**必须配对调用**。 |
 | `transcribe_audio` | `track` | 音频转 MIDI：结果写成**源轨道下面的新 MIDI 轨**（一次撤销）。有 Basic Pitch 模型就用，否则内置 DSP。 |
 | `enhance_audio` | `track`,`mode?` | 降噪：结果写成**源轨道下面的新音频轨**（原轨不动）。`mode=voice`（缺省，人声/去混响，优先 LocalVQE）或 `music`（乐器底噪，内置 DSP）。 |
-| `sing_song` | `track`,`lyrics`,`clip?`,`reference?`,`reference_track?`,`reference_voice?`,`steps?`,`seed?`,`name?` | **歌声合成**（SoulX-Singer ONNX）：把一条 MIDI 轨的旋律 + 一行歌词 + 一条参考声线渲染成**新音频轨**（插在源轨下面，一次撤销）。歌词一字一音（中文字），`-` 连音，标点跳过；歌词不够时多出的音沿用前一字。参考音色三选一：`reference_voice`（人声音色库 id，优先级最高）、`reference_track`（某轨第一段音频）、`reference`（文件路径）。换参考重渲染 = 换音色。歌词可逐音写在音符 `lyric` 上（优先），也可以用 `lyrics` 整串给。需要 SoulX-Singer 模型（约 1.4 GB）；离线渲染，10 秒歌声在 CPU 上约 2–4 分钟（16 步约一半）。 |
+| `sing_song` | `track`,`lyrics`,`clip?`,`reference?`,`reference_track?`,`reference_voice?`,`precision?`,`steps?`,`seed?`,`name?` | **歌声合成**（SoulX-Singer ONNX）：把一条 MIDI 轨的旋律 + 一行歌词 + 一条参考声线渲染成**新音频轨**（插在源轨下面，一次撤销）。歌词一字一音（中文字），`-` 连音，标点跳过；歌词不够时多出的音沿用前一字。参考音色三选一：`reference_voice`（人声音色库 id，优先级最高）、`reference_track`（某轨第一段音频）、`reference`（文件路径）。换参考重渲染 = 换音色。歌词可逐音写在音符 `lyric` 上（优先），也可以用 `lyrics` 整串给。需要 SoulX-Singer 模型：`precision` 可选 `auto`（缺省，已装 fp32 就用）/ `fp16`（1.44 GB）/ `fp32`（2.85 GB，保真更高）；离线渲染，10 秒歌声在 CPU 上约 2–4 分钟（16 步约一半）。 |
 | `separate_stems` | `track`,`model?` | 音源分离：把该轨第一段音频拆成**鼓 / 贝斯 / 其他 / 人声**四条分轨，插到源轨道下面（一次事务，可整体撤销）。需要已安装 HTDemucs 模型（约 209 MB，在「管理器 → 模型」下载）；没有权重会报错，**没有内置兜底**。 |
 | `list_voices` | — | 人声音色库：列出 id / 名字 / 描述 / 标签 / 时长。唱歌前先看这里有没有现成声线。 |
 | `save_voice` | `name?`,`track?`,`path?`,`description?`,`tags?` | 把参考声线存进**音色记忆库**（单声道 24 kHz、自动 `vocal` 标签，跨工程可用）。`track` 取工程内音频轨第一段，或 `path` 给文件。**整首歌也行**：会自动挑 10 秒最像人声的片段存下来（起点记在 `offset_seconds`）。 |

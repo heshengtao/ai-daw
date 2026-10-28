@@ -499,6 +499,213 @@ pub static CATALOG: &[ModelEntry] = &[
         },
         ],
     },
+    ModelEntry {
+        id: "soulx-singer-fp32",
+        name: "SoulX-Singer（歌声合成 · fp32 · 高精度）",
+        feature: "sing",
+        // 与 fp16 同源同导出：上游 SoulX-Singer（Soul AI Lab）Apache-2.0，ONNX 拆分导出
+        // 由社区完成。这一档只把 `diff_step` / `vocoder` 保留 fp32（2.85 GB vs 1.44 GB），
+        // 编码器的外部权重两份导出本来字节相同（见 `soulx_singer_precisions_share_encoder_weights`）。
+        license: "Apache-2.0",
+        dir: Some("soulx-singer-fp32"),
+        bundled: false,
+        // 单源：魔搭（国内直连）。国际镜像待补——同一份字节需要一个 HF 仓库，上传脚本同 fp16。
+        files: &[
+        ModelFile {
+            filename: "note_text_encoder.onnx",
+            approx_bytes: 433,
+            sha256: "087db35205ce93dae9e2c65e0628511266ffbc21beb2c128d80793c150d66714",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_text_encoder.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "note_text_encoder.onnx.data",
+            approx_bytes: 6144000,
+            sha256: "998889d7daff9cd50774abf23282d1acad01d2c753db3040b156d1a53b178e79",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_text_encoder.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "note_pitch_encoder.onnx",
+            approx_bytes: 433,
+            sha256: "90f9ef1cd74e532e1cc89802888bedcf311bd835460b09e27c3eef1be9489bdb",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_pitch_encoder.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "note_pitch_encoder.onnx.data",
+            approx_bytes: 524288,
+            sha256: "20ddcaaea04315e5a46eb11d8cacb6dd6ecf6a9688ebc3af019ab7b27ee7b9c6",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_pitch_encoder.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "note_type_encoder.onnx",
+            approx_bytes: 432,
+            sha256: "869d4d50a0ff5566346e72cf4fb36c110a52e10ef7292c53aecd008c3f74d594",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_type_encoder.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "note_type_encoder.onnx.data",
+            approx_bytes: 524288,
+            sha256: "becf918cd5e23b25783ae42480c13bfa04bf38b84a4075d7c4273befcb3af4a0",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_type_encoder.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "f0_encoder.onnx",
+            approx_bytes: 425,
+            sha256: "f63a5f8da66af2a50b6c3463f8e8a0b52022f6f14bbb79d7364149da2c576a0f",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/f0_encoder.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "f0_encoder.onnx.data",
+            approx_bytes: 739328,
+            sha256: "8c3f3c514b1bf78f723b8fa785ed2f7dd5cb994ca2c1349f22c54ea4909b0f4b",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/f0_encoder.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "preflow.onnx",
+            approx_bytes: 145261,
+            sha256: "af0680d7356ba1131deb5a1801971934344f7ccd5394c875a612f8a66c8e1a60",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/preflow.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "preflow.onnx.data",
+            approx_bytes: 16973824,
+            sha256: "ce2c424a3a22a22a1aff172767baacc3e6796df0eb83f979596d522d87d2422f",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/preflow.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "cond_emb.onnx",
+            approx_bytes: 689,
+            sha256: "6825d68ea4d42bc83ca66dacf3a6440f5f2593af2a8ca40f956fdcde19559e54",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/cond_emb.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "cond_emb.onnx.data",
+            approx_bytes: 2162688,
+            sha256: "fbfa95df1617d8dc12c1544c788be65d5bb08b365a68041c69953b02ac066dbe",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/cond_emb.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "mel_transform.onnx",
+            approx_bytes: 11263,
+            sha256: "5652b9b8a46207413db3d2ff65139d78ab502d60fa7eb3a1a660ec8296d1d885",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/mel_transform.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "mel_transform.onnx.data",
+            approx_bytes: 499712,
+            sha256: "2d1e18edf37041270f999b15bbfd08c19cccca723a6111425ae9a8a228c87927",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/mel_transform.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "diff_step_dml.onnx",
+            approx_bytes: 1772509288,
+            sha256: "bc6e95474793a0eb7dbf8ea4c7cd3820593f6bd5d136f222ea58684b64b07c13",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/diff_step_dml.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "vocoder_dml.onnx",
+            approx_bytes: 1053635812,
+            sha256: "8df53cf50ff7f91208fe613f5f777690a2b9ddb9d17fa59bc6efa0fdbf1e8535",
+            sources: &[
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/vocoder_dml.onnx",
+                },
+            ],
+        },
+        ],
+    },
+
 ];
 
 /// 全部条目。
@@ -637,6 +844,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// fp16 / fp32 是同一份导出的两档：编码器的外部权重（`.onnx.data`）字节完全相同，
+    /// 差别只在 `diff_step` 与 `vocoder`。这条防止有人「顺手」改了某一份的权重却只改一边。
+    #[test]
+    fn soulx_precisions_share_encoder_weights() {
+        let fp16 = by_id("soulx-singer-fp16").expect("缺 fp16 条目");
+        let fp32 = by_id("soulx-singer-fp32").expect("缺 fp32 条目");
+        assert_eq!(fp16.files.len(), fp32.files.len());
+        for (a, b) in fp16.files.iter().zip(fp32.files.iter()) {
+            assert_eq!(a.filename, b.filename, "两档的文件顺序必须一致");
+            if a.filename.ends_with(".onnx.data") {
+                assert_eq!(a.sha256, b.sha256, "{} 是编码器权重，两档应字节相同", a.filename);
+                assert_eq!(a.approx_bytes, b.approx_bytes);
+            }
+        }
+        // 两个大图必须真的不同（否则「fp32 档」就是假的）。
+        let diff16 = fp16.files.iter().find(|f| f.filename == "diff_step_dml.onnx").unwrap();
+        let diff32 = fp32.files.iter().find(|f| f.filename == "diff_step_dml.onnx").unwrap();
+        assert_ne!(diff16.sha256, diff32.sha256);
+        assert!(diff32.approx_bytes > diff16.approx_bytes * 19 / 10);
     }
 
     /// 多文件成组模型的约定：落在自己的子目录、体积按整组算、且 `.onnx` 与它的外部权重

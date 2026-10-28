@@ -22,7 +22,56 @@ use crate::Progress;
 
 use super::seq::Sequence;
 
-/// 模型组目录名（与 `models::catalog` 里的条目一致）。
+/// **重量精度**：两档是同一份导出的不同精度，对应清单里的两个条目 / 两个目录。
+///
+/// 编码器的外部权重（`.onnx.data`）两份导出字节完全相同，差别集中在 `diff_step`
+/// （848 MB → 1.77 GB）与 `vocoder`（519 MB → 1.05 GB）。fp32 保真更高、磁盘与
+/// 内存翻倍，SXSEditor 把这一档标为「最高质量」；fp16 是默认档。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Precision {
+    /// 轻量档（约 1.44 GB）。
+    Fp16,
+    /// 高精度档（约 2.85 GB）。
+    Fp32,
+}
+
+impl Precision {
+    /// 全部档位，**高精度在前**：「自动」优先选它就位的那一档。
+    pub const ALL: [Precision; 2] = [Precision::Fp32, Precision::Fp16];
+
+    /// 清单条目 id（也是组目录名）。
+    pub fn id(self) -> &'static str {
+        match self {
+            Precision::Fp16 => "soulx-singer-fp16",
+            Precision::Fp32 => "soulx-singer-fp32",
+        }
+    }
+
+    /// 展示名（界面 / 错误信息用）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Precision::Fp16 => "fp16",
+            Precision::Fp32 => "fp32",
+        }
+    }
+
+    /// 组目录名（与清单里的 `dir` 一致）。
+    pub fn dir(self) -> &'static str {
+        self.id()
+    }
+
+    /// 从字符串解析：`auto` / 空 = 自动（返回 `None`，由调用方按已安装挑）。
+    pub fn parse(raw: &str) -> Result<Option<Self>, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "auto" => Ok(None),
+            "fp16" => Ok(Some(Precision::Fp16)),
+            "fp32" => Ok(Some(Precision::Fp32)),
+            other => Err(format!("未知精度 `{other}`（可选 auto / fp16 / fp32）")),
+        }
+    }
+}
+
+/// 默认档（fp16）的组目录名；保留给「只看默认安装」的调用方。
 pub const DIR: &str = "soulx-singer-fp16";
 
 /// 组内必须齐备的文件（9 张图 + 外部权重）。
@@ -66,15 +115,61 @@ pub const CFG_STRENGTH: f32 = 3.0;
 /// CFG rescale 权重。
 pub const CFG_RESCALE: f32 = 0.7;
 
-/// 模型所在目录（整组齐备才算）。
-pub fn model_dir() -> Option<PathBuf> {
-    let entry = crate::models::catalog::by_id(DIR)?;
+/// 某一档模型所在目录（整组齐备才算）。
+pub fn model_dir_for(precision: Precision) -> Option<PathBuf> {
+    let entry = crate::models::catalog::by_id(precision.id())?;
     crate::models::catalog::group_dir(entry)
 }
 
-/// 模型是否就位。
+/// 已安装的档位，按 [`Precision::ALL`] 的顺序（高精度优先）。
+pub fn installed_precisions() -> impl Iterator<Item = Precision> {
+    Precision::ALL
+        .into_iter()
+        .filter(|p| model_dir_for(*p).is_some())
+}
+
+/// 自动选档：已就位的高精度档优先，其次 fp16。
+pub fn auto_precision() -> Option<Precision> {
+    installed_precisions().next()
+}
+
+/// 解析「要用的档」：显式指定就必须已安装；`auto` 按已安装挑。
+///
+/// 返回目录，方便调用方直接喂给 [`Runner::load`]。
+pub fn resolve(precision: Option<Precision>) -> Result<(Precision, PathBuf), String> {
+    let Some(p) = precision else {
+        let p = auto_precision().ok_or_else(|| {
+            "未安装歌声合成模型。到「管理器 → 模型」下载 SoulX-Singer（fp16 约 1.44 GB，fp32 约 2.85 GB）"
+                .to_string()
+        })?;
+        return Ok((p, model_dir_for(p).expect("已安装就有目录")));
+    };
+    match model_dir_for(p) {
+        Some(dir) => Ok((p, dir)),
+        None => Err(format!(
+            "未安装 SoulX-Singer 的 {} 档。到「管理器 → 模型」下载，或改用已安装的档（{}）",
+            p.label(),
+            installed_precisions()
+                .map(|x| x.label())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        )),
+    }
+}
+
+/// 默认档（fp16）的目录；没装 fp16 时退回任意已安装档。
+pub fn model_dir() -> Option<PathBuf> {
+    auto_precision().and_then(model_dir_for)
+}
+
+/// 模型是否就位（任意一档）。
 pub fn installed() -> bool {
-    model_dir().is_some()
+    auto_precision().is_some()
+}
+
+/// 某一档是否就位。
+pub fn installed_for(precision: Precision) -> bool {
+    model_dir_for(precision).is_some()
 }
 
 /// 一张图 + 它的输入精度（fp16 导出 or fp32 导出）。
@@ -501,6 +596,22 @@ impl Rng {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn precision_parses_labels_and_auto() {
+        assert_eq!(Precision::parse("auto").unwrap(), None);
+        assert_eq!(Precision::parse("").unwrap(), None);
+        assert_eq!(Precision::parse(" FP32 ").unwrap(), Some(Precision::Fp32));
+        assert_eq!(Precision::parse("fp16").unwrap(), Some(Precision::Fp16));
+        assert!(Precision::parse("fp64").is_err(), "未知精度要报错，不能静默降级");
+        // 两档各自对应清单里的一条，且 id 就是目录名。
+        for p in Precision::ALL {
+            assert!(crate::models::catalog::by_id(p.id()).is_some(), "{} 缺清单条目", p.label());
+            assert_eq!(p.dir(), p.id());
+        }
+        // 高精度在前：「自动」要优先选 fp32。
+        assert_eq!(Precision::ALL[0], Precision::Fp32);
+    }
 
     #[test]
     fn rng_is_deterministic_and_reasonably_gaussian() {

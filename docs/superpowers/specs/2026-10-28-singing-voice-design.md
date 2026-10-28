@@ -215,6 +215,26 @@ SoulX-Singer 的 zero-shot 能力本来就是「参考音频决定音色」。�
   写完用 `cargo test -p ai-daw-local-ai models::catalog` 复核）；下载器按网络位置排序、
   一边失败自动换另一边。
 
+## 8.1 精度档（fp16 / fp32）
+
+清单里是**两档**，同一份导出的不同精度：
+
+| 条目 | 目录 | 体积 | 说明 |
+| --- | --- | --- | --- |
+| `soulx-singer-fp16` | `soulx-singer-fp16/` | 1.44 GB | 默认档；`diff_step` 848 MB、`vocoder` 519 MB |
+| `soulx-singer-fp32` | `soulx-singer-fp32/` | 2.85 GB | 高保真档；`diff_step` 1.77 GB、`vocoder` 1.05 GB（SXSEditor 标为最高质量） |
+
+两档的编码器外部权重（7 个 `.onnx.data`）**字节完全相同**——fp16 与 fp32 的真实差别集中在
+`diff_step` 与 `vocoder`。加载器按图里声明的元素类型自动转 fp16/fp32（`Graph::f16`），
+所以同一套推理代码跑两档；`sing_song` / 界面用 `precision`（`auto` / `fp16` / `fp32`）选档，
+`auto` 优先已安装的高精度档。fp32 目录同样走「整组齐备才算装好」+ sha256 硬门禁。
+
+## 8.2 人声导入不再卡界面
+
+`voice_save` 以前是**同步命令**（Tauri 的同步命令跑在主线程）：解码 + 重采样 + 一遍 FFT
+挑「最适合当参考的 10 秒」，一首 4 分钟的歌就是几百毫秒到几秒，于是导入时窗口转圈、点不动。
+现在改成 `async` + `spawn_blocking`，重活离开主线程；界面同时有「导入中…」的按钮态。
+
 ## 9. 后续
 
 1. 英文 / 日文 G2P（CMUdict 4.3 MB + JP kanji dict，参考实现有现成数据）。

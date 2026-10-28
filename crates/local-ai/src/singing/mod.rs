@@ -18,7 +18,7 @@ pub mod seq;
 pub mod soulx;
 
 pub use seq::SingNote;
-pub use soulx::SAMPLE_RATE;
+pub use soulx::{Precision, SAMPLE_RATE};
 
 use crate::Progress;
 
@@ -40,6 +40,8 @@ pub struct Take {
     pub notes: usize,
     /// 参考声线实际取自原音频的第几秒（自动裁剪）；没有参考时为 `None`。
     pub reference_offset: Option<f64>,
+    /// 这次实际用的重量精度。
+    pub precision: soulx::Precision,
 }
 
 /// 歌词分配的结果（给界面/MCP 的一句话反馈）。
@@ -296,12 +298,21 @@ pub fn synthesize(
     reference: Option<(&[f32], f64)>,
     progress: Progress<'_>,
 ) -> Result<Take, String> {
-    let Some(dir) = soulx::model_dir() else {
-        return Err(format!(
-            "未安装歌声合成模型（{}）。到「管理器 → 模型」下载 SoulX-Singer（约 1.4 GB）",
-            soulx::DIR
-        ));
-    };
+    synthesize_with(notes, bpm, steps, seed, reference, None, progress)
+}
+
+/// 同 [`synthesize`]，但可以指定重量精度（`None` = 自动：fp32 优先，其次 fp16）。
+#[allow(clippy::too_many_arguments)]
+pub fn synthesize_with(
+    notes: &[SingNote],
+    bpm: f64,
+    steps: u32,
+    seed: u64,
+    reference: Option<(&[f32], f64)>,
+    precision: Option<soulx::Precision>,
+    progress: Progress<'_>,
+) -> Result<Take, String> {
+    let (precision, dir) = soulx::resolve(precision)?;
     if notes.is_empty() {
         return Err("没有音符可唱".into());
     }
@@ -424,6 +435,7 @@ pub fn synthesize(
         segments: segments.len(),
         notes: sung_notes,
         reference_offset,
+        precision,
     })
 }
 

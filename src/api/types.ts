@@ -926,14 +926,32 @@ export interface SingingStatus {
   message: string | null;
 }
 
-/** 歌声合成的模型状态（9 张 ONNX 图整组）。 */
-export interface SingingModels {
-  /** 整组权重是否齐备。 */
+/** 歌声合成的一档重量（fp16 / fp32）。 */
+export interface SingingPrecision {
+  /** 清单条目 id（= 目录名）。 */
+  id: string;
+  /** 展示名：`fp16` / `fp32`。 */
+  label: string;
+  /** 这一档是否已就位。 */
   installed: boolean;
+  /** 这一档的目录；未安装时为 null。 */
+  dir: string | null;
+  /** 整组体积（下载提示用）。 */
+  approx_bytes: number;
+}
+
+/** 歌声合成的模型状态（9 张 ONNX 图整组，两档精度）。 */
+export interface SingingModels {
+  /** 任意一档是否齐备。 */
+  installed: boolean;
+  /** 「自动」会选中的那一档（高精度优先）。 */
+  active: string | null;
   /** 模型目录；未安装时为 null。 */
   dir: string | null;
-  /** 需要下载的字节数。 */
+  /** 需要下载的字节数（fp16 档）。 */
   approx_bytes: number;
+  /** 两档的安装状态（高精度在前）。 */
+  precisions: SingingPrecision[];
 }
 
 /**
@@ -955,6 +973,8 @@ export interface SingingArgs {
   reference_track?: number | null;
   /** 参考音色：人声音色库 id（优先级最高）。 */
   reference_voice?: string | null;
+  /** 重量精度：`auto`（缺省，fp32 优先）/ `fp16` / `fp32`。 */
+  precision?: "auto" | "fp16" | "fp32" | null;
   /** 采样步数（缺省 32）。 */
   steps?: number | null;
   /** 噪声种子（缺省 0）。 */

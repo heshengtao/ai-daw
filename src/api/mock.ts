@@ -2587,7 +2587,16 @@ export const mockApi = {
 
   // ---- 歌声合成（预览：模拟进度，不真正推理）----
 
-  singingModels: (): SingingModels => ({ installed: false, dir: null, approx_bytes: 1_448_313_001 }),
+  singingModels: (): SingingModels => ({
+    installed: false,
+    active: null,
+    dir: null,
+    approx_bytes: 1_448_313_001,
+    precisions: [
+      { id: "soulx-singer-fp32", label: "fp32", installed: false, dir: null, approx_bytes: 2_853_872_164 },
+      { id: "soulx-singer-fp16", label: "fp16", installed: false, dir: null, approx_bytes: 1_448_313_001 },
+    ],
+  }),
   singingStatus: (): SingingStatus => ({ ...singingState }),
   singingRender: (_args?: SingingArgs): void => {
     if (singingTimer !== null) return;

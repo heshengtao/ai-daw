@@ -154,6 +154,10 @@ pub(crate) struct SingSongArgs {
     /// 参考音色：人声音色库条目 id（`list_voices` 返回；优先级最高）。
     #[serde(default)]
     reference_voice: Option<String>,
+    /// 重量精度：`auto`（缺省，已装 fp32 就用 fp32）/ `fp16` / `fp32`。
+    /// 两档是同一份导出的不同精度；fp32 体积 2.85 GB、保真更高。
+    #[serde(default)]
+    precision: Option<String>,
     /// 采样步数（缺省 32；16 更快、质量略降）。
     #[serde(default)]
     steps: Option<u32>,
@@ -5355,7 +5359,8 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             track: args.track,
             path: args.path,
         };
-        let entry = crate::voices::voice_save(app.clone(), app.state(), request)?;
+        // 走同步实现：MCP 本来就在自己的线程上，不必再套一层 async 命令。
+        let entry = crate::voices::save(app, &app.state::<crate::state::AppState>(), request)?;
         Ok(format!(
             "已存入人声音色库「{}」：{} 秒（id {}）。之后用 sing_song 的 reference_voice 引用它。",
             entry.name,
@@ -5386,7 +5391,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     pub(crate) fn sing_song(app: &AppHandle, args: SingSongArgs) -> Result<String, String> {
         if !crate::singing::model_ready() {
             return Err(
-                "未安装歌声合成模型（SoulX-Singer，约 1.4 GB）。请先在「管理器 → 模型」下载 soulx-singer-fp16。"
+                "未安装歌声合成模型（SoulX-Singer）。请先在「管理器 → 模型」下载 soulx-singer-fp16（1.44 GB）或 soulx-singer-fp32（2.85 GB）。"
                     .into(),
             );
         }
@@ -5411,6 +5416,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             reference: args.reference,
             reference_track: args.reference_track,
             reference_voice: args.reference_voice,
+            precision: args.precision,
             steps: args.steps,
             seed: args.seed,
             name: args.name,
@@ -5940,7 +5946,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("save_voice", "人声音色库：把一条参考声线存下来（`track` 取工程内音频轨的第一段，或 `path` 给音频文件）。存成**单声道 24 kHz**，跨工程可用；之后 `sing_song` 用 `reference_voice` 直接引用。", SaveVoiceArgs),
             tool_def!("update_voice", "人声音色库：改名字 / 描述 / 标签（不动音频）。", UpdateVoiceArgs),
             tool_def!("delete_voice", "人声音色库：删除一条（连音频一起删）。", VoiceIdArgs),
-            tool_def!("sing_song", "歌声合成（SoulX-Singer ONNX）：把一条 MIDI 轨的旋律 + 一行歌词 + 一条参考声线渲染成**新音频轨**（插在源轨下面，一次撤销可整体去掉）。歌词可以逐音写在音符的 `lyric` 上（优先级更高），也可以用 `lyrics` 整串给（一字一音，`-` 连音，标点跳过，不够时沿用前一字）。参考音色用 `reference`（音频文件）或 `reference_track`（某轨的第一段音频）；换音色 = 换参考重渲染。需要已安装 SoulX-Singer 模型（约 1.4 GB，管理器 → 模型）。渲染是离线的：10 秒歌声在 CPU 上约 2–4 分钟（16 步约一半）。", SingSongArgs),
+            tool_def!("sing_song", "歌声合成（SoulX-Singer ONNX）：把一条 MIDI 轨的旋律 + 一行歌词 + 一条参考声线渲染成**新音频轨**（插在源轨下面，一次撤销可整体去掉）。歌词可以逐音写在音符的 `lyric` 上（优先级更高），也可以用 `lyrics` 整串给（一字一音，`-` 连音，标点跳过，不够时沿用前一字）。参考音色用 `reference`（音频文件）或 `reference_track`（某轨的第一段音频）；换音色 = 换参考重渲染。需要已安装 SoulX-Singer 模型（管理器 → 模型）：fp16 约 1.44 GB、fp32 约 2.85 GB（保真更高）；`precision` 可指定 auto / fp16 / fp32，auto 优先用已装的 fp32。渲染是离线的：10 秒歌声在 CPU 上约 2–4 分钟（16 步约一半）。", SingSongArgs),
             tool_def!("transcribe_audio", "音频转 MIDI：对指定轨道的第一段音频做音高检测（有 Basic Pitch 模型就用，否则内置 DSP），把结果写成**源轨道下面的新 MIDI 轨**（一次撤销）。", TrackArgs),
             tool_def!("enhance_audio", "降噪：对指定轨道的第一段音频降噪，把结果写成**源轨道下面的新音频轨**（原轨不动，便于 A/B）。`mode=voice`（缺省，人声/去混响，优先 LocalVQE 模型）或 `mode=music`（乐器底噪，内置 DSP）。", EnhanceArgs),
             tool_def!("import_audio", "把本机的一个音频文件导入成音频片段（wav/flac/mp3/ogg/m4a）；返回新片段 id。", ImportAudioArgs),

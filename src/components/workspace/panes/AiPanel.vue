@@ -230,10 +230,24 @@ async function cancelModelDownload(): Promise<void> {
 
 // ---- 歌声合成（SoulX-Singer）：MIDI + 歌词 + 参考声线 → 新音频轨 ----
 const singing = ref<SingingStatus>({ running: false, progress: 0, message: null });
-const singingInfo = ref<SingingModels>({ installed: false, dir: null, approx_bytes: 0 });
-const singModel = computed(
-  () => modelsStore.catalog.find((m) => m.feature === "sing") ?? null,
-);
+const singingInfo = ref<SingingModels>({
+  installed: false,
+  active: null,
+  dir: null,
+  approx_bytes: 0,
+  precisions: [],
+});
+/** 重量精度：auto（已装 fp32 就用它）/ fp16 / fp32。 */
+const singPrecision = ref<"auto" | "fp16" | "fp32">("auto");
+/** 当前精度对应的清单条目（下载提示 / 下载进度都用它）。 */
+const singModel = computed(() => {
+  const id = `soulx-singer-${singPrecision.value === "auto" ? "fp16" : singPrecision.value}`;
+  return (
+    modelsStore.catalog.find((m) => m.id === id) ??
+    modelsStore.catalog.find((m) => m.feature === "sing") ??
+    null
+  );
+});
 /** 有音符的 MIDI 轨道（歌声合成的输入）。 */
 const midiTracks = computed(() =>
   (project.project?.tracks ?? []).filter(
@@ -257,7 +271,12 @@ const singDownloading = computed(() =>
   singModel.value ? modelsStore.installing(singModel.value.id) : false,
 );
 const singProgressPct = computed(() => `${Math.round(singing.value.progress * 100)}%`);
-const singReady = computed(() => singingInfo.value.installed);
+/** 当前选中的精度是否已就位（auto = 任意一档已装）。 */
+const singReady = computed(() => {
+  if (singPrecision.value === "auto") return singingInfo.value.installed;
+  const row = singingInfo.value.precisions.find((p) => p.label === singPrecision.value);
+  return !!row?.installed;
+});
 const singTrack = computed(
   () => midiTracks.value.find((t) => String(t.id) === singTrackId.value) ?? midiTracks.value[0] ?? null,
 );
@@ -303,6 +322,27 @@ const singVoice = computed(() =>
 /** 有可用的参考声线（选中的那条还在）。 */
 const hasTone = computed(() => refOptions.value.some((o) => o.id === singRef.value));
 
+/** 精度下拉：自动 + 两档（未下载的也列出来，选中后会提示下载）。 */
+const precisionOptions = computed(() => {
+  const rows = singingInfo.value.precisions.map((p) => ({
+    id: p.label,
+    label: p.label,
+    hint: p.installed ? i18n.t("ai.precisionInstalled") : humanSize(p.approx_bytes),
+  }));
+  const auto = {
+    id: "auto",
+    label: i18n.t("ai.precisionAuto"),
+    hint: singingInfo.value.active ?? undefined,
+  };
+  return [auto, ...rows];
+});
+const precisionChoice = computed({
+  get: () => singPrecision.value,
+  set: (v: string) => {
+    singPrecision.value = v === "fp16" || v === "fp32" ? v : "auto";
+  },
+});
+
 const stepOptions = [
   { id: "16", label: "16" },
   { id: "24", label: "24" },
@@ -319,6 +359,8 @@ const stepChoice = computed({
 // ---- 存进 / 移出人声音色库 ----
 const voiceSaveOpen = ref(false);
 const voiceDraftName = ref("");
+/** 正在导入 / 保存人声（解码 + FFT 挑段，几秒的活；别让按钮看起来没反应）。 */
+const voiceBusy = ref(false);
 /** 待保存的来源：工程内轨道，或一个刚选的音频文件。 */
 const voiceSource = ref<{ track?: number; path?: string } | null>(null);
 
@@ -343,6 +385,8 @@ async function confirmSaveVoice(): Promise<void> {
   const source = voiceSource.value;
   const name = voiceDraftName.value.trim();
   if (!source || !name) return;
+  if (voiceBusy.value) return;
+  voiceBusy.value = true;
   try {
     const entry = await voiceSave({
       track: source.track ?? null,
@@ -357,6 +401,8 @@ async function confirmSaveVoice(): Promise<void> {
     layout.notify(i18n.t("ai.voiceSaved", { name: entry.name }));
   } catch (err) {
     layout.notify(String(err));
+  } finally {
+    voiceBusy.value = false;
   }
 }
 
@@ -368,11 +414,12 @@ function openVoiceLibrary(): void {
 
 /** 从音频文件直接存一条人声音色（与「存入音色库」互补：一个从文件、一个从工程轨道）。 */
 async function importVoice(): Promise<void> {
-  if (singBusy.value) return;
+  if (singBusy.value || voiceBusy.value) return;
   try {
     const path = await pickAudioToOpen();
     if (!path) return;
     const stem = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "";
+    voiceBusy.value = true;
     const entry = await voiceSave({ path, name: stem || i18n.t("ai.voiceDefaultName") });
     await refreshVoices();
     refSource.value = "voice";
@@ -380,6 +427,8 @@ async function importVoice(): Promise<void> {
     layout.notify(i18n.t("ai.voiceSaved", { name: entry.name }));
   } catch (err) {
     layout.notify(String(err));
+  } finally {
+    voiceBusy.value = false;
   }
 }
 
@@ -444,6 +493,7 @@ async function runSinging(): Promise<void> {
       track: t.id,
       reference_voice: singRefVoiceId.value,
       reference_track: singRefTrackId.value,
+      precision: singPrecision.value,
       steps: singSteps.value,
       seed: 0,
     });
@@ -908,13 +958,13 @@ watch(
             <button
               v-if="refSource === 'track'"
               class="iface-btn"
-              :disabled="singBusy || !singRefTrackId"
+              :disabled="singBusy || voiceBusy || !singRefTrackId"
               @click="beginSaveVoice"
             >
               {{ i18n.t("ai.voiceSave") }}
             </button>
-            <button class="iface-btn" :disabled="singBusy" @click="importVoice">
-              {{ i18n.t("ai.voiceImport") }}
+            <button class="iface-btn" :disabled="singBusy || voiceBusy" @click="importVoice">
+              {{ voiceBusy ? i18n.t("ai.voiceImporting") : i18n.t("ai.voiceImport") }}
             </button>
             <button class="iface-btn" :disabled="singBusy" @click="openVoiceLibrary">
               {{ i18n.t("ai.manageVoices") }}
@@ -936,6 +986,15 @@ watch(
           />
           <button class="iface-btn" @click="confirmSaveVoice">{{ i18n.t("common.save") }}</button>
           <button class="iface-btn" @click="voiceSaveOpen = false">{{ i18n.t("common.cancel") }}</button>
+        </div>
+        <div class="param-field">
+          <span class="param-name">{{ i18n.t("ai.singingPrecision") }}</span>
+          <Md3Select
+            v-model="precisionChoice"
+            :options="precisionOptions"
+            :label="i18n.t('ai.singingPrecision')"
+            :disabled="singBusy"
+          />
         </div>
         <div class="param-field">
           <span class="param-name">{{ i18n.t("ai.steps") }}</span>
