@@ -209,6 +209,296 @@ pub static CATALOG: &[ModelEntry] = &[
             ],
         }],
     },
+    ModelEntry {
+        id: "soulx-singer-fp16",
+        name: "SoulX-Singer（歌声合成 · fp16）",
+        feature: "sing",
+        // 上游模型 SoulX-Singer（Soul AI Lab）是 **Apache-2.0**；ONNX 拆分导出由社区完成，
+        // 以同一许可再分发。
+        license: "Apache-2.0",
+        // 9 张图 + 5 个外部权重必须同目录：`ort` 靠 `.onnx` 里记录的**相对路径**找 `.data`。
+        dir: Some("soulx-singer-fp16"),
+        // 1.4 GB：绝不随包，用户在「管理器 → 模型」按需下载。
+        bundled: false,
+        // **国内外双源**：国际走 Hugging Face 镜像（`ailm32442/SoulX-Singer-onnx-fp16`，
+        // 由 `tools/mirror-soulx-hf.sh` 上传，逐文件 sha256 与魔搭完全一致），国内走魔搭。
+        // 下载器按网络位置排序（设置 → 网络 → 模型下载源：自动 / 国外 / 国内），失败再换另一个源。
+        // 这里的 sha256 取自魔搭的 LFS 元数据，换源后字节必须一致，否则校验不过。
+        files: &[
+        ModelFile {
+            filename: "note_text_encoder.onnx",
+            approx_bytes: 3072460,
+            sha256: "331415477a985a8962601a465c616806b5d32a33f5f93230e941a54656d352c6",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/note_text_encoder.onnx",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/note_text_encoder.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "note_text_encoder.onnx.data",
+            approx_bytes: 6144000,
+            sha256: "998889d7daff9cd50774abf23282d1acad01d2c753db3040b156d1a53b178e79",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/note_text_encoder.onnx.data",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/note_text_encoder.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "note_pitch_encoder.onnx",
+            approx_bytes: 262601,
+            sha256: "741b08a2767e9134cd40d4e5b4e073590c2f74cd6dca0c107c7a7715965a346a",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/note_pitch_encoder.onnx",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/note_pitch_encoder.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "note_pitch_encoder.onnx.data",
+            approx_bytes: 524288,
+            sha256: "20ddcaaea04315e5a46eb11d8cacb6dd6ecf6a9688ebc3af019ab7b27ee7b9c6",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/note_pitch_encoder.onnx.data",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/note_pitch_encoder.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "note_type_encoder.onnx",
+            approx_bytes: 262601,
+            sha256: "0aba568ee59c350175663bdc04a40be44fe36fc46ceb648f462d65638bbd85b4",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/note_type_encoder.onnx",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/note_type_encoder.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "note_type_encoder.onnx.data",
+            approx_bytes: 524288,
+            sha256: "becf918cd5e23b25783ae42480c13bfa04bf38b84a4075d7c4273befcb3af4a0",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/note_type_encoder.onnx.data",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/note_type_encoder.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "f0_encoder.onnx",
+            approx_bytes: 370121,
+            sha256: "c7628a2af8b0347a28edbbb2d35bd8a12eb13aa1b138ae4ed267d0e08bb3a046",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/f0_encoder.onnx",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/f0_encoder.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "f0_encoder.onnx.data",
+            approx_bytes: 739328,
+            sha256: "8c3f3c514b1bf78f723b8fa785ed2f7dd5cb994ca2c1349f22c54ea4909b0f4b",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/f0_encoder.onnx.data",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/f0_encoder.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "preflow.onnx",
+            approx_bytes: 8601140,
+            sha256: "d06b7274491a2346194654e17297e63823a10ccc2e21dd39540f4057ffe62abe",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/preflow.onnx",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/preflow.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "preflow.onnx.data",
+            approx_bytes: 16973824,
+            sha256: "ce2c424a3a22a22a1aff172767baacc3e6796df0eb83f979596d522d87d2422f",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/preflow.onnx.data",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/preflow.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "cond_emb.onnx",
+            approx_bytes: 1051289,
+            sha256: "3437e166b1dfd5094215565566fd146e71fa29ac2cf50653831a5e6da60deb88",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/cond_emb.onnx",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/cond_emb.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "cond_emb.onnx.data",
+            approx_bytes: 2162688,
+            sha256: "fbfa95df1617d8dc12c1544c788be65d5bb08b365a68041c69953b02ac066dbe",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/cond_emb.onnx.data",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/cond_emb.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "mel_transform.onnx",
+            approx_bytes: 261055,
+            sha256: "823a41e7b50506c28afc0d954823f27717fe47b50304012eec36daaa7d22685c",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/mel_transform.onnx",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/mel_transform.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "mel_transform.onnx.data",
+            approx_bytes: 499712,
+            sha256: "2d1e18edf37041270f999b15bbfd08c19cccca723a6111425ae9a8a228c87927",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/mel_transform.onnx.data",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/mel_transform.onnx.data",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "diff_step_dml.onnx",
+            approx_bytes: 887377148,
+            sha256: "1a2857f819562e75b73b291ea86ec3c1157d77f6e51abad1e934d2f318711629",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/diff_step_dml.onnx",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/diff_step_dml.onnx",
+                },
+            ],
+        },
+        ModelFile {
+            filename: "vocoder_dml.onnx",
+            approx_bytes: 519486458,
+            sha256: "185a707f907554196f28848256ecfd1b72031c5335571e2dedcbb0a0de35db95",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/vocoder_dml.onnx",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/vocoder_dml.onnx",
+                },
+            ],
+        },
+        ],
+    },
 ];
 
 /// 全部条目。
@@ -292,6 +582,28 @@ mod tests {
         }
     }
 
+    /// SoulX-Singer 是**国内外双源**：同一份字节，国内走魔搭、国际走 HF，
+    /// 少一边就退化成单源（海外直连魔搭会很难受）。
+    #[test]
+    fn soulx_singer_has_both_cn_and_intl_sources() {
+        let entry = by_id("soulx-singer-fp16").expect("应存在 SoulX-Singer 条目");
+        assert_eq!(entry.files.len(), 16, "9 张图 + 7 个外部权重");
+        for file in entry.files {
+            assert!(
+                file.sources.iter().any(|s| s.kind == "modelscope" && s.region == "cn"),
+                "{} / {} 缺国内源",
+                entry.id,
+                file.filename
+            );
+            assert!(
+                file.sources.iter().any(|s| s.kind == "hf" && s.region == "intl"),
+                "{} / {} 缺国际源",
+                entry.id,
+                file.filename
+            );
+        }
+    }
+
     #[test]
     fn htdemucs_is_downloadable_and_not_bundled() {
         let entry = by_id("htdemucs-ort-v1").expect("应存在 htdemucs 条目");
@@ -331,14 +643,18 @@ mod tests {
     /// 必须同目录（`ort` 靠图里记录的**相对路径**找权重）。外部权重可能是单文件
     /// `<name>.data`，也可能是**分片** `<name>.data.0/.1/...`。
     ///
-    /// 当前清单里没有这类条目（原 ACE-Step 已移除），但约定仍由 `dir` 字段保留：
-    /// 将来再加多文件模型时照这个形状写即可。
+    /// 这条约定现在由 SoulX-Singer（歌声合成）实际使用；将来再加多文件模型时照这个形状写即可。
     #[test]
     fn every_group_entry_keeps_its_external_weights_beside_the_graph() {
         for entry in all().iter().filter(|e| e.dir.is_some()) {
             assert!(!entry.bundled, "{} 是 GB 级组模型，不该随包", entry.id);
             for file in entry.files {
                 if !file.filename.ends_with(".onnx") {
+                    continue;
+                }
+                // 自足图（权重内嵌在 .onnx 里）没有外部权重，不算缺件。
+                const SELF_CONTAINED: &[&str] = &["diff_step_dml.onnx", "vocoder_dml.onnx"];
+                if SELF_CONTAINED.contains(&file.filename) {
                     continue;
                 }
                 let single = format!("{}.data", file.filename);

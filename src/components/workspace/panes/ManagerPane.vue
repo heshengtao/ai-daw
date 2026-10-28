@@ -310,6 +310,15 @@ async function doRemoveModel(id: string): Promise<void> {
   await models.remove(id);
 }
 
+/** 在系统文件管理器里显示模型文件；失败要说出来，不能点了没反应。 */
+async function doRevealModel(id: string): Promise<void> {
+  await models.reveal(id);
+  if (models.error) {
+    layout.notify(i18n.t("manager.error", { error: models.error }));
+    models.error = null;
+  }
+}
+
 </script>
 
 <template>
@@ -415,7 +424,7 @@ async function doRemoveModel(id: string): Promise<void> {
             :title="i18n.t('manager.modelReveal')"
             :aria-label="i18n.t('manager.modelReveal')"
             :disabled="models.installing(m.id)"
-            @click="models.reveal(m.id)"
+            @click="doRevealModel(m.id)"
           >
             <FolderOpenIcon class="w-[15px] h-[15px]" />
           </button>
