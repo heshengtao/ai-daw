@@ -698,6 +698,7 @@ const zh: Record<string, string> = {
   "model.htdemucs-6s": "HTDemucs 6s（音源分离 · 6 分轨）",
   "model.beat-this": "Beat This!（节拍 / 速度检测 · final0）",
   "model.soulx-singer-fp16": "SoulX-Singer（歌声合成 · fp16）",
+  "model.soulx-singer-fp32": "SoulX-Singer（歌声合成 · fp32 · 高精度）",
   // 执行后端（后端 `local-ai::backend::catalog`）同理。
   "backend.cpu": "CPU",
   "backend.cpu.note": "纯 CPU（默认，全平台可用）",

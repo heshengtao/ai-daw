@@ -700,6 +700,7 @@ const en: Record<string, string> = {
   "model.htdemucs-6s": "HTDemucs 6s (stem separation · 6 stems)",
   "model.beat-this": "Beat This! (tempo / beat detection · final0)",
   "model.soulx-singer-fp16": "SoulX-Singer (singing voice · fp16)",
+  "model.soulx-singer-fp32": "SoulX-Singer (singing voice · fp32 · high fidelity)",
   // Execution backends (backend `local-ai::backend::catalog`), same idea.
   "backend.cpu": "CPU",
   "backend.cpu.note": "Plain CPU (default, available on every platform)",
