@@ -17,7 +17,7 @@
 
 **AI DAW is a small, AI-native music studio for your desktop** — write, arrange, mix, and master in one lightweight app, and let an AI agent work in the session alongside you.
 
-It is a real DAW: a multi-track timeline, a piano roll, a mixer with sends and buses, automation lanes, a built-in synth, and VST3 / CLAP plugin hosting. It is also built to be **operated by a model** — a bundled Skill teaches any AI harness to drive the running app over MCP, so an agent can add tracks, write notes, balance a mix, and analyse the result while you watch it happen in the UI.
+It is a real DAW: a multi-track timeline, a piano roll, a mixer with sends and buses, automation lanes, a built-in synth, and VST3 / CLAP / AU plugin hosting. It is also built to be **operated by a model** — a bundled Skill teaches any AI harness to drive the running app over MCP, so an agent can add tracks, write notes, balance a mix, and analyse the result while you watch it happen in the UI.
 
 Everything runs on your own machine. No account, no API key, no audio leaving your computer.
 
@@ -97,12 +97,12 @@ Balance the song, then make it loud. Channel strips give you gain, pan, sends, b
 
 ### 🧩 Plugins — Bring your own instruments and effects
 
-AI DAW hosts **VST3** and **CLAP** plugins, so the tools you already own come with you. A plugin manager searches the open registry, filters by type and OS compatibility, and installs, updates, or removes plugins in one click — or point it at something you already have on disk.
+AI DAW hosts **VST3** and **CLAP** plugins everywhere, plus **Audio Units (AU / AUv3)** on macOS, so the tools you already own come with you. A plugin manager searches the open registry, filters by type and OS compatibility, and installs, updates, or removes plugins in one click — or point it at something you already have on disk.
 
-- **VST3 & CLAP hosting** — load third-party instruments and effects on any track
+- **VST3 / CLAP / AU hosting** — load third-party instruments and effects on any track (AU and AUv3 on macOS)
 - **Plugin manager** — search the registry, filter by instrument/effect and platform, install / update / uninstall
 - **Local import** — bring in a plugin you have installed elsewhere
-- **Editors & parameters** — open a plugin's own UI, or drive its parameters from the inspector and automation lanes
+- **Editors & parameters** — open a plugin's own UI, or drive its parameters from the inspector and automation lanes; AU plugins without their own view get a generic parameter panel
 
 <p align="center">
   <img src="./assets/screenshots/04-plugins.png" width="100%" alt="The plugins panel: a built-in synth and effect list, with filters for built-in and external plugins">
@@ -200,7 +200,7 @@ Two small ones do: **Basic Pitch** (audio-to-MIDI) and **LocalVQE** (voice clean
 
 ### Which plugin formats are supported?
 
-VST3 and CLAP.
+VST3 and CLAP on Windows, macOS and Linux; **Audio Units (AU / AUv3)** as well on macOS.
 
 ### Do I need the app running to let an agent drive it?
 
