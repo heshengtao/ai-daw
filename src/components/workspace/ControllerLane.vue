@@ -15,7 +15,7 @@
  */
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { PlusIcon, XMarkIcon } from "@heroicons/vue/24/outline";
-import Md3Select from "@/components/common/Md3Select.vue";
+import LaneTargetSelect from "@/components/workspace/LaneTargetSelect.vue";
 import GridSelect from "@/components/common/GridSelect.vue";
 import AutomationCurve from "@/components/workspace/AutomationCurve.vue";
 import { capturePointer } from "@/utils/pointer";
@@ -112,17 +112,9 @@ const scaleMin = computed(() => curveTarget.value?.min ?? spec.value.min);
 const scaleMax = computed(() => curveTarget.value?.max ?? spec.value.max);
 
 /**
- * 下拉选项：`力度` 单独一组（逐音符），其余按 `props.targets` 的 `group` 分组。
- *
- * 选项一律**只有一行**（不给 `hint`）：表头也不再放属性说明，只留「自动化 + 目标 + 网格」
- * 这一行与选中读数，表头才能压得住 28px 的高度。
+ * 下拉选项已抽到 `LaneTargetSelect`：乐谱窗格与控制器泳道共用同一个「目标」下拉，
+ * 否则用户选了「乐谱」以后就回不来了。
  */
-const chooserOptions = computed(() => [
-  { id: "velocity", label: i18n.t("lane.velocity"), group: i18n.t("auto.group.note") },
-  { id: "pressure", label: i18n.t("lane.pressure"), group: i18n.t("auto.group.note") },
-  { id: "channel", label: i18n.t("lane.channel"), group: i18n.t("auto.group.note") },
-  ...props.targets.map((t) => ({ id: t.key, label: t.label, group: t.group })),
-]);
 
 /** 当前逐音符属性 / 曲线目标的显示名。 */
 const noteLabel = computed(() => {
@@ -344,11 +336,10 @@ onUnmounted(() => {
       <!-- 目标选择：下拉（力度 + 该轨道收窄后的插件参数） -->
       <span class="lane-title">{{ i18n.t("auto.title") }}</span>
       <div class="lane-chooser">
-        <Md3Select
-          :model-value="targetKey"
-          :options="chooserOptions"
-          :label="i18n.t('lane.property')"
-          @select="onChoose"
+        <LaneTargetSelect
+          :target-key="targetKey"
+          :targets="targets"
+          @update:target-key="onChoose"
         />
       </div>
 
@@ -472,22 +463,11 @@ onUnmounted(() => {
   color: rgb(var(--md-on-surface-variant));
   white-space: nowrap;
 }
-/* 目标下拉：压到与泳道头部同高的小尺寸（`Md3Select` 默认是 34px 的宽药丸） */
+/* 目标下拉的尺寸由 `LaneTargetSelect` 自己管（乐谱窗格也用它，两处必须一模一样） */
 .lane-chooser {
   flex: 0 0 auto;
   display: inline-flex;
   min-width: 0;
-}
-.lane-chooser :deep(.md3-select) {
-  width: 120px;
-  height: 22px;
-  padding: 0 8px 0 10px;
-  gap: 6px;
-  font-size: 11px;
-}
-.lane-chooser :deep(.caret) {
-  width: 13px;
-  height: 13px;
 }
 .readout {
   flex: 0 1 auto;

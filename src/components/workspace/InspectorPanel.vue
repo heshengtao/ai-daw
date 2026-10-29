@@ -19,6 +19,7 @@ import Md3Switch from "@/components/common/Md3Switch.vue";
 import PluginBrowser from "@/components/common/PluginBrowser.vue";
 import MidiExpressionDialog from "@/components/workspace/MidiExpressionDialog.vue";
 import NoteEditorDialog from "@/components/workspace/NoteEditorDialog.vue";
+import NotationSettingsDialog from "@/components/workspace/NotationSettingsDialog.vue";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
@@ -28,6 +29,7 @@ import { usePluginInterface } from "@/composables/usePluginInterface";
 import { canonicalPluginId } from "@/data/plugins";
 import { useI18n } from "@/i18n";
 import { formatSemitones } from "@/utils/pitch";
+import { defaultNotationFor, type Notation } from "@/utils/notation";
 import type { Note, NotePatch } from "@/api/types";
 const store = useProjectStore();
 const selection = useSelectionStore();
@@ -39,6 +41,43 @@ const pluginInterface = usePluginInterface();
 const paramBrowser = useParamBrowserStore();
 
 const track = computed(() => selection.track);
+
+// ---- 记谱（显示偏好，存本机） ----
+
+/** 当前轨道的谱式：没设过就按乐器猜。 */
+const trackNotation = computed<Notation>(() => {
+  const t = track.value;
+  if (!t) return "score";
+  return layout.trackNotationOf(t.id) ?? defaultNotationFor(t);
+});
+
+const notationOptions = computed(() => [
+  { id: "score", label: i18n.t("score.notationStaff") },
+  { id: "guitar", label: i18n.t("score.notationGuitar") },
+  { id: "bass", label: i18n.t("score.notationBass") },
+  { id: "drums", label: i18n.t("score.notationDrums") },
+]);
+
+function onPickNotation(id: string): void {
+  const t = track.value;
+  if (t) layout.setTrackNotation(t.id, id as Notation);
+}
+
+/** 记谱设置弹窗（谱号 / 调弦）。 */
+const notationDialogOpen = ref(false);
+
+/** 当前谱号的可读名（没设过 = 自动）。 */
+const clefLabel = computed(() => {
+  const t = track.value;
+  const clef = t ? layout.trackClefs[String(t.id)] : undefined;
+  const keys: Record<string, string> = {
+    G: "score.clefTreble",
+    F: "score.clefBass",
+    C: "score.clefAlto",
+    percussion: "score.clefPercussion",
+  };
+  return i18n.t(clef ? (keys[clef] ?? "score.clefAuto") : "score.clefAuto");
+});
 
 /** 工程概览（未选中轨道时显示）。 */
 const overview = computed(() => {
@@ -422,6 +461,22 @@ function openNoteEditor(tab: "strum" | "expr" | "midi" | "lyric"): void {
               {{ track.clips.reduce((n, c) => n + c.notes.length, 0) }} · {{ track.clips.length }}
             </span>
           </div>
+          <!-- 谱式 / 谱号：这条轨道在乐谱视图和下窗口里怎么排 -->
+          <div class="row">
+            <span class="row-label">{{ i18n.t("score.notation") }}</span>
+            <Md3Select
+              :model-value="trackNotation"
+              :options="notationOptions"
+              :label="i18n.t('score.notation')"
+              @select="onPickNotation"
+            />
+          </div>
+          <div class="row">
+            <span class="row-label">{{ i18n.t("score.clef") }}</span>
+            <button class="open-editor" type="button" @click="notationDialogOpen = true">
+              {{ clefLabel }}
+            </button>
+          </div>
         </div>
       </section>
 
@@ -655,6 +710,8 @@ function openNoteEditor(tab: "strum" | "expr" | "midi" | "lyric"): void {
       </dl>
       <p class="hint">{{ i18n.t("inspector.selectTrackHint") }}</p>
     </template>
+
+    <NotationSettingsDialog v-model:open="notationDialogOpen" :track-id="track?.id ?? null" />
   </div>
 </template>
 

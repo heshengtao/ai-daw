@@ -865,8 +865,41 @@ export function exportAudio(
   return invoke<string>("export_audio", { path, sampleRate, format, bitrateKbps });
 }
 
-/** 离线分析当前工程：响度 / 频谱 / 峰值（AI 的「听感」入口）。 */
-export function analyzeProject(sampleRate = 44100): Promise<AnalysisReport> {
+/**
+ * 把乐谱（MusicXML 文本）写到指定路径，返回写入路径。
+ *
+ * 乐谱内容由前端的 `src/score` 生成，后端只负责落盘——所以这条命令与采样率、插件、渲染
+ * 全都无关，也不会改动工程状态。
+ */
+export function exportScore(path: string, xml: string): Promise<string> {
+  if (mockEnabled()) return Promise.resolve(mockApi.exportScore(path));
+  return invoke<string>("export_score", { path, xml });
+}
+
+/**
+ * 读取用户选中的导入文件（原始字节）。
+ *
+ * 解析放在前端（`src/import`）：MIDI 与 MusicXML 都是一次性的纯数据转换，没必要为了它
+ * 在引擎里再加一套模型映射；后端只负责把文件读出来。
+ */
+export async function readImportFile(path: string): Promise<Uint8Array> {
+  if (mockEnabled()) return mockApi.readImportFile();
+  const buffer = await invoke<ArrayBuffer>("read_import_file", { path });
+  return new Uint8Array(buffer);
+}
+
+/**
+ * 用一个解析好的工程**整体替换**当前工程（导入 MIDI / MusicXML）。
+ *
+ * 后端会把替换前的工程收进历史，所以这一步是「可找回」的；但撤销栈会重建，
+ * 不能靠 Ctrl+Z 撤回。
+ */
+export function importProject(project: Project): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.importProject(project));
+  return invoke<Project>("import_project", { project });
+}
+
+/** 离线分析当前工程：响度 / 频谱 / 峰值（AI 的「听感」入口）。 */export function analyzeProject(sampleRate = 44100): Promise<AnalysisReport> {
   if (mockEnabled()) return Promise.resolve(mockApi.analyzeProject());
   return invoke<AnalysisReport>("analyze_project", { sampleRate });
 }

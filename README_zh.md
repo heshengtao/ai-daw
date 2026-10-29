@@ -21,7 +21,7 @@
 
 一切都在你自己的电脑上运行。不要账号、不要 API Key、音频不出本机。
 
-https://github.com/user-attachments/assets/e0da890d-854d-4727-9cfb-3eb82c2a9bd1
+<img src="./assets/screenshots/01-arrange.png" width="100%" alt="AI DAW——编排视图：时间线上的三条轨道与片段，右侧是轨道检查器，底部是自动化车道">
 
 ## 为什么这件事值得做
 

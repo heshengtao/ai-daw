@@ -328,6 +328,8 @@ export const useTimelineStore = defineStore("timeline", () => {
     barRange,
     beatsAt,
     setViewportWidth,
+    /** 卷帘可视宽度（px）：ghost 层按它裁剪可见范围。 */
+    viewportWidth,
     zoomAt,
     centerOn,
   };

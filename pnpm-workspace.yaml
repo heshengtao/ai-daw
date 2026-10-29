@@ -1,0 +1,7 @@
+# pnpm 11 在 `pnpm install` 时会把「有构建脚本但未获批准的依赖」当成错误。
+#
+# `gl` 是 `opensheetmusicdisplay` 的**可选**依赖，只用于它的 Node 端无头渲染；我们的谱面是在
+# Tauri 的 WebView 里画的，用不到它。这里明确写死 `false`，pnpm 就不会再要求 `approve-builds`，
+# 也不会去编译那个需要原生工具链的模块。
+allowBuilds:
+  gl: false

@@ -45,8 +45,17 @@ const theme = ref<Theme>(loadTheme());
 const accent = ref<AccentColor>(loadAccent());
 const media = window.matchMedia("(prefers-color-scheme: dark)");
 
+/**
+ * 当前**实际**是不是深色（`system` 跟随系统）。
+ *
+ * 谱面渲染要按它换配色：OSMD 的 `darkMode` 只能在构造时给，主题一变就得重建实例，
+ * 所以需要一个能 watch 的值，而不是去读 `<html>` 的 class。
+ */
+const isDark = ref(false);
+
 function applyTheme(): void {
   const dark = theme.value === "dark" || (theme.value === "system" && media.matches);
+  isDark.value = dark;
   document.documentElement.classList.toggle("dark", dark);
   document.documentElement.setAttribute("data-accent", accent.value);
   localStorage.setItem(THEME_KEY, theme.value);
@@ -76,5 +85,5 @@ export function useTheme() {
     theme.value = theme.value === "system" ? "light" : theme.value === "light" ? "dark" : "system";
   }
 
-  return { theme, accent, setTheme, setAccent, cycleTheme };
+  return { theme, accent, isDark, setTheme, setAccent, cycleTheme };
 }

@@ -17,6 +17,7 @@ import {
   PencilSquareIcon,
   AdjustmentsHorizontalIcon,
   MusicalNoteIcon,
+  DocumentTextIcon,
 } from "@heroicons/vue/24/outline";
 import Tooltip from "@/components/common/Tooltip.vue";
 import PanelIcon from "@/components/common/PanelIcon.vue";
@@ -55,6 +56,7 @@ const isMac = isMacOS();
 const navItems: NavItem[] = [
   { labelKey: "topbar.view.arrange", path: "/arrange", icon: Squares2X2Icon },
   { labelKey: "topbar.view.edit", path: "/edit", icon: PianoIcon },
+  { labelKey: "topbar.view.score", path: "/score", icon: DocumentTextIcon },
   { labelKey: "topbar.view.mix", path: "/mix", icon: AdjustmentsHorizontalIcon },
 ];
 

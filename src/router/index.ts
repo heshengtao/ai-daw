@@ -8,6 +8,7 @@ const router = createRouter({
     { path: "/", redirect: "/arrange" },
     { path: "/arrange", name: "arrange", component: () => import("@/views/ArrangeView.vue") },
     { path: "/edit", name: "edit", component: () => import("@/views/EditView.vue") },
+    { path: "/score", name: "score", component: () => import("@/views/ScoreView.vue") },
     { path: "/mix", name: "mix", component: () => import("@/views/MixView.vue") },
     { path: "/settings", name: "settings", component: () => import("@/views/SettingsView.vue") },
     // 内置合成器的独立窗口：由后端用 `index.html#/synth?track=N` 打开。

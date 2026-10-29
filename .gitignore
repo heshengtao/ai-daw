@@ -30,3 +30,7 @@ src-tauri/gen/
 # 插件界面诊断（`AIDAW_EDITOR_SELFTEST`）在仓库根留下的 stderr/stdout 产物。
 /selftest.err.txt
 /selftest.out.txt
+
+# 乐谱自检的本地产物：`.tmp/` 是打包中间文件，`tools/out/` 是生成的 MusicXML 样例。
+/.tmp/
+/tools/out/

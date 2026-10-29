@@ -69,6 +69,16 @@ export const useProjectStore = defineStore("project", () => {
     applyHistory(state);
   }
 
+  /**
+   * 用后端返回的新工程**整体替换**当前快照（导入 MIDI / 乐谱时用）。
+   *
+   * 替换会重建撤销栈：撤回导入得去「历史」里找（后端在替换前已经把旧工程记进去了）。
+   */
+  async function replaceWith(next: Project): Promise<void> {
+    project.value = next;
+    await refreshDepths();
+  }
+
   /** 执行一条返回完整工程快照的编辑命令。 */
   async function edit(run: () => Promise<Project>): Promise<void> {
     project.value = await run();
@@ -660,6 +670,7 @@ export const useProjectStore = defineStore("project", () => {
     undo,
     redo,
     applyHistoryState,
+    replaceWith,
     refreshDepths,
   };
 });

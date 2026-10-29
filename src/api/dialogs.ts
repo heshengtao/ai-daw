@@ -19,6 +19,16 @@ function exportFilter() {
   ];
 }
 
+/**
+ * 乐谱**导出**过滤器。
+ *
+ * 只给 `.musicxml` 一个扩展名：MuseScore / Dorico / Sibelius 都能直接认，而 `.xml` 太泛，
+ * 系统对话框里会混进一堆无关文件。
+ */
+function scoreFilter() {
+  return [{ name: useI18n().t("dialog.scoreFilter"), extensions: ["musicxml"] }];
+}
+
 /** 可导入的音频格式（与 `crates/asset` 的解码能力一致）。 */
 function audioFilter() {
   return [
@@ -27,6 +37,16 @@ function audioFilter() {
       extensions: ["wav", "flac", "mp3", "ogg", "m4a", "aac"],
     },
   ];
+}
+
+/** 可导入的 MIDI 文件（`.smf` 偶见于老工具导出的裸 SMF）。 */
+function midiFilter() {
+  return [{ name: useI18n().t("dialog.midiFilter"), extensions: ["mid", "midi", "smf"] }];
+}
+
+/** 可导入的谱面：`.mxl` 是压缩的 MusicXML（zip），现在还不解压，先让用户能选中。 */
+function scoreOpenFilter() {
+  return [{ name: useI18n().t("dialog.scoreOpenFilter"), extensions: ["musicxml", "xml", "mxl"] }];
 }
 
 /** 选择要导入的工程文件；取消返回 null。 */
@@ -60,6 +80,13 @@ export async function pickAudioToSave(defaultPath: string): Promise<string | nul
   return selected ?? null;
 }
 
+/** 选择乐谱（MusicXML）保存路径；取消返回 null。 */
+export async function pickScoreToSave(defaultPath: string): Promise<string | null> {
+  if (!isTauri()) return `mock://${defaultPath}`;
+  const selected = await saveDialog({ defaultPath, filters: scoreFilter() });
+  return selected ?? null;
+}
+
 /** 选择要导入的音频文件；取消返回 null。 */
 export async function pickAudioToOpen(): Promise<string | null> {
   if (!isTauri()) return "mock://kick.wav";
@@ -67,6 +94,28 @@ export async function pickAudioToOpen(): Promise<string | null> {
     multiple: false,
     directory: false,
     filters: audioFilter(),
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+/** 选择要导入的 MIDI 文件；取消返回 null。 */
+export async function pickMidiToOpen(): Promise<string | null> {
+  if (!isTauri()) return "mock://song.mid";
+  const selected = await openDialog({
+    multiple: false,
+    directory: false,
+    filters: midiFilter(),
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+/** 选择要导入的谱面（MusicXML）；取消返回 null。 */
+export async function pickScoreToOpen(): Promise<string | null> {
+  if (!isTauri()) return "mock://score.musicxml";
+  const selected = await openDialog({
+    multiple: false,
+    directory: false,
+    filters: scoreOpenFilter(),
   });
   return typeof selected === "string" ? selected : null;
 }

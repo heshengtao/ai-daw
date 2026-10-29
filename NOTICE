@@ -108,3 +108,22 @@ character → pinyin table `crates/local-ai/assets/zh_pinyin_map.tsv` was genera
 with pinyin-pro (https://github.com/zh-lx/pinyin-pro, MIT), which itself is built
 on pinyin-data (MIT).
 --------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+alphaTab (https://github.com/CoderLine/alphaTab)
+Copyright Daniel Kuschny and Contributors. Licensed under the Mozilla Public
+License, Version 2.0 (MPL-2.0), https://mozilla.org/MPL/2.0/.
+
+Used as a library to render scores (standard notation, tablature, percussion)
+from the MusicXML we generate. The npm package is redistributed **unmodified**;
+its source is available at the repository above. If we ever need to patch it,
+the modified files must be published under the MPL as well (file-level
+copyleft) -- prefer extending it through its public API instead.
+
+--------------------------------------------------------------------------------
+Bravura (SMuFL music font, https://github.com/steinbergmedia/bravura)
+Copyright 2015 Steinberg Media Technologies GmbH, with Reserved Font Name
+"Bravura". Licensed under the SIL Open Font License, Version 1.1
+(https://scripts.sil.org/OFL). The font files are redistributed unmodified in
+public/alphatab/ and may not be sold on their own.
+--------------------------------------------------------------------------------

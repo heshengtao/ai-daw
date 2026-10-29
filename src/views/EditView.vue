@@ -19,18 +19,22 @@
  * - 右键点击音符 → 删除；右键拖动 → 框选批量删除；
  * - Ctrl/Cmd + 滚轮 → 缩放（锚点在指针下，两个视图同步）。
  */
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useClipboardStore } from "@/stores/clipboard";
-import { useLayoutStore, gridStepFor } from "@/stores/layout";
+import { useLayoutStore, gridStepFor, type RollScope } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
 import { usePluginsStore } from "@/stores/plugins";
 import { useParamBindingsStore } from "@/stores/paramBindings";
 import { useParamBrowserStore } from "@/stores/paramBrowser";
+import Md3Select from "@/components/common/Md3Select.vue";
 import ControllerLane from "@/components/workspace/ControllerLane.vue";
+/**
+ * 乐谱窗格按需加载：OSMD 的包有一兆多，不该进编辑视图的首包——用户不点「乐谱」就不下载。
+ */
+const ScorePane = defineAsyncComponent(() => import("@/components/workspace/ScorePane.vue"));
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
 import { capturePointer } from "@/utils/pointer";
@@ -38,6 +42,7 @@ import { shouldDeferToBrowser } from "@/utils/editable";
 import { automationTargetsFor, curateTargets, defaultBoundKeys } from "@/utils/automation";
 import { auditionNote } from "@/api/tauri";
 import { splitLyrics } from "@/utils/lyrics";
+import { trackHue } from "@/utils/trackColor";
 import { useI18n } from "@/i18n";
 import type { AutomationPoint, Note, NoteEdit, NotePatch } from "@/api/types";
 
@@ -51,7 +56,6 @@ const transport = useTransportStore();
 const plugins = usePluginsStore();
 const bindings = useParamBindingsStore();
 const browser = useParamBrowserStore();
-const router = useRouter();
 
 const LOW = 21; // A0 —— 88 键钢琴最低音
 const HIGH = 108; // C8 —— 88 键钢琴最高音
@@ -92,8 +96,68 @@ const clipBand = computed(() => {
     width: `${Math.max(2, c.length * timeline.zoom)}px`,
   };
 });
-/** 网格细分标签：显示当前选择（自由模式直接写「自由」）。 */
-const gridLabel = computed(() => (layout.noteGrid === "free" ? i18n.t("edit.gridFree") : layout.noteGrid));
+/** 卷帘左上角的「可见范围」：整条轨道 / 全部轨道（后者的其他轨道画成只读 ghost）。 */
+const scopeOptions = computed(() => [
+  { id: "track", label: i18n.t("edit.scopeTrack") },
+  { id: "all", label: i18n.t("edit.scopeAll") },
+]);
+
+function setRollScope(id: string): void {
+  layout.rollScope = id as RollScope;
+}
+
+/** 一个 ghost 音符（只读参考层）在卷帘里的位置。 */
+interface GhostNote {
+  key: string;
+  pitch: number;
+  left: number;
+  width: number;
+  color: string;
+}
+
+/** ghost 上限：再多就不是「看上下文」而是「看雪花」了，也会拖慢滚动。 */
+const MAX_GHOSTS = 3000;
+
+/**
+ * ghost 音符：当前片段**之外**的音符（同轨其他片段 / 其他轨道），只读参考。
+ *
+ * 按视口横向裁剪：滚动时只重算可见的一小段，几千个音的工程也不会卡。
+ */
+const ghostNotes = computed<GhostNote[]>(() => {
+  const current = store.project;
+  if (!current) return [];
+
+  const fromBeat = (timeline.scrollLeft - 240) / timeline.zoom;
+  const toBeat = (timeline.scrollLeft + timeline.viewportWidth + 240) / timeline.zoom;
+  const out: GhostNote[] = [];
+
+  for (let index = 0; index < current.tracks.length; index += 1) {
+    const track = current.tracks[index]!;
+    // 「整条轨道」只画当前轨道；「全部轨道」只画别的轨道——当前轨道的音符由活动片段自己画。
+    if (layout.rollScope === "track" && track.id !== selection.trackId) continue;
+    if (layout.rollScope === "all" && track.id === selection.trackId) continue;
+
+    for (const clip of track.clips) {
+      // 当前正在编辑的那个片段不画 ghost，否则会和真实音符叠在一起。
+      if (track.id === selection.trackId && clip.id === selection.clipId) continue;
+      if (clip.start + clip.length < fromBeat || clip.start > toBeat) continue;
+      for (let ni = 0; ni < clip.notes.length; ni += 1) {
+        const note = clip.notes[ni]!;
+        const start = clip.start + note.start;
+        if (start + note.duration < fromBeat || start > toBeat) continue;
+        if (out.length >= MAX_GHOSTS) return out;
+        out.push({
+          key: `${track.id}:${clip.id}:${ni}`,
+          pitch: note.pitch,
+          left: start * timeline.zoom,
+          width: Math.max(2, note.duration * timeline.zoom),
+          color: `hsl(${trackHue(index)} 62% 52%)`,
+        });
+      }
+    }
+  }
+  return out;
+});
 
 /**
  * 当前网格在 `beat` 处的一步（拍）；自由模式 = `null`（不吸附）。
@@ -563,8 +627,17 @@ function onPointerMove(e: PointerEvent): void {
       // 自由模式（`step === null`）就用原始位移。
       const step = stepAt(p.beat);
       const raw = p.beat - d.originBeat;
-      const db = step === null ? raw : Math.round(raw / step) * step;
-      const dp = p.pitch - d.originPitch;
+      const snapped = step === null ? raw : Math.round(raw / step) * step;
+
+      // 整组一起夹紧：先算出「这组音符还能移动多少」，再统一应用。
+      // 否则边缘的那个音先撞到 0 / 127 停住、其余继续走，音符之间的间距就被拉坏——
+      // 这是拖多选时最典型的数据破坏。
+      const minStart = Math.min(...d.base.map((b) => b.note.start));
+      const minPitch = Math.min(...d.base.map((b) => b.note.pitch));
+      const maxPitch = Math.max(...d.base.map((b) => b.note.pitch));
+      const db = Math.max(snapped, -minStart);
+      const dp = Math.min(127 - maxPitch, Math.max(-minPitch, p.pitch - d.originPitch));
+
       if (db !== d.deltaBeat || dp !== d.deltaPitch) {
         d.deltaBeat = db;
         d.deltaPitch = dp;
@@ -715,8 +788,16 @@ async function deleteNotes(indices: number[]): Promise<void> {
 // 参数车道（卷帘下方泳道）
 // ---------------------------------------------------------------------------
 
-/** 卷帘下方泳道当前选中的目标键（`velocity` = 逐音符力度）。 */
-const controllerTargetKey = ref<string>("velocity");
+/**
+ * 卷帘下方泳道当前选中的目标键（`velocity` = 逐音符力度，`score` = 乐谱窗格）。
+ *
+ * 存在 layout store 里而不是组件本地：切到别的视图再回来，应该还是上次选的那个
+ * （尤其是「乐谱」——不然每次回来都要重新点一次）。
+ */
+const controllerTargetKey = computed({
+  get: () => layout.controllerTarget,
+  set: (value: string) => (layout.controllerTarget = value),
+});
 /** 该轨道可自动化的**全部**目标（轨道混音 / 乐器 / 效果器）——与编排视图的自动化车道同一份列表。 */
 const controllerAllTargets = computed(() =>
   automationTargetsFor(selection.track, plugins.paramsOf, i18n.t),
@@ -779,14 +860,12 @@ watch(
   },
   { immediate: true },
 );
-// 目标消失（乐器 / 效果器被删）时回落到力度；逐音符属性（力度 / 压力 / 通道）不在曲线列表里，
-// 但它们是一直可用的目标，不能被这条兜底逻辑踢掉。
+// 目标消失（乐器 / 效果器被删）时回落到力度。逐音符属性（力度 / 压力 / 通道）不在曲线列表里，
+// 但它们是一直可用的目标；`score` 更不是参数——它是「把窗格换成乐谱」的视图开关，
+// 这三类都不能被这条兜底逻辑踢掉。
 watch(controllerTargets, (list) => {
-  const noteTargets = new Set(["velocity", "pressure", "channel"]);
-  if (
-    !noteTargets.has(controllerTargetKey.value) &&
-    !list.some((t) => t.key === controllerTargetKey.value)
-  ) {
+  const keep = new Set(["velocity", "pressure", "channel", "score"]);
+  if (!keep.has(controllerTargetKey.value) && !list.some((t) => t.key === controllerTargetKey.value)) {
     controllerTargetKey.value = "velocity";
   }
 });
@@ -808,7 +887,7 @@ async function applyToSelection(patch: Partial<Note>): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 轨道切换：跳到「同一时刻」的片段，没有就回编排
+// 轨道切换：尽量切到「同一时刻」的片段；空轨道留在本视图
 // ---------------------------------------------------------------------------
 
 /** 某轨道里覆盖指定拍位置的片段。 */
@@ -818,23 +897,48 @@ function clipCovering(track: number, beats: number) {
   return t.clips.find((c) => beats >= c.start && beats < c.start + c.length) ?? null;
 }
 
+/** 某轨道里离指定拍最近的片段（按区间到该拍的距离）。 */
+function nearestClip(track: number, beats: number) {
+  const t = store.project?.tracks.find((x) => x.id === track);
+  if (!t || t.clips.length === 0) return null;
+  let best = t.clips[0]!;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const c of t.clips) {
+    const distance =
+      beats < c.start ? c.start - beats : beats > c.start + c.length ? beats - (c.start + c.length) : 0;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = c;
+    }
+  }
+  return best;
+}
+
 /**
  * 在钢琴卷帘界面点左侧音轨栏换轨道时：
- * - 该轨道在**当前播放头位置**有片段 → 直接切到那个片段（"同一时刻的音频块"）；
- * - 没有 → 回编排视图（用户显然想先造一个片段）。
+ * 1. 该轨道在**当前播放头位置**有片段 → 直接切到那个片段（"同一时刻的片段"）；
+ * 2. 没有，但这条轨道有别的片段 → 切到时间上最近的那个，别让卷帘空着；
+ * 3. 真·空轨道 → **留在本视图**显示空态（那里有「新建片段」入口），
+ *    绝不弹回编排——用户可能就是想在这条空轨道上直接开一段。
  *
  * 从编排双击片段进来时 `trackId` 不变，所以不会误触发。
  */
+/**
+ * 把编辑焦点落到某条轨道的片段上：
+ * 1. 播放头位置有片段 → 那个；
+ * 2. 没有但有别的片段 → 时间上最近的；
+ * 3. 真·空轨道 → 不选片段（卷帘显示空态，那里有「新建片段」入口）。
+ */
+function focusClip(track: number): void {
+  const target = clipCovering(track, transport.positionBeats) ?? nearestClip(track, transport.positionBeats);
+  selection.selectClip(track, target ? target.id : null);
+}
+
 watch(
   () => selection.trackId,
   (id, prev) => {
     if (id === null || id === prev) return;
-    const target = clipCovering(id, transport.positionBeats);
-    if (target) {
-      selection.selectClip(id, target.id);
-      return;
-    }
-    void router.push("/arrange");
+    focusClip(id);
   },
 );
 
@@ -842,12 +946,18 @@ watch(
 // 空状态：轨道上没有片段时给一个直接可用的入口
 // ---------------------------------------------------------------------------
 
-/** 当前轨道还没有片段时，一键建一个 1 小节片段并选中它。 */
+/**
+ * 当前轨道还没有片段时，一键建一个 1 小节片段并选中它。
+ *
+ * 起点取**播放头吸附到网格**的位置，而不是 0：用户切到空轨道往往就是想在当前听到的地方
+ * 接着写，建到曲首等于让他再拖一次。
+ */
 async function createClipHere(): Promise<void> {
   const t = trackId.value;
   if (t === null) return;
   try {
-    await store.addClip(t, 0, beatsPerBar.value);
+    const start = Math.max(0, timeline.snapBeats(transport.positionBeats));
+    await store.addClip(t, start, beatsPerBar.value);
     const track = store.project?.tracks.find((x) => x.id === t);
     const created = track?.clips[track.clips.length - 1];
     if (created) selection.selectClip(t, created.id);
@@ -1026,6 +1136,9 @@ watch(
 );
 
 onMounted(() => {
+  // 从别的视图回来时，`selection` 可能停在「有轨道、没片段」的状态（乐谱视图里切轨道不会选片段）。
+  // 不补这一步，卷帘会显示「新建片段」空态——看起来就像轨道的片段凭空没了。
+  if (selection.clip === null && selection.trackId !== null) focusClip(selection.trackId);
   window.addEventListener("keydown", onKey);
   window.addEventListener("pointerup", onPointerUp);
   window.addEventListener("pointercancel", onPointerUp);
@@ -1055,7 +1168,14 @@ onUnmounted(() => {
          两块都在卷帘的滚动容器之外，滚轮要显式转发给卷帘（见 onChromeWheel）。 -->
     <div class="ruler-row">
       <div class="ruler-gutter" @wheel="onChromeWheel">
-        <span class="grid-label" :title="i18n.t('edit.snapGrid', { grid: gridLabel })">{{ gridLabel }}</span>
+        <div class="scope-mini">
+          <Md3Select
+            :model-value="layout.rollScope"
+            :options="scopeOptions"
+            :label="i18n.t('edit.rollScope')"
+            @select="setRollScope"
+          />
+        </div>
       </div>
       <div class="ruler-view" @wheel="onChromeWheel">
         <div class="ruler-inner" :style="{ width: rollWidth, transform: `translateX(${-timeline.scrollLeft}px)` }">
@@ -1111,6 +1231,19 @@ onUnmounted(() => {
               top: `${(HIGH - create.pitch) * ROW_H + 1}px`,
               left: `${(clipStart + Math.min(create.from, create.to)) * timeline.zoom}px`,
               width: `${Math.max(2, Math.abs(create.to - create.from) * timeline.zoom)}px`,
+            }"
+          />
+
+          <!-- ghost 参考层：当前片段之外的音符（同轨其他片段 / 其他轨道），只读、不参与命中 -->
+          <div
+            v-for="g in ghostNotes"
+            :key="g.key"
+            class="roll-note ghost"
+            :style="{
+              top: `${(HIGH - g.pitch) * ROW_H + 1}px`,
+              left: `${g.left}px`,
+              width: `${g.width}px`,
+              backgroundColor: g.color,
             }"
           />
 
@@ -1182,10 +1315,20 @@ onUnmounted(() => {
       <!-- 卷帘与控制器泳道之间可拖拽 -->
       <PanelResizer side="bottom" @resize="layout.resizeLane($event)" />
 
+      <!-- 乐谱窗格：与控制器泳道**互斥**，由同一个「目标」下拉切换（选「乐谱」就换成它）。
+           它自带表头（同一个下拉 + 总谱/分谱），所以这里不再包一层。 -->
+      <ScorePane
+        v-if="controllerTargetKey === 'score'"
+        :target-key="controllerTargetKey"
+        :targets="controllerTargets"
+        @update:target-key="(k: string) => (controllerTargetKey = k)"
+      />
+
       <!-- 参数车道：力度 = 逐音符直角条；其余目标 = 编排视图那条自动化曲线。
            本体高度比 `laneHeight` 少 6px（条形上下各 3px 留白），于是「顶边框 + 表头 + 本体」
            的总高与编排视图的自动化车道完全相等，浮动工具岛切视图时不会上下跳。 -->
       <ControllerLane
+        v-else
         :notes="clip?.notes ?? []"
         :selected-indices="selection.noteIndices"
         :target-key="controllerTargetKey"
@@ -1236,6 +1379,10 @@ onUnmounted(() => {
 /* 与琴键列同宽：让标尺的横坐标原点与卷帘一致 */
 .ruler-gutter {
   flex: 0 0 60px;
+  /* 关键：flex item 默认 `min-width: auto`，内容一宽就会把这个槽位撑大——
+     槽位一变宽，标尺的横坐标原点就和卷帘错开，播放头立刻对不上线。 */
+  min-width: 0;
+  overflow: hidden;
   height: 40px;
   display: flex;
   align-items: center;
@@ -1245,11 +1392,26 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--grid-line-strong);
   border-right: 1px solid var(--grid-line-row);
 }
-.grid-label {
-  font-size: 9px;
-  letter-spacing: 0.4px;
-  color: rgb(var(--md-on-surface-muted));
-  font-variant-numeric: tabular-nums;
+/* 左上角的「可见范围」下拉：60px 的槽位要和琴键列等宽，所以只能塞一颗很小的药丸。
+   用「外层包一层 + :deep」的写法（和 `GridSelect` 一样）：类加在组件**根元素**上时，
+   `.scope-select :deep(.md3-select)` 是找后代、永远匹配不到——这是前面踩过的坑。 */
+.scope-mini {
+  flex: 0 0 auto;
+  display: inline-flex;
+  min-width: 0;
+}
+.scope-mini :deep(.md3-select) {
+  /* 44 + 6(padding) + 2(边框) = 52 < 53 的可用宽度，字号压到 9.5px 才塞得下两个字 */
+  width: 44px;
+  height: 18px;
+  padding: 0 2px 0 4px;
+  gap: 1px;
+  font-size: 9.5px;
+  letter-spacing: 0;
+}
+.scope-mini :deep(.caret) {
+  width: 8px;
+  height: 8px;
 }
 .ruler-view {
   position: relative;
@@ -1378,6 +1540,13 @@ onUnmounted(() => {
 .roll-note.dragging {
   cursor: grabbing;
   opacity: 0.9;
+}
+/* ghost 参考层：别的片段 / 轨道的音符，只读。低透明度 + 不接事件，
+   既看得见上下文，又不会挡住真实音符的拖拽。 */
+.roll-note.ghost {
+  opacity: 0.28;
+  pointer-events: none;
+  cursor: default;
 }
 /* 选中：只加一圈同色系描边，不做任何「蓝色高亮」 */
 .roll-note.selected {

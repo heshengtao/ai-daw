@@ -2545,6 +2545,69 @@ pub(crate) fn save_project_impl(app: &tauri::AppHandle, path: &str) -> Result<St
     Ok(path.to_string())
 }
 
+/// 把一份乐谱（MusicXML 文本）写到用户选定的路径，返回写入的绝对路径。
+///
+/// 与 `save_project` 的区别：乐谱是从当前工程**派生**出来的只读产物，所以不改工程状态、
+/// 不进历史、也不触发插件状态回收。音频工程里没有 MIDI 文件导出，这条命令顺便给「交给
+/// MuseScore / Dorico 继续加工」留了口子。
+#[tauri::command]
+pub async fn export_score(path: String, xml: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        if let Some(dir) = std::path::Path::new(&path).parent() {
+            if !dir.as_os_str().is_empty() {
+                std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::write(&path, xml).map_err(|e| e.to_string())?;
+        Ok(path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 用一个前端解析好的工程整体替换当前工程（导入 MIDI / MusicXML 用）。
+///
+/// 走的是「历史恢复」那条路：先把当前工程收进历史，再整体换掉引擎状态——所以导入本身
+/// 也能从「历史」里回退。和 `open_project` 的区别是**不动会话文件路径**：导入进来的是一份
+/// 新内容，保存时应该让用户重新选位置（否则会把原文件覆盖掉）。
+#[tauri::command]
+pub async fn import_project(app: tauri::AppHandle, project: Project) -> Result<Project, String> {
+    import_project_impl(&app, project)
+}
+
+/// 导入工程的同步实现。
+pub(crate) fn import_project_impl(app: &tauri::AppHandle, project: Project) -> Result<Project, String> {
+    let state = app.state::<AppState>();
+    remember_current(app, &state);
+
+    let imported = normalize_project(project);
+    // 导入的内容一定「未保存」：拿旧工程的保存基线做对比，脏标记自然成立。
+    let saved = { state.engine.lock().unwrap().saved().clone() };
+    {
+        let mut engine = state.engine.lock().unwrap();
+        *engine = Engine::restore(imported.clone(), saved);
+    }
+    state.audio.load(&imported);
+    // 整个工程被替换：已开的插件窗口一律作废（否则窗口里还挂着旧轨道的插件实例）。
+    close_all_plugin_windows(app, &state);
+    state.set_session_path(None);
+    Ok(imported)
+}
+
+/// 读取用户选中的导入文件（原始字节），交给前端解析 MIDI / MusicXML。
+///
+/// 用 `Response` 直接回字节（和 `render_preview` 一样），不走 JSON 数组——一兆的谱面要是
+/// 按 `[0,1,2,…]` 传，光序列化就够呛。
+#[tauri::command]
+pub async fn read_import_file(path: String) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        Ok(tauri::ipc::Response::new(bytes))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 当前工程对应的文件路径（尚未保存过时为 `null`）。
 #[tauri::command]
 pub fn current_project_path(state: State<'_, AppState>) -> Option<String> {

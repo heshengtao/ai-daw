@@ -16,12 +16,21 @@ import { useI18n } from "@/i18n";
 import type { ExportFormat } from "@/api/tauri";
 
 /** 用户在对话框里选好的导出参数。 */
-export interface ExportChoice {
-  format: ExportFormat;
-  sampleRate: number;
-  /** 只对 MP3 有意义。 */
-  bitrateKbps: number;
-}
+export type ExportChoice =
+  | {
+      kind: "audio";
+      format: ExportFormat;
+      sampleRate: number;
+      /** 只对 MP3 有意义。 */
+      bitrateKbps: number;
+    }
+  | {
+      kind: "score";
+      /** 记谱量化网格（拍）；0 = 不对齐。 */
+      grid: number;
+      /** 调号（升号为正）。 */
+      keyFifths: number;
+    };
 
 defineProps<{ open: boolean }>();
 
@@ -32,6 +41,9 @@ const emit = defineEmits<{
 
 const i18n = useI18n();
 
+/** 对话框里的「格式」：WAV / MP3 / 乐谱。 */
+type Format = ExportFormat | "score";
+
 /** WAV 可选的采样率（后端接受 8000..=192000，界面只给常用三档）。 */
 const WAV_RATES = [44_100, 48_000, 96_000];
 /** MP3 只支持 MPEG-1 的 32 / 44.1 / 48 kHz；界面给常用的两档。 */
@@ -39,9 +51,44 @@ const MP3_RATES = [44_100, 48_000];
 /** MP3 比特率档位（由高到低，取后端档位表里常用的一段）。 */
 const MP3_BITRATES = [320, 256, 192, 128, 96];
 
-const format = ref<ExportFormat>("wav");
+/**
+ * 记谱网格：量化到多细。
+ *
+ * 默认 1/16：与钢琴卷帘的默认吸附一致，绝大多数流行/电子乐都能原样记出来；1/12（三连音）
+ * 不单独给选项——三连音由量化器自动识别，用户不用关心。
+ */
+const GRIDS: { id: string; label: string; beats: number }[] = [
+  { id: "1/4", label: "1/4", beats: 1 },
+  { id: "1/8", label: "1/8", beats: 0.5 },
+  { id: "1/16", label: "1/16", beats: 0.25 },
+  { id: "1/32", label: "1/32", beats: 0.125 },
+  { id: "off", label: "off", beats: 0 },
+];
+
+/**
+ * 调号。工程模型里没有调号字段，导出时先手选一个：选对调号，升降号会少一大半。
+ *
+ * 标签写成「大调 / 关系小调」——写谱的人认这个，比记「几个升号」直观。
+ */
+const KEYS: { id: string; label: string }[] = [
+  { id: "0", label: "C / Am" },
+  { id: "1", label: "G / Em（1♯）" },
+  { id: "2", label: "D / Bm（2♯）" },
+  { id: "3", label: "A / F#m（3♯）" },
+  { id: "4", label: "E / C#m（4♯）" },
+  { id: "5", label: "B / G#m（5♯）" },
+  { id: "-1", label: "F / Dm（1♭）" },
+  { id: "-2", label: "B♭ / Gm（2♭）" },
+  { id: "-3", label: "E♭ / Cm（3♭）" },
+  { id: "-4", label: "A♭ / Fm（4♭）" },
+  { id: "-5", label: "D♭ / B♭m（5♭）" },
+];
+
+const format = ref<Format>("wav");
 const sampleRate = ref(WAV_RATES[0]!);
 const bitrateKbps = ref(MP3_BITRATES[0]!);
+const gridId = ref("1/16");
+const keyId = ref("0");
 
 const rates = computed(() => (format.value === "mp3" ? MP3_RATES : WAV_RATES));
 
@@ -72,11 +119,17 @@ function close(): void {
 }
 
 function confirm(): void {
-  emit("confirm", {
-    format: format.value,
-    sampleRate: sampleRate.value,
-    bitrateKbps: bitrateKbps.value,
-  });
+  if (format.value === "score") {
+    const grid = GRIDS.find((g) => g.id === gridId.value)?.beats ?? 0.25;
+    emit("confirm", { kind: "score", grid, keyFifths: Number(keyId.value) });
+  } else {
+    emit("confirm", {
+      kind: "audio",
+      format: format.value,
+      sampleRate: sampleRate.value,
+      bitrateKbps: bitrateKbps.value,
+    });
+  }
   emit("update:open", false);
 }
 
@@ -132,10 +185,32 @@ function onKey(e: KeyboardEvent): void {
                   <span class="seg-title">{{ i18n.t("export.mp3") }}</span>
                   <span class="seg-hint">{{ i18n.t("export.mp3Hint") }}</span>
                 </button>
+                <button
+                  class="seg-btn"
+                  :class="{ on: format === 'score' }"
+                  role="radio"
+                  :aria-checked="format === 'score'"
+                  @click="format = 'score'"
+                >
+                  <span class="seg-title">{{ i18n.t("export.score") }}</span>
+                  <span class="seg-hint">{{ i18n.t("export.scoreHint") }}</span>
+                </button>
               </div>
             </div>
 
-            <div class="field">
+            <!-- 乐谱：量化网格 + 调号。这两个选项直接决定谱面好不好看。 -->
+            <template v-if="format === 'score'">
+              <div class="field">
+                <span class="field-label">{{ i18n.t("export.quantize") }}</span>
+                <Md3Select v-model="gridId" :options="GRIDS" :label="i18n.t('export.quantize')" />
+              </div>
+              <div class="field">
+                <span class="field-label">{{ i18n.t("export.keySignature") }}</span>
+                <Md3Select v-model="keyId" :options="KEYS" :label="i18n.t('export.keySignature')" />
+              </div>
+            </template>
+
+            <div v-else class="field">
               <span class="field-label">{{ i18n.t("export.sampleRate") }}</span>
               <Md3Select
                 v-model="rateId"
@@ -153,7 +228,15 @@ function onKey(e: KeyboardEvent): void {
               />
             </div>
 
-            <p class="note">{{ format === "mp3" ? i18n.t("export.mp3Note") : i18n.t("export.wavNote") }}</p>
+            <p class="note">
+              {{
+                format === "mp3"
+                  ? i18n.t("export.mp3Note")
+                  : format === "score"
+                    ? i18n.t("export.scoreNote")
+                    : i18n.t("export.wavNote")
+              }}
+            </p>
           </div>
 
           <footer class="foot">
@@ -238,10 +321,10 @@ function onKey(e: KeyboardEvent): void {
   letter-spacing: 0.4px;
   color: rgb(var(--md-on-surface-variant));
 }
-/* 格式：两枚并列的药丸按钮，各自带一行小字说明（有损 / 无损一眼可见）。 */
+/* 格式：三枚并列的药丸按钮，各自带一行小字说明（有损 / 无损 / 乐谱一眼可见）。 */
 .seg {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 .seg-btn {

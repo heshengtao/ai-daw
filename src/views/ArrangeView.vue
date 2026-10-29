@@ -502,7 +502,10 @@ function onPointerMove(e: PointerEvent): void {
     case "move": {
       const d = moveDrag.value;
       if (!d) break;
-      const delta = snapDelta(beatAt(e.clientX) - d.originBeat);
+      // 整组一起夹紧：位移的下限由「这一组里最靠左的片段」决定。
+      // 否则撞到 0 的那块先停、其余继续走，多选拖完片段之间的相对位置就乱了。
+      const minStart = d.base.length > 0 ? Math.min(...d.base.map((b) => b.start)) : 0;
+      const delta = Math.max(snapDelta(beatAt(e.clientX) - d.originBeat), -minStart);
       if (delta !== d.delta) {
         d.delta = delta;
         d.moved = true;

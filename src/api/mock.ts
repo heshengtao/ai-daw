@@ -2371,6 +2371,14 @@ export const mockApi = {
 
   renderPreview: (): Blob => new Blob([new Uint8Array(0)], { type: "audio/wav" }),
   exportAudio: (path: string): string => path,
+  // 浏览器预览没有文件系统：乐谱内容在前端生成，这里只回一个假路径。
+  exportScore: (path: string): string => path,
+  // 浏览器预览里没有真实文件可读：导入流程会以「文件为空」报错，属预期行为。
+  readImportFile: (): Uint8Array => new Uint8Array(0),
+  importProject: (next: Project): Project => {
+    state = clone(next);
+    return clone(state);
+  },
 
   // 浏览器预览没有真实渲染：给一份「静音」报告，字段与后端对齐（非有限值 → null）。
   analyzeProject: (): AnalysisReport => ({

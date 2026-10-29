@@ -14,6 +14,7 @@ import ProjectHistoryDialog from "@/components/common/ProjectHistoryDialog.vue";
 import ShortcutsDialog from "@/components/common/ShortcutsDialog.vue";
 import UnsavedChangesDialog from "@/components/common/UnsavedChangesDialog.vue";
 import ExportDialog, { type ExportChoice } from "@/components/common/ExportDialog.vue";
+import ImportDialog, { type ImportKind } from "@/components/common/ImportDialog.vue";
 import ParameterBrowser from "@/components/common/ParameterBrowser.vue";
 import UpdateDoneToast from "@/components/common/UpdateDoneToast.vue";
 import { useProjectSync } from "@/composables/useProjectSync";
@@ -29,9 +30,20 @@ import { useParamBrowserStore } from "@/stores/paramBrowser";
 import { useImportingStore, useExportingStore } from "@/stores/importing";
 import { useTimelineStore } from "@/stores/timeline";
 import { useI18n } from "@/i18n";
-import { exportAudio, onPluginsEvent, type ExportFormat } from "@/api/tauri";
+import { exportAudio, exportScore, importProject, onPluginsEvent, readImportFile, type ExportFormat } from "@/api/tauri";
 import type { ProjectHistoryEntry } from "@/api/types";
-import { pickAudioToOpen, pickAudioToSave, pickProjectToOpen, pickProjectToSave } from "@/api/dialogs";
+import {
+  pickAudioToOpen,
+  pickAudioToSave,
+  pickMidiToOpen,
+  pickProjectToOpen,
+  pickProjectToSave,
+  pickScoreToOpen,
+  pickScoreToSave,
+} from "@/api/dialogs";
+import { buildMusicXML } from "@/score/musicxml";
+import { midiToProject, parseMidi } from "@/import/midi";
+import { parseMusicXML, scoreToProject } from "@/import/musicxml";
 import { isTauri } from "@/utils/platform";
 import { shouldDeferToBrowser } from "@/utils/editable";
 
@@ -84,6 +96,8 @@ const aiTracks = ref<number[]>([]);
 const exporting = ref(false);
 /** 导出对话框是否打开（格式 / 采样率 / 比特率）。 */
 const exportOpen = ref(false);
+/** 导入对话框是否打开（音频 / MIDI / MusicXML）。 */
+const importOpen = ref(false);
 let pollTimer: number | null = null;
 let unlistenPlugins: (() => void) | null = null;
 let unlistenImport: (() => void) | null = null;
@@ -200,12 +214,23 @@ async function onRestoreHistory(entry: ProjectHistoryEntry): Promise<void> {
   }
 }
 
+/** 顶栏「导入」：先选来源（音频 / MIDI / 乐谱），再弹系统文件框。 */
+function openImport(): void {
+  importOpen.value = true;
+}
+
+/** 文件名（去掉目录与扩展名）：导入后的工程名用它。 */
+function baseName(path: string): string {
+  const file = path.split(/[\\/]/).pop() ?? path;
+  return file.replace(/\.[^.]+$/, "") || "imported";
+}
+
 /**
  * 导入音频片段：落在**选中轨道**（没有选中就第一条）的播放头处，并对齐到网格。
  *
  * 片段的拍长由后端按素材自然时长换算（导入时不变调）；之后拖宽窄或改速度才会变调。
  */
-async function onImportAudio(): Promise<void> {
+async function importAudioFile(): Promise<void> {
   try {
     const path = await pickAudioToOpen();
     if (!path) return;
@@ -219,6 +244,56 @@ async function onImportAudio(): Promise<void> {
   } catch (err) {
     layout.notify(i18n.t("error.importAudio", { error: String(err) }));
   }
+}
+
+/**
+ * 导入 MIDI：前端解析成工程模型 → 后端整体替换。
+ *
+ * 替换会重建撤销栈，但旧工程在替换前已经进了「历史」，所以不是单向操作。
+ */
+async function importMidiFile(): Promise<void> {
+  const path = await pickMidiToOpen();
+  if (!path) return;
+  try {
+    const bytes = await readImportFile(path);
+    const parsed = parseMidi(bytes);
+    const next = midiToProject(parsed, baseName(path));
+    await transport.stop();
+    await project.replaceWith(await importProject(next));
+    layout.notify(i18n.t("app.importedMidi", { name: baseName(path), tracks: next.tracks.length }));
+    for (const warning of parsed.warnings.slice(0, 5)) console.warn("[midi]", warning);
+  } catch (err) {
+    layout.notify(i18n.t("error.importMidi", { error: String(err) }));
+  }
+}
+
+/** 导入 MusicXML：同上，只是先把字节解成文本再解析。 */
+async function importScoreFile(): Promise<void> {
+  const path = await pickScoreToOpen();
+  if (!path) return;
+  // `.mxl` 是 zip 包，硬当文本解只会得到乱码——直接说清楚，别让用户猜。
+  if (path.toLowerCase().endsWith(".mxl")) {
+    layout.notify(i18n.t("error.importMxl"));
+    return;
+  }
+  try {
+    const bytes = await readImportFile(path);
+    const parsed = parseMusicXML(new TextDecoder().decode(bytes));
+    const next = scoreToProject(parsed, baseName(path));
+    await transport.stop();
+    await project.replaceWith(await importProject(next));
+    layout.notify(i18n.t("app.importedScore", { name: baseName(path), tracks: next.tracks.length }));
+    for (const warning of parsed.warnings.slice(0, 5)) console.warn("[score]", warning);
+  } catch (err) {
+    layout.notify(i18n.t("error.importScore", { error: String(err) }));
+  }
+}
+
+/** 导入对话框选好了来源：音频是「插入」，MIDI / 乐谱是「替换」。 */
+function onImportConfirm(kind: ImportKind): void {
+  if (kind === "audio") void importAudioFile();
+  else if (kind === "midi") void importMidiFile();
+  else void importScoreFile();
 }
 
 async function onNew(): Promise<void> {
@@ -304,8 +379,54 @@ function onExport(): void {
   exportOpen.value = true;
 }
 
+/**
+ * 导出乐谱（MusicXML）：前端拼文本 → 后端落盘。
+ *
+ * 不走 `exporting` 那条进度条：这一步只是字符串拼装加一次写盘，几百毫秒内结束，
+ * 弹一条渲染进度反而更慢也更吓人。
+ */
+async function exportScoreFile(grid: number, keyFifths: number): Promise<void> {
+  const current = project.project;
+  if (!current) return;
+
+  let result: ReturnType<typeof buildMusicXML>;
+  try {
+    result = buildMusicXML(current, { grid, keyFifths });
+  } catch (err) {
+    layout.notify(i18n.t("error.export", { error: String(err) }));
+    return;
+  }
+
+  // 一条可记谱的轨道都没有：直接告诉用户原因，别让他去选一个注定为空的路径。
+  if (result.parts === 0) {
+    layout.notify(i18n.t("export.scoreEmpty"));
+    return;
+  }
+
+  const path = await pickScoreToSave(`${fileBase.value}.musicxml`);
+  if (!path) return;
+
+  try {
+    const written = await exportScore(path, result.xml);
+    // 提示条只有一个槽位：把「路径」和「有几条排版提示」拼成一条，否则后一条会顶掉前一条。
+    const warnSuffix =
+      result.warnings.length > 0 ? i18n.t("export.scoreWarnSuffix", { n: result.warnings.length }) : "";
+    layout.notify(
+      i18n.t("export.scoreDone", { path: written, parts: result.parts, measures: result.measures }) + warnSuffix,
+    );
+    // 排版提示不打断流程（多数是「和弦标记解析不了」这类），留在控制台给排查用。
+    for (const warning of result.warnings.slice(0, 8)) console.warn("[score]", warning);
+  } catch (err) {
+    layout.notify(i18n.t("error.export", { error: String(err) }));
+  }
+}
+
 /** 导出参数在对话框里选好了：选路径 → 渲染 → 编码。 */
 async function onExportConfirm(choice: ExportChoice): Promise<void> {
+  if (choice.kind === "score") {
+    await exportScoreFile(choice.grid, choice.keyFifths);
+    return;
+  }
   if (exporting.value) return;
   exporting.value = true;
   try {
@@ -558,7 +679,7 @@ onUnmounted(() => {
     :ai-active="aiActive"
     :job-bar="jobBar"
     @import="onImport"
-    @import-audio="onImportAudio"
+    @import-audio="openImport"
     @new="onNew"
     @history="historyOpen = true"
     @save="onSave"
@@ -637,6 +758,7 @@ onUnmounted(() => {
 
   <!-- 导出：选格式 / 采样率 / 比特率，再去系统保存对话框选路径（扩展名决定最终格式） -->
   <ExportDialog v-model:open="exportOpen" @confirm="onExportConfirm" />
+  <ImportDialog v-model:open="importOpen" @confirm="onImportConfirm" />
 
   <!-- 升级后首次打开：底部 toast 提示更新完成，可跳到 GitHub 发布页看更新日志 -->
   <UpdateDoneToast />
