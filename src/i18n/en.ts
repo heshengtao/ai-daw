@@ -1551,6 +1551,13 @@ const en: Record<string, string> = {
   "mix.addInsert": "Add insert",
   "mix.emptyTracks": "No tracks yet — new tracks show up on the right.",
   "mix.sendTo": "Send to {name}",
+  "mix.sends": "Sends",
+  "mix.output": "Out",
+  "mix.outputMasterHint": "Every track goes straight to the master; buses are summed through sends.",
+  "mix.pan": "Pan",
+  "mix.volume": "Vol",
+  "mix.noInserts": "No inserts — click the name to add one in the inspector",
+  "mix.inserChain": "Insert chain: {chain}",
 
   // ---- Insert slots ----
   "insert.bypass": "Bypass",

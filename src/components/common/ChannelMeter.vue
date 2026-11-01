@@ -82,8 +82,8 @@ const readout = computed(() => {
   display: flex;
   align-items: stretch;
   gap: 3px;
-  width: 18px;
-  min-width: 18px;
+  width: 20px;
+  min-width: 20px;
   height: 100%;
   padding: 5px 0 0;
   cursor: pointer;
@@ -118,9 +118,9 @@ const readout = computed(() => {
 .bar {
   position: relative;
   flex: 1 1 0;
-  min-width: 3px;
+  min-width: 4px;
   border-radius: 3px;
-  background-color: rgb(var(--md-on-surface) / 0.12);
+  background-color: rgb(var(--md-on-surface) / 0.18);
   overflow: hidden;
 }
 .fill {

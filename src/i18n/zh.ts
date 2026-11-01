@@ -1549,6 +1549,13 @@ const zh: Record<string, string> = {
   "mix.addInsert": "插入效果器",
   "mix.emptyTracks": "还没有音轨——新增轨道后会出现在右侧。",
   "mix.sendTo": "发送到 {name}",
+  "mix.sends": "发送",
+  "mix.output": "输出",
+  "mix.outputMasterHint": "当前所有轨道都直接送往主输出；总线通过「发送」汇总。",
+  "mix.pan": "声像",
+  "mix.volume": "音量",
+  "mix.noInserts": "没有插入效果——点名字去检查器添加",
+  "mix.inserChain": "插入链：{chain}",
 
   // ---- 插入槽 ----
   "insert.bypass": "旁通",

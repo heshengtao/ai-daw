@@ -2,20 +2,20 @@
 /**
  * 混音视图：通道条横向排列，第一列固定是主输出。
  *
- * 一个通道条从上到下是主流调音台的顺序：**名字 → 插入 → 发送 → 声像 → 推子 + 表 → 读数 →
- * 静音/独奏**。这样眼睛不用来回跳：越往下越是「末端」的操作。
+ * 每一条的节奏参照 openDAW / 主流调音台：**名字 → 发送 → 声像 → 音量（读数）→ 推子 + 表 →
+ * 静音/独奏**。插入效果**不铺在通道条上**——它们属于「设备链」，在检查器与右侧混音面板里编辑，
+ * 这里只用一个角标显示条数。这样一眼看到的是「电平与路由」，而不是一列小方块。
  *
  * 拖动推子时调用 `monitorMix`（只改实时声音、不进历史），松手才提交一次正式编辑，
  * 因此一次拖动只产生**一条**撤销记录，同时又能实时听到变化。
  *
- * 宽度是**固定 112 px**：名字再长也只截断，绝不会把通道条撑宽——这一点由 `min-width: 0`
- * 与省略号共同保证（flex 项默认 `min-width: auto`，长名字会把整条撑开）。
+ * 宽度固定：名字再长也只截断，不会把通道条撑宽（`min-width: 0` + 省略号）。
  */
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { MusicalNoteIcon, SpeakerWaveIcon, RectangleStackIcon } from "@heroicons/vue/24/outline";
 import Md3Slider from "@/components/common/Md3Slider.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
 import ChannelMeter from "@/components/common/ChannelMeter.vue";
-import InsertSlot from "@/components/common/InsertSlot.vue";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
@@ -33,6 +33,9 @@ const layout = useLayoutStore();
 const plugins = usePluginsStore();
 const meters = useMetersStore();
 
+/** 推子旁边的刻度（dB）：只画 6 dB 一档，0 以上留空。 */
+const SCALE = [0, -6, -12, -18, -24, -30, -36, -42, -48, -54];
+
 /** 与引擎 `MixerChannel` 的夹紧范围保持一致。 */
 const MIN_DB = -60;
 const MAX_DB = 12;
@@ -40,8 +43,6 @@ const MAX_DB = 12;
 const STEP_DB = 0.5;
 /** 主输出在草稿状态里的哨兵 id。 */
 const MASTER = -1;
-/** 通道条上最多直接显示几个插入 / 发送槽，多出来的折成「+N」。 */
-const MAX_SLOTS = 3;
 
 const MASTER_DEFAULT: MixerChannel = { gain_db: 0, pan: 0, mute: false, solo: false };
 
@@ -53,11 +54,12 @@ interface Strip {
   nameKey?: string;
   mix: MixerChannel;
   hue: number | null;
-  instrument: boolean;
   master: boolean;
+  /** 通道类型：主输出 / 有乐器 / 空轨（总线）。 */
+  kind: "master" | "instrument" | "bus";
   inserts: PluginInstance[];
-  /** 发送摘要：目标名 + 增益。 */
-  sends: { target: number; name: string; gain: number }[];
+  /** 发送摘要：目标名 + 增益 + 是否推子前。 */
+  sends: { target: number; name: string; gain: number; pre: boolean; mute: boolean }[];
 }
 
 /** 推子的显示名：内置条翻译，轨道条用原文。 */
@@ -79,8 +81,8 @@ const strips = computed<Strip[]>(() => [
     nameKey: "mix.master",
     mix: masterMix.value,
     hue: null,
-    instrument: true,
     master: true,
+    kind: "master",
     inserts: store.project?.master_effects ?? [],
     sends: [],
   },
@@ -89,13 +91,15 @@ const strips = computed<Strip[]>(() => [
     name: t.name,
     mix: t.mixer,
     hue: trackHue(i),
-    instrument: Boolean(t.instrument),
     master: false,
+    kind: t.instrument ? ("instrument" as const) : ("bus" as const),
     inserts: t.effects,
     sends: (t.sends ?? []).map((s) => ({
       target: s.target,
       name: trackName(s.target),
       gain: s.gain_db,
+      pre: s.mode === "pre",
+      mute: Boolean(s.mute),
     })),
   })),
 ]);
@@ -107,10 +111,6 @@ function dimmed(s: Strip): boolean {
   return anySolo.value && !s.master && !s.mix.solo && !s.mix.mute;
 }
 
-function pluginName(id: string): string {
-  return plugins.name(id);
-}
-
 /** 某条通道的表（主输出单独一条）。 */
 function meterOf(s: Strip) {
   return s.master ? meters.master : meters.track(s.id);
@@ -118,6 +118,44 @@ function meterOf(s: Strip) {
 
 function resetClip(): void {
   void meters.clearClip();
+}
+
+/** 峰值 → 读数文本（-∞ 表示没信号）。 */
+function peakText(s: Strip): string {
+  const value = meterOf(s);
+  const peak = Math.max(value.l, value.r);
+  if (!(peak > 0)) return "-∞";
+  const db = 20 * Math.log10(peak);
+  return db < -60 ? "-∞" : db.toFixed(1);
+}
+
+/** 当前通道是否削波（表头锁存）。 */
+function clipping(s: Strip): boolean {
+  return meterOf(s).clipped;
+}
+
+/** 插入摘要：名字连起来做 tooltip。 */
+function insertSummary(s: Strip): string {
+  if (s.inserts.length === 0) return i18n.t("mix.noInserts");
+  const chain = s.inserts.map((fx) => plugins.name(fx.plugin_id)).join(" → ");
+  return i18n.t("mix.inserChain", { chain });
+}
+
+/** 点名字 / 角标：选中该轨并打开检查器（设备链在那边）。 */
+function openChannel(s: Strip): void {
+  if (!s.master) selection.selectTrack(s.id);
+  layout.openTab("inspector");
+}
+
+/** 点发送摘要：去右侧混音面板改发送。 */
+function openSends(s: Strip): void {
+  if (!s.master) selection.selectTrack(s.id);
+  layout.openTab("mixer");
+}
+
+/** 发送小标签：`推子前` 用一个点标记，哑掉画删除线。 */
+function sendGain(s: { gain: number }): string {
+  return `${s.gain > 0 ? "+" : ""}${s.gain.toFixed(1)}`;
 }
 
 // ---- 推子拖动 ----
@@ -245,37 +283,6 @@ async function toggleSolo(s: Strip): Promise<void> {
     layout.notify(i18n.t("error.toggleSolo", { error: String(err) }));
   }
 }
-
-// ---- 插入 / 发送 ----
-
-/** 点插入槽：选中该轨并打开检查器（参数编辑在那边）。 */
-function openInsert(s: Strip): void {
-  if (!s.master) selection.selectTrack(s.id);
-  layout.openTab("inspector");
-}
-
-/** 旁通 / 启用一个插入。 */
-async function toggleInsert(s: Strip, index: number): Promise<void> {
-  const fx = s.inserts[index];
-  if (!fx) return;
-  try {
-    if (s.master) await store.setMasterEffectEnabled(index, !(fx.enabled ?? true));
-    else await store.setEffectEnabled(s.id, index, !(fx.enabled ?? true));
-  } catch (err) {
-    layout.notify(String(err));
-  }
-}
-
-/** 「+」：同样打开检查器，在那边挑插件（不在这里塞一个二级弹窗）。 */
-function addInsert(s: Strip): void {
-  openInsert(s);
-}
-
-/** 发送摘要的显示名：过长的目标名截断由 CSS 负责。 */
-function sendLabel(s: { name: string; gain: number }): string {
-  const gain = s.gain > 0 ? `+${s.gain.toFixed(1)}` : s.gain.toFixed(1);
-  return `${s.name} ${gain}`;
-}
 </script>
 
 <template>
@@ -291,58 +298,83 @@ function sendLabel(s: { name: string; gain: number }): string {
           dimmed: dimmed(s),
         }"
       >
+        <div class="strip-head">
+          <span
+            class="kind-badge"
+            :class="{ master: s.master }"
+            :style="s.hue !== null ? { '--track-hue': String(s.hue) } : undefined"
+            aria-hidden="true"
+          >
+            <SpeakerWaveIcon v-if="s.kind === 'master'" class="kind-icon" />
+            <MusicalNoteIcon v-else-if="s.kind === 'instrument'" class="kind-icon" />
+            <RectangleStackIcon v-else class="kind-icon" />
+          </span>
+        </div>
+
         <button
           class="strip-name"
           :title="stripName(s)"
           :aria-label="s.master ? i18n.t('mix.master') : i18n.t('mix.selectNamed', { name: s.name })"
           @click="s.master ? selection.clear() : selection.selectTrack(s.id)"
         >
-          <span
-            v-if="!s.master"
-            class="hue"
-            :style="s.hue !== null ? { '--track-hue': String(s.hue) } : undefined"
-          />
           <span class="name-text">{{ stripName(s) }}</span>
+          <span
+            v-if="s.inserts.length > 0"
+            class="fx-badge"
+            :title="insertSummary(s)"
+            role="button"
+            tabindex="0"
+            @click.stop="openChannel(s)"
+            @keydown.enter.stop="openChannel(s)"
+          >
+            {{ s.inserts.length }}
+          </span>
         </button>
 
-        <!-- 插入：最多 3 个，多出来的折成 +N -->
-        <div class="slots" :class="{ master: s.master }">
-          <InsertSlot
-            v-for="(fx, i) in s.inserts.slice(0, MAX_SLOTS)"
-            :key="`${fx.plugin_id}-${i}`"
-            :name="pluginName(fx.plugin_id)"
-            :enabled="fx.enabled ?? true"
-            :sidechain="fx.sidechain ? trackName(fx.sidechain.track) : null"
-            @toggle="toggleInsert(s, i)"
-            @open="openInsert(s)"
-          />
-          <span v-if="s.inserts.length > MAX_SLOTS" class="more">
-            +{{ s.inserts.length - MAX_SLOTS }}
-          </span>
-          <button
-            class="add-insert"
-            :aria-label="i18n.t('mix.addInsert')"
-            :title="i18n.t('mix.addInsert')"
-            @click="addInsert(s)"
-          >
-            +
-          </button>
+        <!-- 发送：一行摘要，点开去右侧面板改（通道条上不摆控件） -->
+        <div v-if="!s.master" class="field">
+          <span class="field-label">{{ i18n.t("mix.sends") }}</span>
+          <div class="field-value">
+            <button
+              v-for="send in s.sends.slice(0, 1)"
+              :key="send.target"
+              class="chip"
+              :class="{ off: send.mute }"
+              :title="`${i18n.t('mix.sendTo', { name: send.name })} · ${sendGain(send)} dB${send.pre ? ' · ' + i18n.t('mixer.pre') : ''}`"
+              @click="openSends(s)"
+            >
+              <span v-if="send.pre" class="pre-dot" aria-hidden="true" />
+              {{ send.name }}
+            </button>
+            <button
+              v-if="s.sends.length > 1"
+              class="chip more"
+              :title="i18n.t('mix.sendTo', { name: s.sends[1]?.name ?? '' })"
+              @click="openSends(s)"
+            >
+              +{{ s.sends.length - 1 }}
+            </button>
+            <button
+              v-if="s.sends.length === 0"
+              class="chip add"
+              :aria-label="i18n.t('mixer.addSend')"
+              :title="i18n.t('mixer.addSend')"
+              @click="openSends(s)"
+            >
+              +
+            </button>
+          </div>
         </div>
 
-        <!-- 发送：只读摘要（编辑在右侧混音面板），让「有没有送去总线」一眼可见 -->
-        <div v-if="s.sends.length > 0" class="sends">
-          <span
-            v-for="send in s.sends.slice(0, 2)"
-            :key="send.target"
-            class="send-chip"
-            :title="i18n.t('mix.sendTo', { name: send.name })"
-          >
-            {{ sendLabel(send) }}
+        <div v-if="!s.master" class="field">
+          <span class="field-label">{{ i18n.t("mix.output") }}</span>
+          <span class="out-value" :title="i18n.t('mix.outputMasterHint')">
+            {{ i18n.t("mix.master") }}
           </span>
-          <span v-if="s.sends.length > 2" class="more">+{{ s.sends.length - 2 }}</span>
         </div>
 
-        <div v-if="!s.master" class="pan-row">
+        <div v-if="!s.master" class="field">
+          <span class="field-label">{{ i18n.t("mix.pan") }}</span>
           <Md3Slider
             class="pan-slider"
             :model-value="shownPan(s)"
@@ -353,6 +385,13 @@ function sendLabel(s: { name: string; gain: number }): string {
             @update:model-value="(v: number) => onPanInput(s, v)"
             @commit="(v: number) => onPanCommit(s, v)"
           />
+        </div>
+
+        <!-- 读数：左边是推子值，右边是当前峰值（削波变红）——与 openDAW 的「两格数字」一致 -->
+        <div class="field readout">
+          <span class="field-label">{{ i18n.t("mix.volume") }}</span>
+          <span class="num tabular">{{ shownGain(s).toFixed(1) }}</span>
+          <span class="num peak tabular" :class="{ clip: clipping(s) }">{{ peakText(s) }}</span>
         </div>
 
         <div class="fader-row">
@@ -371,14 +410,16 @@ function sendLabel(s: { name: string; gain: number }): string {
             <div class="fader-fill" :style="{ height: `${faderRatio(shownGain(s)) * 100}%` }" />
             <div class="fader-knob" :style="{ bottom: `${faderRatio(shownGain(s)) * 100}%` }" />
           </div>
-          <ChannelMeter
-            :value="meterOf(s)"
-            :label="stripName(s)"
-            @reset="resetClip"
-          />
+          <div class="fader-scale" aria-hidden="true">
+            <span
+              v-for="db in SCALE"
+              :key="db"
+              :style="{ bottom: `${faderRatio(db) * 100}%` }"
+              >{{ db }}</span
+            >
+          </div>
+          <ChannelMeter :value="meterOf(s)" :label="stripName(s)" @reset="resetClip" />
         </div>
-
-        <span class="strip-gain tabular">{{ shownGain(s).toFixed(1) }}</span>
 
         <div v-if="!s.master" class="strip-buttons">
           <Tooltip :text="s.mix.mute ? i18n.t('tracks.unmute') : i18n.t('tracks.mute')">
@@ -428,24 +469,24 @@ function sendLabel(s: { name: string; gain: number }): string {
 .mix-strips {
   display: flex;
   align-items: stretch;
-  gap: 8px;
+  gap: 6px;
   padding: 12px;
   min-width: 100%;
   box-sizing: border-box;
 }
 .strip {
   /* 固定宽度 + min-width: 0：长轨道名只会被省略号截断，不会把通道条撑宽。 */
-  flex: 0 0 112px;
-  width: 112px;
+  flex: 0 0 132px;
+  width: 132px;
   min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 5px;
-  padding: 8px 7px 7px;
-  border-radius: 18px;
+  gap: 4px;
+  padding: 8px 7px;
+  border-radius: 16px;
   background-color: var(--app-inset);
-  border: 1px solid rgb(var(--md-outline-variant) / 0.35);
+  border: 1px solid rgb(var(--md-outline-variant) / 0.25);
   transition: border-color 0.15s ease, opacity 0.15s ease;
   overflow: hidden;
 }
@@ -453,21 +494,21 @@ function sendLabel(s: { name: string; gain: number }): string {
   border-color: rgb(var(--md-primary) / 0.65);
 }
 .strip.dimmed {
-  opacity: 0.45;
+  opacity: 0.5;
 }
 .strip.master {
-  background-color: rgb(var(--md-primary) / 0.08);
-  border-color: rgb(var(--md-primary) / 0.35);
+  background-color: rgb(var(--md-primary) / 0.07);
+  border-color: rgb(var(--md-primary) / 0.3);
 }
 
-/* 名字：单行省略，永远是 112px 里的一行 */
+/* 名字：单行省略 */
 .strip-name {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
   width: 100%;
-  height: 20px;
+  height: 22px;
   padding: 0 2px;
   border: 0;
   border-radius: 6px;
@@ -482,94 +523,198 @@ function sendLabel(s: { name: string; gain: number }): string {
   background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
 }
 .name-text {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.hue {
-  flex: 0 0 auto;
-  width: 3px;
-  height: 12px;
-  border-radius: 2px;
-  background-color: hsl(var(--track-hue, 210) 60% 55%);
-}
-
-/* 插入槽 */
-.slots {
+/* 通道身份：一块带轨道色的图标（openDAW 的「设备图标」位） */
+.strip-head {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  min-height: 18px;
+  justify-content: center;
+  padding: 2px 0 4px;
 }
-.add-insert {
-  height: 16px;
-  padding: 0;
-  border: 1px dashed rgb(var(--md-outline-variant) / 0.8);
-  border-radius: 5px;
-  background: transparent;
-  color: rgb(var(--md-on-surface-muted));
-  font-size: 11px;
-  line-height: 14px;
-  cursor: pointer;
+.kind-badge {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background-color: hsl(var(--track-hue, 210) 60% 55% / 0.14);
+  color: hsl(var(--track-hue, 210) 62% 68%);
 }
-.add-insert:hover {
+.kind-badge.master {
+  background-color: rgb(var(--md-primary) / 0.16);
   color: rgb(var(--md-primary));
-  border-color: rgb(var(--md-primary) / 0.6);
 }
-.more {
-  font-size: 9px;
-  color: rgb(var(--md-on-surface-muted));
-  text-align: center;
+.kind-icon {
+  width: 15px;
+  height: 15px;
 }
-
-/* 发送摘要 */
-.sends {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.out-value {
+  flex: 1 1 auto;
   min-width: 0;
-}
-.send-chip {
-  font-size: 9px;
-  line-height: 14px;
+  height: 15px;
+  line-height: 15px;
   padding: 0 4px;
   border-radius: 4px;
+  background-color: rgb(var(--md-on-surface) / 0.04);
   color: rgb(var(--md-on-surface-variant));
-  background-color: rgb(var(--md-on-surface) / 0.05);
+  font-size: 8.5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.hue.master {
+  background-color: rgb(var(--md-primary));
+}
+/* 插入条数角标：不是按钮排，只是一个数字 */
+.fx-badge {
+  flex: 0 0 auto;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background-color: rgb(var(--md-on-surface) / 0.08);
+  color: rgb(var(--md-on-surface-variant));
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  cursor: pointer;
+}
+.fx-badge:hover {
+  color: rgb(var(--md-primary));
+  background-color: rgb(var(--md-primary) / 0.14);
+}
 
-/* 声像 */
-.pan-row {
+/* 字段行：标签在左（28px 固定），值在右——openDAW 的排版节奏 */
+.field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 18px;
+  padding: 0 2px;
+}
+.field-label {
+  flex: 0 0 26px;
+  font-size: 8.5px;
+  letter-spacing: 0.2px;
+  color: rgb(var(--md-on-surface-muted));
+  white-space: nowrap;
+}
+.field-value {
+  flex: 1 1 auto;
   min-width: 0;
-  padding: 0 1px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 15px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background-color: rgb(var(--md-on-surface) / 0.07);
+  color: rgb(var(--md-on-surface-variant));
+  font-size: 8.5px;
+  line-height: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.chip:hover {
+  background-color: rgb(var(--md-primary) / 0.16);
+  color: rgb(var(--md-primary));
+}
+.chip.off {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+.chip.more,
+.chip.add {
+  flex: 0 0 auto;
+  padding: 0 3px;
+  color: rgb(var(--md-on-surface-muted));
+}
+.chip.add {
+  border: 1px dashed rgb(var(--md-outline-variant) / 0.8);
+  background: transparent;
+}
+.pre-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background-color: rgb(var(--md-primary));
 }
 .pan-slider {
-  width: 100%;
+  flex: 1 1 auto;
   min-width: 0;
+}
+.readout {
+  gap: 2px;
+}
+.num {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 16px;
+  border-radius: 4px;
+  background-color: rgb(var(--md-on-surface) / 0.06);
+  color: rgb(var(--md-on-surface));
+  font-size: 9px;
+  line-height: 16px;
+  text-align: center;
+  overflow: hidden;
+}
+.num.peak {
+  color: rgb(var(--md-on-surface-variant));
+}
+.num.peak.clip {
+  color: rgb(var(--md-on-primary));
+  background-color: rgb(var(--md-error));
 }
 
 /* 推子 + 表 */
 .fader-row {
   flex: 1 1 auto;
-  min-height: 70px;
+  min-height: 120px;
   display: flex;
   align-items: stretch;
   justify-content: center;
-  gap: 6px;
+  gap: 2px;
+  padding: 2px 2px 0;
+}
+/* 刻度：与导轨上下各留 4px 对齐 */
+.fader-scale {
+  position: relative;
+  flex: 0 0 15px;
+  width: 15px;
+  margin: 4px 0;
+  font-size: 7px;
+  line-height: 1;
+  color: rgb(var(--md-on-surface-muted));
+}
+.fader-scale span {
+  position: absolute;
+  right: 0;
+  transform: translateY(50%);
+  white-space: nowrap;
 }
 .fader {
   position: relative;
-  width: 26px;
-  min-width: 26px;
+  width: 24px;
+  min-width: 24px;
   flex: 0 0 auto;
   cursor: ns-resize;
   touch-action: none;
 }
+/* 导轨 */
 .fader-rail {
   position: absolute;
   left: 50%;
@@ -578,7 +723,7 @@ function sendLabel(s: { name: string; gain: number }): string {
   width: 4px;
   margin-left: -2px;
   border-radius: 2px;
-  background-color: rgb(var(--md-on-surface) / 0.12);
+  background-color: rgb(var(--md-on-surface) / 0.1);
 }
 .fader-fill {
   position: absolute;
@@ -587,24 +732,28 @@ function sendLabel(s: { name: string; gain: number }): string {
   width: 4px;
   margin-left: -2px;
   border-radius: 2px;
-  background-color: rgb(var(--md-primary) / 0.55);
+  background-color: rgb(var(--md-primary) / 0.5);
 }
 .fader-knob {
   position: absolute;
   left: 50%;
-  width: 22px;
+  width: 18px;
   height: 12px;
-  margin-left: -11px;
+  margin-left: -9px;
   margin-bottom: -6px;
-  border-radius: 4px;
-  background-color: rgb(var(--md-primary));
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+  border-radius: 3px;
+  background-color: rgb(var(--md-surface-container-high, 40 40 44));
+  border: 1px solid rgb(var(--md-outline-variant) / 0.9);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.35);
 }
-
-.strip-gain {
-  text-align: center;
-  font-size: 10.5px;
-  color: rgb(var(--md-on-surface-variant));
+.fader-knob::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 50%;
+  height: 1px;
+  background-color: rgb(var(--md-on-surface) / 0.55);
 }
 
 .strip-buttons {
@@ -613,12 +762,12 @@ function sendLabel(s: { name: string; gain: number }): string {
   gap: 4px;
 }
 .mini {
-  width: 26px;
+  width: 28px;
   height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+  border: 1px solid rgb(var(--md-outline-variant) / 0.6);
   border-radius: 6px;
   padding: 0;
   background: transparent;

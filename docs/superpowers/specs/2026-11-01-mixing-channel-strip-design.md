@@ -405,7 +405,7 @@ pub sidechain: Option<SidechainSource>,
 | 侧链（内置压缩器） | `sidechain_channels()` / `process_with_sidechain` / `effect_keys` / 键缓冲 | 键信号推子后；自侧链在命令层丢弃 |
 | 发送 pre/post + 哑音 | `SendMode` / `Send.mute` | 预推子取点在效果链之后、推子之前 |
 | 独奏语义修正 | `player.rs::refresh_mix` | solo 轨 + 其传递下游（总线）保持可听 |
-| 混音台重做 | `src/views/MixView.vue` | 固定 112 px 通道条；名字省略号（修掉「长名字撑宽推子」） |
+| 混音台重做 | `src/views/MixView.vue` | 参照 openDAW：**不铺插入列表**，通道条只留「名字 / 发送 / 输出 / 声像 / 音量读数 / 推子+刻度+表 / M-S」；插入用一枚角标显示条数，点开去检查器 |
 | 右面板 | `MixerPanel.vue` | 表 / 插入（旁通 + 侧链）/ 发送（pre-post + 静音）/ 主总线插入（就地调参） |
 | 检查器 | `InspectorPanel.vue` | 效果行的旁通开关 + 侧链来源下拉 |
 
@@ -418,6 +418,17 @@ pub sidechain: Option<SidechainSource>,
 - **M3 其余项**：直接输出、编组 / VCA / solo-safe、片段增益与淡化、自动化扩展。
 - **压缩器 lookahead**：依赖 PDC，未做。
 - **GR 粒度**：每轨一个读数（取链上最大值），不区分槽位。
+
+### 界面
+
+![通道条](../../images/mixer-channel-strip.png)
+
+- 每一条自上而下：**身份图标（轨道色）→ 名字（+ 插入条数角标）→ 发送 → 输出 → 声像 →
+  音量读数（推子值 / 当前峰值）→ 推子 + dB 刻度 + 立体声表 → 静音 / 独奏**。
+- 插入**不在通道条上铺开**（那是设备链的事）：一枚角标显示条数，点它/点名字进检查器。
+  这是参照 openDAW 的取舍——混音台回答「电平与路由」，设备链回答「挂了什么」。
+- 通道宽 132 px 固定；名字单行省略号（修掉「长名字把通道条撑宽」）。
+- 推子右侧的刻度只画 6 dB 一档（0…-54），与导轨上下各留 4 px 对齐。
 
 ### 验证
 
