@@ -1562,6 +1562,7 @@ const zh: Record<string, string> = {
   "insert.enable": "启用",
   "insert.withSidechain": "{name}（侧链：{source}）",
   "insert.sidechainFrom": "侧链来源：{source}",
+  "meter.clipHint": "削波指示：峰值到 0 dBFS 就变红并常亮，点一下表头清除",
 
   // ---- 应用级提示 ----
   "app.imported": "已导入工程",

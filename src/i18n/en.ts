@@ -1564,6 +1564,7 @@ const en: Record<string, string> = {
   "insert.enable": "Enable",
   "insert.withSidechain": "{name} (sidechain: {source})",
   "insert.sidechainFrom": "Sidechain from: {source}",
+  "meter.clipHint": "Clip indicator: turns red at 0 dBFS and latches — click the meter to clear",
 
   // ---- App-level notices ----
   "app.imported": "Project imported",

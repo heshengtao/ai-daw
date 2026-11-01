@@ -7,6 +7,9 @@
  */
 import { computed } from "vue";
 import type { ChannelLevel } from "@/stores/meters";
+import { useI18n } from "@/i18n";
+
+const i18n = useI18n();
 
 const props = withDefaults(
   defineProps<{
@@ -43,10 +46,22 @@ const holdRight = computed(() => ratio(props.value.holdR));
 const gr = computed(() => Math.min(1, Math.max(0, props.value.gr / 24)));
 const clipped = computed(() => props.value.clipped);
 
-/** 给读屏的读数：取两声道里大的那个。 */
-const readout = computed(() => {
-  const peak = Math.max(props.value.l, props.value.r);
-  return peak > 0 ? `${toDb(peak).toFixed(1)} dBFS` : "-∞ dBFS";
+/** 单个声道的读数文本（-∞ 表示没信号）。 */
+function dbText(peak: number): string {
+  return peak > 0 && toDb(peak) > MIN_DB ? `${toDb(peak).toFixed(1)}` : "-∞";
+}
+
+/**
+ * 悬停提示：说清楚「这两条是什么」。
+ *
+ * 表本身只有 20 px 宽，光看是猜不出左右声道的；把 L / R 读数、GR 与削波都写进 title，
+ * 用户第一次把鼠标放上去就明白了。
+ */
+const title = computed(() => {
+  const parts = [`L ${dbText(props.value.l)} / R ${dbText(props.value.r)} dBFS`];
+  if (props.value.gr > 0.1) parts.push(`GR ${props.value.gr.toFixed(1)} dB`);
+  if (props.value.clipped) parts.push("削波（点一下清除）");
+  return props.label ? `${props.label} · ${parts.join(" · ")}` : parts.join(" · ");
 });
 </script>
 
@@ -55,17 +70,17 @@ const readout = computed(() => {
     class="meter"
     :class="{ compact, clipped }"
     role="img"
-    :aria-label="`${label} ${readout}`"
-    :title="label ? `${label} · ${readout}` : readout"
+    :aria-label="title"
+    :title="title"
     @click="emit('reset')"
   >
-    <span class="clip-led" :class="{ on: clipped }" aria-hidden="true" />
+    <span class="clip-led" :class="{ on: clipped }" :title="i18n.t('meter.clipHint')" />
     <div class="bars">
-      <div class="bar">
+      <div class="bar" :title="`L ${dbText(value.l)} dBFS`">
         <span class="fill" :style="{ height: `${left * 100}%` }" />
         <span v-if="holdLeft > 0" class="hold" :style="{ bottom: `${holdLeft * 100}%` }" />
       </div>
-      <div class="bar">
+      <div class="bar" :title="`R ${dbText(value.r)} dBFS`">
         <span class="fill" :style="{ height: `${right * 100}%` }" />
         <span v-if="holdRight > 0" class="hold" :style="{ bottom: `${holdRight * 100}%` }" />
       </div>
@@ -98,16 +113,18 @@ const readout = computed(() => {
   position: absolute;
   top: 0;
   left: 50%;
-  width: 5px;
-  height: 5px;
-  margin-left: -2.5px;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
   border-radius: 50%;
-  background-color: rgb(var(--md-outline-variant));
+  background-color: rgb(var(--md-on-surface) / 0.12);
+  box-shadow: 0 0 0 1px rgb(var(--md-outline-variant) / 0.7);
   transition: background-color 0.12s ease;
+  cursor: pointer;
 }
 .clip-led.on {
   background-color: rgb(var(--md-error));
-  box-shadow: 0 0 6px rgb(var(--md-error) / 0.8);
+  box-shadow: 0 0 5px rgb(var(--md-error) / 0.85);
 }
 .bars {
   display: flex;
