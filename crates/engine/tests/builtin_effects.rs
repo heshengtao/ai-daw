@@ -21,6 +21,8 @@ fn fx(id: &str, params: &[(&str, f32)]) -> PluginInstance {
             .map(|(k, v)| ((*k).to_string(), *v))
             .collect::<BTreeMap<_, _>>(),
         state: Vec::new(),
+        enabled: true,
+        sidechain: None,
     }
 }
 
@@ -38,6 +40,8 @@ fn project(effects: Vec<PluginInstance>) -> Project {
                 .into_iter()
                 .collect(),
             state: Vec::new(),
+            enabled: true,
+            sidechain: None,
         }),
         effects,
         clips: vec![Clip {

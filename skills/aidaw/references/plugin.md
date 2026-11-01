@@ -18,7 +18,11 @@
 3. **把选项摆给用户**：说明候选是什么、多大、什么格式、是否已验证，以及不下载有哪些替代方案。
    **不要自己下载或安装。**
 4. 用户明确同意后，才可调用 `install_plugin(slug, confirm=true)`（高风险，Harness 可能再弹一次审批）；
-   或者让用户打开「插件管理器 → 可下载」自己点。装完会自动重扫，再用 `list_plugins` / `describe_plugin`。
+   **若 `matches[].needs_acknowledgement=true`**（下载源是第三方域名，`download_host` 里写着是哪个，
+   例如 `ci.helio.fm`、`discodsp.com`），必须先把那个域名原样告诉用户，用户同意后
+   再带上 `acknowledged_host="那个域名"`——不带或写错，后端会直接拒绝下载。
+   或者让用户打开「插件管理器 → 可下载」自己点（界面会先亮出域名再让他确认）。装完会自动重扫，
+   再用 `list_plugins` / `describe_plugin`。
 5. 用户既不想装、替代方案也不够用时，再提议做一个 CLAP（Rust + nih-plug 最快），
    按 `clap-plugin-dev.md` 施工，打完包 `rescan_plugins` 就能像普通插件一样挂轨、调参、保存、导出。
 
@@ -31,7 +35,7 @@
 | `list_plugins` | `kind?`,`query?` | 全部可用乐器/效果器（内置 + 本机 VST3/CLAP），**只给描述**。`kind` = `instrument` / `effect` / `all`；`query` 按名字/厂商/分类/描述/标签过滤。 |
 | `rescan_plugins` | — | 重新扫描本机插件目录（装完新插件后调用）。较慢。 |
 | `search_plugin_store` | `query`,`kind?`,`limit?` | 搜**可下载**插件（注册表），返回候选 + 不下载的替代方案。**只读，不下载**。 |
-| `install_plugin` | `slug`,`confirm` | **高风险**：下载并安装注册表插件。必须用户明确同意且 `confirm=true`；否则会被拒绝。 |
+| `install_plugin` | `slug`,`confirm`,`acknowledged_host?` | **高风险**：下载并安装注册表插件。必须用户明确同意且 `confirm=true`；**第三方下载域名**（`needs_acknowledgement=true`）还要把用户看过的域名传进 `acknowledged_host`，否则会被拒绝。 |
 | `describe_plugin` | `plugin_id`,`query?`,`max_params?` | 单件的全部音色参数 + 用户预设 + 用法提示。`query` 只在**这一件**内部缩小范围；MIDI CC 映射这类管道参数不返回（用 `param_hidden` 报个数）。 |
 | `list_synth_presets` | `category?`,`query?` | **内置合成器的 36 条出厂音色**：id / 中文名 / 分类 / 描述 / 完整参数补丁。捏音色从它开始，不用猜。 |
 | `set_track_instrument` | `track`,`plugin_id` | 挂/换乐器；`plugin_id` 可以是 id 或名字（`JC303`）。回执里会说明这件乐器是什么、建议怎么用。 |

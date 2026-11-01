@@ -18,6 +18,12 @@ import type {
   SingingArgs,
   SingingModels,
   SingingStatus,
+  SvcModels,
+  SvcStatus,
+  SwapArgs,
+  YueComposeArgs,
+  YueEngineStatus,
+  YueJobStatus,
   VoiceEntry,
   VoiceSaveArgs,
   AnalysisReport,
@@ -25,6 +31,9 @@ import type {
   BackendInfo,
   BackendParam,
   BackendPreference,
+  RuntimeStatus,
+  DiscoveredRuntime,
+  RuntimeProgress,
   CatalogPlugin,
   CliStatus,
   ClipPlacement,
@@ -46,6 +55,7 @@ import type {
   ManagerProgress,
   MasterArgs,
   McpStatus,
+  MeterSnapshot,
   MixerState,
   ModelProgress,
   ModelSourcePreference,
@@ -89,6 +99,8 @@ export const EVENT_TRANSPORT = "engine://transport";
 export const EVENT_AI = "engine://ai";
 /** 歌声合成状态广播通道名，与后端 `singing::EVENT_SINGING` 保持一致。 */
 export const EVENT_SINGING = "engine://singing";
+/** 音色替换状态广播通道名，与后端 `svc::EVENT_SVC` 保持一致。 */
+export const EVENT_SVC = "engine://svc";
 
 /** 插件管理器进度广播通道名，与后端 `manager::EVENT_MANAGER` 保持一致。 */
 export const EVENT_MANAGER = "engine://manager";
@@ -102,6 +114,8 @@ export const EVENT_EXPORT = "engine://export";
 export const EVENT_AGENT = "engine://agent";
 /** 音色记忆库变更广播通道名，与后端 `state::EVENT_SOUND_MEMORIES` 保持一致。 */
 export const EVENT_SOUND_MEMORIES = "engine://sound-memories";
+/** ONNX Runtime 运行时下载进度通道名，与后端 `runtimes::EVENT_RUNTIME` 保持一致。 */
+export const EVENT_RUNTIME = "engine://runtime";
 
 /** 读取当前工程。 */
 export function getProject(): Promise<Project> {
@@ -877,6 +891,17 @@ export function exportScore(path: string, xml: string): Promise<string> {
 }
 
 /**
+ * 把当前工程导出为标准 MIDI 文件（`.mid`，SMF type 1），返回写入路径。
+ *
+ * 内容由后端从工程直接生成（每条 MIDI 轨一条 MIDI track + 指挥轨的速度/拍号图），
+ * 与乐谱导出一样**不改工程、不进历史**。`tracks` 给定时只导出这些轨道。
+ */
+export function exportMidi(path: string, tracks?: number[]): Promise<string> {
+  if (mockEnabled()) return Promise.resolve(mockApi.exportMidi(path));
+  return invoke<string>("export_midi", { path, tracks });
+}
+
+/**
  * 读取用户选中的导入文件（原始字节）。
  *
  * 解析放在前端（`src/import`）：MIDI 与 MusicXML 都是一次性的纯数据转换，没必要为了它
@@ -1262,6 +1287,150 @@ export function onSingingEvent(handler: (status: SingingStatus) => void): Promis
   return listen<SingingStatus>(EVENT_SINGING, (e) => handler(e.payload));
 }
 
+// ---------------------------------------------------------------------------
+// 音色替换（SoulX-Singer-SVC ONNX）
+// ---------------------------------------------------------------------------
+
+/** 音色替换模型是否就位。 */
+export function svcModels(): Promise<SvcModels> {
+  if (mockEnabled()) return Promise.resolve(mockApi.svcModels());
+  return invoke<SvcModels>("svc_models");
+}
+
+/** 当前音色替换任务状态。 */
+export function svcStatus(): Promise<SvcStatus> {
+  if (mockEnabled()) return Promise.resolve(mockApi.svcStatus());
+  return invoke<SvcStatus>("svc_status");
+}
+
+/**
+ * 开始替换：目标人声轨 + 参考声线 → 新音频轨（插在源轨下面，一次撤销）。
+ *
+ * 渲染是离线的：10 秒大约 1–2 分钟 CPU 时间；进度走 `onSvcEvent`。
+ */
+export function svcRender(args: SwapArgs): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.svcRender());
+  return invoke<void>("svc_render", { args });
+}
+
+/** 停止当前替换（还没落地的结果直接丢弃）。 */
+export function svcCancel(): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.svcCancel());
+  return invoke<void>("svc_cancel");
+}
+
+/** 订阅音色替换状态。 */
+export function onSvcEvent(handler: (status: SvcStatus) => void): Promise<UnlistenFn> {
+  if (mockEnabled()) {
+    const onMock = (e: Event): void => handler((e as CustomEvent<SvcStatus>).detail);
+    window.addEventListener("ai-daw-mock-svc", onMock);
+    const off = mockApi.onSvcEvent();
+    return Promise.resolve(() => {
+      window.removeEventListener("ai-daw-mock-svc", onMock);
+      off();
+    });
+  }
+  return listen<SvcStatus>(EVENT_SVC, (e) => handler(e.payload));
+}
+
+// ---------------------------------------------------------------------------
+// YuE2 写歌：引擎子进程 + 生成任务（进度走 `engine://yue-engine` / `engine://yue-job`）
+// ---------------------------------------------------------------------------
+
+/** 引擎状态广播通道名，与后端 `yue_engine::EVENT_ENGINE` 一致。 */
+export const EVENT_YUE_ENGINE = "engine://yue-engine";
+/** 生成任务广播通道名，与后端 `yue_engine::EVENT_JOB` 一致。 */
+export const EVENT_YUE_JOB = "engine://yue-job";
+
+/** 当前引擎状态。 */
+export function yueEngineStatus(): Promise<YueEngineStatus> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueEngineStatus());
+  return invoke<YueEngineStatus>("ai_yue_engine_status");
+}
+
+/** 引擎日志最后若干行（界面轮询；服务端只写文件，没有 SSE）。 */
+export function yueEngineLog(lines = 80): Promise<string> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueEngineLog(lines));
+  return invoke<string>("ai_yue_engine_log", { lines });
+}
+
+/** audio.cpp 引擎的 CUDA `cuda_perf` 预设开关（下次启动引擎生效）。 */
+export function yueCudaPerf(): Promise<boolean> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueCudaPerf());
+  return invoke<boolean>("ai_yue_cuda_perf");
+}
+
+export function yueSetCudaPerf(enabled: boolean): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueSetCudaPerf(enabled));
+  return invoke<void>("ai_yue_set_cuda_perf", { enabled });
+}
+
+/** 从本地目录安装引擎后端（目录里放清单要求的归档；仍校验 sha256）。 */
+export function yueImport(id: string, dir: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve();
+  return invoke<void>("ai_yue_import", { id, dir });
+}
+
+/** 把生成时落盘的 ABC 谱导入工程，写成 MIDI 轨（乐谱视图可看）。 */
+export function yueImportAbc(path: string): Promise<string> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueImportAbc(path));
+  return invoke<string>("ai_yue_import_abc", { path });
+}
+
+/** 拉起引擎（首次要加载几 GB 权重，分钟级；状态走 `onYueEngineEvent`）。换权重会重新加载。 */
+export function yueEngineStart(model: string | null = null): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueEngineStart(model));
+  return invoke<void>("ai_yue_engine_start", { model });
+}
+
+/** 停掉引擎（释放显存；下次生成时重新拉起）。 */
+export function yueEngineStop(): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueEngineStop());
+  return invoke<void>("ai_yue_engine_stop");
+}
+
+/** 提交一次写歌（分钟级；进度与结果走 `onYueJobEvent`）。 */
+export function yueCompose(args: YueComposeArgs): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueCompose(args));
+  return invoke<void>("ai_yue_compose", { args });
+}
+
+/** 取消当前生成。 */
+export function yueComposeCancel(): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueComposeCancel());
+  return invoke<void>("ai_yue_compose_cancel");
+}
+
+/** 订阅引擎状态。 */
+export function onYueEngineEvent(
+  handler: (status: YueEngineStatus) => void,
+): Promise<UnlistenFn> {
+  if (mockEnabled()) {
+    const onMock = (e: Event): void => handler((e as CustomEvent<YueEngineStatus>).detail);
+    window.addEventListener("ai-daw-mock-yue-engine", onMock);
+    const off = mockApi.onYueEngineEvent();
+    return Promise.resolve(() => {
+      window.removeEventListener("ai-daw-mock-yue-engine", onMock);
+      off();
+    });
+  }
+  return listen<YueEngineStatus>(EVENT_YUE_ENGINE, (e) => handler(e.payload));
+}
+
+/** 订阅生成任务状态。 */
+export function onYueJobEvent(handler: (status: YueJobStatus) => void): Promise<UnlistenFn> {
+  if (mockEnabled()) {
+    const onMock = (e: Event): void => handler((e as CustomEvent<YueJobStatus>).detail);
+    window.addEventListener("ai-daw-mock-yue-job", onMock);
+    const off = mockApi.onYueJobEvent();
+    return Promise.resolve(() => {
+      window.removeEventListener("ai-daw-mock-yue-job", onMock);
+      off();
+    });
+  }
+  return listen<YueJobStatus>(EVENT_YUE_JOB, (e) => handler(e.payload));
+}
+
 /** 订阅 AI 任务状态。 */
 export function onAiEvent(handler: (status: AiStatus) => void): Promise<UnlistenFn> {
   if (mockEnabled()) {
@@ -1465,6 +1634,78 @@ export function setEffectParams(
 ): Promise<Project> {
   if (mockEnabled()) return Promise.resolve(mockApi.setEffectParams(track, index, params));
   return invoke<Project>("set_effect_params", { track, index, params });
+}
+
+/** 启用 / 旁通轨道上的一个效果器（不重建播放器，出声不断）。 */
+export function setEffectEnabled(
+  track: number,
+  index: number,
+  enabled: boolean,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setEffectEnabled(track, index, enabled));
+  return invoke<Project>("set_effect_enabled", { track, index, enabled });
+}
+
+/** 设置轨道效果器的侧链来源（`null` = 不接）。 */
+export function setEffectSidechain(
+  track: number,
+  index: number,
+  source: number | null,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setEffectSidechain(track, index, source));
+  return invoke<Project>("set_effect_sidechain", { track, index, source });
+}
+
+/** 在主总线插入链末尾追加一个效果器。 */
+export function addMasterEffect(pluginId: string): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.addMasterEffect(pluginId));
+  return invoke<Project>("add_master_effect", { pluginId });
+}
+
+/** 从主总线插入链移除一个效果器（按链内序号）。 */
+export function removeMasterEffect(index: number): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.removeMasterEffect(index));
+  return invoke<Project>("remove_master_effect", { index });
+}
+
+/** 调整主总线效果器在链中的位置。 */
+export function moveMasterEffect(from: number, to: number): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.moveMasterEffect(from, to));
+  return invoke<Project>("move_master_effect", { from, to });
+}
+
+/** 设置主总线效果器参数。 */
+export function setMasterEffectParam(
+  index: number,
+  param: string,
+  value: number,
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setMasterEffectParam(index, param, value));
+  return invoke<Project>("set_master_effect_param", { index, param, value });
+}
+
+/** 启用 / 旁通主总线上的一个效果器。 */
+export function setMasterEffectEnabled(index: number, enabled: boolean): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setMasterEffectEnabled(index, enabled));
+  return invoke<Project>("set_master_effect_enabled", { index, enabled });
+}
+
+/** 设置主总线效果器的侧链来源（`null` = 不接）。 */
+export function setMasterEffectSidechain(index: number, source: number | null): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setMasterEffectSidechain(index, source));
+  return invoke<Project>("set_master_effect_sidechain", { index, source });
+}
+
+/** 读一次通道电平表（取走峰值并清零）。 */
+export function mixerMeters(): Promise<MeterSnapshot> {
+  if (mockEnabled()) return Promise.resolve(mockApi.mixerMeters());
+  return invoke<MeterSnapshot>("mixer_meters");
+}
+
+/** 清掉所有削波锁存（点表头时调用）。 */
+export function clearMeterClip(): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.clearMeterClip());
+  return invoke<void>("clear_meter_clip");
 }
 
 /** 取最近的输出采样，供界面画实时波形。 */
@@ -1737,13 +1978,8 @@ export function modelResolveUrl(id: string): Promise<string> {
 /** 订阅模型下载进度。 */
 export function onModelEvent(handler: (p: ModelProgress) => void): Promise<UnlistenFn> {
   if (mockEnabled()) {
-    const onMock = (e: Event): void => handler((e as CustomEvent<ModelProgress>).detail);
-    window.addEventListener("ai-daw-mock-model", onMock);
-    const off = mockApi.onModelEvent();
-    return Promise.resolve(() => {
-      window.removeEventListener("ai-daw-mock-model", onMock);
-      off();
-    });
+    // 预览里由 mock 自己挂/摘监听（它还要顺带清掉下载定时器）。
+    return Promise.resolve(mockApi.onModelEvent(handler));
   }
   return listen<ModelProgress>(EVENT_MODEL, (e) => handler(e.payload));
 }
@@ -1758,8 +1994,95 @@ export function aiBackendInfo(): Promise<BackendInfo> {
   return invoke<BackendInfo>("ai_backend_info");
 }
 
-/** 保存执行后端偏好（写 `store.json` 并立即生效）。 */
+/** 保存执行后端偏好（写 `store.json`；运行时已加载时需重启才生效）。 */
 export function aiSetBackend(preference: BackendPreference): Promise<BackendInfo> {
   if (mockEnabled()) return Promise.resolve(mockApi.aiSetBackend(preference));
   return invoke<BackendInfo>("ai_set_backend", { preference });
+}
+
+// ---------------------------------------------------------------------------
+// ONNX Runtime 运行时：下载 / 删除（进度走 `engine://runtime`）
+// ---------------------------------------------------------------------------
+
+/** 全部运行时的本地状态。 */
+export function aiRuntimeCatalog(): Promise<RuntimeStatus[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.aiRuntimeCatalog());
+  return invoke<RuntimeStatus[]>("ai_runtime_catalog");
+}
+
+/** 开始下载并安装一个运行时（装完需重启才生效）。 */
+export function aiRuntimeInstall(id: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.aiRuntimeInstall(id));
+  return invoke<void>("ai_runtime_install", { id });
+}
+
+/** 取消正在进行中的运行时下载。 */
+export function aiRuntimeCancel(): Promise<void> {
+  if (mockEnabled()) return Promise.resolve();
+  return invoke<void>("ai_runtime_cancel");
+}
+
+/** 当前是否有运行时正在下载（界面挂载时用来纠正卡住的状态）。 */
+export function aiRuntimeBusy(): Promise<boolean> {
+  if (mockEnabled()) return Promise.resolve(false);
+  return invoke<boolean>("ai_runtime_busy");
+}
+
+/** 删除一个已下载的运行时（当前加载中的那份要重启后才会真正释放）。 */
+export function aiRuntimeRemove(id: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.aiRuntimeRemove(id));
+  return invoke<void>("ai_runtime_remove", { id });
+}
+
+/** 在系统文件管理器里显示运行时目录。 */
+export function aiRuntimeReveal(id: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.aiRuntimeReveal(id));
+  return invoke<void>("ai_runtime_reveal", { id });
+}
+
+/** 扫描本机已有的 CUDA 版 ONNX Runtime（pip / conda / 官方解压目录）。 */
+export function aiRuntimeDiscover(): Promise<DiscoveredRuntime[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.aiRuntimeDiscover());
+  return invoke<DiscoveredRuntime[]>("ai_runtime_discover");
+}
+
+/**
+ * 挑 YuE2 引擎用哪个后端（`null` = 按显卡自动挑：CUDA 13 → CUDA 12 → Vulkan → CPU）。
+ *
+ * 引擎后端和 ONNX Runtime 共用「运行时」那张列表，所以不在 Settings 另开一处。
+ */
+export function aiYueSelect(id: string | null): Promise<void> {
+  if (mockEnabled()) return Promise.resolve();
+  return invoke<void>("ai_yue_select", { id });
+}
+
+/** 把发现的那一份复制进应用自己的运行时目录。 */
+export function aiRuntimeImport(dir: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.aiRuntimeImport(dir));
+  return invoke<void>("ai_runtime_import", { dir });
+}
+/** 订阅运行时下载进度（组件挂载时调用，返回取消订阅函数）。 */
+export function onRuntimeEvent(
+  handler: (p: RuntimeProgress) => void,
+): Promise<UnlistenFn> {
+  if (mockEnabled()) {
+    const onMock = (e: Event): void =>
+      handler((e as CustomEvent<RuntimeProgress>).detail);
+    window.addEventListener("ai-daw-mock-runtime", onMock);
+    return Promise.resolve(() =>
+      window.removeEventListener("ai-daw-mock-runtime", onMock),
+    );
+  }
+  return listen<RuntimeProgress>(EVENT_RUNTIME, (e) => handler(e.payload));
+}
+
+/**
+ * 首帧已经上屏：让后端显示主窗口并开始装载音频宿主。
+ *
+ * 后端不在「页面加载完成」时装载工程：那一步要解码全部音频素材（实测 4–21 秒），
+ * 和首次绘制抢资源会拖出十几秒的黑屏。只有前端知道自己真的画完了。
+ */
+export function appReady(): Promise<void> {
+  if (mockEnabled()) return Promise.resolve();
+  return invoke<void>("app_ready");
 }

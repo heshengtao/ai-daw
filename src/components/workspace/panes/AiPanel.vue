@@ -19,39 +19,52 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { BoltIcon, ClipboardDocumentIcon } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
+import AiYuePage from "@/components/workspace/panes/ai/AiYuePage.vue";
+import AiSingingPage from "@/components/workspace/panes/ai/AiSingingPage.vue";
+import AiSvcPage from "@/components/workspace/panes/ai/AiSvcPage.vue";
+import "@/components/workspace/panes/ai/aiPage.css";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
+import EngineBackendPicker from "@/components/common/EngineBackendPicker.vue";
+import Md3Segmented from "@/components/common/Md3Segmented.vue";
+import type { SegmentedOption } from "@/components/common/segmented";
 import {
+  aiBackendInfo,
   aiCancel,
   aiModels,
+  aiSetBackend,
   aiStart,
   aiStatus,
   mcpStatus,
   onAiEvent,
   onSingingEvent,
+  onSvcEvent,
   setMcpConfig,
   singingCancel,
-  singingRender,
   singingStatus,
-  voiceList,
-  voiceSave,
+  svcCancel,
+  svcStatus,
 } from "@/api/tauri";
 import type {
   AiModels,
   AiStatus,
+  BackendInfo,
+  BackendPreference,
   McpStatus,
   ModelStatus,
   SingingStatus,
-  VoiceEntry,
+  SvcStatus,
 } from "@/api/types";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
 import { useModelsStore } from "@/stores/models";
-import { useSoundMemoriesStore } from "@/stores/soundMemories";
+import { useRuntimesStore } from "@/stores/runtimes";
+import { useModelChoice } from "@/composables/useModelChoice";
+import { useYueStore } from "@/stores/yue";
 import { useI18n } from "@/i18n";
 import { copyText } from "@/utils/clipboard";
-import { pickAudioToOpen } from "@/api/dialogs";
 import { humanSize, missingBytes, modelName } from "@/utils/models";
+import { restartApp } from "@/utils/restart";
 
 const KIND_MIDI = "to_midi";
 /** 人声降噪 / 去混响：走 LocalVQE 模型。 */
@@ -66,8 +79,218 @@ const project = useProjectStore();
 const selection = useSelectionStore();
 const layout = useLayoutStore();
 const modelsStore = useModelsStore();
-const soundMemories = useSoundMemoriesStore();
 const i18n = useI18n();
+
+/**
+ * 面板里正在显示的子页（`null` = 卡片列表）。
+ *
+ * 三个 AI 功能（写歌 / 歌声合成 / 音色替换）的表单都**占满侧栏**，而不是跳到工作区中间：
+ * 它们是右栏的延续，左边的时间线要一直看得见。
+ */
+const aiPage = ref<null | "yue" | "singing" | "svc">(null);
+/** 子页里自己会弹完成通知，列表这边让路（两边都在挂载状态）。 */
+const inAiPage = computed(() => aiPage.value !== null);
+
+// ---- 顶部标签：全部 / 生成 / 转换（「全部」里用分隔标题分组）----
+const aiTab = ref<"all" | "generate" | "convert">("all");
+const AI_TABS = ["all", "generate", "convert"] as const;
+function aiTabLabel(tab: (typeof AI_TABS)[number]): string {
+  return i18n.t(`ai.tab.${tab}`);
+}
+
+// ---- 运行后端：与设置页同一套（切换要重启）----
+const backend = ref<BackendInfo | null>(null);
+const backendBusy = ref(false);
+const backendRestart = ref(false);
+/** 重启提示正文：开发模式下补一句「不会自动重启」。 */
+const backendRestartBody = computed(() => {
+  const body = i18n.t("ai.backendRestartBody");
+  return import.meta.env.DEV ? `${body} ${i18n.t("settings.ai.restartDevHint")}` : body;
+});
+/** audio.cpp 引擎的后端包（独立于 ONNX Runtime，切换只需重启引擎）。 */
+const runtimes = useRuntimesStore();
+/** 本机平台支持的后端（CPU 之外通常只有 DirectML / CoreML / CUDA 之一）。 */
+const backendOptions = computed(() => backend.value?.options.filter((o) => o.available) ?? []);
+/** 分段控件用的选项（文案走 i18n；缺运行时的给个悬停提示）。 */
+const backendSegOptions = computed<SegmentedOption[]>(() =>
+  backendOptions.value.map((o) => ({
+    value: o.kind,
+    label: backendLabelOf(o.kind, o.label),
+    disabled: backendBusy.value,
+    title: o.runtime_installed ? undefined : i18n.t("ai.backendMissing"),
+  })),
+);
+function onBackendPick(value: string): void {
+  void pickBackend(value as BackendPreference);
+}
+/** 当前后端的一句话说明（词典没这条就退回后端下发的中文）。 */
+const backendNote = computed(() => {
+  const current = backend.value?.options.find((o) => o.kind === backend.value?.preference);
+  if (!current) return i18n.t("ai.backendHint");
+  const key = `backend.${current.kind}.note`;
+  const text = i18n.t(key);
+  return text === key ? current.note : text;
+});
+function backendLabelOf(kind: string, fallback: string): string {
+  const key = `backend.${kind}`;
+  const text = i18n.t(key);
+  return text === key ? fallback : text;
+}
+
+/** CUDA 组件 id → 界面上的名字（面板里没有运行时清单，用固定名称）。 */
+function partLabel(id: string): string {
+  switch (id) {
+    case "cudart":
+    case "cudart13":
+      return id.endsWith("13") ? "CUDA Runtime 13" : "CUDA Runtime";
+    case "cublas":
+    case "cublas13":
+      return id.endsWith("13") ? "cuBLAS 13" : "cuBLAS";
+    case "cufft":
+    case "cufft13":
+      return id.endsWith("13") ? "cuFFT 12" : "cuFFT";
+    case "cudnn":
+    case "cudnn13":
+      return "cuDNN 9";
+    default:
+      return id;
+  }
+}
+
+/** CUDA 看着能用、实际会回落 CPU 的两种情况：组件缺 / provider 没注册成功。 */
+const backendWarning = computed(() => {
+  const info = backend.value;
+  if (!info || !info.preference.startsWith("cuda")) return "";
+  const cuda = info.options.find((o) => o.kind === info.preference);
+  if (!cuda || !cuda.available) return "";
+  if (!cuda.runtime_installed) return i18n.t("ai.backendCoreMissing");
+  const missing = cuda.missing ?? [];
+  if (missing.length > 0) {
+    return i18n.t("ai.backendPartsMissing", { parts: missing.map(partLabel).join("、") });
+  }
+  // 启动后还没建会话时运行时尚未加载，`ep_ready` 为 false 属于正常；只有加载过
+  // 但 provider 仍没注册成功才提示。
+  if (!info.ep_ready && info.loaded_runtime) return i18n.t("ai.backendNotActive");
+  return "";
+});
+
+async function loadBackendInfo(): Promise<void> {
+  try {
+    backend.value = await aiBackendInfo();
+  } catch {
+    backend.value = null;
+  }
+}
+
+async function pickBackend(kind: BackendPreference): Promise<void> {
+  if (!backend.value || backend.value.preference === kind || backendBusy.value) return;
+  const option = backend.value.options.find((o) => o.kind === kind);
+  if (!option) return;
+  // 本体没装、或 CUDA 组件没装齐：切过去也只会静默跑 CPU，先去下载管理器补齐。
+  const missing = option.missing ?? [];
+  if (!option.runtime_installed || missing.length > 0) {
+    layout.notify(
+      missing.length > 0
+        ? i18n.t("ai.backendPartsMissing", { parts: missing.map(partLabel).join("、") })
+        : i18n.t("ai.backendMissing"),
+    );
+    layout.openTab("manager");
+    return;
+  }
+  backendBusy.value = true;
+  try {
+    backend.value = await aiSetBackend(kind);
+    if (backend.value?.restart_required) {
+      backendRestart.value = true;
+    } else {
+      const loaded = backend.value?.loaded_runtime === option.runtime;
+      layout.notify(
+        i18n.t(
+          loaded ? "settings.ai.backendAppliedCurrent" : "settings.ai.backendAppliedNext",
+          { backend: backendLabelOf(kind, option.label) },
+        ),
+      );
+    }
+  } catch (err) {
+    layout.notify(String(err));
+  } finally {
+    backendBusy.value = false;
+  }
+}
+
+// ---- YuE2 写歌 ----
+/** 已装 / 未装的 YuE2 权重都在下拉里；选过哪一档跨会话记住（卡片与子页共用）。 */
+const yueChoice = useModelChoice("compose", () =>
+  modelsStore.catalog.filter((m) => m.feature === "compose"),
+);
+const yueDraftModel = yueChoice.id;
+const chosenYueModel = yueChoice.current;
+/** 下拉选项与其它模型卡片同一套（名称 + 「已下载 / 需下载 · 体积」）。 */
+const yueModelOptions = yueChoice.selectOptions;
+
+/** 「开始」：引擎没装先进页（页里强制选引擎）；模型没下就弹下载确认。 */
+function startYue(): void {
+  // 安装包默认不带引擎：先让写歌页的安装向导处理，别先去下几 GB 权重。
+  if (!runtimes.items.some((r) => r.group === "audiocpp" && r.installed)) {
+    aiPage.value = "yue";
+    return;
+  }
+  const model = chosenYueModel.value;
+  if (model && !model.installed) {
+    pendingModel.value = model;
+    promptOpen.value = true;
+    return;
+  }
+  aiPage.value = "yue";
+}
+
+// ---- YuE2 本地写歌 ----
+/** 引擎子进程 + 一次生成任务（表单在模态框里，条目只留入口与状态）。 */
+const yue = useYueStore();
+/** 后端 id → 界面上的显卡名字。 */
+function deviceLabel(device: string): string {
+  switch (device) {
+    case "cuda13":
+      return "CUDA 13";
+    case "cuda12":
+      return "CUDA 12";
+    case "vulkan":
+      return "Vulkan";
+    case "metal":
+      return "Metal";
+    default:
+      return "CPU";
+  }
+}
+
+/** 条目上的小徽标：未启动 / 加载中 / 就绪 / 出错。 */
+const yueBadge = computed(() => {
+  const state = yue.engine?.state ?? "stopped";
+  if (state === "ready") return deviceLabel(yue.engine?.device ?? "cpu");
+  if (state === "starting") return i18n.t("ai.yueBadgeLoading");
+  if (state === "error") return i18n.t("ai.yueBadgeError");
+  return i18n.t("ai.yueBadgeStopped");
+});
+
+/** 条目 / 对话框里那一行说明。 */
+const yueStatusLine = computed(() => {
+  const engine = yue.engine;
+  if (yue.busy) {
+    return i18n.t("ai.yueElapsed", { seconds: Math.round(yue.job.elapsed) });
+  }
+  if (!engine || engine.state === "stopped") return i18n.t("ai.yueHint");
+  if (engine.state === "error") {
+    return engine.message ?? engine.log ?? i18n.t("ai.yueEngineError");
+  }
+  if (engine.state === "starting") {
+    return engine.message ?? i18n.t("ai.yueEngineStarting");
+  }
+  return `${i18n.t("ai.yueEngineReady", {
+    device: deviceLabel(engine.device),
+    model: engine.model,
+  })} · ${i18n.t("yue.readyHint")}`;
+});
+
 
 // ---- MCP ----
 const status = ref<McpStatus | null>(null);
@@ -116,6 +339,10 @@ let unlisten: (() => void) | null = null;
 let stopModel: (() => void) | null = null;
 /** 歌声合成状态订阅的取消函数。 */
 let stopSingingEvent: (() => void) | null = null;
+/** 音色替换状态订阅的取消函数。 */
+let stopSvcEvent: (() => void) | null = null;
+/** YuE2 引擎 / 任务状态订阅的取消函数。 */
+let stopYueEvent: (() => void) | null = null;
 
 /** 目标轨道（选中轨道，否则首轨）与「有音频片段」。 */
 const track = computed(() => {
@@ -145,30 +372,14 @@ function hasModel(kind: string): boolean {
 const progressPct = computed(() => `${Math.round(ai.value.progress * 100)}%`);
 
 // ---- 音源分离：可选模型（4 分轨 / 6 分轨）；缺权重时先问、再下载并跳到「管理器」----
-/** 清单里的分离模型（按清单顺序）。 */
-const separateModels = computed(() => modelsStore.catalog.filter((m) => m.feature === "separate"));
-/** 当前选中的分离模型 id；`null` = 还没定，由下面的 watcher 按「谁已下载」自动选。 */
-const sepModelId = ref<string | null>(null);
-/** 当前选中的分离模型条目（清单没加载出来时为 null）。 */
-const sepModel = computed(
-  () => separateModels.value.find((m) => m.id === sepModelId.value) ?? separateModels.value[0] ?? null,
-);
-/** 选中模型是否就位。 */
-const separateModelReady = computed(() => sepModel.value?.installed ?? false);
-/** 选中模型是否正在下载。 */
-const sepDownloading = computed(() =>
-  sepModel.value ? modelsStore.installing(sepModel.value.id) : false,
-);
-/** 下拉选项：名称 + 「已下载 / 需下载 · 体积」。 */
-const sepOptions = computed(() =>
-  separateModels.value.map((m) => ({
-    id: m.id,
-    label: modelName(m),
-    hint: m.installed
-      ? i18n.t("ai.modelReady")
-      : i18n.t("ai.modelNeedsDownload", { size: humanSize(m.approx_bytes) }),
-  })),
-);
+/** 分离模型（4 分轨 / 6 分轨）：选过哪一档跨会话记住。 */
+const {
+  current: sepModel,
+  id: sepModelId,
+  ready: separateModelReady,
+  downloading: sepDownloading,
+  selectOptions: sepOptions,
+} = useModelChoice("separate", () => modelsStore.catalog.filter((m) => m.feature === "separate"));
 
 /** 待下载的分离模型（用于 MD3 确认框）。 */
 const pendingModel = ref<ModelStatus | null>(null);
@@ -226,253 +437,38 @@ async function cancelModelDownload(): Promise<void> {
   await modelsStore.cancel();
 }
 
-// ---- 歌声合成（SoulX-Singer）：MIDI + 歌词 + 参考声线 → 新音频轨 ----
-const singing = ref<SingingStatus>({ running: false, progress: 0, message: null });
-/** 歌声合成可选的模型（fp16 / fp32，与「音源分离」同一套选择方式，没有「自动」）。 */
-const singModels = computed(() => modelsStore.catalog.filter((m) => m.feature === "sing"));
-/** 当前选中的模型 id；`null` = 还没定，由下面的 watcher 按「谁已下载」选。 */
-const singModelId = ref<string | null>(null);
-/** 当前选中的模型条目（清单没加载出来时为 null）。 */
-const singModel = computed(
-  () => singModels.value.find((m) => m.id === singModelId.value) ?? singModels.value[0] ?? null,
-);
+// ---- 歌声合成 / 音色替换：列表里只留「选模型 + 开始」，参数都在各自独立的页面里 ----
 /** 有音符的 MIDI 轨道（歌声合成的输入）。 */
 const midiTracks = computed(() =>
   (project.project?.tracks ?? []).filter(
     (t) => !t.clips.every((c) => c.audio) && t.clips.some((c) => (c.notes?.length ?? 0) > 0),
   ),
 );
-/** 有音频片段的轨道（可当参考声线）。 */
+/** 有音频片段的轨道（可当参考声线，也是音色替换的输入）。 */
 const audioTracks = computed(() =>
   (project.project?.tracks ?? []).filter((t) => t.clips.some((c) => c.audio)),
 );
-/** 下拉用**字符串 id**（`Md3Select` 是字符串模型）；参考声线是 `voice:<id>` / `track:<id>`。 */
-const singTrackId = ref<string | null>(null);
-const singRef = ref<string>("");
-const singSteps = ref(32);
-/** 人声音色库（跨工程）。 */
-const voices = ref<VoiceEntry[]>([]);
-/** 参考声线的来源：工程内轨道 / 人声音色库。 */
-const refSource = ref<"track" | "voice">("track");
+
+const singing = ref<SingingStatus>({ running: false, progress: 0, message: null });
+/** 歌声合成（fp16 / fp32）：选过哪一档跨会话记住。 */
+const {
+  current: singModel,
+  id: singModelId,
+  ready: singReady,
+  downloading: singDownloading,
+  selectOptions: singModelOptions,
+} = useModelChoice("sing", () => modelsStore.catalog.filter((m) => m.feature === "sing"));
 const singBusy = computed(() => singing.value.running);
-const singDownloading = computed(() =>
-  singModel.value ? modelsStore.installing(singModel.value.id) : false,
-);
-const singProgressPct = computed(() => `${Math.round(singing.value.progress * 100)}%`);
-/** 选中模型是否就位。 */
-const singReady = computed(() => singModel.value?.installed ?? false);
-/** 下拉选项：模型名 + 「已下载 / 需下载 · 体积」。 */
-const singModelOptions = computed(() =>
-  singModels.value.map((m) => ({
-    id: m.id,
-    label: modelName(m),
-    hint: m.installed
-      ? i18n.t("ai.modelReady")
-      : i18n.t("ai.modelNeedsDownload", { size: humanSize(m.approx_bytes) }),
-  })),
-);
-const singTrack = computed(
-  () => midiTracks.value.find((t) => String(t.id) === singTrackId.value) ?? midiTracks.value[0] ?? null,
-);
-const singOptions = computed(() =>
-  midiTracks.value.map((t) => ({ id: String(t.id), label: t.name })),
-);
-const sourceOptions = computed(() => [
-  { id: "track", label: i18n.t("ai.refSourceTrack") },
-  { id: "voice", label: i18n.t("ai.refSourceVoice") },
-]);
-const sourceChoice = computed({
-  get: () => refSource.value,
-  set: (v: string) => {
-    refSource.value = v === "voice" ? "voice" : "track";
-    // 换来源时立刻落到该来源的第一条，避免下拉显示空值。
-    singRef.value =
-      refSource.value === "voice"
-        ? (voices.value[0] ? `voice:${voices.value[0].id}` : "")
-        : (audioTracks.value[0] ? `track:${audioTracks.value[0].id}` : "");
-  },
-});
 
-/** 当前来源下可选的参考（轨道 / 音色库）。 */
-const refOptions = computed(() =>
-  refSource.value === "voice"
-    ? voices.value.map((v) => ({
-        id: `voice:${v.id}`,
-        label: v.name,
-        hint: `${Math.round(v.seconds)}s${v.description ? ` · ${v.description}` : ""}`,
-      }))
-    : audioTracks.value.map((t) => ({ id: `track:${t.id}`, label: t.name })),
-);
-const singRefVoiceId = computed(() =>
-  singRef.value.startsWith("voice:") ? singRef.value.slice("voice:".length) : null,
-);
-const singRefTrackId = computed(() =>
-  singRef.value.startsWith("track:") ? Number(singRef.value.slice("track:".length)) : null,
-);
-/** 当前选中的音色库条目。 */
-const singVoice = computed(() =>
-  voices.value.find((v) => v.id === singRefVoiceId.value) ?? null,
-);
-/** 有可用的参考声线（选中的那条还在）。 */
-const hasTone = computed(() => refOptions.value.some((o) => o.id === singRef.value));
-
-const stepOptions = [
-  { id: "16", label: "16" },
-  { id: "24", label: "24" },
-  { id: "32", label: "32" },
-  { id: "48", label: "48" },
-];
-const stepChoice = computed({
-  get: () => String(singSteps.value),
-  set: (v: string) => {
-    singSteps.value = Number(v);
-  },
-});
-
-// ---- 存进 / 移出人声音色库 ----
-const voiceSaveOpen = ref(false);
-const voiceDraftName = ref("");
-/** 正在导入 / 保存人声（解码 + FFT 挑段，几秒的活；别让按钮看起来没反应）。 */
-const voiceBusy = ref(false);
-/** 待保存的来源：工程内轨道，或一个刚选的音频文件。 */
-const voiceSource = ref<{ track?: number; path?: string } | null>(null);
-
-async function refreshVoices(): Promise<void> {
-  try {
-    voices.value = await voiceList();
-  } catch {
-    voices.value = [];
-  }
-}
-
-/** 把当前选中的工程内轨道存成音色（默认用轨道名）。 */
-function beginSaveVoice(): void {
-  if (refSource.value !== "track") return;
-  const track = audioTracks.value.find((t) => t.id === singRefTrackId.value);
-  voiceSource.value = track ? { track: track.id } : null;
-  voiceDraftName.value = track?.name ?? i18n.t("ai.voiceDefaultName");
-  voiceSaveOpen.value = true;
-}
-
-async function confirmSaveVoice(): Promise<void> {
-  const source = voiceSource.value;
-  const name = voiceDraftName.value.trim();
-  if (!source || !name) return;
-  if (voiceBusy.value) return;
-  voiceBusy.value = true;
-  try {
-    const entry = await voiceSave({
-      track: source.track ?? null,
-      path: source.path ?? null,
-      name,
-    });
-    await refreshVoices();
-    refSource.value = "voice";
-    singRef.value = `voice:${entry.id}`;
-    voiceSaveOpen.value = false;
-    voiceSource.value = null;
-    layout.notify(i18n.t("ai.voiceSaved", { name: entry.name }));
-  } catch (err) {
-    layout.notify(String(err));
-  } finally {
-    voiceBusy.value = false;
-  }
-}
-
-/** 打开侧边栏的「音色库」：人声和乐器在同一个库里，只靠标签区分。 */
-function openVoiceLibrary(): void {
-  soundMemories.kind = "voice";
-  layout.openTab("sounds");
-}
-
-/** 从音频文件直接存一条人声音色（与「存入音色库」互补：一个从文件、一个从工程轨道）。 */
-async function importVoice(): Promise<void> {
-  if (singBusy.value || voiceBusy.value) return;
-  try {
-    const path = await pickAudioToOpen();
-    if (!path) return;
-    const stem = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "";
-    voiceBusy.value = true;
-    const entry = await voiceSave({ path, name: stem || i18n.t("ai.voiceDefaultName") });
-    await refreshVoices();
-    refSource.value = "voice";
-    singRef.value = `voice:${entry.id}`;
-    layout.notify(i18n.t("ai.voiceSaved", { name: entry.name }));
-  } catch (err) {
-    layout.notify(String(err));
-  } finally {
-    voiceBusy.value = false;
-  }
-}
-
-/** 跳到钢琴卷帘的歌词模式，并把当前 MIDI 片段选中。 */
-function openLyricsEditor(): void {
-  const t = singTrack.value;
-  if (!t) return;
-  const clip = t.clips.find((c) => !c.audio && (c.notes?.length ?? 0) > 0);
-  selection.selectTrack(t.id);
-  if (clip) selection.selectClip(t.id, clip.id);
-  layout.setTool("lyric");
-  void router.push("/edit");
-}
-
-/** 选中轨变化后把 MIDI 轨与参考声线的默认值收敛到合法值。 */
-watch(
-  () =>
-    [
-      midiTracks.value.map((t) => t.id).join(","),
-      audioTracks.value.map((t) => t.id).join(","),
-      voices.value.map((v) => v.id).join(","),
-      selection.trackId,
-    ].join("|"),
-  () => {
-    if (!midiTracks.value.some((t) => String(t.id) === singTrackId.value)) {
-      const selected = midiTracks.value.find((t) => t.id === selection.trackId);
-      singTrackId.value = String((selected ?? midiTracks.value[0])?.id ?? "") || null;
-    }
-    // 所选来源下没有可选条目时，自动切到另一边（用户可能刚导入第一条人声）。
-    if (refSource.value === "voice" && voices.value.length === 0 && audioTracks.value.length > 0) {
-      refSource.value = "track";
-    } else if (
-      refSource.value === "track" &&
-      audioTracks.value.length === 0 &&
-      voices.value.length > 0
-    ) {
-      refSource.value = "voice";
-    }
-    if (!hasTone.value) {
-      singRef.value = refOptions.value[0]?.id ?? "";
-    }
-  },
-  { immediate: true },
-);
-
-/** 点「生成」：模型缺就弹确认框（下载后跳到管理器），否则直接渲染。 */
-async function runSinging(): Promise<void> {
-  const t = singTrack.value;
-  if (!t || singBusy.value) return;
-  if (!singReady.value) {
-    if (!singModel.value) return;
-    pendingModel.value = singModel.value;
+/** 点「开始」：模型没下就先问下载；没有清单条目也先进页（页里能直接去下载）。 */
+function startSinging(): void {
+  const model = singModel.value;
+  if (model && !model.installed) {
+    pendingModel.value = model;
     promptOpen.value = true;
     return;
   }
-  if (!hasTone.value) {
-    layout.notify(i18n.t("ai.singingNeedsTone"));
-    return;
-  }
-  try {
-    await singingRender({
-      track: t.id,
-      reference_voice: singRefVoiceId.value,
-      reference_track: singRefTrackId.value,
-      model: singModel.value?.id ?? null,
-      steps: singSteps.value,
-      seed: 0,
-    });
-  } catch (err) {
-    layout.notify(String(err));
-  }
+  aiPage.value = "singing";
 }
 
 async function stopSinging(): Promise<void> {
@@ -483,6 +479,35 @@ async function stopSinging(): Promise<void> {
   }
 }
 
+const svc = ref<SvcStatus>({ running: false, progress: 0, message: null });
+/** 音色替换（fp16_hq / fp32）：选过哪一档跨会话记住。 */
+const {
+  current: svcModel,
+  id: svcModelId,
+  ready: svcReady,
+  downloading: svcDownloading,
+  selectOptions: svcModelOptions,
+} = useModelChoice("voice_swap", () => modelsStore.catalog.filter((m) => m.feature === "voice_swap"));
+const svcBusy = computed(() => svc.value.running);
+
+/** 点「开始」：同歌声合成，进音色替换页。 */
+function startSvc(): void {
+  const model = svcModel.value;
+  if (model && !model.installed) {
+    pendingModel.value = model;
+    promptOpen.value = true;
+    return;
+  }
+  aiPage.value = "svc";
+}
+
+async function stopSvc(): Promise<void> {
+  try {
+    await svcCancel();
+  } catch {
+    // 状态事件会纠正。
+  }
+}
 
 // ---- 节拍检测：只依赖一个模型（Beat This! final0），缺权重时同样先问再下载 ----
 /** 清单里节拍检测的模型（`feature = detect_tempo`）。 */
@@ -514,23 +539,11 @@ async function runTempo(): Promise<void> {
   }
 }
 
-// 分离模型就位情况变化后：默认选中「已下载」的那个（都没下载就退回第一个），并刷新标签。
-// 同时覆盖节拍检测的模型（任一模型下载完成后都要刷新 AI 模型可用状态）。
+// 任一模型下载完成后刷新「哪些能力已经能走真模型」的标签。
+// 注意：**不在这里改用户选的档**——选择归用户，只有清单里彻底没有那一档时才回落。
 watch(
   () => modelsStore.catalog.map((m) => `${m.id}:${m.installed}`).join(","),
   () => {
-    const singing = singModels.value;
-    const currentSing = singing.find((m) => m.id === singModelId.value);
-    // 选中的已就位就留着；否则优先跟着已下载的那个，都没有再退回第一个。
-    if (!currentSing?.installed && singing.length > 0) {
-      singModelId.value = (singing.find((m) => m.installed) ?? singing[0])!.id;
-    }
-    const list = separateModels.value;
-    const current = list.find((m) => m.id === sepModelId.value);
-    // 选中的已就位就留着；否则优先跟着已下载的那个，都没有再退回第一个。
-    if (!current?.installed && list.length > 0) {
-      sepModelId.value = (list.find((m) => m.installed) ?? list[0])!.id;
-    }
     void aiModels()
       .then((m) => (models.value = m))
       .catch(() => {});
@@ -587,39 +600,91 @@ onMounted(async () => {
   models.value = await aiModels().catch(() => models.value);
   unlisten = await onAiEvent((s) => (ai.value = s));
   singing.value = await singingStatus().catch(() => singing.value);
-  await refreshVoices();
-  // 从音色库点「用作参考」过来：直接落在刚选的那条人声上（只消费一次）。
-  const picked = soundMemories.consumeVoicePick();
-  if (picked) {
-    refSource.value = "voice";
-    singRef.value = `voice:${picked}`;
-  }
   stopSingingEvent = await onSingingEvent((s) => (singing.value = s));
+  svc.value = await svcStatus().catch(() => svc.value);
+  stopSvcEvent = await onSvcEvent((s) => (svc.value = s));
   // 分离卡片的「未安装 → 下载」需要知道模型清单与下载进度。
   void modelsStore.load();
   stopModel = modelsStore.watchProgress();
+  // 运行后端（与设置页同一套）+ YuE2 的默认权重档。
+  void loadBackendInfo();
+  // audio.cpp 引擎的后端包：AI 面板里的选择器和设置页读同一个 store。
+  // 这里必须自己拉一次——选择器在清单为空时仍会渲染，但不能指望它替父组件加载。
+  void runtimes.load();
+  void modelsStore.load();
+  // YuE2：引擎状态 + 任务状态（写歌卡片的徽标 / 进度都靠它）。
+  void yue.load();
+  stopYueEvent = yue.watch();
 });
 onUnmounted(() => {
   unlisten?.();
   stopModel?.();
   stopSingingEvent?.();
+  stopSvcEvent?.();
+  stopYueEvent?.();
 });
 
 // 合成跑完时把摘要 / 错误作为通知弹一次。
 watch(
   () => singing.value.running,
   (running, wasRunning) => {
-    if (wasRunning && !running && singing.value.message) layout.notify(singing.value.message);
+    if (wasRunning && !running && singing.value.message && !inAiPage.value) {
+      layout.notify(singing.value.message);
+    }
+  },
+);
+
+// 音色替换跑完时同样只弹一次通知。
+watch(
+  () => svc.value.running,
+  (running, wasRunning) => {
+    if (wasRunning && !running && svc.value.message && !inAiPage.value) {
+      layout.notify(svc.value.message);
+    }
+  },
+);
+
+// YuE2 写歌跑完 / 失败时弹一次通知（音频轨已经进工程了）。
+watch(
+  () => yue.job.state,
+  (state, before) => {
+    if (before !== "running") return;
+    if (state === "done") {
+      if (yue.job.message && !inAiPage.value) layout.notify(yue.job.message);
+      void yue.load();
+    } else if (state === "failed" && yue.job.message && !inAiPage.value) {
+      layout.notify(yue.job.message);
+    }
   },
 );
 </script>
 
 <template>
   <div class="pane">
+    <!-- 三个子页占满侧栏（从卡片进来，左上角返回到列表） -->
+    <AiYuePage v-if="aiPage === 'yue'" @back="aiPage = null" />
+    <AiSingingPage v-else-if="aiPage === 'singing'" @back="aiPage = null" />
+    <AiSvcPage v-else-if="aiPage === 'svc'" @back="aiPage = null" />
+
+    <template v-else>
+    <!-- 顶部标签：全部 / 生成 / 转换（全部里用分隔标题分组） -->
+    <div class="ai-tabs" role="tablist" :aria-label="i18n.t('ai.tabLabel')">
+      <button
+        v-for="t in AI_TABS"
+        :key="t"
+        class="ai-tab"
+        :class="{ on: aiTab === t }"
+        role="tab"
+        :aria-selected="aiTab === t"
+        @click="aiTab = t"
+      >
+        {{ aiTabLabel(t) }}
+      </button>
+    </div>
     <ul class="list">
       <!-- MCP 服务器：接入地址并入同一个容器 -->
       <!-- 写歌智能体：对话式编曲入口 -->
-      <li class="item">
+      <li class="item" v-if="aiTab === 'all'" :style="{ order: 10 }">
         <div class="item-row">
           <div class="item-main">
             <span class="item-name">{{ i18n.t("panes.agent") }}</span>
@@ -629,7 +694,39 @@ watch(
         </div>
       </li>
 
-      <li class="item">
+      <!-- YuE2 本地写歌：引擎 + 一次生成（表单在模态框里，条目只留入口与状态） -->
+      <li
+        class="item"
+        v-if="aiTab !== 'convert'"
+        :style="{ order: 50 }"
+        :class="{ busy: yue.busy }"
+      >
+        <div class="item-row">
+          <div class="item-main">
+            <span class="item-name">
+              {{ i18n.t("ai.yueTitle") }}
+              <span class="badge" :class="{ on: yue.ready }">{{ yueBadge }}</span>
+            </span>
+            <span class="item-note">{{ yueStatusLine }}</span>
+          </div>
+        </div>
+        <div class="item-row">
+          <Md3Select
+            v-model="yueDraftModel"
+            class="model-select"
+            :options="yueModelOptions"
+            :label="i18n.t('ai.yueModel')"
+          />
+          <button class="run-btn" :disabled="yue.starting" @click="startYue">
+            {{ chosenYueModel?.installed ? i18n.t("ai.yueOpen") : i18n.t("ai.yueDownloadAndWrite") }}
+          </button>
+        </div>
+        <div v-if="yue.busy" class="progress">
+          <div class="progress-fill indeterminate" />
+        </div>
+      </li>
+
+      <li class="item" v-if="aiTab === 'all'" :style="{ order: 20 }">
         <div class="item-row">
           <div class="item-main">
             <span class="item-name">{{ i18n.t("ai.mcpServer") }}</span>
@@ -660,7 +757,7 @@ watch(
       </li>
 
       <!-- 命令行与 Skills：入口，跳到「设置 → 命令行」 -->
-      <li class="item">
+      <li class="item" v-if="aiTab === 'all'" :style="{ order: 30 }">
         <div class="item-row">
           <div class="item-main">
             <span class="item-name">{{ i18n.t("ai.cli") }}</span>
@@ -673,8 +770,44 @@ watch(
         </div>
       </li>
 
+      <!-- 运行后端：与设置页同一套；换后端 = 换进程里的运行时，要重启 -->
+      <li class="item" v-if="aiTab === 'all'" :style="{ order: 40 }">
+        <div class="item-row">
+          <div class="item-main">
+            <span class="item-name">{{ i18n.t("ai.backend") }}</span>
+            <span class="item-note">{{ backendNote }}</span>
+          </div>
+        </div>
+        <div class="item-row">
+          <Md3Segmented
+            :model-value="backend?.preference ?? ''"
+            :options="backendSegOptions"
+            size="sm"
+            :aria-label="i18n.t('ai.backend')"
+            @update:model-value="onBackendPick"
+          />
+        </div>
+        <div class="item-row" v-if="backendWarning">
+          <span class="item-note warn">{{ backendWarning }}</span>
+        </div>
+      </li>
+
+      <!-- audio.cpp 引擎后端：与 ONNX Runtime 那套相互独立；切换只重启引擎，不用重启应用 -->
+      <li class="item" v-if="aiTab === 'all'" :style="{ order: 41 }">
+        <EngineBackendPicker compact />
+      </li>
+
+      <li class="ai-sep sep-generate" v-if="aiTab === 'all'">
+        {{ i18n.t("ai.tab.generate") }}
+      </li>
+
       <!-- 音频转 MIDI：只要一个按钮（处理中变成「停止」） -->
-      <li class="item" :class="{ busy: busy(KIND_MIDI) }">
+      <li
+        class="item"
+        v-if="aiTab !== 'generate'"
+        :style="{ order: 100 }"
+        :class="{ busy: busy(KIND_MIDI) }"
+      >
         <div class="item-row">
           <div class="item-main">
             <span class="item-name">
@@ -694,7 +827,12 @@ watch(
       </li>
 
       <!-- 人声降噪 / 去混响：LocalVQE（16 kHz 语音模型） -->
-      <li class="item" :class="{ busy: busy(KIND_VOICE) }">
+      <li
+        class="item"
+        v-if="aiTab !== 'generate'"
+        :style="{ order: 90 }"
+        :class="{ busy: busy(KIND_VOICE) }"
+      >
         <div class="item-row">
           <div class="item-main">
             <span class="item-name">
@@ -721,7 +859,16 @@ watch(
       </li>
 
       <!-- 音源分离：HTDemucs 模型（可选 4 分轨 / 6 分轨；缺权重时先问再下载，无内置兜底） -->
-      <li class="item" :class="{ busy: busy(KIND_SEPARATE) || sepDownloading }">
+      <li class="ai-sep sep-convert" v-if="aiTab === 'all'">
+        {{ i18n.t("ai.tab.convert") }}
+      </li>
+
+      <li
+        class="item"
+        v-if="aiTab !== 'generate'"
+        :style="{ order: 80 }"
+        :class="{ busy: busy(KIND_SEPARATE) || sepDownloading }"
+      >
         <div class="item-row">
           <div class="item-main">
             <span class="item-name">
@@ -780,7 +927,12 @@ watch(
       </li>
 
       <!-- 节拍检测：Beat This!（一个全局 BPM + 拍号，并把片段首重拍对齐到小节线） -->
-      <li class="item" :class="{ busy: busy(KIND_TEMPO) || tempoDownloading }">
+      <li
+        class="item"
+        v-if="aiTab !== 'generate'"
+        :style="{ order: 110 }"
+        :class="{ busy: busy(KIND_TEMPO) || tempoDownloading }"
+      >
         <div class="item-row">
           <div class="item-main">
             <span class="item-name">
@@ -830,8 +982,13 @@ watch(
         </div>
       </li>
 
-      <!-- 歌声合成：SoulX-Singer 的 9 张 ONNX 图（MIDI + 歌词 + 参考声线 → 新音频轨） -->
-      <li class="item" :class="{ busy: singBusy || singDownloading }">
+      <!-- 歌声合成：参数在独立页里，列表只留「选模型 + 开始」 -->
+      <li
+        class="item"
+        v-if="aiTab !== 'convert'"
+        :style="{ order: 60 }"
+        :class="{ busy: singBusy || singDownloading }"
+      >
         <div class="item-row">
           <div class="item-main">
             <span class="item-name">
@@ -854,134 +1011,25 @@ watch(
             <span v-if="!midiTracks.length" class="item-hint">
               {{ i18n.t("ai.singingNeedsMidi") }}
             </span>
-            <span v-else-if="!audioTracks.length" class="item-hint">
-              {{ i18n.t("ai.singingNeedsTone") }}
-            </span>
-            <span v-else class="item-hint">{{ i18n.t("ai.singingToneHint") }}</span>
           </div>
-
+        </div>
+        <div class="item-row">
+          <Md3Select
+            v-model="singModelId"
+            class="model-select"
+            :options="singModelOptions"
+            :label="i18n.t('ai.singingModel')"
+          />
           <button v-if="singDownloading" class="run-btn" @click="cancelModelDownload">
             {{ i18n.t("ai.stop") }}
           </button>
           <button v-else-if="singBusy" class="run-btn" @click="stopSinging">
             {{ i18n.t("ai.stop") }}
           </button>
-          <button v-else class="run-btn" :disabled="!singTrack || !hasTone" @click="runSinging">
+          <button v-else class="run-btn" @click="startSinging">
             {{ singReady ? i18n.t("ai.runSinging") : i18n.t("ai.downloadAndSing") }}
           </button>
         </div>
-
-        <!-- 输入：MIDI 轨 / 歌词入口 / 参考声线 / 步数 -->
-        <div class="param-field">
-          <span class="param-name">{{ i18n.t("ai.singingTrack") }}</span>
-          <Md3Select
-            v-model="singTrackId"
-            :options="singOptions"
-            :label="i18n.t('ai.singingTrack')"
-            :empty="i18n.t('ai.singingNeedsMidi')"
-            :disabled="singBusy"
-          />
-        </div>
-
-        <!-- 歌词在钢琴卷帘里逐音填（这里只放入口，不再重复一个整串歌词框） -->
-        <div class="param-field">
-          <span class="param-name">{{ i18n.t("ai.lyrics") }}</span>
-          <span class="item-hint lyric-hint">{{ i18n.t("ai.lyricsInEditor") }}</span>
-          <button
-            class="iface-btn"
-            :disabled="!singTrack || singBusy"
-            @click="openLyricsEditor"
-          >
-            {{ i18n.t("ai.goFillLyrics") }}
-          </button>
-        </div>
-
-        <!-- 参考声线：先选来源（工程轨道 / 音色库），再选具体那条 -->
-        <div class="param-field">
-          <span class="param-name">{{ i18n.t("ai.refSource") }}</span>
-          <Md3Select
-            v-model="sourceChoice"
-            :options="sourceOptions"
-            :label="i18n.t('ai.refSource')"
-            :disabled="singBusy"
-          />
-        </div>
-        <div class="param-field">
-          <span class="param-name">{{ i18n.t("ai.singingTone") }}</span>
-          <Md3Select
-            v-model="singRef"
-            :options="refOptions"
-            :label="i18n.t('ai.singingTone')"
-            :empty="
-              refSource === 'voice' ? i18n.t('ai.voiceLibraryEmpty') : i18n.t('ai.singingNeedsTone')
-            "
-            :disabled="singBusy"
-          />
-        </div>
-
-        <div class="tone-actions">
-          <span class="item-hint">
-            <template v-if="refSource === 'track'">
-              {{ i18n.t("ai.voiceSaveHint") }}
-            </template>
-            <template v-else-if="singVoice">
-              {{ i18n.t("ai.voiceFromLibrary", { seconds: Math.round(singVoice.seconds) }) }}
-            </template>
-            <template v-else>{{ i18n.t("ai.voiceLibraryEmpty") }}</template>
-          </span>
-          <div class="tone-buttons">
-            <button
-              v-if="refSource === 'track'"
-              class="iface-btn"
-              :disabled="singBusy || voiceBusy || !singRefTrackId"
-              @click="beginSaveVoice"
-            >
-              {{ i18n.t("ai.voiceSave") }}
-            </button>
-            <button class="iface-btn" :disabled="singBusy || voiceBusy" @click="importVoice">
-              {{ voiceBusy ? i18n.t("ai.voiceImporting") : i18n.t("ai.voiceImport") }}
-            </button>
-            <button class="iface-btn" :disabled="singBusy" @click="openVoiceLibrary">
-              {{ i18n.t("ai.manageVoices") }}
-            </button>
-          </div>
-        </div>
-
-        <!-- 存进音色库：内联命名，不弹窗 -->
-        <div v-if="voiceSaveOpen" class="param-field">
-          <span class="param-name">{{ i18n.t("ai.voiceName") }}</span>
-          <input
-            v-model="voiceDraftName"
-            class="voice-name"
-            type="text"
-            maxlength="60"
-            spellcheck="false"
-            :placeholder="i18n.t('ai.voiceDefaultName')"
-            @keydown.enter.prevent="confirmSaveVoice"
-          />
-          <button class="iface-btn" @click="confirmSaveVoice">{{ i18n.t("common.save") }}</button>
-          <button class="iface-btn" @click="voiceSaveOpen = false">{{ i18n.t("common.cancel") }}</button>
-        </div>
-        <div class="param-field">
-          <span class="param-name">{{ i18n.t("ai.singingModel") }}</span>
-          <Md3Select
-            v-model="singModelId"
-            :options="singModelOptions"
-            :label="i18n.t('ai.singingModel')"
-            :disabled="singBusy"
-          />
-        </div>
-        <div class="param-field">
-          <span class="param-name">{{ i18n.t("ai.steps") }}</span>
-          <Md3Select
-            v-model="stepChoice"
-            :options="stepOptions"
-            :label="i18n.t('ai.steps')"
-            :disabled="singBusy"
-          />
-        </div>
-
-        <!-- 进度条：模型下载 或 合成，贴在条目下边缘 -->
         <div v-if="singDownloading" class="progress">
           <div
             class="progress-fill"
@@ -990,11 +1038,71 @@ watch(
           />
         </div>
         <div v-else-if="singBusy" class="progress">
-          <div class="progress-fill" :style="{ width: singProgressPct }" />
+          <div class="progress-fill indeterminate" />
         </div>
       </li>
 
+      <!-- 音色替换：同上，参数在独立页里 -->
+      <li
+        class="item"
+        v-if="aiTab !== 'convert'"
+        :style="{ order: 70 }"
+        :class="{ busy: svcBusy || svcDownloading }"
+      >
+        <div class="item-row">
+          <div class="item-main">
+            <span class="item-name">
+              {{ i18n.t("ai.voiceSwap") }}
+              <span class="badge" :class="{ on: svcReady }">
+                {{ i18n.t(svcReady ? "ai.backendModel" : "ai.modelMissing") }}
+              </span>
+            </span>
+            <span class="item-note">
+              {{
+                svcDownloading
+                  ? i18n.t("ai.downloadingModel")
+                  : svcBusy
+                    ? i18n.t("ai.voiceSwapBusy")
+                    : svcReady
+                      ? i18n.t("ai.voiceSwapNote")
+                      : i18n.t("ai.voiceSwapNeedsModel")
+              }}
+            </span>
+            <span v-if="!audioTracks.length" class="item-hint">
+              {{ i18n.t("ai.voiceSwapNeedsAudio") }}
+            </span>
+          </div>
+        </div>
+        <div class="item-row">
+          <Md3Select
+            v-model="svcModelId"
+            class="model-select"
+            :options="svcModelOptions"
+            :label="i18n.t('ai.singingModel')"
+          />
+          <button v-if="svcDownloading" class="run-btn" @click="cancelModelDownload">
+            {{ i18n.t("ai.stop") }}
+          </button>
+          <button v-else-if="svcBusy" class="run-btn" @click="stopSvc">
+            {{ i18n.t("ai.stop") }}
+          </button>
+          <button v-else class="run-btn" @click="startSvc">
+            {{ svcReady ? i18n.t("ai.runVoiceSwap") : i18n.t("ai.downloadAndSwap") }}
+          </button>
+        </div>
+        <div v-if="svcDownloading" class="progress">
+          <div
+            class="progress-fill"
+            :class="{ indeterminate: modelsStore.progressPct === null }"
+            :style="modelsStore.progressPct === null ? undefined : { width: `${modelsStore.progressPct}%` }"
+          />
+        </div>
+        <div v-else-if="svcBusy" class="progress">
+          <div class="progress-fill indeterminate" />
+        </div>
+      </li>
     </ul>
+    </template>
 
     <!-- 「是否下载该模型」用应用内 MD3 模态框（不用系统原生框）。 -->
     <ConfirmDialog
@@ -1003,6 +1111,16 @@ watch(
       :message="downloadPromptMessage"
       :confirm-label="i18n.t('dialog.downloadModelOk')"
       @confirm="confirmDownloadModel"
+    />
+
+
+    <!-- 换运行时 = 换进程里的 dylib：重启才生效 -->
+    <ConfirmDialog
+      v-model:open="backendRestart"
+      :title="i18n.t('ai.backendRestartTitle')"
+      :message="backendRestartBody"
+      :confirm-label="i18n.t('ai.backendRestartNow')"
+      @confirm="restartApp()"
     />
   </div>
 </template>
@@ -1056,6 +1174,10 @@ watch(
 .item-note {
   font-size: 11px;
   color: rgb(var(--md-on-surface-variant));
+}
+/* 警告：后端看着能用、实际会回落 CPU（CUDA 组件缺失 / provider 没注册成功）。 */
+.item-note.warn {
+  color: rgb(var(--md-error));
 }
 /* 适用范围（比说明更弱一档）：常驻显示，不随任务状态变化。 */
 .item-hint {
@@ -1292,5 +1414,125 @@ watch(
 .iface-btn:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 2px;
+}
+
+/* ---- 顶部标签 / 分组标题 / 运行后端 ---- */
+.ai-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 10px;
+}
+.ai-tab {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--md-on-surface-variant));
+  font-size: 12px;
+  cursor: pointer;
+}
+.ai-tab:hover {
+  background-color: rgb(var(--md-on-surface-variant) / var(--md-state-hover-alpha));
+}
+.ai-tab.on {
+  background-color: rgb(var(--md-primary) / 0.16);
+  color: rgb(var(--md-primary));
+  font-weight: 500;
+}
+.ai-sep {
+  margin: 6px 0 0;
+  padding: 0 2px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: rgb(var(--md-on-surface-variant) / 0.9);
+}
+.ai-sep.sep-generate {
+  order: 45;
+}
+.ai-sep.sep-convert {
+  order: 75;
+}
+.ai-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background-color: rgb(var(--md-surface-container-highest));
+}
+.ai-seg-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--md-on-surface-variant));
+  font-size: 11px;
+  cursor: pointer;
+}
+.ai-seg-btn.on {
+  background-color: rgb(var(--md-primary));
+  color: rgb(var(--md-on-primary));
+}
+.ai-seg-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.model-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.yue-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 22px 14px;
+}
+.yue-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.yue-input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.6);
+  border-radius: 10px;
+  background-color: rgb(var(--md-surface-container-highest) / 0.6);
+  color: rgb(var(--md-on-surface));
+  font-size: 13px;
+  font-family: inherit;
+}
+.yue-input:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 1px;
+}
+.yue-lyrics {
+  min-height: 150px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.yue-row {
+  display: flex;
+  gap: 10px;
+}
+.yue-row .yue-field {
+  flex: 1 1 0;
+}
+.yue-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgb(var(--md-on-surface-variant));
+  word-break: break-word;
+}
+.yue-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 18px 16px;
 }
 </style>

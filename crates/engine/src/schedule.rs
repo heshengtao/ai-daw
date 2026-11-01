@@ -102,6 +102,10 @@ pub struct ScheduledSend {
     pub target_index: usize,
     /// 线性发送增益。
     pub gain: f32,
+    /// 是否取推子**前**的信号（效果链之后、推子之前）。
+    pub pre: bool,
+    /// 这一路是否被哑掉。
+    pub mute: bool,
 }
 
 /// 一条已定绝对帧的 MIDI 事件。
@@ -199,6 +203,11 @@ pub struct ScheduledTrack {
     pub lanes: Vec<ScheduledLane>,
     /// 发送（目标已解析成轨道下标）。
     pub sends: Vec<ScheduledSend>,
+    /// 每个效果器的侧链来源（轨道下标）；与 `effects` **一一对应**，`None` = 不接。
+    ///
+    /// 单独一条并行数组而不是塞进 `PluginInstance`：`PluginInstance` 里存的是 `TrackId`，
+    /// 音频线程每次都要查表；这里在控制侧一次解析成下标，播放时 O(1)。
+    pub effect_keys: Vec<Option<usize>>,
 }
 
 /// 整首工程的定帧事件表：离线渲染与实时播放共用。
@@ -225,6 +234,10 @@ pub struct ScheduledEvents {
     pub order: Vec<usize>,
     /// 速度表：自动化按「拍」求值时，播放器用它把当前帧位置换算成拍。
     pub tempo_map: TempoMap,
+    /// 主总线插入链（总加之后、master 推子之前）。
+    pub master_effects: Vec<PluginInstance>,
+    /// 主总线每个效果器的侧链来源（轨道下标）；与 `master_effects` 一一对应。
+    pub master_effect_keys: Vec<Option<usize>>,
 }
 
 /// 由发送边算出一个「来源在前、目标在后」的处理顺序。
@@ -322,7 +335,9 @@ impl ScheduledEvents {
             .collect();
 
         let mut tracks = Vec::with_capacity(project.tracks.len());
-        let mut edges: Vec<Vec<usize>> = Vec::with_capacity(project.tracks.len());
+        // 一次按轨道数铺好：侧链的边是**从后往前**指的（源轨可能在目标轨之后），
+        // 边表必须先有全部槽位，否则索引会越界。
+        let mut edges: Vec<Vec<usize>> = vec![Vec::new(); project.tracks.len()];
         for track in &project.tracks {
             let mut events = Vec::new();
             let mut pitch_spans = Vec::new();
@@ -639,10 +654,28 @@ impl ScheduledEvents {
                     (target_index != self_index).then_some(ScheduledSend {
                         target_index,
                         gain: db_to_linear(s.gain_db),
+                        pre: matches!(s.mode, crate::model::SendMode::Pre),
+                        mute: s.mute,
                     })
                 })
                 .collect();
-            edges.push(sends.iter().map(|s| s.target_index).collect());
+            edges[self_index] = sends.iter().map(|s| s.target_index).collect();
+            // 侧链：来源解析成下标；自己给自己、指向不存在的轨道一律当「不接」。
+            // 同时给路由图补一条「源 → 目标」的边：源轨必须先算完，键缓冲里才有本块的信号。
+            let effect_keys: Vec<Option<usize>> = track
+                .effects
+                .iter()
+                .map(|fx| {
+                    let source = fx.sidechain?;
+                    let source_index = *index_by_id.get(&source.track)?;
+                    (source_index != self_index).then_some(source_index)
+                })
+                .collect();
+            for source in effect_keys.iter().flatten() {
+                if !edges[*source].contains(&self_index) {
+                    edges[*source].push(self_index);
+                }
+            }
             tracks.push(ScheduledTrack {
                 track_id: track.id,
                 instrument: track.instrument.clone(),
@@ -658,10 +691,18 @@ impl ScheduledEvents {
                 audio_clips,
                 lanes,
                 sends,
+                effect_keys,
             });
         }
 
         let order = routing_order(&edges);
+
+        // 主总线的侧链：所有轨道都算完之后才轮到 master，因此不存在顺序约束，直接解析下标。
+        let master_effect_keys: Vec<Option<usize>> = project
+            .master_effects
+            .iter()
+            .map(|fx| fx.sidechain.and_then(|s| index_by_id.get(&s.track).copied()))
+            .collect();
 
         ScheduledEvents {
             tracks,
@@ -672,6 +713,8 @@ impl ScheduledEvents {
             sample_rate,
             order,
             tempo_map: map,
+            master_effects: project.master_effects.clone(),
+            master_effect_keys,
         }
     }
 }
@@ -1124,6 +1167,8 @@ mod tests {
         p.tracks[0].sends = vec![Send {
             target: TrackId(2),
             gain_db: 0.0,
+            mode: Default::default(),
+            mute: false,
         }];
         p.tracks[0].automation = vec![AutomationLane {
             param: "gain_db".into(),
@@ -1154,6 +1199,8 @@ mod tests {
         p.tracks[0].sends = vec![Send {
             target: TrackId(999),
             gain_db: 0.0,
+            mode: Default::default(),
+            mute: false,
         }];
         let s = ScheduledEvents::from_project(&p, 48_000.0);
         assert!(s.tracks[0].lanes.is_empty(), "未知参数不生成车道");
@@ -1200,6 +1247,8 @@ mod tests {
             plugin_id: "builtin.synth".into(),
             params: Default::default(),
             state: vec![],
+            enabled: true,
+            sidechain: None,
         });
         let s = ScheduledEvents::from_project(&p, 48_000.0);
         assert!(s.tracks[0]

@@ -70,6 +70,39 @@ pub trait Plugin: Send {
         Vec::new()
     }
 
+    /// 侧链（键输入）的声道数；`0` = 不支持（默认）。
+    ///
+    /// 支持时宿主会把「键来源轨道」的推子后信号按本声道数送入
+    /// [`process_with_sidechain`](Plugin::process_with_sidechain)，而**不需要**插件实现方
+    /// 自己去 fetch 任何东西。压缩器 / 门限这类插件返回 2（立体声键）。
+    fn sidechain_channels(&self) -> u8 {
+        0
+    }
+
+    /// 带侧链的块处理。默认实现忽略键信号，直接走 [`process`](Plugin::process)。
+    ///
+    /// `key` 是**只读**键信号（每个元素一个通道，长度均等于本块帧数）。宿主只在
+    /// [`sidechain_channels`](Plugin::sidechain_channels) 非 0 且工程里确实接了键来源时才传
+    /// `Some`。实时契约与 `process` 相同：不分配、不加锁。
+    fn process_with_sidechain(
+        &mut self,
+        ctx: &ProcessContext,
+        audio: &mut [&mut [f32]],
+        events: &[TimedMidiEvent],
+        key: Option<&[&[f32]]>,
+    ) {
+        let _ = key;
+        self.process(ctx, audio, events);
+    }
+
+    /// 当前增益衰减量（dB，**正数**表示压下去多少）；`None` = 不适用。
+    ///
+    /// 宿主把它写进通道电平表，所以这是「表头上的 GR 读数」。必须在音频线程调用，
+    /// 因此实现方只能返回一个已算好的数（不得现算 FFT / 分配内存）。
+    fn gain_reduction_db(&self) -> Option<f32> {
+        None
+    }
+
     /// 在**丢弃宿主之前**把音频处理停掉（默认无需处理）。
     ///
     /// 宿主重建播放器时会把实例「搬」到新播放器复用（保住插件状态与已打开的界面窗口）。

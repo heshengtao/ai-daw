@@ -270,6 +270,8 @@ mod tests {
                 plugin_id: "builtin.synth".into(),
                 params,
                 state: vec![],
+                enabled: true,
+                sidechain: None,
             }),
             effects: vec![],
             clips: vec![Clip {

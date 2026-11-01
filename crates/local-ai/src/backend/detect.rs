@@ -48,6 +48,10 @@ pub struct HardwareProfile {
     pub gpu_name: Option<String>,
     /// NVIDIA 驱动版本（有才填）。
     pub driver: Option<String>,
+    /// CUDA 计算能力（`8.9` 这种；`nvidia-smi --query-gpu=compute_cap`）。
+    ///
+    /// 用来判断能不能用 CUDA 13：CUDA 13 不再支持 Maxwell / Pascal / Volta（< 7.5）。
+    pub compute_cap: Option<String>,
 }
 
 impl HardwareProfile {
@@ -59,6 +63,7 @@ impl HardwareProfile {
             gpu: None,
             gpu_name: None,
             driver: None,
+            compute_cap: None,
         }
     }
 }
@@ -121,10 +126,10 @@ pub fn parse_macos_chip(text: &str) -> Option<String> {
     None
 }
 
-/// Linux：解析 `nvidia-smi --query-gpu=name,driver_version --format=csv,noheader,nounits`。
+/// Linux：解析 `nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv,noheader,nounits`。
 ///
-/// 形如 `NVIDIA GeForce RTX 4090, 550.54.14`（每行一张卡，取第一张）。
-pub fn parse_nvidia_smi(text: &str) -> Option<(String, Option<String>)> {
+/// 形如 `NVIDIA GeForce RTX 4090, 550.54.14, 8.9`（每行一张卡，取第一张）。
+pub fn parse_nvidia_smi(text: &str) -> Option<(String, Option<String>, Option<String>)> {
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -139,7 +144,11 @@ pub fn parse_nvidia_smi(text: &str) -> Option<(String, Option<String>)> {
             .next()
             .filter(|d| !d.is_empty() && *d != "[N/A]")
             .map(|d| d.to_string());
-        return Some((name, driver));
+        let compute_cap = parts
+            .next()
+            .filter(|c| !c.is_empty() && *c != "[N/A]")
+            .map(|c| c.to_string());
+        return Some((name, driver, compute_cap));
     }
     None
 }
@@ -205,6 +214,7 @@ pub fn detect() -> HardwareProfile {
         }
         if profile.gpu == Some(GpuVendor::Nvidia) {
             profile.driver = windows_nvidia_driver();
+            profile.compute_cap = nvidia_compute_cap();
         }
     }
 
@@ -213,14 +223,15 @@ pub fn detect() -> HardwareProfile {
         if let Some(text) = run(
             "nvidia-smi",
             &[
-                "--query-gpu=name,driver_version",
+                "--query-gpu=name,driver_version,compute_cap",
                 "--format=csv,noheader,nounits",
             ],
         ) {
-            if let Some((name, driver)) = parse_nvidia_smi(&text) {
+            if let Some((name, driver, compute_cap)) = parse_nvidia_smi(&text) {
                 profile.gpu = vendor_of_adapter(&name).or(Some(GpuVendor::Nvidia));
                 profile.gpu_name = Some(name);
                 profile.driver = driver;
+                profile.compute_cap = compute_cap;
             }
         }
     }
@@ -308,8 +319,49 @@ fn windows_adapters() -> Option<String> {
 /// Windows：读 NVIDIA 驱动版本（`DriverVersion`）。
 ///
 /// 通配条件用单引号，避免命令里再套一层双引号（PowerShell 的命令行转义容易翻车）。
+/// NVIDIA 计算能力（`8.9`）：`nvidia-smi` 不在 PATH 时返回 `None`。
+fn nvidia_compute_cap() -> Option<String> {
+    run(
+        "nvidia-smi",
+        &["--query-gpu=compute_cap", "--format=csv,noheader,nounits"],
+    )
+    .and_then(|text| {
+        text.lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && *line != "[N/A]")
+            .map(str::to_string)
+    })
+}
+
+/// Windows：从 `nvidia-smi` 取 NVIDIA 驱动版本（`610.88` 这种营销版本号）。
+///
+/// **不能直接用 WMI 的 `DriverVersion`**：那是 Windows 驱动包版本（这台机器上是
+/// `32.0.16.1088`），拿它的 major 去和 580 比会恒为假——CUDA 13 明明能跑也会被判成
+/// 「驱动太老」。优先 `nvidia-smi`（PATH 里没有时试 NVIDIA 的标准安装目录），
+/// 拿不到再退回 WMI。
+#[cfg(target_os = "windows")]
+fn nvidia_driver_from_smi() -> Option<String> {
+    const ARGS: &[&str] = &[
+        "--query-gpu=driver_version",
+        "--format=csv,noheader,nounits",
+    ];
+    let text = run("nvidia-smi", ARGS).or_else(|| {
+        run(
+            r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+            ARGS,
+        )
+    })?;
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && *line != "[N/A]")
+        .map(str::to_string)
+}
+
 #[cfg(target_os = "windows")]
 fn windows_nvidia_driver() -> Option<String> {
+    if let Some(driver) = nvidia_driver_from_smi() {
+        return Some(driver);
+    }
     let text = run(
         "powershell",
         &[
@@ -381,13 +433,16 @@ mod tests {
 
     #[test]
     fn parses_nvidia_smi_first_gpu_and_driver() {
-        let (name, driver) = parse_nvidia_smi("NVIDIA GeForce RTX 4090, 550.54.14\n").unwrap();
+        let (name, driver, compute) =
+            parse_nvidia_smi("NVIDIA GeForce RTX 4090, 550.54.14, 8.9\n").unwrap();
         assert_eq!(name, "NVIDIA GeForce RTX 4090");
         assert_eq!(driver.as_deref(), Some("550.54.14"));
+        assert_eq!(compute.as_deref(), Some("8.9"));
         // 驱动拿不到时也不能失败。
-        let (name, driver) = parse_nvidia_smi("Tesla T4, [N/A]\n").unwrap();
+        let (name, driver, compute) = parse_nvidia_smi("Tesla T4, [N/A], [N/A]\n").unwrap();
         assert_eq!(name, "Tesla T4");
         assert_eq!(driver, None);
+        assert_eq!(compute, None);
         assert!(parse_nvidia_smi("  \n").is_none());
     }
 

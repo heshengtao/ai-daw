@@ -120,6 +120,8 @@ pub struct AudioEngine {
     scope: Arc<ScopeBuffer>,
     /// 输入电平表缓冲（音频线程写、界面读），与输出 `scope` 分开。
     input_scope: Arc<ScopeBuffer>,
+    /// 通道电平表（每轨 + 主输出）；重建播放器时沿用同一张。
+    meter: Arc<ai_daw_engine::meter::MeterBank>,
 }
 
 impl AudioEngine {
@@ -152,6 +154,7 @@ impl AudioEngine {
         let status = Arc::new(SharedStatus::new());
         let scope = Arc::new(ScopeBuffer::new(SCOPE_CAPACITY));
         let input_scope = Arc::new(ScopeBuffer::new(SCOPE_CAPACITY));
+        let meter = Arc::new(ai_daw_engine::meter::MeterBank::new());
 
         let engine = AudioEngine {
             tx,
@@ -162,6 +165,7 @@ impl AudioEngine {
             status: Arc::clone(&status),
             scope: Arc::clone(&scope),
             input_scope: Arc::clone(&input_scope),
+            meter: Arc::clone(&meter),
         };
         thread::Builder::new()
             .name("ai-daw-audio".into())
@@ -177,6 +181,7 @@ impl AudioEngine {
                     editor_handles,
                     scope,
                     input_scope,
+                    meter,
                     assets,
                 )
             })
@@ -323,6 +328,11 @@ impl AudioEngine {
         out
     }
 
+    /// 通道电平表（每轨 + 主输出）。与 `scope` 一样跨重建沿用同一张。
+    pub fn meter(&self) -> Arc<ai_daw_engine::meter::MeterBank> {
+        Arc::clone(&self.meter)
+    }
+
     /// 试听一个音（合成器界面里的键盘）：不写工程、不进撤销历史、不等传输。
     pub fn audition_note(&self, track: TrackId, note: u8, velocity: u8, on: bool) {
         if self.unavailable() {
@@ -453,6 +463,38 @@ impl AudioEngine {
                         });
                     }
                 }
+                // 旁通是「仅混音」变更：只把开关推给音频线程，不重建——否则点一下开关就断音。
+                Event::EffectEnabledChanged {
+                    track,
+                    index,
+                    enabled,
+                    ..
+                } => {
+                    self.queue_if_available(TransportCommand::SetEffectEnabled {
+                        track: *track,
+                        effect: *index,
+                        enabled: *enabled,
+                    });
+                }
+                // 主总线插入链的参数 / 旁通同理：就地改活实例。
+                Event::MasterEffectParamChanged {
+                    index,
+                    param,
+                    value,
+                    ..
+                } => {
+                    self.queue_if_available(TransportCommand::SetMasterEffectParam {
+                        effect: *index,
+                        param: param.clone(),
+                        value: *value,
+                    });
+                }
+                Event::MasterEffectEnabledChanged { index, enabled, .. } => {
+                    self.queue_if_available(TransportCommand::SetMasterEffectEnabled {
+                        effect: *index,
+                        enabled: *enabled,
+                    });
+                }
                 other => {
                     // 兜底：任何新增事件默认都走重建，宁可多重建也不要漏掉结构变更。
                     debug_assert!(!other.is_mix_only(), "mix-only event must be handled above");
@@ -526,6 +568,7 @@ fn start_host(
     error: &Mutex<Option<String>>,
     status: &Arc<SharedStatus>,
     scope: &Arc<ScopeBuffer>,
+    meter: &Arc<ai_daw_engine::meter::MeterBank>,
     carried: ReusableInstances,
 ) -> Option<AudioHost> {
     let started = std::time::Instant::now();
@@ -553,6 +596,7 @@ fn start_host(
         command_capacity: COMMAND_CAPACITY,
         scope: Arc::clone(scope),
         status: Arc::clone(status),
+        meter: Some(Arc::clone(meter)),
     };
     let at = std::time::Instant::now();
     let built = AudioHost::start_on(
@@ -608,6 +652,7 @@ fn rebuild(
     available: &AtomicBool,
     error: &Mutex<Option<String>>,
     scope: &Arc<ScopeBuffer>,
+    meter: &Arc<ai_daw_engine::meter::MeterBank>,
     reset_rate: bool,
     carried: ReusableInstances,
 ) -> Option<AudioHost> {
@@ -629,6 +674,7 @@ fn rebuild(
         error,
         status,
         scope,
+        meter,
         carried,
     )
 }
@@ -662,6 +708,7 @@ fn run_audio_thread(
     editor_handles: EditorHandles,
     scope: Arc<ScopeBuffer>,
     input_scope: Arc<ScopeBuffer>,
+    meter: Arc<ai_daw_engine::meter::MeterBank>,
     assets: Arc<AssetCache>,
 ) {
     /// 设备轮询间隔：够快能跟上插拔耳机，又不至于每秒多次查询 CoreAudio 太过分。
@@ -734,6 +781,7 @@ fn run_audio_thread(
                     &available,
                     &error,
                     &scope,
+                    &meter,
                     false,
                     carried,
                 );
@@ -772,6 +820,7 @@ fn run_audio_thread(
                     &available,
                     &error,
                     &scope,
+                    &meter,
                     // 工程变化不改采样率（采样率取决于设备），沿用缓存即可。
                     false,
                     carried,
@@ -805,6 +854,7 @@ fn run_audio_thread(
                     &available,
                     &error,
                     &scope,
+                    &meter,
                     true,
                     carried,
                 );
@@ -839,6 +889,7 @@ fn run_audio_thread(
                     &available,
                     &error,
                     &scope,
+                    &meter,
                     true,
                     carried,
                 );
@@ -953,6 +1004,7 @@ fn run_audio_thread(
                     &available,
                     &error,
                     &scope,
+                    &meter,
                     true,
                     carried,
                 );

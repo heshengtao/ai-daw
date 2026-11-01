@@ -398,6 +398,8 @@ mod tests {
                     plugin_id: plugin_id.into(),
                     params: Default::default(),
                     state: vec![],
+                    enabled: true,
+                    sidechain: None,
                 }),
                 effects: vec![],
                 clips: vec![],

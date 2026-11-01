@@ -18,6 +18,7 @@ use ort::session::Session;
 use ort::value::{DynTensor, Tensor, TensorElementType, ValueType};
 
 use crate::backend::session::GraphRole;
+use crate::rng::Rng;
 use crate::Progress;
 
 use super::seq::Sequence;
@@ -214,9 +215,17 @@ pub fn resolve(model: Option<&str>) -> Result<(Precision, PathBuf), String> {
             let hint = if installed.is_empty() {
                 "到「管理器 → 模型」下载".to_string()
             } else {
-                format!("到「管理器 → 模型」下载，或改用已安装的 {}", installed.join(" / "))
+                format!(
+                    "到「管理器 → 模型」下载，或改用已安装的 {}",
+                    installed.join(" / ")
+                )
             };
-            Err(format!("未安装模型 {}（{} 档）：{}", p.id(), p.label(), hint))
+            Err(format!(
+                "未安装模型 {}（{} 档）：{}",
+                p.id(),
+                p.label(),
+                hint
+            ))
         }
     }
 }
@@ -613,7 +622,10 @@ impl Runner {
                         for i in 0..n {
                             delta[i] = y1[i] - xt[i];
                         }
-                        v_prev.as_mut().expect("首步之后就有历史速度").copy_from_slice(&v);
+                        v_prev
+                            .as_mut()
+                            .expect("首步之后就有历史速度")
+                            .copy_from_slice(&v);
                     } else {
                         for i in 0..n {
                             delta[i] = v[i] * dt;
@@ -696,46 +708,6 @@ enum GraphRef {
     F0,
 }
 
-/// 可复现的噪声（SplitMix64 → 标准正态，Box-Muller）。
-struct Rng {
-    state: u64,
-    spare: Option<f32>,
-}
-
-impl Rng {
-    fn new(seed: u64) -> Self {
-        Self {
-            state: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1),
-            spare: None,
-        }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    fn uniform(&mut self) -> f32 {
-        // (0, 1]：避免 log(0)。
-        ((self.next_u64() >> 40) as f32 + 1.0) / 16_777_217.0
-    }
-
-    fn normal(&mut self) -> f32 {
-        if let Some(v) = self.spare.take() {
-            return v;
-        }
-        let u1 = self.uniform();
-        let u2 = self.uniform();
-        let r = (-2.0 * u1.ln()).sqrt();
-        let theta = std::f32::consts::TAU * u2;
-        self.spare = Some(r * theta.sin());
-        r * theta.cos()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -771,30 +743,33 @@ mod tests {
 
     #[test]
     fn model_ids_map_to_tiers() {
-        assert_eq!(Precision::from_model("soulx-singer-fp16").unwrap(), Precision::Fp16);
-        assert_eq!(Precision::from_model("soulx-singer-fp32").unwrap(), Precision::Fp32);
+        assert_eq!(
+            Precision::from_model("soulx-singer-fp16").unwrap(),
+            Precision::Fp16
+        );
+        assert_eq!(
+            Precision::from_model("soulx-singer-fp32").unwrap(),
+            Precision::Fp32
+        );
         assert_eq!(Precision::from_model(" fp32 ").unwrap(), Precision::Fp32);
-        assert!(Precision::from_model("fp64").is_err(), "未知模型要报错，不能静默降级");
-        assert!(Precision::from_model("auto").is_err(), "没有「自动」档，模型必须明确指定");
+        assert!(
+            Precision::from_model("fp64").is_err(),
+            "未知模型要报错，不能静默降级"
+        );
+        assert!(
+            Precision::from_model("auto").is_err(),
+            "没有「自动」档，模型必须明确指定"
+        );
         // 两档各自对应清单里的一条，且 id 就是目录名。
         for p in Precision::ALL {
-            assert!(crate::models::catalog::by_id(p.id()).is_some(), "{} 缺清单条目", p.label());
+            assert!(
+                crate::models::catalog::by_id(p.id()).is_some(),
+                "{} 缺清单条目",
+                p.label()
+            );
             assert_eq!(p.dir(), p.id());
         }
         // 默认档是 fp16（清单/界面的顺序也是 fp16 在前）。
         assert_eq!(Precision::ALL[0], Precision::Fp16);
-    }
-
-    #[test]
-    fn rng_is_deterministic_and_reasonably_gaussian() {
-        let mut a = Rng::new(7);
-        let mut b = Rng::new(7);
-        let xs: Vec<f32> = (0..20_000).map(|_| a.normal()).collect();
-        let ys: Vec<f32> = (0..20_000).map(|_| b.normal()).collect();
-        assert_eq!(xs, ys, "同一个种子必须给出同一段噪声");
-        let mean = xs.iter().sum::<f32>() / xs.len() as f32;
-        let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / xs.len() as f32;
-        assert!(mean.abs() < 0.05, "均值应接近 0：{mean}");
-        assert!((var - 1.0).abs() < 0.1, "方差应接近 1：{var}");
     }
 }

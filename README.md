@@ -41,7 +41,7 @@ Being small is a feature, not a compromise.
 
 - **A lightweight footprint** — no Electron, no cloud, no bundled model zoo. The macOS app is about 38 MB — for reference, mainstream DAWs such as Ableton Live, Logic Pro, and FL Studio typically install at 1–3 GB, making AI DAW **95%+ smaller**.
 - **Fast to start** — nothing heavyweight loads at boot; AI models are pulled in only when you use them.
-- **Big models on demand, never in the installer** — heavy work such as music generation is not integrated by default. **Singing voice** (SoulX-Singer, 1.4 GB) is an opt-in model in Manager → Models: download it when you want it, and it costs no disk until then.
+- **Big models on demand, never in the installer** — heavy work such as music generation is not integrated by default. **Singing voice** (SoulX-Singer, 1.4 GB) and **voice swap** (SoulX-Singer-SVC, 2.4 GB) are opt-in models in Manager → Models: download them when you want them, and they cost no disk until then.
 - **Built to be extended** — interfaces for plugging external AI models into the workflow are on the roadmap.
 
 ## Drive it from any AI harness
@@ -89,7 +89,7 @@ Balance the song, then make it loud. Channel strips give you gain, pan, sends, b
 - **Built-in effects** — dynamics, EQ, and time-based effects, ready to drop on any track
 - **Mastering chain** — loudness normalization, true-peak limiting, and stereo width
 - **Built-in synth** — oscillators, envelopes, and a filter with a live oscilloscope
-- **Export** — lossless WAV or LAME-encoded MP3, with the sample rate and bitrate you pick
+- **Export** — lossless WAV or LAME-encoded MP3 (sample rate and bitrate your pick), a standard MIDI file, or a MusicXML score
 
 <p align="center">
   <img src="./assets/screenshots/03-mix.png" width="100%" alt="The mixer: channel strips for the master bus and each track, with faders, pan and mute/solo">
@@ -117,6 +117,7 @@ The AI features are built for real sessions, not demos. Point them at a track an
 - **Voice cleanup** — LocalVQE reduces noise and reverb on vocal takes
 - **Stem separation** — HTDemucs v4 splits a track into 4 or 6 stems, ready to remix
 - **Singing voice** — a MIDI melody, lyrics and a reference voice become an editable vocal take (SoulX-Singer zero-shot timbre cloning). Lyrics can be edited per note in the piano roll (`-` slurs), and reference voices live in a **voice library** shared across projects — changing the timbre is just picking another one
+- **Voice swap** — take an existing vocal, keep its melody/lyrics/timing and replace only the timbre with a reference voice (SoulX-Singer-SVC, zero-shot). The result lands on a new track below the source and is a single undo away; separating the vocals from a full mix first keeps accompaniment out of the pitch tracker
 - **Offline by design** — no account, no API key, no uploads
 
 <p align="center">

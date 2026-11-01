@@ -94,6 +94,8 @@ pub struct AppState {
     pub ai: AiRuntime,
     /// 歌声合成任务（独立的进度 / 取消；模型是另一组权重，不该和 AI 面板抢一个槽位）。
     pub singing: crate::singing::SingingRuntime,
+    /// 音色替换任务（独立的进度 / 取消；与歌声合成是两组权重，各自有各自的模型档）。
+    pub svc: crate::svc::SvcRuntime,
 }
 
 impl AppState {
@@ -187,6 +189,7 @@ impl AppState {
             audio_started: AtomicBool::new(start_audio),
             ai: AiRuntime::new(),
             singing: crate::singing::SingingRuntime::new(),
+            svc: crate::svc::SvcRuntime::new(),
         }
     }
 

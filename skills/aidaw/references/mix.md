@@ -11,10 +11,14 @@
 | `set_master_gain` | `gain_db` | 总输出增益。 |
 | `set_sends` | `track`,`sends` | 发送列表（**整体替换**）：`[{"target":<轨道 id>,"gain_db":<dB>}]`。 |
 | `set_automation` | `track`,`param`,`points` | 自动化车道（**整体替换**）：`param` 为 `gain_db`/`pan`/`cc:<0..=127>`（MIDI 控制变化），或 `inst:<参数id>`（轨道乐器）/ `fx<i>:<参数id>`（效果链第 `i` 个，`i` 从 **0** 起）；`points` 为 `[{"beat":<拍>,"value":<值>}]`，空数组 = 删除。 |
+| `get_levels` | `points?` | 只读：读一次电平表（主输出 / 录音输入的峰值，线性与 dBFS）。主输出只在播放时有内容。 |
+| `preview_track_mix` | `track`,`gain_db?`,`pan?`,`mute?`,`solo?` | **实时预听**一轨的混音值：不写工程、不进撤销（与界面拖动推子一致）。要让改动落地仍用 `set_gain` 等。 |
 
 **要点**
 - **总线**：新建一条空轨道当总线，把源轨的 `set_sends` 指向它；总线照常去 master，
   所以「发送」是**额外复制**一份推子后信号，不是改路由。
+- **概览就能看到路由**：`get_project_overview` 现在带每条轨道的 `sends`（目标 + 增益）与
+  `automation`（参数名 + 点数）；曲线点本身用 `get_project` 取。
 - 自发送（`target` = 自身）会被丢弃；指向不存在轨道的发送会被忽略。
 - **自动化覆盖推子值**（读取模式）：某参数一旦有曲线，推子值对该参数不再生效。
 - 自动化是「仅混音」变更：拖曲线**不会**打断音频（逐块求值）。

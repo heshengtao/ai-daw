@@ -4,9 +4,9 @@
   "version": "1.6.2",
   "identifier": "com.aidaw.app",
   "build": {
-    "beforeDevCommand": "npm run build:sidecars && npm run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run fetch:registry && npm run build && npm run build:sidecars",
+    "beforeDevCommand": "npm run fetch:ort && npm run build:sidecars && npm run dev",
+    "devUrl": "http://localhost:28420",
+    "beforeBuildCommand": "npm run fetch:ort && npm run fetch:registry && npm run build && npm run build:sidecars",
     "frontendDist": "../dist"
   },
   "app": {
@@ -18,7 +18,9 @@
         "height": 900,
         "minWidth": 1000,
         "minHeight": 620,
-        "create": false
+        "create": false,
+        "visible": false,
+        "backgroundColor": "#1c1b1f"
       }
     ],
     "security": {
@@ -37,6 +39,7 @@
     ],
     "resources": {
       "resources/articulation-maps": "articulation-maps",
+      "resources/ort": "ort",
       "resources/onnx/basic-pitch-nmp.onnx": "models/basic-pitch-nmp.onnx",
       "resources/onnx/localvqe-ns.onnx": "models/localvqe-ns.onnx",
       "resources/onnx/mel_spectrogram.onnx": "models/mel_spectrogram.onnx"

@@ -8,6 +8,8 @@ pub mod command_queue;
 pub mod compose;
 pub mod event;
 pub mod harmony;
+pub mod midi;
+pub mod meter;
 pub mod model;
 pub mod mp3;
 pub mod op;

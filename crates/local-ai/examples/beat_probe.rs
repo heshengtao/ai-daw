@@ -36,7 +36,8 @@ fn read_wav16(path: &Path) -> Option<(Vec<f32>, usize, u32)> {
             let n = (size / 2).min((bytes.len() - body) / 2);
             let mut out = Vec::with_capacity(n);
             for i in 0..n {
-                let s = i16::from_le_bytes(bytes[body + i * 2..body + i * 2 + 2].try_into().unwrap());
+                let s =
+                    i16::from_le_bytes(bytes[body + i * 2..body + i * 2 + 2].try_into().unwrap());
                 out.push(s as f32 / 32768.0);
             }
             return Some((out, channels, rate));
@@ -54,16 +55,27 @@ fn main() {
     };
     let (mel, beat) = ai_daw_local_ai::models::beat_this::model_paths()
         .expect("未找到 Beat This! 权重（mel 前端 + final0）");
-    let (samples, channels, rate) = read_wav16(Path::new(&path)).expect("读不了这个 WAV（需 16-bit PCM）");
+    let (samples, channels, rate) =
+        read_wav16(Path::new(&path)).expect("读不了这个 WAV（需 16-bit PCM）");
     // 下混单声道。
     let mono: Vec<f32> = if channels <= 1 {
         samples.clone()
     } else {
         (0..samples.len() / channels)
-            .map(|i| samples[i * channels..(i + 1) * channels].iter().sum::<f32>() / channels as f32)
+            .map(|i| {
+                samples[i * channels..(i + 1) * channels]
+                    .iter()
+                    .sum::<f32>()
+                    / channels as f32
+            })
             .collect()
     };
-    println!("素材：{path}  {} 声道  {} Hz  {:.1} s", channels, rate, mono.len() as f64 / rate as f64);
+    println!(
+        "素材：{path}  {} 声道  {} Hz  {:.1} s",
+        channels,
+        rate,
+        mono.len() as f64 / rate as f64
+    );
 
     let mut tracker = BeatThis::new(&RtenRuntime, &mel, &beat).expect("加载权重失败");
     let t = std::time::Instant::now();
@@ -76,9 +88,19 @@ fn main() {
         timed.timing.decode.as_secs_f64(),
     );
     let analysis = timed.analysis;
-    println!("拍点 {} 个，重拍 {} 个", analysis.beats.len(), analysis.downbeats.len());
-    println!("BPM（crate 估计）：{:?}", beat_this::calculate_bpm(&analysis));
-    println!("拍号估计（本仓库逻辑）：{}", ai_daw_local_ai::models::beat_this::time_signature_num(&analysis));
+    println!(
+        "拍点 {} 个，重拍 {} 个",
+        analysis.beats.len(),
+        analysis.downbeats.len()
+    );
+    println!(
+        "BPM（crate 估计）：{:?}",
+        beat_this::calculate_bpm(&analysis)
+    );
+    println!(
+        "拍号估计（本仓库逻辑）：{}",
+        ai_daw_local_ai::models::beat_this::time_signature_num(&analysis)
+    );
     println!("重拍时刻：{:?}", analysis.downbeats);
     println!("拍点时刻：{:?}", analysis.beats);
     // 相邻重拍之间夹了多少拍（= 小节拍数的直接观察）。
@@ -87,7 +109,11 @@ fn main() {
         .iter()
         .filter_map(|d| {
             let at = analysis.beats.partition_point(|b| *b < *d - 1e-3);
-            analysis.beats.get(at).filter(|b| (**b - *d).abs() < 1e-3).map(|_| at)
+            analysis
+                .beats
+                .get(at)
+                .filter(|b| (**b - *d).abs() < 1e-3)
+                .map(|_| at)
         })
         .collect();
     let spans: Vec<usize> = idx.windows(2).map(|p| p[1] - p[0]).collect();

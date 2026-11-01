@@ -13,11 +13,11 @@
  * - 左键点击 → 选中；**单击片段会顺手打开右侧检查器**（方便立刻换音色）；Ctrl/Cmd+点击 → 加选；
  * - **Shift/Alt + 左键拖动 → 框选**（顶栏的鼠标模式也能切换默认左键行为）；
  * - **分隔模式（顶栏 / 快捷键 3）**：左键点击片段 → 在该拍切成两段（razor）；
- * - **右键点击 → 删除**；**右键拖动 → 框选批量删除**；
+ * - **右键点击片段 / 空白 → 复制 / 剪切 / 粘贴 / 删除菜单**；
  * - 双击片段 → 进入它的钢琴卷帘；
  * - Delete/Backspace → 删除所选片段；Ctrl/Cmd + 滚轮 → 缩放。
  */
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore, type ClipSel } from "@/stores/selection";
@@ -30,10 +30,13 @@ import ClipWaveform from "@/components/common/ClipWaveform.vue";
 import { clipBounds } from "@/api/tauri";
 import AutomationLane from "@/components/workspace/AutomationLane.vue";
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
+import ContextMenu from "@/components/common/ContextMenu.vue";
+import type { ContextMenuItem } from "@/components/common/contextMenu";
 import { trackHue } from "@/utils/trackColor";
 import { laneScrollTop } from "@/composables/useLaneScroll";
 import { capturePointer } from "@/utils/pointer";
 import { shouldDeferToBrowser } from "@/utils/editable";
+import { isMacOS } from "@/utils/platform";
 import { useI18n } from "@/i18n";
 import type { Clip, ClipPlacement, Note, Track } from "@/api/types";
 
@@ -53,8 +56,11 @@ const MIN_CREATE_BEATS = 1 / 32;
 
 const scroller = ref<HTMLElement | null>(null);
 const lanesEl = ref<HTMLElement | null>(null);
+/** 底部自动化块的根元素：实测高度写给左侧音轨栏（见 `layout.arrangeBottomInset`）。 */
+const autoBlockEl = ref<HTMLElement | null>(null);
 let applyingScroll = false;
 let resizeObserver: ResizeObserver | null = null;
+let autoObserver: ResizeObserver | null = null;
 
 const tracks = computed(() => store.project?.tracks ?? []);
 
@@ -71,6 +77,23 @@ const TIMELINE_INSET_PX = 26;
 function reportViewportWidth(): void {
   const el = scroller.value;
   if (el) timeline.setViewportWidth(el.clientWidth - TIMELINE_INSET_PX);
+  syncBottomInset();
+}
+
+/**
+ * 量出「左侧音轨栏底部要让出多少」：自动化块 + 编排容器的横向滚动条。
+ *
+ * 音轨栏的轨道列表必须和编排的**可滚动区域**等高，否则两边滚到底部时行会错位
+ * （音轨栏停得更早）。两项都不能写死：
+ * - 自动化块 = 分隔线 + 表头 + 曲线画布；曲线没渲染 / 表头换行都会变；
+ * - 横向滚动条：`scrollbar-width: thin` 下 10px，覆盖式滚动条（macOS）为 0，
+ *   而且只有内容横向溢出时才出现。
+ */
+function syncBottomInset(): void {
+  const el = scroller.value;
+  const auto = autoBlockEl.value?.offsetHeight ?? 0;
+  const hbar = el ? Math.max(0, el.offsetHeight - el.clientHeight) : 0;
+  layout.arrangeBottomInset = auto + hbar;
 }
 
 /** 指针 x → 拍（已含横向滚动；落在预留空白里算第 0 拍）。 */
@@ -108,7 +131,26 @@ function laneIndexAt(clientY: number): number {
 // 拖拽状态机
 // ---------------------------------------------------------------------------
 
-type DragMode = "create" | "move" | "resize" | "marquee" | "marquee-delete";
+type DragMode = "create" | "move" | "resize" | "marquee" | "erase";
+
+/** 右键菜单的快捷键提示前缀（与 App 的全局快捷键一致）。 */
+const modKey = isMacOS() ? "⌘" : "Ctrl+";
+/** 当前右键菜单：位置 + 菜单项 + 选中后的动作。 */
+const ctxMenu = ref<{
+  x: number;
+  y: number;
+  items: ContextMenuItem[];
+  run: (id: string) => void;
+} | null>(null);
+
+function closeMenu(): void {
+  ctxMenu.value = null;
+}
+
+/** 菜单项被选中：执行当前菜单绑定的动作。 */
+function runMenu(id: string): void {
+  ctxMenu.value?.run(id);
+}
 
 interface MoveDrag {
   originBeat: number;
@@ -143,6 +185,31 @@ const resizeDrag = ref<{
 } | null>(null);
 /** 框选矩形（客户端坐标，用于 fixed 覆盖层与相交测试）。 */
 const marquee = reactive({ x1: 0, y1: 0, x2: 0, y2: 0 });
+
+/**
+ * 橡皮拖动：按下时的位置 / 是否真的拖动过 / 命中项。
+ *
+ * 手势与框选一致：**拖动 = 框选批量删除**；原地点击 = 删除指针下的那一个。
+ * 不直接「按下即删」是为了让用户能从一个片段上开始拖出一块区域，而不是先删掉它。
+ */
+const eraseDrag = ref<{
+  x: number;
+  y: number;
+  moved: boolean;
+  target: { track: number; clip: number } | null;
+} | null>(null);
+
+const ERASE_DRAG_PX = 4;
+
+/** 开始一次橡皮框选（`target` = 按下的那个片段；空白处为 null）。 */
+function startErase(e: PointerEvent, target: { track: number; clip: number } | null): void {
+  e.preventDefault();
+  if (scroller.value) capturePointer(scroller.value, e.pointerId);
+  eraseDrag.value = { x: e.clientX, y: e.clientY, moved: false, target };
+  marquee.x1 = marquee.x2 = e.clientX;
+  marquee.y1 = marquee.y2 = e.clientY;
+  mode.value = "erase";
+}
 
 /** 边缘拖拽的夹取范围（拍）——展开不能超出素材本身。`null` = 还没取回来（不夹）。 */
 const resizeBounds = ref<{ min: number; max: number } | null>(null);
@@ -366,6 +433,12 @@ function onClipPointerDown(e: PointerEvent, track: Track, clip: Clip): void {
   if (e.button !== 0) return;
   e.stopPropagation();
 
+  // 橡皮模式：按下先不删，拖动可框选批量删；原地点击松手才删这一个。
+  if (layout.tool === "eraser") {
+    startErase(e, { track: track.id, clip: clip.id });
+    return;
+  }
+
   // 分隔模式：点片段即在该拍切开，不启动拖动。
   if (layout.tool === "split") {
     void splitAt(e.clientX, track, clip);
@@ -416,7 +489,7 @@ function onResizePointerDown(
   clip: Clip,
   edge: "left" | "right",
 ): void {
-  if (e.button !== 0) return;
+  if (e.button !== 0 || layout.tool === "eraser") return;
   e.stopPropagation();
   selection.selectClip(track.id, clip.id);
   capturePointer(e.currentTarget, e.pointerId);
@@ -440,21 +513,16 @@ function onResizePointerDown(
     .catch(() => {});
 }
 
-/** 空白处按下：右键 → 框选删除；Shift/Alt 或「框选模式」→ 框选；否则左键拖拽创建片段。 */
+/** 空白处按下：Shift/Alt 或「框选模式」→ 框选；否则左键拖拽创建片段。 */
 function onLanePointerDown(e: PointerEvent, track: Track): void {
-  if (e.button === 2) {
-    // 片段自己处理右键（右键点击删除 / 整组删除），这里只管空白区域。
+  if (e.button !== 0) return;
+  // 分隔模式只对片段生效；橡皮模式可以在空白处起手，拖出一块删除区域。
+  if (layout.tool === "split") return;
+  if (layout.tool === "eraser") {
     if ((e.target as HTMLElement).closest(".clip")) return;
-    capturePointer(e.currentTarget, e.pointerId);
-    selection.selectTrack(track.id);
-    mode.value = "marquee-delete";
-    marquee.x1 = marquee.x2 = e.clientX;
-    marquee.y1 = marquee.y2 = e.clientY;
+    startErase(e, null);
     return;
   }
-  if (e.button !== 0) return;
-  // 分隔模式只对片段生效，空白处按下不做任何事。
-  if (layout.tool === "split") return;
   const beat = Math.max(0, snapDelta(beatAt(e.clientX)));
 
   // 顶栏的鼠标模式决定左键的默认含义；Shift/Alt 随时可以临时切到框选。
@@ -474,19 +542,82 @@ function onLanePointerDown(e: PointerEvent, track: Track): void {
   mode.value = "create";
 }
 
-/** 抑制原生右键菜单（框选删除与右键删除都在自己的处理里）。 */
+/** 右键空白处：只给「粘贴」（在指针所在的轨道 / 拍位落块）。 */
 function onLaneContextMenu(e: MouseEvent): void {
   e.preventDefault();
+  if ((e.target as HTMLElement).closest(".clip")) return;
+  const trackId = tracks.value[laneIndexAt(e.clientY)]?.id ?? selection.trackId;
+  const beat = Math.max(0, timeline.snapBeats(beatAt(e.clientX)));
+  const hasClip = clipboard.payload?.kind === "clip";
+  ctxMenu.value = {
+    x: e.clientX,
+    y: e.clientY,
+    items: [
+      {
+        id: "paste",
+        label: i18n.t("common.paste"),
+        shortcut: `${modKey}V`,
+        disabled: !hasClip,
+      },
+    ],
+    run: (id) => {
+      if (id === "paste") void pasteClipAt(trackId, beat);
+    },
+  };
 }
 
+/** 右键片段：复制 / 剪切 / 粘贴 / 删除（点已选中的片段时删除整组）。 */
 function onClipContextMenu(e: MouseEvent, track: Track, clip: Clip): void {
   e.preventDefault();
   e.stopPropagation();
-  // 右键点未选中的片段：只删它；点已选中的：删掉整组。
-  const targets = selection.isClipSelected(track.id, clip.id)
+  const wasSelected = selection.isClipSelected(track.id, clip.id);
+  if (!wasSelected) selection.selectClip(track.id, clip.id);
+  const targets = wasSelected
     ? selection.clipRefs.map((r) => ({ track: r.track, clip: r.clip }))
     : [{ track: track.id, clip: clip.id }];
-  void deleteClips(targets);
+  const single = targets.length === 1;
+  const beat = Math.max(0, timeline.snapBeats(beatAt(e.clientX)));
+  const hasClip = clipboard.payload?.kind === "clip";
+  ctxMenu.value = {
+    x: e.clientX,
+    y: e.clientY,
+    items: [
+      {
+        id: "copy",
+        label: i18n.t("common.copy"),
+        shortcut: `${modKey}C`,
+        disabled: !single,
+      },
+      {
+        id: "cut",
+        label: i18n.t("common.cut"),
+        shortcut: `${modKey}X`,
+        disabled: !single,
+      },
+      {
+        id: "paste",
+        label: i18n.t("common.paste"),
+        shortcut: `${modKey}V`,
+        disabled: !hasClip,
+        divided: true,
+      },
+      {
+        id: "delete",
+        label: i18n.t("common.delete"),
+        shortcut: "Del",
+        danger: true,
+        divided: true,
+      },
+    ],
+    run: (id) => {
+      if (id === "copy") clipboard.copyClip(clip);
+      else if (id === "cut") {
+        clipboard.copyClip(clip);
+        void deleteClips(targets);
+      } else if (id === "paste") void pasteClipAt(track.id, beat);
+      else if (id === "delete") void deleteClips(targets);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -553,10 +684,23 @@ function onPointerMove(e: PointerEvent): void {
       }
       break;
     }
-    case "marquee":
-    case "marquee-delete": {
+    case "marquee": {
       marquee.x2 = e.clientX;
       marquee.y2 = e.clientY;
+      break;
+    }
+    case "erase": {
+      marquee.x2 = e.clientX;
+      marquee.y2 = e.clientY;
+      const drag = eraseDrag.value;
+      if (
+        drag &&
+        !drag.moved &&
+        (Math.abs(e.clientX - drag.x) > ERASE_DRAG_PX ||
+          Math.abs(e.clientY - drag.y) > ERASE_DRAG_PX)
+      ) {
+        drag.moved = true;
+      }
       break;
     }
     default:
@@ -653,6 +797,26 @@ async function onPointerUp(): Promise<void> {
     return;
   }
 
+  if (current === "erase") {
+    const drag = eraseDrag.value;
+    eraseDrag.value = null;
+    if (!drag) return;
+    // 原地点击：只删指针下的那一个；拖动过：删掉框内所有片段。
+    if (!drag.moved) {
+      if (drag.target) await deleteClips([drag.target]);
+      return;
+    }
+    const items: { track: number; clip: number }[] = [];
+    lanesEl.value?.querySelectorAll<HTMLElement>(".clip").forEach((el) => {
+      if (!intersects(el)) return;
+      const track = Number(el.dataset.track);
+      const clip = Number(el.dataset.clip);
+      if (Number.isFinite(track) && Number.isFinite(clip)) items.push({ track, clip });
+    });
+    await deleteClips(items);
+    return;
+  }
+
   if (current === "marquee") {
     const refs: ClipSel[] = [];
     lanesEl.value?.querySelectorAll<HTMLElement>(".clip").forEach((el) => {
@@ -662,22 +826,6 @@ async function onPointerUp(): Promise<void> {
       if (Number.isFinite(track) && Number.isFinite(clip)) refs.push({ track, clip });
     });
     selection.setClipSelection(refs);
-    return;
-  }
-
-  if (current === "marquee-delete") {
-    const width = Math.abs(marquee.x2 - marquee.x1);
-    const height = Math.abs(marquee.y2 - marquee.y1);
-    // 几乎没动 = 一次右键点击：删除指针下的那一个片段（由 contextmenu 处理），这里不做事。
-    if (width < 4 && height < 4) return;
-    const items: { track: number; clip: number }[] = [];
-    lanesEl.value?.querySelectorAll<HTMLElement>(".clip").forEach((el) => {
-      if (!intersects(el)) return;
-      const track = Number(el.dataset.track);
-      const clip = Number(el.dataset.clip);
-      if (Number.isFinite(track) && Number.isFinite(clip)) items.push({ track, clip });
-    });
-    await deleteClips(items);
   }
 }
 
@@ -717,36 +865,43 @@ function onClipDoubleClick(track: Track, clip: Clip): void {
   void router.push("/edit");
 }
 
-/** 粘贴：副本落在该轨道最后一个片段之后。 */
+/** 粘贴：`beat` 省略时副本落在该轨道最后一个片段之后（右键菜单则落在指针处）。 */
 async function pasteClip(): Promise<void> {
+  const ref = selection.clipRefs;
+  await pasteClipAt(ref.length > 0 ? ref[0]!.track : selection.trackId, null);
+}
+
+async function pasteClipAt(trackId: number | null, beat: number | null): Promise<void> {
   const p = clipboard.payload;
   if (!p || p.kind !== "clip") return;
-  const ref = selection.clipRefs;
-  const trackId = ref.length > 0 ? ref[0]!.track : selection.trackId;
-  if (trackId === null) return;
-  const t = tracks.value.find((x) => x.id === trackId);
-  const start = (t?.clips ?? []).reduce((m, c) => Math.max(m, c.start + c.length), 0);
+  const target = trackId ?? selection.clipRefs[0]?.track ?? selection.trackId;
+  if (target === null) return;
+  const t = tracks.value.find((x) => x.id === target);
+  const start =
+    beat === null
+      ? (t?.clips ?? []).reduce((m, c) => Math.max(m, c.start + c.length), 0)
+      : Math.max(0, beat);
   try {
     // 音频片段：内容在 `audio` 上、`notes` 是空的。必须按音频建块，否则粘出来是个等长的空块。
     if (p.audio) {
-      await store.addAudioClip(trackId, start, p.length, p.audio.path, p.audio.offset_frames, p.audio.frames);
-      const track = store.project?.tracks.find((x) => x.id === trackId);
+      await store.addAudioClip(target, start, p.length, p.audio.path, p.audio.offset_frames, p.audio.frames);
+      const track = store.project?.tracks.find((x) => x.id === target);
       const created = track?.clips[track.clips.length - 1];
-      if (created) selection.selectClip(trackId, created.id);
+      if (created) selection.selectClip(target, created.id);
       return;
     }
-    await store.addClip(trackId, start, p.length);
-    const track = store.project?.tracks.find((x) => x.id === trackId);
+    await store.addClip(target, start, p.length);
+    const track = store.project?.tracks.find((x) => x.id === target);
     const created = track?.clips[track.clips.length - 1];
     if (!created) return;
-    for (const n of p.notes) await store.addNote(trackId, created.id, { ...n });
-    selection.selectClip(trackId, created.id);
+    for (const n of p.notes) await store.addNote(target, created.id, { ...n });
+    selection.selectClip(target, created.id);
   } catch (err) {
     layout.notify(i18n.t("error.addClip", { error: String(err) }));
   }
 }
 
-/** Delete / Backspace 删除所选片段；Ctrl/Cmd+C / V 复制粘贴。 */
+/** Delete / Backspace 删除所选片段；Ctrl/Cmd+C / X / V 复制 / 剪切 / 粘贴。 */
 function onKey(e: KeyboardEvent): void {
   // 焦点在输入框/文本域里，或用户选了一段文字：这些按键归浏览器。
   // 少了这一关，只要有一条片段被选中，用户选中的文本一按 Cmd+C 就被当成「复制片段」吞掉。
@@ -762,6 +917,18 @@ function onKey(e: KeyboardEvent): void {
       e.preventDefault();
       clipboard.copyClip(c);
     }
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "x") {
+    const ref = selection.clipRefs;
+    if (ref.length !== 1) return;
+    const only = ref[0]!;
+    const t = tracks.value.find((x) => x.id === only.track);
+    const c = t?.clips.find((x) => x.id === only.clip);
+    if (!c) return;
+    e.preventDefault();
+    clipboard.copyClip(c);
+    void deleteClips([{ track: only.track, clip: only.clip }]);
     return;
   }
   if (mod && e.key.toLowerCase() === "v") {
@@ -820,8 +987,13 @@ watch(
 
 watch(laneScrollTop, (v) => {
   const el = scroller.value;
-  if (!el || Math.abs(el.scrollTop - v) < 1) return;
-  el.scrollTop = v;
+  if (!el) return;
+  // 编排（右侧）是纵向滚动的**权威**：音轨栏的底部让位高度是异步实测的（挂载、
+  // 拖动分隔线、滚动条出现时都会晚一拍），请求越界时把位置夹回并回写，避免两边短暂错位。
+  const max = Math.max(0, el.scrollHeight - el.clientHeight);
+  const target = Math.min(Math.max(0, v), max);
+  if (Math.abs(el.scrollTop - target) >= 1) el.scrollTop = target;
+  if (Math.abs(target - v) >= 1) laneScrollTop.value = target;
 });
 
 /** Ctrl/Cmd + 滚轮缩放：锚点在指针下，两个视图同步。 */
@@ -838,6 +1010,35 @@ function onWheel(e: WheelEvent): void {
   );
 }
 
+/**
+ * 实测底部自动化块的高度（分隔线 + 表头 + 曲线画布），写给左侧音轨栏。
+ *
+ * 音轨栏的列表必须和编排的**可滚动区域**一样高，两边滚到底部时行才不会错位。
+ * 自动化块的高度不是常数：表头固定 30px，但曲线画布随 `laneHeight` 变，没有可选目标时
+ * 还会整个不渲染，所以用 `ResizeObserver` 量，而不是拿常量估。
+ */
+function watchAutoBlock(): void {
+  autoObserver?.disconnect();
+  autoObserver = null;
+  if (!layout.showAutomation) {
+    // 自动化块被收起：下一位让位只剩横向滚动条，等 DOM 更新后重量一次。
+    void nextTick(syncBottomInset);
+    return;
+  }
+  void nextTick(() => {
+    const el = autoBlockEl.value;
+    if (!el) {
+      syncBottomInset();
+      return;
+    }
+    autoObserver = new ResizeObserver(syncBottomInset);
+    autoObserver.observe(el);
+    syncBottomInset();
+  });
+}
+
+watch(() => layout.showAutomation, watchAutoBlock);
+
 onMounted(() => {
   window.addEventListener("pointerup", onPointerUp);
   window.addEventListener("pointercancel", onPointerUp);
@@ -845,12 +1046,34 @@ onMounted(() => {
   // 可视区变宽 / 变窄（窗口缩放、面板拖动）都要重新补足刻度。
   resizeObserver = new ResizeObserver(reportViewportWidth);
   if (scroller.value) resizeObserver.observe(scroller.value);
-  // 进视图时对齐共享时间轴的横向位置（从编辑切过来时视角不变）。
+  // 横向滚动条出现 / 消失只会改变 `clientHeight`，外层尺寸不变；顺带看住内容宽度变化。
+  if (lanesEl.value) resizeObserver.observe(lanesEl.value);
+  watchAutoBlock();
+  // 进视图时对齐共享时间轴：横向沿用上一个视图的视角，纵向沿用音轨栏当前的位置
+  // （从编辑视图切回来时，音轨栏可能被单独滚过；两边必须从同一位置开始）。
   requestAnimationFrame(() => {
     const el = scroller.value;
-    if (el) el.scrollLeft = timeline.scrollLeft;
+    if (el) {
+      el.scrollLeft = timeline.scrollLeft;
+      const max = Math.max(0, el.scrollHeight - el.clientHeight);
+      const top = Math.min(Math.max(0, laneScrollTop.value), max);
+      if (Math.abs(el.scrollTop - top) >= 1) el.scrollTop = top;
+      if (Math.abs(laneScrollTop.value - top) >= 1) laneScrollTop.value = top;
+    }
     reportViewportWidth();
   });
+});
+onUnmounted(() => {
+  window.removeEventListener("pointerup", onPointerUp);
+  window.removeEventListener("pointercancel", onPointerUp);
+  window.removeEventListener("keydown", onKey);
+  resizeObserver?.disconnect();
+  resizeObserver = null;
+  autoObserver?.disconnect();
+  autoObserver = null;
+  // 离开编排视图后音轨栏不再需要给底部让位（编辑视图没有自动化车道 / 横向滚动条）。
+  layout.arrangeBottomInset = 0;
+  cancelOpenInspector();
 });
 onUnmounted(() => {
   window.removeEventListener("pointerup", onPointerUp);
@@ -877,7 +1100,13 @@ onUnmounted(() => {
         <TimelineRuler />
       </div>
 
-      <div ref="lanesEl" class="lanes" :style="timeline.widthStyle" @contextmenu="onLaneContextMenu">
+      <div
+        ref="lanesEl"
+        class="lanes"
+        :class="{ 'eraser-mode': layout.tool === 'eraser' }"
+        :style="timeline.widthStyle"
+        @contextmenu="onLaneContextMenu"
+      >
         <div
           v-for="(track, ti) in tracks"
           :key="track.id"
@@ -925,6 +1154,7 @@ onUnmounted(() => {
                 dragging: moveDrag?.base.some((b) => b.clip === clip.id),
                 selected: isSelected(clip, track.id),
                 'split-cursor': layout.tool === 'split',
+                'erase-cursor': layout.tool === 'eraser',
               }"
               :style="clipStyle(clip, ti)"
               :data-track="track.id"
@@ -989,20 +1219,30 @@ onUnmounted(() => {
         <div class="playhead" :style="{ left: `${playheadPx}px` }" />
       </div>
 
-      <!-- 框选矩形：客户端坐标的固定覆盖层 -->
+      <!-- 框选 / 橡皮框选：客户端坐标的固定覆盖层 -->
       <div
-        v-if="mode === 'marquee' || mode === 'marquee-delete'"
+        v-if="mode === 'marquee' || mode === 'erase'"
         class="marquee"
-        :class="{ danger: mode === 'marquee-delete' }"
+        :class="{ danger: mode === 'erase' }"
         :style="marqueeStyle"
       />
     </div>
 
     <!-- 自动化曲线编辑器：编排视图底部，与网格共用同一条时间轴（原点 = 同一份留白常量） -->
-    <template v-if="layout.showAutomation">
+    <div v-if="layout.showAutomation" ref="autoBlockEl" class="auto-block">
       <PanelResizer side="bottom" @resize="layout.resizeLane($event)" />
       <AutomationLane :height="layout.laneHeight" :inset-px="TIMELINE_INSET_PX" />
-    </template>
+    </div>
+
+    <!-- 右键菜单：复制 / 剪切 / 粘贴 / 删除 -->
+    <ContextMenu
+      :open="ctxMenu !== null"
+      :x="ctxMenu?.x ?? 0"
+      :y="ctxMenu?.y ?? 0"
+      :items="ctxMenu?.items ?? []"
+      @select="runMenu($event)"
+      @close="closeMenu"
+    />
   </div>
 </template>
 
@@ -1029,6 +1269,13 @@ onUnmounted(() => {
   user-select: none;
   -webkit-user-select: none;
 }
+/* 底部自动化块：分隔线 + 自动化车道，整体高度由 ResizeObserver 量给左侧音轨栏 */
+.auto-block {
+  flex: 0 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 /* 标尺外层：吸附在顶部，宽度与网格一致 */
 .ruler-wrap {
   position: sticky;
@@ -1047,6 +1294,10 @@ onUnmounted(() => {
   flex: 0 0 auto;
   border-bottom: 1px solid var(--grid-line-row);
   cursor: crosshair;
+}
+/* 橡皮模式：空白处也能拖出删除框 */
+.lanes.eraser-mode .lane {
+  cursor: cell;
 }
 .lane.selected {
   background-color: rgb(var(--md-primary) / 0.05);
@@ -1125,6 +1376,10 @@ onUnmounted(() => {
 .clip.split-cursor {
   cursor: col-resize;
 }
+/* 橡皮模式：光标提示「这一下是删除」 */
+.clip.erase-cursor {
+  cursor: cell;
+}
 .clip.selected {
   border-color: rgb(var(--md-primary));
   box-shadow: 0 0 0 2px rgb(var(--md-primary) / 0.75);
@@ -1189,6 +1444,7 @@ onUnmounted(() => {
   background-color: rgb(var(--md-primary) / 0.16);
   pointer-events: none;
 }
+/* 橡皮框选：红色，一眼看出松手会删东西 */
 .marquee.danger {
   border-color: rgb(var(--md-error));
   background-color: rgb(var(--md-error) / 0.16);

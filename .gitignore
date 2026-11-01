@@ -34,3 +34,6 @@ src-tauri/gen/
 # 乐谱自检的本地产物：`.tmp/` 是打包中间文件，`tools/out/` 是生成的 MusicXML 样例。
 /.tmp/
 /tools/out/
+
+# 随包的 ONNX Runtime（npm run fetch:ort 生成，不入库）
+src-tauri/resources/ort/

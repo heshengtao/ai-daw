@@ -58,7 +58,11 @@ fn main() {
         let started = Instant::now();
         match backend::session::build(path, *role) {
             Ok(session) => {
-                println!("  ✓ {:<12}（{mb:>7.1} MB）建会话 {:.2?}", role.label(), started.elapsed());
+                println!(
+                    "  ✓ {:<12}（{mb:>7.1} MB）建会话 {:.2?}",
+                    role.label(),
+                    started.elapsed()
+                );
                 if show_io {
                     for input in session.inputs() {
                         println!("        ← {}  {:?}", input.name(), input.dtype());

@@ -16,7 +16,7 @@
  * - Shift/Alt + 左键拖动 → 框选（顶栏的鼠标模式也能切换默认左键行为）；
  * - 分隔模式（顶栏 / 快捷键 3）：左键点击 → 在该拍把当前片段切成两段（razor）；
  * - 歌词模式（顶栏 / 快捷键 4）：点音符 → 就地输入歌词，Enter 提交并跳到下一个音；
- * - 右键点击音符 → 删除；右键拖动 → 框选批量删除；
+ * - 右键点击音符 / 空白 → 复制 / 剪切 / 粘贴 / 删除菜单；
  * - Ctrl/Cmd + 滚轮 → 缩放（锚点在指针下，两个视图同步）。
  */
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
@@ -37,8 +37,11 @@ import ControllerLane from "@/components/workspace/ControllerLane.vue";
 const ScorePane = defineAsyncComponent(() => import("@/components/workspace/ScorePane.vue"));
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
+import ContextMenu from "@/components/common/ContextMenu.vue";
+import type { ContextMenuItem } from "@/components/common/contextMenu";
 import { capturePointer } from "@/utils/pointer";
 import { shouldDeferToBrowser } from "@/utils/editable";
+import { isMacOS } from "@/utils/platform";
 import { automationTargetsFor, curateTargets, defaultBoundKeys } from "@/utils/automation";
 import { auditionNote } from "@/api/tauri";
 import { splitLyrics } from "@/utils/lyrics";
@@ -200,7 +203,26 @@ const rollGridStyle = computed(() => {
 // 拖拽状态机
 // ---------------------------------------------------------------------------
 
-type DragMode = "create" | "move" | "resize" | "marquee" | "marquee-delete";
+type DragMode = "create" | "move" | "resize" | "marquee" | "erase";
+
+/** 右键菜单的快捷键提示前缀（与 App 的全局快捷键一致）。 */
+const modKey = isMacOS() ? "⌘" : "Ctrl+";
+/** 当前右键菜单：位置 + 菜单项 + 选中后的动作。 */
+const ctxMenu = ref<{
+  x: number;
+  y: number;
+  items: ContextMenuItem[];
+  run: (id: string) => void;
+} | null>(null);
+
+function closeMenu(): void {
+  ctxMenu.value = null;
+}
+
+/** 菜单项被选中：执行当前菜单绑定的动作。 */
+function runMenu(id: string): void {
+  ctxMenu.value?.run(id);
+}
 
 interface MoveDrag {
   originBeat: number;
@@ -218,6 +240,24 @@ const create = reactive({ pitch: 60, from: 0, to: 0 });
 const moveDrag = ref<MoveDrag | null>(null);
 const resizeDrag = ref<{ index: number; originBeat: number; base: number; next: number; moved: boolean } | null>(null);
 const marquee = reactive({ x1: 0, y1: 0, x2: 0, y2: 0 });
+
+/**
+ * 橡皮拖动：按下时的位置 / 是否真的拖动过 / 命中项。
+ *
+ * 手势与框选一致：**拖动 = 框选批量删除**；原地点击 = 删除指针下的那一个。
+ */
+const eraseDrag = ref<{ x: number; y: number; moved: boolean; target: number | null } | null>(null);
+const ERASE_DRAG_PX = 4;
+
+/** 开始一次橡皮框选（`target` = 按下的音符序号；空白处为 null）。 */
+function startErase(e: PointerEvent, target: number | null): void {
+  e.preventDefault();
+  if (rollEl.value) capturePointer(rollEl.value, e.pointerId);
+  eraseDrag.value = { x: e.clientX, y: e.clientY, moved: false, target };
+  marquee.x1 = marquee.x2 = e.clientX;
+  marquee.y1 = marquee.y2 = e.clientY;
+  mode.value = "erase";
+}
 
 const scroller = ref<HTMLElement | null>(null);
 const rollEl = ref<HTMLElement | null>(null);
@@ -457,6 +497,12 @@ function onNotePointerDown(e: PointerEvent, index: number): void {
   if (e.button !== 0) return;
   e.stopPropagation();
 
+  // 橡皮模式：按下先不删，拖动可框选批量删；原地点击松手才删这一个。
+  if (layout.tool === "eraser") {
+    startErase(e, index);
+    return;
+  }
+
   // 歌词模式：点音符 → 就地输入；不进入拖动。
   if (layout.tool === "lyric") {
     e.preventDefault();
@@ -492,7 +538,7 @@ function onNotePointerDown(e: PointerEvent, index: number): void {
 }
 
 function onResizePointerDown(e: PointerEvent, index: number, note: Note): void {
-  if (e.button !== 0 || layout.tool === "lyric") return;
+  if (e.button !== 0 || layout.tool === "lyric" || layout.tool === "eraser") return;
   e.stopPropagation();
   selection.selectNote(index);
   capturePointer(e.currentTarget, e.pointerId);
@@ -506,16 +552,13 @@ function onRollPointerDown(e: PointerEvent): void {
   const c = clip.value;
   const t = trackId.value;
   if (!c || t === null) return;
+  if (e.button !== 0) return;
 
-  if (e.button === 2) {
-    if ((e.target as HTMLElement).closest(".roll-note")) return;
-    capturePointer(e.currentTarget, e.pointerId);
-    mode.value = "marquee-delete";
-    marquee.x1 = marquee.x2 = e.clientX;
-    marquee.y1 = marquee.y2 = e.clientY;
+  // 橡皮模式：空白处也能起手，拖出一块删除区域。
+  if (layout.tool === "eraser") {
+    startErase(e, null);
     return;
   }
-  if (e.button !== 0) return;
 
   // 分隔模式：在点击处切分当前片段。
   if (layout.tool === "split") {
@@ -550,15 +593,84 @@ function onRollPointerDown(e: PointerEvent): void {
   audition(p.pitch);
 }
 
+/** 右键空白处：只给「粘贴」（在指针所在的拍位落音符）。 */
 function onRollContextMenu(e: MouseEvent): void {
   e.preventDefault();
+  if ((e.target as HTMLElement).closest(".roll-note")) return;
+  const c = clip.value;
+  if (!c) return;
+  const rel = Math.max(0, pointAt(e.clientX, e.clientY).rel);
+  const hasNote = clipboard.payload?.kind === "note";
+  ctxMenu.value = {
+    x: e.clientX,
+    y: e.clientY,
+    items: [
+      {
+        id: "paste",
+        label: i18n.t("common.paste"),
+        shortcut: `${modKey}V`,
+        disabled: !hasNote,
+      },
+    ],
+    run: (id) => {
+      if (id === "paste") void pasteNoteAt(rel);
+    },
+  };
 }
 
+/** 右键音符：复制 / 剪切 / 粘贴 / 删除（点已选中的音符时删除整组）。 */
 function onNoteContextMenu(e: MouseEvent, index: number): void {
   e.preventDefault();
   e.stopPropagation();
-  const indices = selection.isNoteSelected(index) ? [...selection.noteIndices] : [index];
-  void deleteNotes(indices);
+  const c = clip.value;
+  const note = c?.notes[index];
+  if (!c || !note) return;
+  const wasSelected = selection.isNoteSelected(index);
+  if (!wasSelected) selection.selectNote(index);
+  const indices = wasSelected ? [...selection.noteIndices] : [index];
+  const single = indices.length === 1;
+  const rel = Math.max(0, pointAt(e.clientX, e.clientY).rel);
+  const hasNote = clipboard.payload?.kind === "note";
+  ctxMenu.value = {
+    x: e.clientX,
+    y: e.clientY,
+    items: [
+      {
+        id: "copy",
+        label: i18n.t("common.copy"),
+        shortcut: `${modKey}C`,
+        disabled: !single,
+      },
+      {
+        id: "cut",
+        label: i18n.t("common.cut"),
+        shortcut: `${modKey}X`,
+        disabled: !single,
+      },
+      {
+        id: "paste",
+        label: i18n.t("common.paste"),
+        shortcut: `${modKey}V`,
+        disabled: !hasNote,
+        divided: true,
+      },
+      {
+        id: "delete",
+        label: i18n.t("common.delete"),
+        shortcut: "Del",
+        danger: true,
+        divided: true,
+      },
+    ],
+    run: (id) => {
+      if (id === "copy") clipboard.copyNote(note);
+      else if (id === "cut") {
+        clipboard.copyNote(note);
+        void deleteNotes(indices);
+      } else if (id === "paste") void pasteNoteAt(rel);
+      else if (id === "delete") void deleteNotes(indices);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -658,10 +770,23 @@ function onPointerMove(e: PointerEvent): void {
       }
       break;
     }
-    case "marquee":
-    case "marquee-delete": {
+    case "marquee": {
       marquee.x2 = e.clientX;
       marquee.y2 = e.clientY;
+      break;
+    }
+    case "erase": {
+      marquee.x2 = e.clientX;
+      marquee.y2 = e.clientY;
+      const drag = eraseDrag.value;
+      if (
+        drag &&
+        !drag.moved &&
+        (Math.abs(e.clientX - drag.x) > ERASE_DRAG_PX ||
+          Math.abs(e.clientY - drag.y) > ERASE_DRAG_PX)
+      ) {
+        drag.moved = true;
+      }
       break;
     }
     default:
@@ -740,6 +865,25 @@ async function onPointerUp(): Promise<void> {
     return;
   }
 
+  if (current === "erase") {
+    const drag = eraseDrag.value;
+    eraseDrag.value = null;
+    if (!drag) return;
+    // 原地点击：只删指针下的那个音；拖动过：删掉框内所有音符。
+    if (!drag.moved) {
+      if (drag.target !== null) await deleteNotes([drag.target]);
+      return;
+    }
+    const indices: number[] = [];
+    rollEl.value?.querySelectorAll<HTMLElement>(".roll-note").forEach((el) => {
+      if (!intersects(el)) return;
+      const index = Number(el.dataset.index);
+      if (Number.isFinite(index)) indices.push(index);
+    });
+    await deleteNotes(indices);
+    return;
+  }
+
   if (current === "marquee") {
     const indices: number[] = [];
     rollEl.value?.querySelectorAll<HTMLElement>(".roll-note").forEach((el) => {
@@ -749,20 +893,6 @@ async function onPointerUp(): Promise<void> {
     });
     selection.setNoteSelection(indices);
     return;
-  }
-
-  if (current === "marquee-delete") {
-    const width = Math.abs(marquee.x2 - marquee.x1);
-    const height = Math.abs(marquee.y2 - marquee.y1);
-    // 几乎没动 = 一次右键点击：由 contextmenu 处理，这里不做事。
-    if (width < 4 && height < 4) return;
-    const indices: number[] = [];
-    rollEl.value?.querySelectorAll<HTMLElement>(".roll-note").forEach((el) => {
-      if (!intersects(el)) return;
-      const index = Number(el.dataset.index);
-      if (Number.isFinite(index)) indices.push(index);
-    });
-    await deleteNotes(indices);
   }
 }
 
@@ -1091,6 +1221,17 @@ function onKey(e: KeyboardEvent): void {
     }
     return;
   }
+  if (mod && e.key.toLowerCase() === "x") {
+    const c = clip.value;
+    const idx = selection.noteIndices;
+    if (!c || idx.length !== 1) return;
+    const note = c.notes[idx[0]!];
+    if (!note) return;
+    e.preventDefault();
+    clipboard.copyNote(note);
+    void deleteNotes([idx[0]!]);
+    return;
+  }
   if (mod && e.key.toLowerCase() === "v") {
     // 没有可粘贴的音符就别吞按键。
     if (clipboard.payload?.kind !== "note") return;
@@ -1104,13 +1245,18 @@ function onKey(e: KeyboardEvent): void {
   void deleteNotes([...selection.noteIndices]);
 }
 
-/** 粘贴：副本落在该片段最后一个音符之后。 */
+/** 粘贴：`at` 省略时副本落在该片段最后一个音符之后（右键菜单则落在指针处）。 */
 async function pasteNote(): Promise<void> {
+  await pasteNoteAt(null);
+}
+
+async function pasteNoteAt(at: number | null): Promise<void> {
   const p = clipboard.payload;
   const c = clip.value;
   const t = trackId.value;
   if (!p || p.kind !== "note" || !c || t === null) return;
-  const start = c.notes.reduce((m, n) => Math.max(m, n.start + n.duration), 0);
+  const start =
+    at === null ? c.notes.reduce((m, n) => Math.max(m, n.start + n.duration), 0) : Math.max(0, at);
   try {
     const index = c.notes.length;
     await store.addNote(t, c.id, { ...p.note, start });
@@ -1212,6 +1358,7 @@ onUnmounted(() => {
         <div
           ref="rollEl"
           class="roll"
+          :class="{ 'eraser-mode': layout.tool === 'eraser' }"
           :style="{ width: rollWidth, height: rollHeight, ...rollGridStyle }"
           @pointerdown="onRollPointerDown"
           @pointermove="onPointerMove"
@@ -1255,6 +1402,7 @@ onUnmounted(() => {
               selected: selection.isNoteSelected(i),
               dragging: moveDrag?.base.some((b) => b.index === i),
               legato: !!noteOf(i, n).legato,
+              'erase-cursor': layout.tool === 'eraser',
             }"
             :style="noteStyle(noteOf(i, n))"
             :data-index="i"
@@ -1345,12 +1493,22 @@ onUnmounted(() => {
       />
     </template>
 
-    <!-- 框选矩形：客户端坐标的固定覆盖层 -->
+    <!-- 框选 / 橡皮框选：客户端坐标的固定覆盖层 -->
     <div
-      v-if="mode === 'marquee' || mode === 'marquee-delete'"
+      v-if="mode === 'marquee' || mode === 'erase'"
       class="marquee"
-      :class="{ danger: mode === 'marquee-delete' }"
+      :class="{ danger: mode === 'erase' }"
       :style="marqueeStyle"
+    />
+
+    <!-- 右键菜单：复制 / 剪切 / 粘贴 / 删除 -->
+    <ContextMenu
+      :open="ctxMenu !== null"
+      :x="ctxMenu?.x ?? 0"
+      :y="ctxMenu?.y ?? 0"
+      :items="ctxMenu?.items ?? []"
+      @select="runMenu($event)"
+      @close="closeMenu"
     />
   </div>
 </template>
@@ -1635,6 +1793,14 @@ onUnmounted(() => {
   border: 1px solid rgb(var(--md-primary));
   background-color: rgb(var(--md-primary) / 0.16);
   pointer-events: none;
+}
+/* 橡皮模式：光标提示「这一下是删除」 */
+.roll-note.erase-cursor {
+  cursor: cell;
+}
+/* 橡皮模式：空白处也能拖出删除框 */
+.roll.eraser-mode {
+  cursor: cell;
 }
 .marquee.danger {
   border-color: rgb(var(--md-error));

@@ -109,8 +109,15 @@ fn push_note(
     if duration_sec < MIN_NOTE_SEC {
         return;
     }
-    let velocity = ((peak_rms * 2.0).min(1.0) * 127.0).round().clamp(1.0, 127.0) as u8;
-    notes.push(DetectedNote { pitch, start_sec, duration_sec, velocity });
+    let velocity = ((peak_rms * 2.0).min(1.0) * 127.0)
+        .round()
+        .clamp(1.0, 127.0) as u8;
+    notes.push(DetectedNote {
+        pitch,
+        start_sec,
+        duration_sec,
+        velocity,
+    });
 }
 
 /// 单帧基频 → MIDI 号；无声或不可信时 `None`。
@@ -121,8 +128,11 @@ fn estimate_pitch(
     ifft: &dyn Fft<f32>,
     sample_rate: f64,
 ) -> Option<u8> {
-    let mut buf: Vec<Complex<f32>> =
-        frame.iter().zip(window).map(|(x, w)| Complex::new(x * w, 0.0)).collect();
+    let mut buf: Vec<Complex<f32>> = frame
+        .iter()
+        .zip(window)
+        .map(|(x, w)| Complex::new(x * w, 0.0))
+        .collect();
     fft.process(&mut buf);
     // 功率谱 → 逆变换 = 自相关。
     for c in buf.iter_mut() {
@@ -191,7 +201,11 @@ mod tests {
         let notes = detect_notes(&audio, 1, sr, &|_| true);
         assert_eq!(notes.len(), 1, "一段稳定正弦应得到一条音符：{notes:?}");
         assert_eq!(notes[0].pitch, 69, "440 Hz = A4 = MIDI 69");
-        assert!(notes[0].duration_sec > 0.8, "时长应接近 1 秒：{}", notes[0].duration_sec);
+        assert!(
+            notes[0].duration_sec > 0.8,
+            "时长应接近 1 秒：{}",
+            notes[0].duration_sec
+        );
         assert!(notes[0].velocity > 0);
     }
 

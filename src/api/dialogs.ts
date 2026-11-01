@@ -87,6 +87,20 @@ export async function pickScoreToSave(defaultPath: string): Promise<string | nul
   return selected ?? null;
 }
 
+/**
+ * 选择 MIDI 保存路径；取消返回 null。
+ *
+ * 只给 `.mid` / `.midi`：SMF 的容器扩展名就这两种（`.smf` 只作为导入的兼容写法）。
+ */
+export async function pickMidiToSave(defaultPath: string): Promise<string | null> {
+  if (!isTauri()) return `mock://${defaultPath}`;
+  const selected = await saveDialog({
+    defaultPath,
+    filters: [{ name: useI18n().t("dialog.midiFilter"), extensions: ["mid", "midi"] }],
+  });
+  return selected ?? null;
+}
+
 /** 选择要导入的音频文件；取消返回 null。 */
 export async function pickAudioToOpen(): Promise<string | null> {
   if (!isTauri()) return "mock://kick.wav";
@@ -128,5 +142,12 @@ export async function pickPluginToImport(): Promise<string | null> {
     directory: false,
     filters: [{ name: useI18n().t("dialog.pluginFilter"), extensions: ["vst3", "clap", "component"] }],
   });
+  return typeof selected === "string" ? selected : null;
+}
+
+/** 选择一个目录（引擎归档离线安装用）；取消返回 null。 */
+export async function pickDirectory(): Promise<string | null> {
+  if (!isTauri()) return "mock://engine-archives";
+  const selected = await openDialog({ multiple: false, directory: true });
   return typeof selected === "string" ? selected : null;
 }

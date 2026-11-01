@@ -3,14 +3,65 @@
 这是把「用户一句话」变成「DAW 里能播放的乐谱」的标准流程：
 
 ```
-需求 → 曲风分析（风格卡）→ 查知识（skills / 可选联网）→ MIDI 设计 → AIDAW 落地 → 检查 → 导出
+需求 → get_capabilities（能力预检）→ 选路线 ┬ A：compose_song 初稿 → separate_stems → …
+                                          └ B：风格卡 → 查知识 → MIDI 设计 → AIDAW 落地
+→ 检查 → 导出
 ```
 
 目标不是「生成一堆音符」，而是**先证明你理解这首曲子要什么，再让每一步都可解释、可撤销**。
 工具细节见 `composition.md`、`note.md`、`track.md`、`mix.md`；曲风配方见 `genres.md`；
 乐理见 `theory.md`；鼓谱见 `rhythm.md`。
 
+## 开工前：能力预检与路线选择
+
+**第一件事：`get_capabilities`（只读）。** 它逐项给出本地 AI 功能的 `available` / `degraded` /
+`missing`（缺哪个模型或运行时、多大）/ `fix`（该调 `download_model` 还是 `install_runtime`）/
+`fallback`，并直接给出 `recommended_workflow`：`route: "ai_draft"` 就走路线 A，
+`route: "manual_midi"` 就走路线 B。**对 `available=false` 的功能不要硬试**——写歌会加载几 GB
+权重、歌声要跑几分钟，缺东西时白等一场（这些工具自己也会返回 `ok:false` 的说明，但别故意去撞）。
+
+### 路线 A：AI 写歌可用（`compose.available = true`）—— 先出初稿，再分离/加工
+
+适合「做一首 X」，用户没有具体 MIDI 编写要求，或想先要一个能听的草稿。
+
+1. **AI 初稿**：`compose_song(style="city pop, female vocal", lyrics="...", duration=120)`
+   → 新音频轨（一次撤销）。参数：`model` 选 `yue2-q8-0` / `yue2-q4-0` / `yue2-bf16`（省略用已装默认）；
+   `cot`（full/melody/off）、`cfg_scale`、`seed` 可复现；`after_track` 指定插入位置。
+2. **拆轨**：`separate_stems(track=<初稿轨>, model="htdemucs-6s")` → 鼓 / 贝斯 / 其他 / 人声
+   （`-6s` 多吉他/钢琴）。先看 `capabilities.separate`：没装 HTDemucs 就跳过这一步，
+   或先按 `fix` 征得用户同意再下（约 209 MB）。
+3. **按需加工**（每一步都先看对应 `capabilities`）：
+   - `swap_voice(track=<人声分轨>, reference_voice=...)` 换人声音色；
+   - `transcribe_audio(track=<分轨>)` 把分轨变成可编辑 MIDI（Basic Pitch 随包；不在位时自动走 DSP）；
+   - `enhance_audio(track=<人声分轨>, mode="voice")` 清人声；
+   - `detect_tempo(track=<初稿轨>)` 若初稿速度没写进工程。
+4. **收尾**：`set_gain` / `set_pan` / `set_sends` / `set_automation` 平衡 →
+   `analyze_project` 看响度 → `master_project(as_track=true)` 或 `export_wav` / `export_midi`。
+
+**注意**：初稿是**音频**，不能直接改音符；要改就 `transcribe_audio` 得到 MIDI 再编辑。
+分离出来的分轨仍然是音频；`swap_voice` 只换音色、不改唱法。
+
+### 路线 B：AI 写歌不可用 —— 自己写 MIDI + 自主配器 / 捏音色
+
+`compose.available=false`（缺 audio.cpp 引擎或 YuE2 权重）、或用户明确不要 AI 初稿时走这条。
+这也是下面「0–5 步」的主线：
+
+1. 按 `genres.md` / `theory.md` / `rhythm.md` 做风格卡与纸面设计；
+2. `set_tempo` / `set_time_signature` / `set_project_harmony` / `set_project_sections`；
+3. `add_track` → `list_plugins` / `find_instrument` → `set_track_instrument` → `set_track_meta`；
+   需要定制音色时读 `sound-design.md`，`list_synth_presets` → `preview_synth` → `set_params`；
+4. `add_clip` → `add_notes`（批量）→ 律动（`quantize_notes` / `apply_swing` / `strum_notes` /
+   `humanize_notes`）→ 自检（`analyze_harmony` / `analyze_track_overlap` / `get_track_note_stats`）；
+5. 混音与交付同路线 A 第 4 步；要给别人继续编曲就 `export_midi`。
+
+### 组件没装时怎么办
+
+先把「缺什么、多大、装完能得到什么」讲清楚，再问用户；**用户同意后**才
+`install_runtime(id, confirm=true)` / `download_model(id, confirm=true)`（高风险，Harness 可能再弹审批）。
+用户不想装就直接走 B——不要反复劝、也不要假装已经装好。
+
 ## 0. 先判断需求属于哪一类
+
 
 | 用户说法 | 你要先定的事 | 不要做的事 |
 | --- | --- | --- |

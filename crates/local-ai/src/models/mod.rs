@@ -157,6 +157,8 @@ pub struct Availability {
     pub beat_this: Option<PathBuf>,
     /// 歌声合成（SoulX-Singer 9 图整组）的目录 —— 整组齐备才算可用。
     pub singing: Option<PathBuf>,
+    /// 音色替换（SoulX-Singer-SVC 7 图整组）的目录 —— 整组齐备才算可用。
+    pub svc: Option<PathBuf>,
 }
 
 impl Availability {
@@ -167,6 +169,7 @@ impl Availability {
             || self.htdemucs.is_some()
             || self.beat_this.is_some()
             || self.singing.is_some()
+            || self.svc.is_some()
     }
 }
 
@@ -183,6 +186,7 @@ pub fn availability() -> Availability {
         htdemucs: find(HTDEMUCS_FILE),
         beat_this,
         singing: crate::singing::model_dir(),
+        svc: crate::svc::model_dir(),
     }
 }
 

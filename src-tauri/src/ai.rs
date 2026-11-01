@@ -119,6 +119,11 @@ impl AiRuntime {
             message: self.message.lock().unwrap().clone(),
         }
     }
+
+    /// 请求取消（下一次进度回调时停下）。与 `ai_cancel` 命令同一语义。
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 /// 取当前任务状态。
@@ -197,7 +202,8 @@ pub fn ai_start(
         std::thread::Builder::new()
             .name("ai-daw-master".into())
             .spawn(move || {
-                let outcome = run_master_job(&thread_app, &thread_runtime, &options);
+                // 线程里 panic 也要收尾：否则 `running` 永远为真、进度条卡住（见 crate::job）。
+                let outcome = crate::job::guard(|| run_master_job(&thread_app, &thread_runtime, &options));
                 finish(&thread_app, &thread_runtime, outcome);
             })
             .map_err(|e| e.to_string())?;
@@ -213,13 +219,16 @@ pub fn ai_start(
     std::thread::Builder::new()
         .name("ai-daw-ai".into())
         .spawn(move || {
-            let outcome = run_job(
-                &thread_app,
-                &thread_runtime,
-                &kind,
-                &input,
-                model.as_deref(),
-            );
+            // 线程里 panic 也要收尾：否则 `running` 永远为真、进度条卡住（见 crate::job）。
+            let outcome = crate::job::guard(|| {
+                run_job(
+                    &thread_app,
+                    &thread_runtime,
+                    &kind,
+                    &input,
+                    model.as_deref(),
+                )
+            });
             finish(&thread_app, &thread_runtime, outcome);
         })
         .map_err(|e| e.to_string())?;
@@ -833,6 +842,22 @@ fn run_master_job(
         return Ok("已取消".into());
     }
 
+    land_master_audio(app, &project, processed, channels, &report)
+}
+
+/// 母带链跑完之后「写文件 + 进素材缓存 + 落成一条新音频轨」。
+///
+/// 界面任务（[`run_master_job`]）与 MCP 的 `master_project(as_track=true)` 共用这一段：
+/// 两边的区别只在渲染调度（进度 / 取消），落地必须完全一致，否则同一首歌两条路径会得到
+/// 不同的轨道内容。
+fn land_master_audio(
+    app: &tauri::AppHandle,
+    project: &ai_daw_engine::model::Project,
+    processed: Vec<f32>,
+    channels: usize,
+    report: &ai_daw_mastering::MasterReport,
+) -> Result<String, String> {
+    let state = app.state::<AppState>();
     let frames = processed.len() / channels;
     let seconds = frames as f64 / MASTER_SAMPLE_RATE as f64;
     let path = ai_output_path(app, "master")?;
@@ -843,7 +868,7 @@ fn run_master_job(
             .map_err(|e| e.to_string())?;
     }
     // 先把要用的数字与长度算出来，再交出 `processed` 的所有权。
-    let length = crate::commands::natural_length_beats(&project, 0.0, seconds);
+    let length = crate::commands::natural_length_beats(project, 0.0, seconds);
     state.assets.insert(
         &path,
         Arc::new(DecodedAudio {
@@ -881,6 +906,26 @@ fn run_master_job(
             String::new()
         }
     ))
+}
+
+/// **同步母带**：渲染 → 母带链 → 落成一条新音频轨（MCP 的 `as_track=true` 用）。
+///
+/// 与界面任务走同一段落地逻辑（[`land_master_audio`]），只是不经过 `AiRuntime` 的进度 /
+/// 取消状态机——MCP 调用本身就是阻塞的，再挂一个看不见的进度条没有意义。
+pub(crate) fn master_to_track(
+    app: &tauri::AppHandle,
+    options: &ai_daw_mastering::MasterOptions,
+) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let inputs = crate::commands::render_inputs(&state);
+    let project = inputs.project.clone();
+    let buffer = crate::commands::render_offline(inputs, MASTER_SAMPLE_RATE, MASTER_TAIL_SECONDS);
+    let channels = buffer.channels();
+    let (processed, report) =
+        ai_daw_mastering::master(buffer.data(), channels, MASTER_SAMPLE_RATE as f64, options)
+            .map_err(|e| e.to_string())?;
+    drop(buffer);
+    land_master_audio(app, &project, processed, channels, &report)
 }
 
 /// AI 产出的文件路径：应用数据目录 `local-ai/<kind>-<epochms>.wav`。

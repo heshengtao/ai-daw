@@ -1018,6 +1018,32 @@
     box-shadow: 0 0 0 2px rgb(var(--md-primary) / 0.22);
   }
 
+  /* 多行输入与 `.m3-input` 同一套配色 / 焦点环，只是改成圆角矩形而不是药丸。 */
+  .m3-textarea {
+    width: 100%;
+    min-height: 84px;
+    box-sizing: border-box;
+    padding: 8px 12px;
+    border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+    border-radius: 14px;
+    background-color: rgb(var(--md-surface-container-highest));
+    color: rgb(var(--md-on-surface));
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+  }
+
+  .m3-textarea::placeholder {
+    color: rgb(var(--md-on-surface-muted));
+  }
+
+  .m3-textarea:focus {
+    border-color: rgb(var(--md-primary));
+    box-shadow: 0 0 0 2px rgb(var(--md-primary) / 0.22);
+  }
+
   /* 卡片内右对齐的操作区 */
   .m3-card-actions {
     display: flex;

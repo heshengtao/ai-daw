@@ -70,6 +70,9 @@ sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tar = "0.4"
 flate2 = "1"
+# Linux 的 CUDA 组件（NVIDIA redist）只发 `.tar.xz`：`tar` 认不了 xz，这里补一个流式解码器。
+# `xz2` 是 liblzma 的绑定（Windows 上随 build 自带源码），解压是流式的，不会把 1 GB 读进内存。
+xz2 = "0.1"
 
 # 音色记忆库：插件二进制状态以 base64 存进 JSON，避免 Vec<u8> 变成数字数组。
 base64 = "0.22"

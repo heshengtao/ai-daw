@@ -152,12 +152,40 @@ export interface MixerChannel {
   solo: boolean;
 }
 
+/** 一帧电平表读数（线性峰值 + 增益衰减）。 */
+export interface MeterValue {
+  /** 左声道峰值（线性，1.0 = 0 dBFS）。 */
+  peak_l: number;
+  /** 右声道峰值（线性）。 */
+  peak_r: number;
+  /** 增益衰减（dB，正数 = 压下去多少）。 */
+  gr_db: number;
+  /** 自上次清零以来出现过削波。 */
+  clipped: boolean;
+}
+
+/** 某条轨道的一帧读数。 */
+export interface TrackMeter {
+  track: number;
+  value: MeterValue;
+}
+
+/** 一次 `mixer_meters` 轮询的结果。 */
+export interface MeterSnapshot {
+  master: MeterValue;
+  tracks: TrackMeter[];
+}
+
 /** 一路发送（aux send）：把本轨推子后的信号按增益送进目标轨道。 */
 export interface Send {
   /** 目标轨道 id（通常是一条总线轨道）。 */
   target: number;
   /** 发送增益（dB）。 */
   gain_db: number;
+  /** 取点：推子前 / 推子后（缺省推子后）。 */
+  mode?: "pre" | "post";
+  /** 这一路是否被哑掉（缺省 false）。 */
+  mute?: boolean;
 }
 
 /** 自动化曲线上的一个关键点。 */
@@ -180,6 +208,10 @@ export interface PluginInstance {
   plugin_id: string;
   params: Record<string, number>;
   state: number[];
+  /** 是否参与处理；`false` = 旁通。后端为 `true` 时不写这个键。 */
+  enabled?: boolean;
+  /** 侧链（键输入）来源；不写 = 不接。 */
+  sidechain?: { track: number };
 }
 
 export interface Track {
@@ -276,6 +308,8 @@ export interface Project {
   transport: Transport;
   tracks: Track[];
   master: MixerChannel;
+  /** 主总线插入链；空时后端不写这个键。 */
+  master_effects?: PluginInstance[];
   /** 小节和弦表；空时后端不写这个键。 */
   harmony?: HarmonyBar[];
   /** 段落表；空时后端不写这个键。 */
@@ -965,6 +999,112 @@ export interface SingingArgs {
   name?: string | null;
 }
 
+/** 音色替换任务状态（与后端 `svc::SvcStatus` 一一对应）。 */
+export interface SvcStatus {
+  /** 是否正在替换。 */
+  running: boolean;
+  /** 进度（0..1）。模型加载占前 20%，之后按区段推进。 */
+  progress: number;
+  /** 结束后的摘要或错误。 */
+  message: string | null;
+}
+
+/** YuE2 引擎（audio.cpp `audiocpp_server` 子进程）的状态（与后端 `yue_engine::EngineStatus` 一一对应）。 */
+export interface YueEngineStatus {
+  /** `stopped` / `starting` / `ready` / `error`。 */
+  state: "stopped" | "starting" | "ready" | "error";
+  /** 监听端口；没起时为空。 */
+  port: number | null;
+  /** 实际用的后端：`cuda13` / `cuda12` / `vulkan` / `cpu`。 */
+  device: string;
+  /** 权重 id（`yue2-q8-0` 这类）。 */
+  model: string;
+  /** 启动中 / 出错时的一句话。 */
+  message: string | null;
+  /** 引擎日志最后几行。 */
+  log: string;
+}
+
+/** 一次写歌任务的状态（与后端 `yue_engine::JobStatus` 一一对应）。 */
+export interface YueJobStatus {
+  /** `idle` / `running` / `done` / `failed` / `cancelled`。 */
+  state: "idle" | "running" | "done" | "failed" | "cancelled";
+  /** 已经跑了多少秒（生成是分钟级的，界面上按秒走）。 */
+  elapsed: number;
+  /** 完成时的摘要 / 失败原因。 */
+  message: string | null;
+  /** 落地的音频路径。 */
+  audio: string | null;
+  /** 落地的 ABC 谱（模型给得出时）。 */
+  score: string | null;
+  /** 成品时长（秒）。 */
+  seconds: number | null;
+}
+
+/** 写歌参数（与后端 `yue_engine::ComposeArgs` 一一对应）。 */
+export interface YueComposeArgs {
+  /** 风格标签（逗号分隔）。 */
+  style: string;
+  /** 歌词（可带 `[Verse]` / `[Chorus]` 结构标签）。 */
+  lyrics: string;
+  /** 直接给一段 ABC 谱（空 = 让模型自己写）。 */
+  abc?: string;
+  /** 目标时长（秒，15..=360）。 */
+  duration?: number;
+  /** 流匹配步数（1..=128）。 */
+  steps?: number;
+  /** 种子（-1 = 随机）。 */
+  seed?: number;
+  /** 结构模式：`full`（带和弦的谱）/ `melody`（只要旋律）/ `off`（跳过符号阶段）。 */
+  cot?: string;
+  /** CFG：负值 = 用协议默认。 */
+  cfg_scale?: number;
+  /** 指定权重 id；省略 = 已安装的默认档。 */
+  model?: string | null;
+  /** 生成结果插到这条轨道下面（轨道 id；省略 = 追加到末尾）。 */
+  after_track?: number | null;
+  /** 新轨道的名字。 */
+  name?: string;
+}
+
+/** 音色替换的模型状态（7 张 ONNX 图整组）。 */
+export interface SvcModels {
+  /** 是否有任一档已就位。 */
+  installed: boolean;
+  /** 默认档的目录；未安装时为 null。 */
+  dir: string | null;
+  /** 需要下载的字节数（默认档）。 */
+  approx_bytes: number;
+}
+
+/**
+ * 音色替换参数（与后端 `svc::SwapArgs` 一一对应）。
+ *
+ * 目标音频给出「唱什么」，参考声线给出「换成谁」；两者都应是单声部人声。
+ */
+export interface SwapArgs {
+  /** 目标音频轨道 id（用它的第一个音频片段）。 */
+  track: number;
+  /** 指定片段 id；省略 = 第一个音频片段。 */
+  clip?: number | null;
+  /** 参考音色：音频文件路径。 */
+  reference?: string | null;
+  /** 参考音色：用这条轨道的第一个音频片段。 */
+  reference_track?: number | null;
+  /** 参考音色：人声音色库 id（优先级最高）。 */
+  reference_voice?: string | null;
+  /** 模型：`soulx-svc-fp16hq` / `soulx-svc-fp32`；省略 = 已安装的默认档。 */
+  model?: string | null;
+  /** 采样步数（缺省 32）。 */
+  steps?: number | null;
+  /** 噪声种子（缺省 0）。 */
+  seed?: number | null;
+  /** 整体移调（半音，-24..=24）。 */
+  pitch_shift?: number | null;
+  /** 新轨道名。 */
+  name?: string | null;
+}
+
 /**
  * 一个模型清单条目 + 本地状态（与后端 `models::ModelStatus` 一一对应）。
  *
@@ -1037,13 +1177,15 @@ export interface ModelProgress {
 }
 
 /**
- * 执行后端（Execution Provider）种类。三个都**随包、零下载**。
+ * 执行后端（Execution Provider）种类。
  *
  * - `cpu`：纯 CPU，全平台可用，**默认**；
- * - `coreml`：macOS Apple Silicon（Intel Mac 没有对应预编译构建）；
- * - `directml`：Windows。
+ * - `coreml`：macOS Apple Silicon（Intel Mac 没有对应运行时）；
+ * - `directml`：Windows；
+ * - `cuda12`：NVIDIA CUDA 12（Windows / Linux x86_64，老卡 / 老驱动）；
+ * - `cuda13`：NVIDIA CUDA 13（Windows / Linux x86_64，Turing 起 + 驱动 580+）。
  */
-export type BackendKind = "cpu" | "coreml" | "directml";
+export type BackendKind = "cpu" | "coreml" | "directml" | "cuda12" | "cuda13";
 
 /** 执行后端偏好（与后端 `manager::BackendPreference` 一一对应）。 */
 export type BackendPreference = BackendKind;
@@ -1058,6 +1200,61 @@ export interface BackendOption {
   note: string;
   /** 是否本机平台支持（不可用的不会出现在设置页里）。 */
   available: boolean;
+  /** 它需要哪一份运行时（`cpu` / `cuda` / …）。 */
+  runtime: string;
+  /** 那份运行时装好了没有。 */
+  runtime_installed: boolean;
+  /** 需要下载多少字节（0 = 已装好）。 */
+  download_bytes: number;
+  /**
+   * 还缺哪些**组件**（运行时 id，例如 `cufft`）。空 = 齐了 / 与它无关。
+   *
+   * CUDA 的 provider 硬依赖 cudart / cuBLAS / cuFFT / cuDNN，缺一个就载不进来，
+   * ORT 会**静默回落 CPU**。
+   */
+  missing: string[];
+}
+
+/** 一个运行时的本地状态（与后端 `runtimes::RuntimeStatus` 一一对应）。 */
+export interface RuntimeStatus {
+  id: string;
+  label: string;
+  note: string;
+  bytes: number;
+  installed: boolean;
+  selected: boolean;
+  /** 随安装包分发（不可删除）。 */
+  bundled: boolean;
+  loaded: boolean;
+  dir: string;
+  /** 属于哪一套：`ort`（ONNX Runtime）/ `audiocpp`（audio.cpp 引擎）/ `cuda12` · `cuda13`（CUDA 组件）。 */
+  group: "ort" | "audiocpp" | "cuda12" | "cuda13" | "cuda";
+  /** 是否是引擎的默认那一份（audio.cpp 的 CPU 兜底；ORT 恒为 false）。 */
+  core: boolean;
+  /** 引擎是否处于「自动挑后端」状态（没手动选过）；ORT 恒为 false。 */
+  automatic: boolean;
+  /** 引擎「自动模式」会用的设备（`cpu` / `vulkan` / `cuda12` / `cuda13`）；ORT 恒为空。 */
+  device: string;
+}
+
+/** 本机已有的一份 CUDA 版 ONNX Runtime（与后端 `runtimes::DiscoveredRuntime` 一一对应）。 */
+export interface DiscoveredRuntime {
+  /** core 与 provider 同在一个目录里。 */
+  dir: string;
+  /** 版本；读不到时为空串。 */
+  version: string;
+  /** `python` / `conda` / `file`。 */
+  source: string;
+  /** CUDA 大版本（`12` / `13`）：借来的那份会放进同版本的组件目录。 */
+  flavor: string;
+}
+/** 运行时下载进度（`engine://runtime` 事件载荷）。 */
+export interface RuntimeProgress {
+  id: string;
+  state: "downloading" | "done" | "error";
+  received: number;
+  total: number;
+  message: string | null;
 }
 
 /** 后端选择 + 本机情况（与后端 `backends::BackendInfo` 一一对应）。 */
@@ -1066,8 +1263,20 @@ export interface BackendInfo {
   preference: BackendPreference;
   /** 当前生效的后端（偏好在本机不支持时回落 CPU）。 */
   current: BackendKind;
+  /** 本机推荐的后端（NVIDIA 新卡 + 新驱动时是 `cuda13`，老卡 `cuda12`，否则 `cpu`）。 */
+  recommended: BackendKind;
   /** 本机平台描述（展示用）。 */
   platform: string;
+  /** 进程里已经加载的运行时；未加载为 `null`。 */
+  loaded_runtime: string | null;
+  /** 选了新后端 / 新运行时但还没重启。 */
+  restart_required: boolean;
+  /**
+   * CUDA provider 是否**真的注册进了 ONNX Runtime**。
+   *
+   * `false` 时即便选了 CUDA，本次进程建的会话也只会跑在 CPU 上（ORT 会静默忽略它）。
+   */
+  ep_ready: boolean;
   /** 全部选项（含本机不支持的）。 */
   options: BackendOption[];
 }
@@ -1161,6 +1370,13 @@ export interface ManagerInstallRequest {
   url: string;
   sha256: string;
   size: number;
+  /**
+   * 用户确认过的**第三方下载域名**（与后端 `is_trusted_download_host` 对应）。
+   *
+   * 官方源（GitHub / 魔搭 / Hugging Face / 大厂镜像）留空；第三方域名必须原样回传，
+   * 后端比对不上就拒绝下载——界面上给用户看的也是这个域名。
+   */
+  acknowledged_host?: string | null;
 }
 
 /** 代理取用方式（与后端 `manager::ProxyMode` 一一对应）。 */
@@ -1193,6 +1409,8 @@ export interface StoreNetwork {
   model_source_preference: ModelSourcePreference;
   /** **执行后端**偏好；`auto` = 按本机硬件推荐（默认）。 */
   backend_preference: BackendPreference;
+  /** audio.cpp 引擎在 CUDA 上是否启用 `cuda_perf` 预设（默认开）。 */
+  yue_cuda_perf: boolean;
 }
 
 /** 当前配置会解析成什么代理（不联网）。 */

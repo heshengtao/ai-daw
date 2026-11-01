@@ -227,6 +227,74 @@ fn describe_one(project: &Project, command: &Command) -> (String, Option<String>
                 num("value", *value as f64),
             ],
         ),
+        Command::SetEffectEnabled {
+            track,
+            index,
+            enabled,
+        } => (
+            "set_effect_enabled",
+            track_name(project, *track),
+            vec![
+                num("index", *index as f64),
+                num("enabled", if *enabled { 1.0 } else { 0.0 }),
+            ],
+        ),
+        Command::SetEffectSidechain {
+            track,
+            index,
+            source,
+        } => (
+            "set_effect_sidechain",
+            track_name(project, *track),
+            vec![
+                num("index", *index as f64),
+                num("source", source.map(|s| s.0 as f64).unwrap_or(0.0)),
+            ],
+        ),
+        Command::AddMasterEffect { plugin_id } => (
+            "add_master_effect",
+            Some("master".into()),
+            vec![text("plugin", plugin_id.clone())],
+        ),
+        Command::RemoveMasterEffect { index } => (
+            "remove_master_effect",
+            Some("master".into()),
+            vec![num("index", *index as f64)],
+        ),
+        Command::MoveMasterEffect { from, to } => (
+            "move_master_effect",
+            Some("master".into()),
+            vec![num("from", *from as f64), num("to", *to as f64)],
+        ),
+        Command::SetMasterEffectParam {
+            index,
+            param,
+            value,
+        } => (
+            "set_master_effect_param",
+            Some("master".into()),
+            vec![
+                num("index", *index as f64),
+                text("param", param.clone()),
+                num("value", *value as f64),
+            ],
+        ),
+        Command::SetMasterEffectEnabled { index, enabled } => (
+            "set_master_effect_enabled",
+            Some("master".into()),
+            vec![
+                num("index", *index as f64),
+                num("enabled", if *enabled { 1.0 } else { 0.0 }),
+            ],
+        ),
+        Command::SetMasterEffectSidechain { index, source } => (
+            "set_master_effect_sidechain",
+            Some("master".into()),
+            vec![
+                num("index", *index as f64),
+                num("source", source.map(|s| s.0 as f64).unwrap_or(0.0)),
+            ],
+        ),
 
         Command::SplitClip { track, beat, .. } => (
             "split_clip",

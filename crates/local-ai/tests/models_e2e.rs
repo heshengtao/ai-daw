@@ -44,7 +44,10 @@ fn transcribes_a_chord_recorded_at_48k_stereo() {
     let notes = models::basic_pitch::transcribe(&audio, 2, sr, &|_| true).expect("转写应成功");
     let pitches: Vec<u8> = notes.iter().map(|n| n.pitch).collect();
     for want in [60u8, 64, 67] {
-        assert!(pitches.contains(&want), "48k 立体声下应检测到 MIDI {want}：{pitches:?}");
+        assert!(
+            pitches.contains(&want),
+            "48k 立体声下应检测到 MIDI {want}：{pitches:?}"
+        );
     }
     assert!(notes.iter().all(|n| n.duration_sec > 0.0 && n.velocity > 0));
 }
@@ -58,10 +61,19 @@ fn enhance_keeps_length_and_lowers_the_noise_floor() {
     let sr = 48_000.0;
     let audio = chord_with_hiss(2.0, sr);
     let out = models::localvqe::enhance(&audio, 2, sr, &|_| true).expect("降噪应成功");
-    assert_eq!(out.len(), audio.len(), "输出必须与输入同长度（时间轴不能变）");
+    assert_eq!(
+        out.len(),
+        audio.len(),
+        "输出必须与输入同长度（时间轴不能变）"
+    );
     assert!(out.iter().all(|v| v.is_finite()), "输出不应出现 NaN/inf");
     // 静音帧仍然静音；整体能量应被压低（模型是语音降噪，对音乐也会压）。
-    assert!(rms(&out) < rms(&audio), "降噪后总能量应更低：{} -> {}", rms(&audio), rms(&out));
+    assert!(
+        rms(&out) < rms(&audio),
+        "降噪后总能量应更低：{} -> {}",
+        rms(&audio),
+        rms(&out)
+    );
 }
 
 #[test]
@@ -69,7 +81,9 @@ fn resampling_to_model_rates_round_trips_a_tone() {
     // 这条不依赖权重：确认 48k → 16k → 48k 不会把 440 Hz 弄丢（模型前的准备工作）。
     let sr = 48_000.0;
     let n = (sr * 0.5) as usize;
-    let x: Vec<f32> = (0..n).map(|i| (std::f64::consts::TAU * 440.0 * i as f64 / sr).sin() as f32 * 0.5).collect();
+    let x: Vec<f32> = (0..n)
+        .map(|i| (std::f64::consts::TAU * 440.0 * i as f64 / sr).sin() as f32 * 0.5)
+        .collect();
     let down = resample::resample(&x, sr, 16_000.0);
     let back = resample::resample(&down, 16_000.0, sr);
     assert!((back.len() as i64 - n as i64).abs() <= 1);
@@ -84,7 +98,9 @@ fn resampling_to_model_rates_round_trips_a_tone() {
 
 /// 无状态伪噪声（同一个 `i` 恒定给出同一个值；测试可复现）。
 fn noise(i: usize) -> f64 {
-    let mut x = (i as u32).wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+    let mut x = (i as u32)
+        .wrapping_mul(747_796_405)
+        .wrapping_add(2_891_336_453);
     x ^= x >> 15;
     x = x.wrapping_mul(2_246_822_519);
     x ^= x >> 13;
@@ -125,7 +141,8 @@ fn four_on_the_floor(bpm: f64, bars: usize, sr: f64) -> Vec<f32> {
             add(&mut mono, t, 0.2, sr, |i| {
                 let ii = i as f64;
                 let env = (-ii / (0.055 * sr)).exp();
-                env * (0.35 * (std::f64::consts::TAU * 190.0 * ii / sr).sin() + 0.65 * noise(i)) * 0.6
+                env * (0.35 * (std::f64::consts::TAU * 190.0 * ii / sr).sin() + 0.65 * noise(i))
+                    * 0.6
             });
         }
         // 闭镲：一阶差分噪声 ≈ 高通。
@@ -171,7 +188,8 @@ fn read_wav16(path: &std::path::Path) -> Option<Vec<f32>> {
             let n = (size / 2).min((bytes.len() - body) / 2);
             let mut out = Vec::with_capacity(n);
             for i in 0..n {
-                let s = i16::from_le_bytes(bytes[body + i * 2..body + i * 2 + 2].try_into().unwrap());
+                let s =
+                    i16::from_le_bytes(bytes[body + i * 2..body + i * 2 + 2].try_into().unwrap());
                 out.push(s as f32 / 32768.0);
             }
             return Some(out);
@@ -193,18 +211,31 @@ fn detects_120_bpm_four_four_on_a_simple_loop() {
     let det = models::beat_this::detect(&synth, 2, sr, &|_| true).expect("节拍检测应成功");
     assert!((det.bpm - 120.0).abs() < 2.0, "BPM 应接近 120：{}", det.bpm);
     assert_eq!((det.time_sig_num, det.time_sig_den), (4, 4), "应是 4/4");
-    assert!(det.downbeats >= 6, "8 小节应至少检出 6 个重拍：{}", det.downbeats);
+    assert!(
+        det.downbeats >= 6,
+        "8 小节应至少检出 6 个重拍：{}",
+        det.downbeats
+    );
     let first = det.first_downbeat_sec.expect("应检出重拍");
     assert!(first < 0.15, "首重拍应几乎落在起点：{first}");
 
     // 2) 若 `tools/make-test-song.py` 生成的曲子也在，直接验它——用户拿的就是这个文件。
-    let song =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-files/beat-test-120bpm.wav");
+    let song = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-files/beat-test-120bpm.wav");
     match read_wav16(&song) {
         Some(audio) => {
-            let det = models::beat_this::detect(&audio, 2, sr, &|_| true).expect("脚本曲子的检测应成功");
-            assert!((det.bpm - 120.0).abs() < 2.0, "脚本曲子的 BPM 应接近 120：{}", det.bpm);
-            assert_eq!((det.time_sig_num, det.time_sig_den), (4, 4), "脚本曲子应是 4/4");
+            let det =
+                models::beat_this::detect(&audio, 2, sr, &|_| true).expect("脚本曲子的检测应成功");
+            assert!(
+                (det.bpm - 120.0).abs() < 2.0,
+                "脚本曲子的 BPM 应接近 120：{}",
+                det.bpm
+            );
+            assert_eq!(
+                (det.time_sig_num, det.time_sig_den),
+                (4, 4),
+                "脚本曲子应是 4/4"
+            );
         }
         None => eprintln!("（未找到 test-files/beat-test-120bpm.wav，跳过脚本曲子的校验）"),
     }

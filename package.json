@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
     "fetch:registry": "node tools/fetch-plugin-registry.mjs",
+    "fetch:ort": "node tools/fetch-ort-runtime.mjs",
     "fetch:articulation-maps": "node tools/fetch-articulation-maps.mjs",
     "build:aidaw": "bash tools/build-aidaw.sh",
     "build:vst3-helper": "bash tools/build-vst3-helper.sh",

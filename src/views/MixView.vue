@@ -1,30 +1,37 @@
 <script setup lang="ts">
 /**
- * 混音视图：通道条靠左排列、占满整个高度。
- * 第一列固定是主输出，其后按工程顺序排列音轨——新增的轨道出现在最右边。
+ * 混音视图：通道条横向排列，第一列固定是主输出。
  *
- * 可执行的操作：
- * - 拖动推子 → 改增益；拖动声像滑块 → 改声像；
- * - M / S → 静音 / 独奏（独奏时其余轨道自动静音，与播放器语义一致）。
+ * 一个通道条从上到下是主流调音台的顺序：**名字 → 插入 → 发送 → 声像 → 推子 + 表 → 读数 →
+ * 静音/独奏**。这样眼睛不用来回跳：越往下越是「末端」的操作。
  *
- * 拖动过程中调用 `monitorMix`（只改实时声音、不进历史），松手时才提交一次正式编辑，
+ * 拖动推子时调用 `monitorMix`（只改实时声音、不进历史），松手才提交一次正式编辑，
  * 因此一次拖动只产生**一条**撤销记录，同时又能实时听到变化。
+ *
+ * 宽度是**固定 112 px**：名字再长也只截断，绝不会把通道条撑宽——这一点由 `min-width: 0`
+ * 与省略号共同保证（flex 项默认 `min-width: auto`，长名字会把整条撑开）。
  */
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import Md3Slider from "@/components/common/Md3Slider.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
+import ChannelMeter from "@/components/common/ChannelMeter.vue";
+import InsertSlot from "@/components/common/InsertSlot.vue";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
+import { usePluginsStore } from "@/stores/plugins";
+import { useMetersStore } from "@/stores/meters";
 import { trackHue } from "@/utils/trackColor";
 import { capturePointer } from "@/utils/pointer";
 import { useI18n } from "@/i18n";
-import type { MixerState } from "@/api/types";
+import type { MixerChannel, PluginInstance } from "@/api/types";
 
 const store = useProjectStore();
 const i18n = useI18n();
 const selection = useSelectionStore();
 const layout = useLayoutStore();
+const plugins = usePluginsStore();
+const meters = useMetersStore();
 
 /** 与引擎 `MixerChannel` 的夹紧范围保持一致。 */
 const MIN_DB = -60;
@@ -33,8 +40,10 @@ const MAX_DB = 12;
 const STEP_DB = 0.5;
 /** 主输出在草稿状态里的哨兵 id。 */
 const MASTER = -1;
+/** 通道条上最多直接显示几个插入 / 发送槽，多出来的折成「+N」。 */
+const MAX_SLOTS = 3;
 
-const MASTER_DEFAULT: MixerState = { gain_db: 0, pan: 0, mute: false, solo: false };
+const MASTER_DEFAULT: MixerChannel = { gain_db: 0, pan: 0, mute: false, solo: false };
 
 interface Strip {
   id: number;
@@ -42,10 +51,13 @@ interface Strip {
   name: string;
   /** 主输出这类**内置条**的名字走 i18n（有 nameKey 就用它）。 */
   nameKey?: string;
-  mix: MixerState;
+  mix: MixerChannel;
   hue: number | null;
   instrument: boolean;
   master: boolean;
+  inserts: PluginInstance[];
+  /** 发送摘要：目标名 + 增益。 */
+  sends: { target: number; name: string; gain: number }[];
 }
 
 /** 推子的显示名：内置条翻译，轨道条用原文。 */
@@ -54,10 +66,24 @@ function stripName(s: Strip): string {
 }
 
 const tracks = computed(() => store.project?.tracks ?? []);
-const masterMix = computed<MixerState>(() => store.project?.master ?? MASTER_DEFAULT);
+const masterMix = computed<MixerChannel>(() => store.project?.master ?? MASTER_DEFAULT);
+
+function trackName(id: number): string {
+  return tracks.value.find((t) => t.id === id)?.name ?? `#${id}`;
+}
 
 const strips = computed<Strip[]>(() => [
-  { id: MASTER, name: "", nameKey: "mix.master", mix: masterMix.value, hue: null, instrument: true, master: true },
+  {
+    id: MASTER,
+    name: "",
+    nameKey: "mix.master",
+    mix: masterMix.value,
+    hue: null,
+    instrument: true,
+    master: true,
+    inserts: store.project?.master_effects ?? [],
+    sends: [],
+  },
   ...tracks.value.map((t, i) => ({
     id: t.id,
     name: t.name,
@@ -65,6 +91,12 @@ const strips = computed<Strip[]>(() => [
     hue: trackHue(i),
     instrument: Boolean(t.instrument),
     master: false,
+    inserts: t.effects,
+    sends: (t.sends ?? []).map((s) => ({
+      target: s.target,
+      name: trackName(s.target),
+      gain: s.gain_db,
+    })),
   })),
 ]);
 
@@ -74,6 +106,21 @@ const anySolo = computed(() => tracks.value.some((t) => t.mixer.solo));
 function dimmed(s: Strip): boolean {
   return anySolo.value && !s.master && !s.mix.solo && !s.mix.mute;
 }
+
+function pluginName(id: string): string {
+  return plugins.name(id);
+}
+
+/** 某条通道的表（主输出单独一条）。 */
+function meterOf(s: Strip) {
+  return s.master ? meters.master : meters.track(s.id);
+}
+
+function resetClip(): void {
+  void meters.clearClip();
+}
+
+// ---- 推子拖动 ----
 
 /** 正在拖动的通道；拖动期间显示草稿值而不是工程值。 */
 const dragging = ref<number | null>(null);
@@ -157,10 +204,12 @@ async function endGainDrag(): Promise<void> {
 onMounted(() => {
   window.addEventListener("pointerup", endGainDrag);
   window.addEventListener("pointercancel", endGainDrag);
+  meters.start();
 });
 onUnmounted(() => {
   window.removeEventListener("pointerup", endGainDrag);
   window.removeEventListener("pointercancel", endGainDrag);
+  meters.stop();
 });
 
 /** 声像滑块：拖动时监听，松手提交。 */
@@ -196,6 +245,37 @@ async function toggleSolo(s: Strip): Promise<void> {
     layout.notify(i18n.t("error.toggleSolo", { error: String(err) }));
   }
 }
+
+// ---- 插入 / 发送 ----
+
+/** 点插入槽：选中该轨并打开检查器（参数编辑在那边）。 */
+function openInsert(s: Strip): void {
+  if (!s.master) selection.selectTrack(s.id);
+  layout.openTab("inspector");
+}
+
+/** 旁通 / 启用一个插入。 */
+async function toggleInsert(s: Strip, index: number): Promise<void> {
+  const fx = s.inserts[index];
+  if (!fx) return;
+  try {
+    if (s.master) await store.setMasterEffectEnabled(index, !(fx.enabled ?? true));
+    else await store.setEffectEnabled(s.id, index, !(fx.enabled ?? true));
+  } catch (err) {
+    layout.notify(String(err));
+  }
+}
+
+/** 「+」：同样打开检查器，在那边挑插件（不在这里塞一个二级弹窗）。 */
+function addInsert(s: Strip): void {
+  openInsert(s);
+}
+
+/** 发送摘要的显示名：过长的目标名截断由 CSS 负责。 */
+function sendLabel(s: { name: string; gain: number }): string {
+  const gain = s.gain > 0 ? `+${s.gain.toFixed(1)}` : s.gain.toFixed(1);
+  return `${s.name} ${gain}`;
+}
 </script>
 
 <template>
@@ -212,15 +292,57 @@ async function toggleSolo(s: Strip): Promise<void> {
         }"
       >
         <button
-          class="strip-name text-label-md"
+          class="strip-name"
+          :title="stripName(s)"
           :aria-label="s.master ? i18n.t('mix.master') : i18n.t('mix.selectNamed', { name: s.name })"
           @click="s.master ? selection.clear() : selection.selectTrack(s.id)"
         >
-          {{ stripName(s) }}
+          <span
+            v-if="!s.master"
+            class="hue"
+            :style="s.hue !== null ? { '--track-hue': String(s.hue) } : undefined"
+          />
+          <span class="name-text">{{ stripName(s) }}</span>
         </button>
 
+        <!-- 插入：最多 3 个，多出来的折成 +N -->
+        <div class="slots" :class="{ master: s.master }">
+          <InsertSlot
+            v-for="(fx, i) in s.inserts.slice(0, MAX_SLOTS)"
+            :key="`${fx.plugin_id}-${i}`"
+            :name="pluginName(fx.plugin_id)"
+            :enabled="fx.enabled ?? true"
+            :sidechain="fx.sidechain ? trackName(fx.sidechain.track) : null"
+            @toggle="toggleInsert(s, i)"
+            @open="openInsert(s)"
+          />
+          <span v-if="s.inserts.length > MAX_SLOTS" class="more">
+            +{{ s.inserts.length - MAX_SLOTS }}
+          </span>
+          <button
+            class="add-insert"
+            :aria-label="i18n.t('mix.addInsert')"
+            :title="i18n.t('mix.addInsert')"
+            @click="addInsert(s)"
+          >
+            +
+          </button>
+        </div>
+
+        <!-- 发送：只读摘要（编辑在右侧混音面板），让「有没有送去总线」一眼可见 -->
+        <div v-if="s.sends.length > 0" class="sends">
+          <span
+            v-for="send in s.sends.slice(0, 2)"
+            :key="send.target"
+            class="send-chip"
+            :title="i18n.t('mix.sendTo', { name: send.name })"
+          >
+            {{ sendLabel(send) }}
+          </span>
+          <span v-if="s.sends.length > 2" class="more">+{{ s.sends.length - 2 }}</span>
+        </div>
+
         <div v-if="!s.master" class="pan-row">
-          <span class="pan-label">PAN</span>
           <Md3Slider
             class="pan-slider"
             :model-value="shownPan(s)"
@@ -231,26 +353,32 @@ async function toggleSolo(s: Strip): Promise<void> {
             @update:model-value="(v: number) => onPanInput(s, v)"
             @commit="(v: number) => onPanCommit(s, v)"
           />
-          <span class="pan-value tabular">{{ shownPan(s).toFixed(2) }}</span>
         </div>
 
-        <div
-          class="fader"
-          role="slider"
-          tabindex="0"
-          :aria-label="i18n.t('mix.gainNamed', { name: stripName(s) })"
-          :aria-valuemin="MIN_DB"
-          :aria-valuemax="MAX_DB"
-          :aria-valuenow="s.mix.gain_db"
-          @pointerdown="beginGainDrag($event, s)"
-          @pointermove="onGainMove($event, s)"
-        >
-          <div class="fader-rail" />
-          <div class="fader-fill" :style="{ height: `${faderRatio(shownGain(s)) * 100}%` }" />
-          <div class="fader-knob" :style="{ bottom: `${faderRatio(shownGain(s)) * 100}%` }" />
+        <div class="fader-row">
+          <div
+            class="fader"
+            role="slider"
+            tabindex="0"
+            :aria-label="i18n.t('mix.gainNamed', { name: stripName(s) })"
+            :aria-valuemin="MIN_DB"
+            :aria-valuemax="MAX_DB"
+            :aria-valuenow="s.mix.gain_db"
+            @pointerdown="beginGainDrag($event, s)"
+            @pointermove="onGainMove($event, s)"
+          >
+            <div class="fader-rail" />
+            <div class="fader-fill" :style="{ height: `${faderRatio(shownGain(s)) * 100}%` }" />
+            <div class="fader-knob" :style="{ bottom: `${faderRatio(shownGain(s)) * 100}%` }" />
+          </div>
+          <ChannelMeter
+            :value="meterOf(s)"
+            :label="stripName(s)"
+            @reset="resetClip"
+          />
         </div>
 
-        <span class="strip-gain text-label-sm tabular">{{ shownGain(s).toFixed(1) }}</span>
+        <span class="strip-gain tabular">{{ shownGain(s).toFixed(1) }}</span>
 
         <div v-if="!s.master" class="strip-buttons">
           <Tooltip :text="s.mix.mute ? i18n.t('tracks.unmute') : i18n.t('tracks.mute')">
@@ -276,18 +404,11 @@ async function toggleSolo(s: Strip): Promise<void> {
             </button>
           </Tooltip>
         </div>
-
-        <span
-          class="strip-tag"
-          :class="{ on: s.instrument && !s.master, master: s.master }"
-          :style="s.hue !== null ? { '--track-hue': String(s.hue) } : undefined"
-        >
-          {{ s.master ? i18n.t("mix.masterOut") : s.instrument ? i18n.t("mix.instrument") : i18n.t("mix.empty") }}
-        </span>
+        <div v-else class="strip-tag">{{ i18n.t("mix.masterOut") }}</div>
       </div>
 
       <p v-if="tracks.length === 0" class="mix-empty text-body-sm">
-        还没有音轨——新增轨道后会出现在右侧。
+        {{ i18n.t("mix.emptyTracks") }}
       </p>
     </div>
   </div>
@@ -307,134 +428,202 @@ async function toggleSolo(s: Strip): Promise<void> {
 .mix-strips {
   display: flex;
   align-items: stretch;
-  gap: 10px;
-  padding: 14px;
+  gap: 8px;
+  padding: 12px;
   min-width: 100%;
   box-sizing: border-box;
 }
 .strip {
-  flex: 0 0 124px;
+  /* 固定宽度 + min-width: 0：长轨道名只会被省略号截断，不会把通道条撑宽。 */
+  flex: 0 0 112px;
+  width: 112px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 10px;
-  border-radius: 22px;
+  align-items: stretch;
+  gap: 5px;
+  padding: 8px 7px 7px;
+  border-radius: 18px;
   background-color: var(--app-inset);
   border: 1px solid rgb(var(--md-outline-variant) / 0.35);
   transition: border-color 0.15s ease, opacity 0.15s ease;
+  overflow: hidden;
 }
 .strip.selected {
   border-color: rgb(var(--md-primary) / 0.65);
 }
 .strip.dimmed {
-  opacity: 0.55;
+  opacity: 0.45;
 }
 .strip.master {
-  background-color: rgb(var(--md-primary-container) / 0.55);
-  border-color: rgb(var(--md-primary) / 0.5);
+  background-color: rgb(var(--md-primary) / 0.08);
+  border-color: rgb(var(--md-primary) / 0.35);
 }
+
+/* 名字：单行省略，永远是 112px 里的一行 */
 .strip-name {
-  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+  height: 20px;
+  padding: 0 2px;
   border: 0;
-  padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: 6px;
   background: transparent;
   color: rgb(var(--md-on-surface));
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
   cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font: inherit;
 }
 .strip-name:hover {
   background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
 }
-/* 声像：小号自绘滑块 + 数值 */
-.pan-row {
-  width: 100%;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 5px;
+.name-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.pan-label {
-  font-size: 8.5px;
-  letter-spacing: 0.6px;
+.hue {
+  flex: 0 0 auto;
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background-color: hsl(var(--track-hue, 210) 60% 55%);
+}
+
+/* 插入槽 */
+.slots {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  min-height: 18px;
+}
+.add-insert {
+  height: 16px;
+  padding: 0;
+  border: 1px dashed rgb(var(--md-outline-variant) / 0.8);
+  border-radius: 5px;
+  background: transparent;
+  color: rgb(var(--md-on-surface-muted));
+  font-size: 11px;
+  line-height: 14px;
+  cursor: pointer;
+}
+.add-insert:hover {
+  color: rgb(var(--md-primary));
+  border-color: rgb(var(--md-primary) / 0.6);
+}
+.more {
+  font-size: 9px;
+  color: rgb(var(--md-on-surface-muted));
+  text-align: center;
+}
+
+/* 发送摘要 */
+.sends {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.send-chip {
+  font-size: 9px;
+  line-height: 14px;
+  padding: 0 4px;
+  border-radius: 4px;
   color: rgb(var(--md-on-surface-variant));
+  background-color: rgb(var(--md-on-surface) / 0.05);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 声像 */
+.pan-row {
+  min-width: 0;
+  padding: 0 1px;
 }
 .pan-slider {
-  height: 18px;
+  width: 100%;
+  min-width: 0;
 }
-.pan-value {
-  font-size: 9px;
-  color: rgb(var(--md-on-surface-variant));
-  min-width: 24px;
-  text-align: right;
+
+/* 推子 + 表 */
+.fader-row {
+  flex: 1 1 auto;
+  min-height: 70px;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 6px;
 }
-/* 推子：自绘轨道 + 已推部分 + 手柄，随高度拉伸；可拖动 */
 .fader {
   position: relative;
-  width: 22px;
-  flex: 1 1 auto;
-  min-height: 90px;
-  display: flex;
-  justify-content: center;
+  width: 26px;
+  min-width: 26px;
+  flex: 0 0 auto;
   cursor: ns-resize;
   touch-action: none;
-  outline: none;
-}
-.fader:focus-visible {
-  box-shadow: 0 0 0 2px rgb(var(--md-primary) / 0.5);
-  border-radius: 999px;
 }
 .fader-rail {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  border-radius: 999px;
-  background-color: rgb(var(--md-on-surface) / 0.14);
+  left: 50%;
+  top: 4px;
+  bottom: 4px;
+  width: 4px;
+  margin-left: -2px;
+  border-radius: 2px;
+  background-color: rgb(var(--md-on-surface) / 0.12);
 }
 .fader-fill {
   position: absolute;
-  bottom: 0;
-  width: 6px;
-  border-radius: 999px;
+  left: 50%;
+  bottom: 4px;
+  width: 4px;
+  margin-left: -2px;
+  border-radius: 2px;
   background-color: rgb(var(--md-primary) / 0.55);
 }
 .fader-knob {
   position: absolute;
-  width: 26px;
+  left: 50%;
+  width: 22px;
   height: 12px;
+  margin-left: -11px;
   margin-bottom: -6px;
-  border-radius: 999px;
+  border-radius: 4px;
   background-color: rgb(var(--md-primary));
-  box-shadow: var(--md-elevation-1);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
 }
-.strip.master .fader-knob {
-  background-color: rgb(var(--md-on-primary-container));
-}
+
 .strip-gain {
+  text-align: center;
+  font-size: 10.5px;
   color: rgb(var(--md-on-surface-variant));
-  font-variant-numeric: tabular-nums;
 }
+
 .strip-buttons {
   display: flex;
-  gap: 5px;
+  justify-content: center;
+  gap: 4px;
 }
 .mini {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 1px solid rgb(var(--md-outline-variant) / 0.7);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 0;
   background: transparent;
   color: rgb(var(--md-on-surface-variant));
-  font-size: 10.5px;
+  font-size: 9.5px;
   font-weight: 700;
   cursor: pointer;
   transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
@@ -452,38 +641,15 @@ async function toggleSolo(s: Strip): Promise<void> {
   border-color: rgb(var(--md-primary));
   color: rgb(var(--md-on-primary));
 }
-.mini:focus-visible {
-  outline: 2px solid rgb(var(--md-primary));
-  outline-offset: 1px;
-}
 .strip-tag {
-  font-size: 10px;
-  padding: 3px 10px;
-  border-radius: 999px;
-  background-color: rgb(var(--md-surface-container-highest));
-  color: rgb(var(--md-on-surface-muted));
-  white-space: nowrap;
-}
-.strip-tag.on {
-  background-color: hsl(var(--track-hue, 0) 45% 34%);
-  color: hsl(var(--track-hue, 0) 70% 90%);
-}
-.strip-tag.master {
-  background-color: rgb(var(--md-primary) / 0.22);
-  color: rgb(var(--md-on-primary-container));
-}
-.tabular {
-  font-variant-numeric: tabular-nums;
+  text-align: center;
+  font-size: 8.5px;
+  letter-spacing: 0.5px;
+  color: rgb(var(--md-primary));
 }
 .mix-empty {
   align-self: center;
-  padding: 0 8px;
+  margin: 0 12px;
   color: rgb(var(--md-on-surface-muted));
-}
-@media (prefers-reduced-motion: reduce) {
-  .strip,
-  .mini {
-    transition: none;
-  }
 }
 </style>

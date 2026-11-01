@@ -244,6 +244,13 @@ pub struct InstallRequest {
     pub url: String,
     pub sha256: String,
     pub size: u64,
+    /// 用户确认过的**第三方下载域名**（见 [`is_trusted_download_host`]）。
+    ///
+    /// 只有「不在白名单里的域名」才需要它：前端把界面上给用户看的域名原样传回来，
+    /// 后端比对得上才继续下载。官方域名（GitHub / 魔搭 / Hugging Face / 大厂镜像）
+    /// 不需要确认，留空即可。
+    #[serde(default)]
+    pub acknowledged_host: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -604,6 +611,11 @@ pub struct RegistryMatch {
     pub formats: Vec<String>,
     /// 首选归档的体积（字节）。
     pub size_bytes: u64,
+    /// 首选归档的**下载域名**（`github.com` / `ci.helio.fm` …）。
+    pub download_host: Option<String>,
+    /// 这个域名是否属于第三方——`true` 时安装必须先让用户看见域名并确认，
+    /// 并把域名回传（`install_plugin(acknowledged_host=…)`）。
+    pub needs_acknowledgement: bool,
     /// 匹配分数（只用于排序）。
     pub score: i64,
     /// 命中原因。
@@ -750,6 +762,8 @@ fn search_registry_entries(
             formats.sort();
             formats.dedup();
             let installable = best_installable_file(plugin).is_some();
+            let download_host =
+                best_installable_file(plugin).and_then(|file| download_host(&file.url));
             Some(RegistryMatch {
                 slug: plugin.slug.clone(),
                 name: plugin.name.clone(),
@@ -763,6 +777,10 @@ fn search_registry_entries(
                 verified: plugin.verified,
                 installed: installed.contains(&plugin.slug),
                 installable,
+                needs_acknowledgement: download_host
+                    .as_deref()
+                    .is_some_and(|host| !is_trusted_download_host(host)),
+                download_host,
                 formats,
                 size_bytes: best_installable_file(plugin)
                     .map(|file| file.size)
@@ -821,7 +839,14 @@ pub fn search_registry(
 /// 从注册表安装 / 更新一个插件（MCP：install_plugin）。
 ///
 /// **会真的联网下载并解压可执行插件**。调用方必须先拿到用户的明确同意。
-pub fn install_registry_plugin(app: &AppHandle, slug: &str) -> Result<String, String> {
+///
+/// 第三方域名（插件作者自己的站点）还要多一层：`acknowledged_host` 必须是界面上
+/// 报给用户的那个域名，对不上就拒绝（白名单见 [`is_trusted_download_host`]）。
+pub fn install_registry_plugin(
+    app: &AppHandle,
+    slug: &str,
+    acknowledged_host: Option<&str>,
+) -> Result<String, String> {
     let plugins = load_registry_index(app)?;
     // 只认 slug，不按名字猜：同名插件不止一个，装错东西的代价太大。
     let plugin = plugins
@@ -846,6 +871,7 @@ pub fn install_registry_plugin(app: &AppHandle, slug: &str) -> Result<String, St
         url: file.url.clone(),
         sha256: file.sha256.clone(),
         size: file.size,
+        acknowledged_host: acknowledged_host.map(|h| h.to_string()),
     };
     install_from_registry(app, &request)?;
     Ok(format!(
@@ -893,8 +919,8 @@ pub enum ModelSourcePreference {
 
 /// **执行后端**偏好：决定用哪个 ONNX Runtime 执行后端跑本地模型。
 ///
-/// 三个选项全部随包（零下载），**默认 CPU**。设置页只列出本机平台支持的那些
-/// （如 Intel Mac 没有 CoreML、非 Windows 没有 DirectML）。
+/// 默认 CPU。运行时由 `runtimes.rs` 下载管理：CPU 一份必装，CUDA 12 / 13 按需下载
+/// （见 `docs/superpowers/specs/2026-10-16-backend-runtime-download.md`）。
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum BackendPreference {
@@ -907,6 +933,14 @@ pub enum BackendPreference {
     /// Windows DirectML。
     #[serde(rename = "directml")]
     DirectMl,
+    /// NVIDIA CUDA 12（Windows / Linux x86_64；老卡 / 老驱动）。
+    ///
+    /// 旧配置里存的是 `"cuda"`：`alias` 让它们继续落到 CUDA 12，不会把老卡带到跑不起来的 13。
+    #[serde(rename = "cuda12", alias = "cuda")]
+    Cuda12,
+    /// NVIDIA CUDA 13（Windows / Linux x86_64；Turing 起 + 驱动 580+）。
+    #[serde(rename = "cuda13")]
+    Cuda13,
 }
 
 impl BackendPreference {
@@ -917,6 +951,8 @@ impl BackendPreference {
             BackendPreference::Cpu => BackendKind::Cpu,
             BackendPreference::CoreMl => BackendKind::CoreMl,
             BackendPreference::DirectMl => BackendKind::DirectMl,
+            BackendPreference::Cuda12 => BackendKind::Cuda12,
+            BackendPreference::Cuda13 => BackendKind::Cuda13,
         }
     }
 }
@@ -957,6 +993,13 @@ pub struct StoreNetwork {
     /// **执行后端**偏好（自动推荐 / 强制某一种）。见 [`BackendPreference`]。
     #[serde(default)]
     pub backend_preference: BackendPreference,
+    /// audio.cpp 引擎在 CUDA 上是否启用 `cuda_perf` 预设（默认开；显存小的卡可关）。
+    #[serde(default = "default_true")]
+    pub yue_cuda_perf: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// 运行时的网络配置（内存 + `store.json` 文件）。
@@ -1028,6 +1071,89 @@ fn registry_sources(config: &StoreNetwork) -> Vec<String> {
         sources.push(REGISTRY_URL.to_string());
     }
     sources
+}
+
+/// 这个下载域名是不是「官方 / 大厂」——只有这些可以不问用户直接下载。
+///
+/// 判的是**真正要请求的那一跳**（`download_candidates` 重写之后），所以用户配的
+/// 「下载代理前缀」若指向第三方反代，同样会被要求确认。
+///
+/// 只列厂商自己的域名 + 国内几家大厂镜像站；GitHub / 魔搭 / Hugging Face 之外
+/// 一律算第三方（插件作者的站点、个人反代都算），必须让用户看见域名并点头。
+/// **重定向的落点不在这里判**：`github.com` 会跳到 `objects.githubusercontent.com`、
+/// 魔搭会跳到 `cdn-lfs-cn-1.modelscope.cn`，那些是官方自己签发的 CDN，域名已按后缀覆盖。
+pub(crate) fn is_trusted_download_host(host: &str) -> bool {
+    const TRUSTED: &[&str] = &[
+        // 代码托管 / 发布
+        "github.com",
+        "githubusercontent.com",
+        "gitee.com",
+        // 模型仓库
+        "modelscope.cn",
+        "huggingface.co",
+        "hf.co",
+        // 大厂镜像站（系统包 / NuGet 等）
+        "mirrors.tuna.tsinghua.edu.cn",
+        "mirrors.aliyun.com",
+        "mirrors.huaweicloud.com",
+        "mirrors.ustc.edu.cn",
+        "mirrors.cloud.tencent.com",
+        // 运行时厂商自己
+        "api.nuget.org",
+        "nvidia.com",
+        "nvidia.cn",
+        "microsoft.com",
+    ];
+    let host = normalize_host(host);
+    if host.is_empty() {
+        return false;
+    }
+    TRUSTED
+        .iter()
+        .any(|root| host == *root || host.ends_with(&format!(".{root}")))
+}
+
+/// 域名归一化：小写、去首尾空白、去 `www.` 前缀、去结尾的点。
+fn normalize_host(host: &str) -> String {
+    host.trim()
+        .trim_start_matches("www.")
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
+}
+
+/// 从一个下载地址里取出域名（小写、去端口、去 `www.`）；解析不出来返回 `None`。
+///
+/// 手写而不用 `url` crate：这里只需要 `scheme://host[:port]` 这一小段，
+/// 而且要在 `install_from_registry` 的热路径上跑（不引入新依赖）。
+pub(crate) fn download_host(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(rest)
+        .rsplit('@') // 去掉 user:pass@
+        .next()
+        .unwrap_or("");
+    let host = normalize_host(authority.split(':').next().unwrap_or(""));
+    if host.is_empty() {
+        return None;
+    }
+    Some(host)
+}
+
+/// 候选地址里第一个「第三方、且用户没有确认过」的域名；全都干净时返回 `None`。
+///
+/// 拿它当下载前的**最后一道闸**（界面和 MCP 都从这里过）：
+/// 判断的是**重写之后**真正会被请求的域名，所以自定义反代前缀同样跑不掉。
+pub(crate) fn unacknowledged_host(
+    candidates: &[String],
+    acknowledged: Option<&str>,
+) -> Option<String> {
+    let acknowledged = acknowledged.map(normalize_host).unwrap_or_default();
+    candidates
+        .iter()
+        .filter_map(|url| download_host(url))
+        .find(|host| !is_trusted_download_host(host) && *host != acknowledged)
 }
 
 /// 下载地址是否需要走代理（只重写 GitHub 的地址）。
@@ -1127,7 +1253,18 @@ pub(crate) fn probe_agent(proxy: Option<&ureq::Proxy>) -> ureq::Agent {
 ///
 /// 代理也**显式**设置（`Direct` 传 `None`）：不依赖 ureq 的隐式行为，
 /// 「不走代理」就是真的不走。
-fn tls_agent(
+///
+/// **根证书必须用系统信任库**（`RootCerts::PlatformVerifier`）。ureq 3 的默认是
+/// `RootCerts::WebPki`——它给 native-tls 打开 `disable_built_in_roots(true)`，只用
+/// `webpki-root-certs` 里那份 Mozilla 快照，**完全忽略操作系统的信任库**。魔搭
+/// （`modelscope.cn`）现在的链是「叶 ← GlobalSign GCC R46 OV TLS CA 2025 ←
+/// 交叉签名的 GlobalSign Root R46 ← GlobalSign Root CA（1998 老根）」：老根在
+/// Windows / macOS 系统库里，**不在**那份 Mozilla 快照里，于是 webpki 模式下 TLS
+/// 握手直接失败（`unable to find any user-specified roots in the final cert chain`），
+/// 模型下载一个字节都拿不到——而浏览器 / curl 走系统库，同一个地址完全正常。
+/// 换成系统校验后 native-tls 用 schannel（Windows）/ Security.framework（macOS）/
+/// OpenSSL 默认库（Linux）验链，与浏览器一致，魔搭的链就能过。
+pub(crate) fn tls_agent(
     proxy: Option<&ureq::Proxy>,
     resolve: Option<Duration>,
     connect: Option<Duration>,
@@ -1136,6 +1273,8 @@ fn tls_agent(
 ) -> ureq::Agent {
     let tls = ureq::tls::TlsConfig::builder()
         .provider(ureq::tls::TlsProvider::NativeTls)
+        // 见上面的注释：这是「魔搭源全部下载失败」的根因。
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
         .build();
     ureq::Agent::config_builder()
         .tls_config(tls)
@@ -1958,6 +2097,14 @@ fn install_from_registry(app: &AppHandle, req: &InstallRequest) -> Result<(), St
         // **扩展名判定仍用原始地址**，因为归档类型（zip / tar.gz / 裸文件）由原始 URL 决定。
         let network = app.state::<StoreRuntime>().network();
         let candidates = download_candidates(&req.url, &network.download_prefix);
+        // **第三方域名必须先经用户确认**：白名单见 `is_trusted_download_host`。
+        // 判的是重写之后真正会被请求的地址——用户自己配的反代同样要过这一关。
+        if let Some(host) = unacknowledged_host(&candidates, req.acknowledged_host.as_deref()) {
+            return Err(format!(
+                "「{host}」不在受信任的下载域名里（默认只允许 GitHub / 魔搭 / Hugging Face / \
+                 大厂镜像站）。要下载就先让用户看见这个域名并确认，再把确认过的域名回传。"
+            ));
+        }
         let source_count = candidates.len();
         let resolved = resolve_proxy(&network);
         eprintln!("[manager] 下载 {}：{}", req.name, resolved.source);
@@ -2293,6 +2440,8 @@ pub fn plugin_manager_set_network(
             .unwrap_or_else(|| runtime.network().model_source_preference),
         // 执行后端偏好由 `backend_set_preference` 单独管，这里原样保留。
         backend_preference: runtime.network().backend_preference,
+        // 引擎的 CUDA 预设由 `ai_yue_set_cuda_perf` 单独管，这里原样保留。
+        yue_cuda_perf: runtime.network().yue_cuda_perf,
     };
     runtime.set(next.clone())?;
     Ok(next)
@@ -2678,6 +2827,7 @@ mod tests {
             url: "https://x/Plugin.dmg".into(),
             sha256: "a".into(),
             size: 1,
+            acknowledged_host: None,
         };
         assert!(req.kind_is_installer());
     }
@@ -2801,6 +2951,89 @@ mod tests {
         assert_eq!(
             download_candidates(other, "https://proxy.example/"),
             vec![other.to_string()]
+        );
+    }
+
+    /// 域名解析：只认 `scheme://host[:port]` 那一段，用户信息 / 路径 / 端口都要剥掉。
+    #[test]
+    fn download_host_takes_the_authority_only() {
+        assert_eq!(
+            download_host("https://ci.helio.fm/helio-3.17-x64.zip").as_deref(),
+            Some("ci.helio.fm")
+        );
+        assert_eq!(
+            download_host("https://user:pw@mirrors.example:8443/a.zip?x=1").as_deref(),
+            Some("mirrors.example")
+        );
+        assert_eq!(
+            download_host("https://www.modelscope.cn/models/x/resolve/master/a.onnx").as_deref(),
+            Some("modelscope.cn")
+        );
+        assert_eq!(download_host("没有协议头的地址"), None);
+    }
+
+    /// 只有官方 / 大厂域名可以不问用户直接下；作者站点、个人反代都不算。
+    #[test]
+    fn only_official_and_big_vendor_hosts_are_trusted() {
+        for host in [
+            "github.com",
+            "objects.githubusercontent.com",
+            "raw.githubusercontent.com",
+            "modelscope.cn",
+            "cdn-lfs-cn-1.modelscope.cn",
+            "huggingface.co",
+            "mirrors.tuna.tsinghua.edu.cn",
+            "mirrors.aliyun.com",
+            "mirrors.huaweicloud.com",
+            "api.nuget.org",
+            "developer.download.nvidia.cn",
+            "www.modelscope.cn",
+        ] {
+            assert!(is_trusted_download_host(host), "{host} 应当是受信任域名");
+        }
+        for host in [
+            "ci.helio.fm",
+            "discodsp.com",
+            "hf-mirror.com",
+            "ghproxy.com",
+            "notgithub.com", // 后缀匹配必须按 label 边界，不能被 "github.com" 骗
+            "github.com.evil.tld", // 同上：前面的才是真正的域名
+            "",
+        ] {
+            assert!(!is_trusted_download_host(host), "{host} 不该被当成官方域名");
+        }
+    }
+
+    /// 第三方域名要「用户确认过」才放行；确认的是别的域名不算数。
+    #[test]
+    fn third_party_hosts_need_matching_acknowledgement() {
+        let official = vec!["https://github.com/x/y/releases/download/v1/P.zip".to_string()];
+        assert_eq!(unacknowledged_host(&official, None), None, "官方源不用确认");
+
+        let third = vec!["https://ci.helio.fm/helio-3.17-x64.zip".to_string()];
+        assert_eq!(
+            unacknowledged_host(&third, None).as_deref(),
+            Some("ci.helio.fm"),
+            "没确认 → 拦下来，并报出要确认的域名"
+        );
+        assert_eq!(
+            unacknowledged_host(&third, Some("discodsp.com")),
+            Some("ci.helio.fm".to_string()),
+            "确认了别的域名不算数"
+        );
+        assert_eq!(
+            unacknowledged_host(&third, Some("CI.Helio.fm")),
+            None,
+            "确认的就是这个域名（大小写不敏感）→ 放行"
+        );
+        // 自定义反代前缀：真正请求的是 proxy.example，同样要确认。
+        let proxied = download_candidates(
+            "https://github.com/x/y/releases/download/v1/P.zip",
+            "https://proxy.example/",
+        );
+        assert_eq!(
+            unacknowledged_host(&proxied, None).as_deref(),
+            Some("proxy.example")
         );
     }
 

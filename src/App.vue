@@ -30,12 +30,13 @@ import { useParamBrowserStore } from "@/stores/paramBrowser";
 import { useImportingStore, useExportingStore } from "@/stores/importing";
 import { useTimelineStore } from "@/stores/timeline";
 import { useI18n } from "@/i18n";
-import { exportAudio, exportScore, importProject, onPluginsEvent, readImportFile, type ExportFormat } from "@/api/tauri";
+import { exportAudio, exportMidi, exportScore, importProject, onPluginsEvent, readImportFile, type ExportFormat } from "@/api/tauri";
 import type { ProjectHistoryEntry } from "@/api/types";
 import {
   pickAudioToOpen,
   pickAudioToSave,
   pickMidiToOpen,
+  pickMidiToSave,
   pickProjectToOpen,
   pickProjectToSave,
   pickScoreToOpen,
@@ -427,6 +428,25 @@ async function onExportConfirm(choice: ExportChoice): Promise<void> {
     await exportScoreFile(choice.grid, choice.keyFifths);
     return;
   }
+  if (choice.kind === "midi") {
+    // 只有带音符的轨道会进 MIDI：一条都没有时先去保存对话框选路径是白跑一趟。
+    const tracks = (project.project?.tracks ?? []).filter((track) =>
+      track.clips.some((clip) => clip.notes.length > 0),
+    ).length;
+    if (tracks === 0) {
+      layout.notify(i18n.t("export.midiEmpty"));
+      return;
+    }
+    const path = await pickMidiToSave(`${fileBase.value}.mid`);
+    if (!path) return;
+    try {
+      const written = await exportMidi(path);
+      layout.notify(i18n.t("export.midiDone", { tracks, path: written }));
+    } catch (err) {
+      layout.notify(i18n.t("error.export", { error: String(err) }));
+    }
+    return;
+  }
   if (exporting.value) return;
   exporting.value = true;
   try {
@@ -528,7 +548,7 @@ function onKey(e: KeyboardEvent): void {
     layout.devDrawer = false;
     return;
   }
-  // 鼠标模式：与顶栏的三段按钮同一顺序 —— 1 = 绘制，2 = 框选，3 = 分隔。
+  // 鼠标模式：与工具岛同一顺序 —— 1 = 绘制，2 = 橡皮，3 = 框选，4 = 分隔，5 = 歌词。
   if (!mod && e.key === "1") {
     e.preventDefault();
     layout.setTool("draw");
@@ -536,15 +556,20 @@ function onKey(e: KeyboardEvent): void {
   }
   if (!mod && e.key === "2") {
     e.preventDefault();
-    layout.setTool("select");
+    layout.setTool("eraser");
     return;
   }
   if (!mod && e.key === "3") {
     e.preventDefault();
-    layout.setTool("split");
+    layout.setTool("select");
     return;
   }
   if (!mod && e.key === "4") {
+    e.preventDefault();
+    layout.setTool("split");
+    return;
+  }
+  if (!mod && e.key === "5") {
     e.preventDefault();
     layout.setTool("lyric");
     return;
@@ -693,6 +718,7 @@ onUnmounted(() => {
         <TrackHeaderList
           v-if="layout.showTrackHeaders"
           :agent-tracks="aiTracks"
+          :reserve-bottom="layout.arrangeBottomInset"
           :style="{ width: `${layout.trackWidth}px`, flex: '0 0 auto' }"
         />
         <PanelResizer v-if="layout.showTrackHeaders" side="left" @resize="onResizeLeft" />

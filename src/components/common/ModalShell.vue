@@ -6,7 +6,8 @@
  * 连同一段样式）。参数页要用同一套外壳，所以抽到这里，两边**共用一份**——类名与样式原样搬过来，
  * 视觉与交互逐项不变（`z-index:120`、`width:620px`、`max-height:78vh`、Escape 关闭、点遮罩关闭）。
  *
- * 只管三件事：Escape 关闭、点遮罩关闭、把标题同时用作 `role="dialog"` 的可访问名。
+ * 只管四件事：Escape 关闭、点遮罩关闭、把标题同时用作 `role="dialog"` 的可访问名，
+ * 以及用 `dismissible` 支持「必须先做一个选择才能继续」的强制流程。
  * 内容按插槽拼：`toolbar`（工具条）/ 默认（主体）/ `foot`（页脚）；**焦点归内容自己管**
  * （打开时聚焦搜索框这类约定由各页自己实现，见 `ListToolbar` 暴露的 `focusSearch()`）。
  */
@@ -20,8 +21,15 @@ const props = withDefaults(
     title: string;
     /** 自定义宽度（默认 620px）；宽内容（例如历史工程卡片墙）用它。 */
     width?: string;
+    /**
+     * 是否允许关闭（X / Escape / 点遮罩）。
+     *
+     * 默认允许；「一个引擎都没有时必须先选一个」这类强制流程传 `false`——
+     * 此时标题栏没有关闭按钮，只能走页脚里的显式动作。
+     */
+    dismissible?: boolean;
   }>(),
-  { width: "" },
+  { width: "", dismissible: true },
 );
 
 const emit = defineEmits<{ (e: "update:open", value: boolean): void }>();
@@ -29,15 +37,16 @@ const emit = defineEmits<{ (e: "update:open", value: boolean): void }>();
 const i18n = useI18n();
 
 function close(): void {
+  if (!props.dismissible) return;
   emit("update:open", false);
 }
 
 /** Escape 关闭；`stopPropagation` 免得这一个按键再触发外层的全局快捷键。 */
 function onKey(e: KeyboardEvent): void {
-  if (e.key === "Escape") {
-    e.stopPropagation();
-    close();
-  }
+  if (e.key !== "Escape") return;
+  // 强制流程里 Escape 不关闭，但也不该漏给后面的全局快捷键。
+  e.stopPropagation();
+  if (props.dismissible) close();
 }
 </script>
 
@@ -56,7 +65,12 @@ function onKey(e: KeyboardEvent): void {
         >
           <header class="head">
             <h2 class="title">{{ title }}</h2>
-            <button class="icon-btn" :aria-label="i18n.t('common.close')" @click="close">
+            <button
+              v-if="dismissible"
+              class="icon-btn"
+              :aria-label="i18n.t('common.close')"
+              @click="close"
+            >
               <XMarkIcon class="w-[18px] h-[18px]" />
             </button>
           </header>

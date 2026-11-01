@@ -98,9 +98,11 @@ Copyright Soul AI Lab. Licensed under the Apache License, Version 2.0.
 The singing-voice feature (`crates/local-ai/src/singing/`) runs an ONNX export of
 the SoulX-Singer zero-shot singing model. The weights are **not** distributed with
 this project: users download them on demand through Manager → Models
-(`soulx-singer-fp16`, ~1.4 GB) under the Apache License, Version 2.0. The ONNX
-graph split is the community export published on ModelScope
-(`syxppp/SoulX-Singer-onnx-directml-fp16`), redistributed byte-identically.
+(`soulx-singer-fp16`, ~1.4 GB; `soulx-singer-fp32`, ~2.9 GB) under the Apache
+License, Version 2.0. The ONNX graph split is the community export published on
+ModelScope (`syxppp/SoulX-Singer-onnx-directml-fp16`, and
+`syxppp/SoulX-Singer-onnx-directml` for the fp32 tier), redistributed
+byte-identically through ModelScope (CN) and Hugging Face (`ailm32442/...`, intl).
 
 The phoneme vocabulary `crates/local-ai/assets/phone_set.txt` (3033 tokens) is
 transcribed from that model's phone set (via SXSEditor, MIT). The Mandarin
@@ -126,4 +128,22 @@ Copyright 2015 Steinberg Media Technologies GmbH, with Reserved Font Name
 "Bravura". Licensed under the SIL Open Font License, Version 1.1
 (https://scripts.sil.org/OFL). The font files are redistributed unmodified in
 public/alphatab/ and may not be sold on their own.
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+audio.cpp (https://github.com/0xShug0/audio.cpp)
+Copyright 2026 ShugoAI LLC. Licensed under the Apache License, Version 2.0.
+
+The optional "write a song" engine (`audiocpp_server`) is **not** bundled with
+this project. Users download a portable archive on demand from GitHub Releases
+or the ModelScope mirror (`ailm32442/audiocpp-assets`), then it runs as a
+separate local HTTP process. The archive also contains ggml (MIT, Copyright
+Georgi Gerganov and contributors) and the Microsoft Visual C++ runtime DLLs
+(redistributable under Microsoft's terms).
+
+YuE2 model weights (`yue2-q8-0`, `yue2-q4-0`, `yue2-bf16`) are **not**
+distributed with this project either: they are licensed CC BY-NC 4.0
+(non-commercial) by their authors and are downloaded on demand through
+Manager → Models from Hugging Face or ModelScope. Do not redistribute them
+with commercial builds.
 --------------------------------------------------------------------------------

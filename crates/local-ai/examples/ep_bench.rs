@@ -25,8 +25,7 @@ fn tone(seconds: f64, rate: f64) -> Vec<f32> {
     for i in 0..frames {
         let t = i as f64 / rate;
         let l = (0.4 * (2.0 * std::f64::consts::PI * 220.0 * t).sin()
-            + 0.25 * (2.0 * std::f64::consts::PI * 440.0 * t).sin())
-            as f32;
+            + 0.25 * (2.0 * std::f64::consts::PI * 440.0 * t).sin()) as f32;
         let r = (0.4 * (2.0 * std::f64::consts::PI * 330.0 * t).sin()
             + 0.25 * (2.0 * std::f64::consts::PI * 660.0 * t).sin()) as f32;
         noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
@@ -42,7 +41,11 @@ fn timed<T>(label: &str, run: impl FnOnce() -> Result<T, String>) -> Option<T> {
     let started = Instant::now();
     match run() {
         Ok(value) => {
-            println!("  {:.<26} 总 {:>9.2?}", format!("{label} 单次调用"), started.elapsed());
+            println!(
+                "  {:.<26} 总 {:>9.2?}",
+                format!("{label} 单次调用"),
+                started.elapsed()
+            );
             Some(value)
         }
         Err(e) => {

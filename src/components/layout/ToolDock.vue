@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 浮动工具岛（中栏右下角）：鼠标模式三选一 + 底部窗格开关，共 4 个按钮。
+ * 浮动工具岛（中栏右下角）：五种鼠标模式 + 底部窗格开关。
  *
  * 从顶栏挪下来，免得顶栏图标越堆越多。只在**有底部窗格**的视图（编排 / 编辑）出现——
  * 那两个视图才用得到鼠标模式与底部窗格；混音 / 设置页不渲染。
@@ -12,6 +12,7 @@ import Tooltip from "@/components/common/Tooltip.vue";
 import PanelIcon from "@/components/common/PanelIcon.vue";
 import MarqueeIcon from "@/components/common/icons/MarqueeIcon.vue";
 import SplitIcon from "@/components/common/icons/SplitIcon.vue";
+import EraserIcon from "@/components/common/icons/EraserIcon.vue";
 import { useLayoutStore, type Tool } from "@/stores/layout";
 import { useI18n } from "@/i18n";
 
@@ -53,9 +54,10 @@ function toggleBottomLane(): void {
   else layout.showAutomation = !layout.showAutomation;
 }
 
-/** 三种鼠标模式（顺序即展示顺序）：绘制 / 框选 / 分隔。 */
+/** 五种鼠标模式（顺序即展示顺序与数字快捷键）：绘制 / 橡皮 / 框选 / 分隔 / 歌词。 */
 const toolOptions: { id: Tool; icon: unknown; labelKey: string }[] = [
   { id: "draw", icon: PaintBrushIcon, labelKey: "topbar.toolDraw" },
+  { id: "eraser", icon: EraserIcon, labelKey: "topbar.toolEraser" },
   { id: "select", icon: MarqueeIcon, labelKey: "topbar.toolSelect" },
   { id: "split", icon: SplitIcon, labelKey: "topbar.toolSplit" },
   { id: "lyric", icon: LanguageIcon, labelKey: "topbar.toolLyric" },

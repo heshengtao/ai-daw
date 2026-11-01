@@ -6,7 +6,7 @@
  *
  * 每行可：选中（驱动检查器与钢琴卷帘）、静音 / 独奏、删除。
  */
-import { ref, watch } from "vue";
+import { onMounted, ref, watch } from "vue";
 import { PlusIcon, TrashIcon } from "@heroicons/vue/24/outline";
 import Logo from "@/components/common/Logo.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
@@ -26,8 +26,15 @@ const selection = useSelectionStore();
 const plugins = usePluginsStore();
 const i18n = useI18n();
 
-/** 最近被 AI 代理改动过的轨道 id：这些行会短暂高亮，让代理的动作看得见。 */
-defineProps<{ agentTracks?: number[] }>();
+/**
+ * `agentTracks`：最近被 AI 代理改动过的轨道 id（短暂高亮，让代理的动作看得见）。
+ * `reserveBottom`：底部要空出的高度（px）——自动化车道 + 横向滚动条。
+ *
+ * 音轨栏的列表必须与编排的**可滚动区域**等高，否则两边滚到底部时行会错位
+ * （列表比网格多出一截可视区，就会更早停下）。编排视图实测后传进来；
+ * 编辑视图没有这两块，传 0 / 不传。
+ */
+defineProps<{ agentTracks?: number[]; reserveBottom?: number }>();
 
 const listEl = ref<HTMLElement | null>(null);
 let applying = false;
@@ -99,6 +106,14 @@ watch(laneScrollTop, (v) => {
   requestAnimationFrame(() => {
     applying = false;
   });
+});
+
+// 面板重新显示（`v-if` 重建）时，列表从 0 开始；先对齐到编排当前的滚动位置。
+onMounted(() => {
+  const el = listEl.value;
+  if (el && Math.abs(el.scrollTop - laneScrollTop.value) >= 1) {
+    el.scrollTop = laneScrollTop.value;
+  }
 });
 </script>
 
@@ -183,6 +198,14 @@ watch(laneScrollTop, (v) => {
         {{ i18n.t("tracks.empty") }}
       </li>
     </ul>
+
+    <!-- 底部让位区：让列表底部与编排网格的可滚动区域底部对齐 -->
+    <div
+      v-if="(reserveBottom ?? 0) > 0"
+      class="heads-reserve"
+      :style="{ height: `${reserveBottom}px` }"
+      aria-hidden="true"
+    />
   </div>
 </template>
 
@@ -264,6 +287,11 @@ watch(laneScrollTop, (v) => {
   flex: 1 1 auto;
   overflow-y: auto;
   overflow-x: hidden;
+}
+/* 底部让位区：与编排底部的自动化车道 + 横向滚动条等高，空白即可 */
+.heads-reserve {
+  flex: 0 0 auto;
+  background-color: var(--app-card);
 }
 /* 行：整行 64px、无缝隙，与 lane 一一对应 */
 .track-row {

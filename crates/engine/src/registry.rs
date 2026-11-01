@@ -22,6 +22,10 @@ pub const BUILTIN_CHORUS: &str = ai_daw_effects::CHORUS_ID;
 pub const BUILTIN_DRIVE: &str = ai_daw_effects::DRIVE_ID;
 /// 内置两段 EQ 的插件 id。
 pub const BUILTIN_EQ: &str = ai_daw_effects::EQ_ID;
+/// 内置压缩器的插件 id。
+pub const BUILTIN_COMPRESSOR: &str = ai_daw_effects::COMPRESSOR_ID;
+/// 内置限幅器的插件 id。
+pub const BUILTIN_LIMITER: &str = ai_daw_effects::LIMITER_ID;
 
 /// 内置合成器的**出厂预设**：同一套信号链，不同的参数补丁。
 ///
@@ -249,6 +253,13 @@ impl PluginRegistry {
         r.register(BUILTIN_CHORUS, |_track, _slot| Box::new(ai_daw_effects::Chorus::new()));
         r.register(BUILTIN_DRIVE, |_track, _slot| Box::new(ai_daw_effects::Drive::new()));
         r.register(BUILTIN_EQ, |_track, _slot| Box::new(ai_daw_effects::Eq::new()));
+        // 动态处理：压缩器（0 延迟，可接侧链）+ 限幅器（前瞻，建议挂主总线）。
+        r.register(BUILTIN_COMPRESSOR, |_track, _slot| {
+            Box::new(ai_daw_effects::Compressor::new())
+        });
+        r.register(BUILTIN_LIMITER, |_track, _slot| {
+            Box::new(ai_daw_effects::Limiter::new())
+        });
         r
     }
 
@@ -311,7 +322,15 @@ mod tests {
     #[test]
     fn builtins_include_the_effects() {
         let r = PluginRegistry::with_builtins();
-        for id in [BUILTIN_DELAY, BUILTIN_REVERB, BUILTIN_CHORUS, BUILTIN_DRIVE, BUILTIN_EQ] {
+        for id in [
+            BUILTIN_DELAY,
+            BUILTIN_REVERB,
+            BUILTIN_CHORUS,
+            BUILTIN_DRIVE,
+            BUILTIN_EQ,
+            BUILTIN_COMPRESSOR,
+            BUILTIN_LIMITER,
+        ] {
             let p = r.create(id, TrackId(1), PluginSlot::Instrument).unwrap_or_else(|| panic!("{id} 未注册"));
             let d = p.descriptor();
             assert_eq!(d.kind, PluginKind::Effect, "{id} 应当是效果器");

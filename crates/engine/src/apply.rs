@@ -68,6 +68,8 @@ pub fn apply(project: &mut Project, event: &Event) {
                     plugin_id: plugin_id.clone(),
                     params: Default::default(),
                     state: vec![],
+                    enabled: true,
+                    sidechain: None,
                 });
             }
         }
@@ -454,6 +456,8 @@ pub fn apply(project: &mut Project, event: &Event) {
                     plugin_id: plugin_id.clone(),
                     params: Default::default(),
                     state: vec![],
+                    enabled: true,
+                    sidechain: None,
                 });
             }
         }
@@ -489,6 +493,50 @@ pub fn apply(project: &mut Project, event: &Event) {
                         fx.params.insert(param.clone(), *value);
                     }
                 }
+            }
+        }
+        Event::EffectEnabledChanged {
+            track,
+            index,
+            enabled,
+            ..
+        } => {
+            if let Some(t) = project.track_mut(*track) {
+                if let Some(fx) = t.effects.get_mut(*index) {
+                    fx.enabled = *enabled;
+                }
+            }
+        }
+        Event::EffectSidechainChanged {
+            track,
+            index,
+            source,
+            ..
+        } => {
+            if let Some(t) = project.track_mut(*track) {
+                if let Some(fx) = t.effects.get_mut(*index) {
+                    fx.sidechain = *source;
+                }
+            }
+        }
+        Event::MasterEffectsChanged { effects, .. } => {
+            project.master_effects = effects.clone();
+        }
+        Event::MasterEffectParamChanged {
+            index,
+            param,
+            value,
+            ..
+        } => {
+            if let Some(fx) = project.master_effects.get_mut(*index) {
+                if value.is_finite() {
+                    fx.params.insert(param.clone(), *value);
+                }
+            }
+        }
+        Event::MasterEffectEnabledChanged { index, enabled, .. } => {
+            if let Some(fx) = project.master_effects.get_mut(*index) {
+                fx.enabled = *enabled;
             }
         }
         Event::ProjectRenamed { name, .. } => project.name = name.clone(),

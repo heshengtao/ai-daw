@@ -39,7 +39,11 @@ pub fn denoise(
     progress: Progress,
 ) -> Vec<f32> {
     let channels = channels.max(1);
-    let strength = if strength.is_finite() { strength.clamp(0.0, 8.0) } else { 2.0 };
+    let strength = if strength.is_finite() {
+        strength.clamp(0.0, 8.0)
+    } else {
+        2.0
+    };
     let frames = samples.len() / channels;
     let mut out = vec![0.0f32; samples.len()];
     for ch in 0..channels {
@@ -108,7 +112,9 @@ fn denoise_channel(
         }
         // 目标增益：帧功率高出噪声底多少。
         let p = frame_power[f].max(1e-18);
-        let target = ((p - strength * noise_floor) / p).clamp(min_gain_sq, 1.0).sqrt();
+        let target = ((p - strength * noise_floor) / p)
+            .clamp(min_gain_sq, 1.0)
+            .sqrt();
         // 帧间平滑：避免增益突变造成抽吸。
         gain = GAIN_SMOOTH * target + (1.0 - GAIN_SMOOTH) * gain;
 
@@ -186,7 +192,10 @@ mod tests {
         let audio = noise((1.0 * sr) as usize, 0.2);
         let before = rms(&audio);
         let after = rms(&denoise(&audio, 1, sr, 2.0, &|_| true));
-        assert!(after < before * 0.5, "纯噪声应被明显压低：{before} -> {after}");
+        assert!(
+            after < before * 0.5,
+            "纯噪声应被明显压低：{before} -> {after}"
+        );
     }
 
     #[test]
@@ -211,12 +220,18 @@ mod tests {
         let before = tone_amplitude(head, 440.0, sr);
         let out = denoise(&audio, 1, sr, 2.0, &|_| true);
         let after = tone_amplitude(&out[..tone_frames - 4096], 440.0, sr);
-        assert!(after > before * 0.8, "有声段的 440 Hz 成分应当保留：{before} -> {after}");
+        assert!(
+            after > before * 0.8,
+            "有声段的 440 Hz 成分应当保留：{before} -> {after}"
+        );
 
         // 无声段（只有嘶声）应被压低。
         let tail_in = rms(&audio[tone_frames + 4096..]);
         let tail_out = rms(&out[tone_frames + 4096..]);
-        assert!(tail_out < tail_in * 0.5, "无声段的底噪应被压低：{tail_in} -> {tail_out}");
+        assert!(
+            tail_out < tail_in * 0.5,
+            "无声段的底噪应被压低：{tail_in} -> {tail_out}"
+        );
     }
 
     #[test]

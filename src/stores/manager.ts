@@ -124,8 +124,17 @@ export const useManagerStore = defineStore("manager", () => {
     return () => stop?.();
   }
 
-  /** 从注册表安装（也是更新）。 */
-  async function install(p: ManagerPlugin, file: ManagerFile): Promise<void> {
+  /**
+   * 从注册表安装（也是更新）。
+   *
+   * `acknowledgedHost` 只在**第三方域名**（作者自己的站点 / 个人反代）时才传：
+   * 它是界面上给用户看过的域名，后端会拿它和真正要请求的域名比对。
+   */
+  async function install(
+    p: ManagerPlugin,
+    file: ManagerFile,
+    acknowledgedHost?: string,
+  ): Promise<void> {
     busy.value = p.slug;
     error.value = null;
     progress.value = { slug: p.slug, phase: "downloading", received: 0, total: file.size, message: null };
@@ -137,6 +146,7 @@ export const useManagerStore = defineStore("manager", () => {
         url: file.url,
         sha256: file.sha256,
         size: file.size,
+        ...(acknowledgedHost ? { acknowledged_host: acknowledgedHost } : {}),
       };
       await managerInstall(req);
       await refreshLocal();

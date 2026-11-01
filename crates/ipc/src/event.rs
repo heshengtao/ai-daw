@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     AudioSource, AutomationPoint, ClipId, ClipPlacement, ClipRef, HarmonyBar, Note, NoteEdit,
-    PitchRange, Section, Send, TrackId,
+    PitchRange, PluginInstance, Section, Send, TrackId,
 };
 
 /// 变更来源。
@@ -257,6 +257,42 @@ pub enum Event {
         param: String,
         value: f32,
     },
+    /// 效果器被启用 / 旁通（按链内序号定位）。
+    ///
+    /// 「仅混音」变更：只把开关推给音频线程，不重建播放器——否则每次点旁通都要断一次音。
+    EffectEnabledChanged {
+        actor: Actor,
+        track: TrackId,
+        index: usize,
+        enabled: bool,
+    },
+    /// 效果器的侧链来源改变。
+    ///
+    /// **结构性**变更：它会改变路由图（源轨必须先于目标轨处理），必须重建。
+    EffectSidechainChanged {
+        actor: Actor,
+        track: TrackId,
+        index: usize,
+        source: Option<crate::model::SidechainSource>,
+    },
+    /// 主总线插入链被整体替换（增 / 删 / 挪 / 改侧链都用它）。
+    MasterEffectsChanged {
+        actor: Actor,
+        effects: Vec<PluginInstance>,
+    },
+    /// 主总线效果器参数改变。
+    MasterEffectParamChanged {
+        actor: Actor,
+        index: usize,
+        param: String,
+        value: f32,
+    },
+    /// 主总线效果器被启用 / 旁通。
+    MasterEffectEnabledChanged {
+        actor: Actor,
+        index: usize,
+        enabled: bool,
+    },
     /// 工程被重命名。
     ProjectRenamed { actor: Actor, name: String },
     /// 工程被重置为空。`actor` 为发起者。
@@ -358,6 +394,11 @@ impl Event {
             | Event::EffectRemoved { actor, .. }
             | Event::EffectMoved { actor, .. }
             | Event::EffectParamChanged { actor, .. }
+            | Event::EffectEnabledChanged { actor, .. }
+            | Event::EffectSidechainChanged { actor, .. }
+            | Event::MasterEffectsChanged { actor, .. }
+            | Event::MasterEffectParamChanged { actor, .. }
+            | Event::MasterEffectEnabledChanged { actor, .. }
             | Event::ProjectRenamed { actor, .. }
             | Event::ProjectCleared { actor, .. }
             | Event::TrackMetaChanged { actor, .. }
@@ -385,6 +426,9 @@ impl Event {
                 | Event::SoloChanged { .. }
                 | Event::MasterGainChanged { .. }
                 | Event::AutomationChanged { .. }
+                | Event::EffectEnabledChanged { .. }
+                | Event::MasterEffectParamChanged { .. }
+                | Event::MasterEffectEnabledChanged { .. }
         )
     }
 }

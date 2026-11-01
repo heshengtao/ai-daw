@@ -228,6 +228,11 @@ pub fn model_cancel() {
     runtime().cancel.store(true, Ordering::Relaxed);
 }
 
+/// 当前是否有模型在下载（MCP 的 `get_ai_status` 用）。
+pub(crate) fn busy() -> bool {
+    runtime().running.load(Ordering::SeqCst)
+}
+
 /// 删除**已下载**的模型文件（只删下载目录里的，不动随包的资源文件）。
 ///
 /// 组条目会把整组文件都删掉（含子目录），这样「重下」才有干净的状态。
@@ -236,6 +241,11 @@ pub fn model_remove(app: AppHandle, id: String) -> Result<(), String> {
     let entry = catalog::by_id(&id).ok_or_else(|| format!("未知模型：{id}"))?;
     let dir = entry_dir_path(&app, entry)?;
     for file in entry.files {
+        // 同一目录里还有别的**已装好**的条目要这个文件（YuE2 的三档量化共用一份 VAE）：
+        // 删掉它等于顺手把别人也弄坏，留着。
+        if shared_with_installed(entry, file.filename) {
+            continue;
+        }
         for name in [file.filename.to_string(), format!("{}.part", file.filename)] {
             let path = dir.join(name);
             if path.exists() {
@@ -244,10 +254,21 @@ pub fn model_remove(app: AppHandle, id: String) -> Result<(), String> {
         }
     }
     // 组条目清空后顺手把空目录收掉，别在 `models/` 里留一个空壳。
+    // 目录里还有别人的文件时 `remove_dir` 会失败，正好什么都不做。
     if entry.dir.is_some() {
         let _ = fs::remove_dir(&dir);
     }
     Ok(())
+}
+
+/// 这个文件是不是**别的已装好条目**也在用（同目录、同文件名）。
+fn shared_with_installed(entry: &ModelEntry, filename: &str) -> bool {
+    catalog::all().iter().any(|other| {
+        other.id != entry.id
+            && other.dir == entry.dir
+            && other.files.iter().any(|f| f.filename == filename)
+            && catalog::installed(other)
+    })
 }
 
 /// 在系统文件管理器里显示模型文件（找不到就直接打开下载目录）。

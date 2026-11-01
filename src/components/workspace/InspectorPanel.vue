@@ -249,6 +249,37 @@ async function moveFx(from: number, to: number): Promise<void> {
   }
 }
 
+/** 旁通 / 启用链上的第 `index` 个效果器（不重建播放器，出声不断）。 */
+async function toggleFxEnabled(index: number): Promise<void> {
+  const t = track.value;
+  const fx = t?.effects[index];
+  if (!t || !fx) return;
+  try {
+    await store.setEffectEnabled(t.id, index, !(fx.enabled ?? true));
+  } catch (err) {
+    layout.notify(String(err));
+  }
+}
+
+/** 可作侧链来源的轨道（除自身外）。 */
+const sidechainOptions = computed(() => [
+  { id: "", label: i18n.t("mixer.sidechainNone") },
+  ...(store.project?.tracks ?? [])
+    .filter((t) => t.id !== track.value?.id)
+    .map((t) => ({ id: String(t.id), label: t.name })),
+]);
+
+/** 设置第 `index` 个效果器的侧链来源（`""` = 不接）。 */
+async function setFxSidechain(index: number, value: string): Promise<void> {
+  const t = track.value;
+  if (!t) return;
+  try {
+    await store.setEffectSidechain(t.id, index, value === "" ? null : Number(value));
+  } catch (err) {
+    layout.notify(String(err));
+  }
+}
+
 // ---- 音频片段：播放速度 / 升降调（与工程 BPM 解耦；无音频片段时整块灰显） ----
 
 const MIN_RATE = 0.25;
@@ -529,9 +560,18 @@ function openNoteEditor(tab: "strum" | "expr" | "midi" | "lyric"): void {
         <div class="card">
           <p v-if="track.effects.length === 0" class="hint">{{ i18n.t("inspector.fxEmpty") }}</p>
 
-          <div v-for="(fx, i) in track.effects" :key="i" class="fx">
+          <div v-for="(fx, i) in track.effects" :key="i" class="fx" :class="{ off: fx.enabled === false }">
             <div class="row">
-              <span class="row-label">{{ i + 1 }}</span>
+              <button
+                class="mini power"
+                :class="{ on: fx.enabled !== false }"
+                :aria-pressed="fx.enabled !== false"
+                :aria-label="fx.enabled !== false ? i18n.t('insert.bypass') : i18n.t('insert.enable')"
+                :title="fx.enabled !== false ? i18n.t('insert.bypass') : i18n.t('insert.enable')"
+                @click="toggleFxEnabled(i)"
+              >
+                <span class="dot" />
+              </button>
               <span class="fx-name">{{ plugins.name(fx.plugin_id) }}</span>
               <button
                 class="open-editor small"
@@ -563,6 +603,16 @@ function openNoteEditor(tab: "strum" | "expr" | "midi" | "lyric"): void {
                   <XMarkIcon class="mini-icon" />
                 </button>
               </div>
+            </div>
+            <div v-if="plugins.info(fx.plugin_id)?.sidechain" class="row fx-sidechain">
+              <span class="row-label">{{ i18n.t("mixer.sidechain") }}</span>
+              <Md3Select
+                :model-value="fx.sidechain ? String(fx.sidechain.track) : ''"
+                :options="sidechainOptions"
+                :label="i18n.t('mixer.sidechain')"
+                :placeholder="i18n.t('mixer.sidechainNone')"
+                @update:model-value="(v: string) => setFxSidechain(i, v)"
+              />
             </div>
           </div>
 
@@ -919,6 +969,29 @@ function openNoteEditor(tab: "strum" | "expr" | "midi" | "lyric"): void {
 }
 .fx:last-of-type {
   border-bottom: 0;
+}
+/* 旁通的效果器：整行变淡（名字仍然可读，方便开回来） */
+.fx.off .fx-name {
+  color: rgb(var(--md-on-surface-muted));
+  text-decoration: line-through;
+}
+.fx-sidechain {
+  min-height: 30px;
+  padding-left: 6px;
+}
+.mini.power {
+  width: 20px;
+  height: 20px;
+  border-color: transparent;
+}
+.mini.power .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: rgb(var(--md-on-surface) / 0.3);
+}
+.mini.power.on .dot {
+  background-color: rgb(var(--md-primary));
 }
 .fx-name {
   flex: 1 1 auto;

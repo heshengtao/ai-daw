@@ -184,6 +184,49 @@ export const useProjectStore = defineStore("project", () => {
     return edit(() => api.setEffectParam(track, index, param, value));
   }
 
+  /** 启用 / 旁通一个效果器（不重建播放器，出声不断）。 */
+  function setEffectEnabled(track: number, index: number, enabled: boolean): Promise<void> {
+    return edit(() => api.setEffectEnabled(track, index, enabled));
+  }
+
+  /** 设置效果器的侧链来源（`null` = 不接）。 */
+  function setEffectSidechain(track: number, index: number, source: number | null): Promise<void> {
+    return edit(() => api.setEffectSidechain(track, index, source));
+  }
+
+  // ---- 主总线插入 ----
+
+  /** 在主总线插入链末尾追加一个效果器。 */
+  function addMasterEffect(pluginId: string): Promise<void> {
+    return edit(() => api.addMasterEffect(pluginId));
+  }
+
+  /** 从主总线插入链移除一个效果器。 */
+  function removeMasterEffect(index: number): Promise<void> {
+    return edit(() => api.removeMasterEffect(index));
+  }
+
+  /** 调整主总线效果器的位置。 */
+  function moveMasterEffect(from: number, to: number): Promise<void> {
+    return edit(() => api.moveMasterEffect(from, to));
+  }
+
+  /** 设置主总线效果器参数。 */
+  function setMasterEffectParam(index: number, param: string, value: number): Promise<void> {
+    if (!Number.isFinite(value)) return Promise.resolve();
+    return edit(() => api.setMasterEffectParam(index, param, value));
+  }
+
+  /** 启用 / 旁通主总线上的一个效果器。 */
+  function setMasterEffectEnabled(index: number, enabled: boolean): Promise<void> {
+    return edit(() => api.setMasterEffectEnabled(index, enabled));
+  }
+
+  /** 设置主总线效果器的侧链来源（`null` = 不接）。 */
+  function setMasterEffectSidechain(index: number, source: number | null): Promise<void> {
+    return edit(() => api.setMasterEffectSidechain(index, source));
+  }
+
   // ---- 片段 ----
 
   /** 新增片段。 */
@@ -615,6 +658,14 @@ export const useProjectStore = defineStore("project", () => {
     moveEffect,
     setEffectParam,
     setEffectParams,
+    setEffectEnabled,
+    setEffectSidechain,
+    addMasterEffect,
+    removeMasterEffect,
+    moveMasterEffect,
+    setMasterEffectParam,
+    setMasterEffectEnabled,
+    setMasterEffectSidechain,
     applySoundMemory,
     addClip,
     importAudio,

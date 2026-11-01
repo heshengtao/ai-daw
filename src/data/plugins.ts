@@ -30,6 +30,13 @@ export interface PluginInfo {
   format?: string;
   /** 是否自带原生编辑器界面。 */
   hasEditor?: boolean;
+  /**
+   * 是否支持侧链（键输入）。
+   *
+   * 只有**明确支持**的插件才在界面上露出「侧链来源」下拉——否则用户会以为选一下就生效，
+   * 而引擎其实按「哑侧链」处理。外部插件在宿主适配器支持前一律不显示。
+   */
+  sidechain?: boolean;
 }
 
 /** 内置合成器的插件 id（与引擎 `ai_daw_engine::BUILTIN_SYNTH` 一致）。 */
@@ -63,6 +70,10 @@ export const CHORUS_ID = "builtin.chorus";
 export const DRIVE_ID = "builtin.drive";
 /** 内置两段 EQ 的插件 id（与引擎 `BUILTIN_EQ` 一致）。 */
 export const EQ_ID = "builtin.eq";
+/** 内置压缩器的插件 id（与引擎 `BUILTIN_COMPRESSOR` 一致）。 */
+export const COMPRESSOR_ID = "builtin.compressor";
+/** 内置限幅器的插件 id（与引擎 `BUILTIN_LIMITER` 一致）。 */
+export const LIMITER_ID = "builtin.limiter";
 
 /**
  * 内置合成器的**出厂预设**。
@@ -393,6 +404,27 @@ export const BUILTIN_PLUGINS: PluginInfo[] = [
     tags: ["eq", "tone", "bass", "treble", "均衡", "音色", "低频", "高频"],
     note: "eq.note",
   },
+  {
+    id: COMPRESSOR_ID,
+    name: "compressor.name",
+    kind: "effect",
+    category: "pluginCategory.builtinEffect",
+    builtin: true,
+    loadable: true,
+    tags: ["compressor", "comp", "dynamics", "compression", "压缩", "动态", "侧链"],
+    note: "compressor.note",
+    sidechain: true,
+  },
+  {
+    id: LIMITER_ID,
+    name: "limiter.name",
+    kind: "effect",
+    category: "pluginCategory.builtinEffect",
+    builtin: true,
+    loadable: true,
+    tags: ["limiter", "limit", "ceiling", "limiting", "限幅", "母带", "响度"],
+    note: "limiter.note",
+  },
 ];
 
 /** 参数元信息（与 `plugin-api` 的 `ParamInfo` 同构，另加界面用的步长与单位）。 */
@@ -624,6 +656,28 @@ export const EQ_PARAMS: ParamSpec[] = [
 ];
 
 /**
+ * 内置压缩器的参数表（与 `crates/effects/src/compressor.rs` 的 `PARAM_TABLE` 一致）。
+ *
+ * 单位直接写在 `unit` 里：dB / :1 / ms / %，旋钮的读数因此不用再猜。
+ */
+export const COMPRESSOR_PARAMS: ParamSpec[] = [
+  { id: "threshold", name: "阈值", min: -60, max: 0, step: 0.5, default: -18, digits: 1, unit: " dB" },
+  { id: "ratio", name: "压缩比", min: 1, max: 20, step: 0.1, default: 4, digits: 1, unit: ":1" },
+  { id: "attack", name: "启动", min: 0.1, max: 200, step: 0.1, default: 10, digits: 1, unit: " ms" },
+  { id: "release", name: "释放", min: 5, max: 2000, step: 1, default: 150, digits: 0, unit: " ms" },
+  { id: "knee", name: "拐点", min: 0, max: 24, step: 0.1, default: 6, digits: 1, unit: " dB" },
+  { id: "makeup", name: "补偿", min: -12, max: 24, step: 0.1, default: 0, digits: 1, unit: " dB" },
+  { id: "mix", name: "混合", min: 0, max: 1, step: 0.01, default: 1, digits: 2 },
+];
+
+/** 内置限幅器的参数表（与 `crates/effects/src/limiter.rs` 的 `PARAM_TABLE` 一致）。 */
+export const LIMITER_PARAMS: ParamSpec[] = [
+  { id: "ceiling", name: "上限", min: -12, max: 0, step: 0.1, default: -1, digits: 1, unit: " dB" },
+  { id: "release", name: "释放", min: 10, max: 500, step: 1, default: 80, digits: 0, unit: " ms" },
+  { id: "lookahead", name: "前瞻", min: 1, max: 10, step: 0.1, default: 5, digits: 1, unit: " ms" },
+];
+
+/**
  * 采样内置乐器的参数表。`gain` 的默认值按试听峰值校准，与 Rust 侧
  * `Kind::default_gain()` 必须一致；`tone` 是一阶低通，1 = 旁通。
  */
@@ -679,6 +733,8 @@ export const BUILTIN_PARAMS: Record<string, ParamSpec[]> = {
   [CHORUS_ID]: CHORUS_PARAMS,
   [DRIVE_ID]: DRIVE_PARAMS,
   [EQ_ID]: EQ_PARAMS,
+  [COMPRESSOR_ID]: COMPRESSOR_PARAMS,
+  [LIMITER_ID]: LIMITER_PARAMS,
 };
 
 /**
@@ -688,7 +744,7 @@ export const BUILTIN_PARAMS: Record<string, ParamSpec[]> = {
  * 所以「命中哪条预设」不能拿实例里存的残缺参数去比，要先补齐成这一份完整参数集。
  */
 export const EFFECT_DEFAULTS: Record<string, Record<string, number>> = Object.fromEntries(
-  [DELAY_ID, REVERB_ID, CHORUS_ID, DRIVE_ID, EQ_ID].map((id) => [
+  [DELAY_ID, REVERB_ID, CHORUS_ID, DRIVE_ID, EQ_ID, COMPRESSOR_ID, LIMITER_ID].map((id) => [
     id,
     Object.fromEntries((BUILTIN_PARAMS[id] ?? []).map((p) => [p.id, p.default])),
   ]),

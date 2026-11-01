@@ -136,15 +136,7 @@ fn main() {
     let report = assign_lyrics(&mut notes, &lyrics);
     println!("歌词：{}", report.summary());
 
-    let take = synthesize(
-        &notes,
-        bpm,
-        steps,
-        7,
-        Some((&mono, rate)),
-        &|_| true,
-    )
-    .expect("合成失败");
+    let take = synthesize(&notes, bpm, steps, 7, Some((&mono, rate)), &|_| true).expect("合成失败");
     write_wav(&out_path, &take.samples, take.sample_rate);
     println!(
         "写出 {out_path}：{:.1} 秒、{} 个音、{} 段；实际参考起点 {:?} 秒",

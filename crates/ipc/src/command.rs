@@ -178,6 +178,37 @@ pub enum Command {
         param: String,
         value: f32,
     },
+    /// 启用 / 旁通轨道上的一个效果器（按链内序号定位）。
+    SetEffectEnabled {
+        track: TrackId,
+        index: usize,
+        enabled: bool,
+    },
+    /// 设置轨道效果器的侧链来源（`None` = 不接）。
+    SetEffectSidechain {
+        track: TrackId,
+        index: usize,
+        source: Option<TrackId>,
+    },
+    /// 在主总线插入链末尾追加一个效果器。
+    AddMasterEffect { plugin_id: String },
+    /// 从主总线插入链移除一个效果器（按链内序号）。
+    RemoveMasterEffect { index: usize },
+    /// 调整主总线效果器在链中的位置（`from` → `to`）。
+    MoveMasterEffect { from: usize, to: usize },
+    /// 设置主总线效果器的某个参数。
+    SetMasterEffectParam {
+        index: usize,
+        param: String,
+        value: f32,
+    },
+    /// 启用 / 旁通主总线上的一个效果器。
+    SetMasterEffectEnabled { index: usize, enabled: bool },
+    /// 设置主总线效果器的侧链来源（`None` = 不接）。
+    SetMasterEffectSidechain {
+        index: usize,
+        source: Option<TrackId>,
+    },
     /// 在第 `beat` 拍切分一个片段（razor）。
     ///
     /// 左半段沿用原 `clip`（id 不变），右半段是新片段。`beat` 必须落在片段内部，否则安静忽略。

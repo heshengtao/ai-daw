@@ -1,13 +1,14 @@
 <script setup lang="ts">
 /**
- * 导出音频对话框：格式（WAV / MP3）+ 采样率（+ MP3 的比特率）。
+ * 导出音频对话框：格式（WAV / MP3 / MIDI / 乐谱）+ 采样率（+ MP3 的比特率）。
  *
  * 为什么要有这一步而不是直接开保存对话框：MP3 需要挑比特率，而两种格式能用的采样率不一样
  * （MP3 只有 MPEG-1 的三档，96 kHz 会被后端直接拒掉）。选完这里再去系统保存对话框选路径，
  * **扩展名决定最终格式**（见 `api/dialogs.ts` 的 `pickAudioToSave`）——所以文件名写成 `.mp3`
  * 永远会得到 MP3，与这里选了什么不冲突。
  *
- * 外壳与 `ConfirmDialog` 同一套（遮罩 + 圆角框 + 取消/确认），只是中间换成两三个字段。
+ * 外壳与 `ConfirmDialog` 同一套（遮罩 + 圆角框 + 取消/确认），只是中间换成几个字段。
+ * 四张格式卡片并排，对话框相应放宽到 680px。
  */
 import { computed, ref, watch } from "vue";
 import { XMarkIcon } from "@heroicons/vue/24/outline";
@@ -30,6 +31,9 @@ export type ExportChoice =
       grid: number;
       /** 调号（升号为正）。 */
       keyFifths: number;
+    }
+  | {
+      kind: "midi";
     };
 
 defineProps<{ open: boolean }>();
@@ -41,8 +45,8 @@ const emit = defineEmits<{
 
 const i18n = useI18n();
 
-/** 对话框里的「格式」：WAV / MP3 / 乐谱。 */
-type Format = ExportFormat | "score";
+/** 对话框里的「格式」：WAV / MP3 / MIDI / 乐谱。 */
+type Format = ExportFormat | "midi" | "score";
 
 /** WAV 可选的采样率（后端接受 8000..=192000，界面只给常用三档）。 */
 const WAV_RATES = [44_100, 48_000, 96_000];
@@ -122,6 +126,8 @@ function confirm(): void {
   if (format.value === "score") {
     const grid = GRIDS.find((g) => g.id === gridId.value)?.beats ?? 0.25;
     emit("confirm", { kind: "score", grid, keyFifths: Number(keyId.value) });
+  } else if (format.value === "midi") {
+    emit("confirm", { kind: "midi" });
   } else {
     emit("confirm", {
       kind: "audio",
@@ -187,6 +193,16 @@ function onKey(e: KeyboardEvent): void {
                 </button>
                 <button
                   class="seg-btn"
+                  :class="{ on: format === 'midi' }"
+                  role="radio"
+                  :aria-checked="format === 'midi'"
+                  @click="format = 'midi'"
+                >
+                  <span class="seg-title">{{ i18n.t("export.midi") }}</span>
+                  <span class="seg-hint">{{ i18n.t("export.midiHint") }}</span>
+                </button>
+                <button
+                  class="seg-btn"
                   :class="{ on: format === 'score' }"
                   role="radio"
                   :aria-checked="format === 'score'"
@@ -210,7 +226,7 @@ function onKey(e: KeyboardEvent): void {
               </div>
             </template>
 
-            <div v-else class="field">
+            <div v-if="format === 'wav' || format === 'mp3'" class="field">
               <span class="field-label">{{ i18n.t("export.sampleRate") }}</span>
               <Md3Select
                 v-model="rateId"
@@ -232,9 +248,11 @@ function onKey(e: KeyboardEvent): void {
               {{
                 format === "mp3"
                   ? i18n.t("export.mp3Note")
-                  : format === "score"
-                    ? i18n.t("export.scoreNote")
-                    : i18n.t("export.wavNote")
+                  : format === "midi"
+                    ? i18n.t("export.midiNote")
+                    : format === "score"
+                      ? i18n.t("export.scoreNote")
+                      : i18n.t("export.wavNote")
               }}
             </p>
           </div>
@@ -261,8 +279,8 @@ function onKey(e: KeyboardEvent): void {
   background-color: rgb(var(--md-scrim) / 0.42);
 }
 .dialog {
-  width: 420px;
-  max-width: 100%;
+  width: 680px;
+  max-width: calc(100vw - 48px);
   display: flex;
   flex-direction: column;
   border-radius: 24px;
@@ -321,10 +339,10 @@ function onKey(e: KeyboardEvent): void {
   letter-spacing: 0.4px;
   color: rgb(var(--md-on-surface-variant));
 }
-/* 格式：三枚并列的药丸按钮，各自带一行小字说明（有损 / 无损 / 乐谱一眼可见）。 */
+/* 格式：四枚并列的药丸按钮，各自带一行小字说明（无损 / 有损 / MIDI / 乐谱一眼可见）。 */
 .seg {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 .seg-btn {
@@ -415,6 +433,12 @@ function onKey(e: KeyboardEvent): void {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+/* 窄窗口：四张卡片折成两行，避免每张只剩几十像素。 */
+@media (max-width: 720px) {
+  .seg {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .icon-btn,

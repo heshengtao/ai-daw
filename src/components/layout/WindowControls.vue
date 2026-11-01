@@ -1,59 +1,116 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+/**
+ * 窗口按钮：Windows / Linux 无边框窗口自绘的最小化 / 最大化 / 关闭。
+ *
+ * 与 `D:\ai-cut` 同一套：34×34 圆形按钮、**12px** 图标（比原来的 16px 小一号，看着更
+ * 精致）、悬停淡填充、关闭按钮悬停变错误色，并带 Tooltip。
+ */
+import { ref, onMounted, onUnmounted } from "vue";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import Tooltip from "@/components/common/Tooltip.vue";
+import { useI18n } from "@/i18n";
 
-const isMaximized = ref(false)
-const appWindow = getCurrentWindow()
+const i18n = useI18n();
+const isMaximized = ref(false);
+const appWindow = getCurrentWindow();
 
-let unlisten: (() => void) | null = null
+let unlisten: (() => void) | null = null;
 
 onMounted(async () => {
-  isMaximized.value = await appWindow.isMaximized()
+  isMaximized.value = await appWindow.isMaximized();
   unlisten = await appWindow.onResized(() => {
-    appWindow.isMaximized().then(v => { isMaximized.value = v })
-  })
-})
+    void appWindow.isMaximized().then((v) => (isMaximized.value = v));
+  });
+});
 
 onUnmounted(() => {
-  unlisten?.()
-})
+  unlisten?.();
+});
 </script>
 
 <template>
   <div class="window-controls" data-tauri-drag-region="false">
-    <button class="window-control-btn" @click="appWindow.minimize()" :title="'Minimize'">
-      <svg width="16" height="16" viewBox="0 0 11 11">
-        <rect x="0.5" y="5" width="10" height="1" fill="currentColor" rx="0.5" />
-      </svg>
-    </button>
-    <button
-      class="window-control-btn"
-      @click="appWindow.toggleMaximize()"
-      :title="isMaximized ? 'Restore' : 'Maximize'"
+    <Tooltip :text="i18n.t('window.minimize')" align="end">
+      <button
+        class="window-control-btn"
+        :aria-label="i18n.t('window.minimize')"
+        @click="appWindow.minimize()"
+      >
+        <svg width="12" height="12" viewBox="0 0 11 11" aria-hidden="true">
+          <rect x="0.5" y="5" width="10" height="1" fill="currentColor" rx="0.5" />
+        </svg>
+      </button>
+    </Tooltip>
+    <Tooltip
+      :text="isMaximized ? i18n.t('window.restore') : i18n.t('window.maximize')"
+      align="end"
     >
-      <svg v-if="isMaximized" width="16" height="16" viewBox="0 0 11 11">
-        <rect x="2.5" y="0.5" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="0.9" />
-        <rect x="0.5" y="2.5" width="8" height="8" rx="1" fill="rgb(var(--md-surface))" stroke="currentColor" stroke-width="0.9" />
-      </svg>
-      <svg v-else width="16" height="16" viewBox="0 0 11 11">
-        <rect x="1" y="1" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1" />
-      </svg>
-    </button>
-    <button class="window-control-btn" @click="appWindow.close()" :title="'Close'">
-      <svg width="16" height="16" viewBox="0 0 11 11">
-        <path d="M1 1l9 9M10 1L1 10" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" />
-      </svg>
-    </button>
+      <button
+        class="window-control-btn"
+        :aria-label="isMaximized ? i18n.t('window.restore') : i18n.t('window.maximize')"
+        @click="appWindow.toggleMaximize()"
+      >
+        <svg v-if="isMaximized" width="12" height="12" viewBox="0 0 11 11" aria-hidden="true">
+          <rect
+            x="1"
+            y="4"
+            width="6.4"
+            height="6.4"
+            rx="1"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1"
+          />
+          <path
+            d="M4 4V2a1 1 0 0 1 1-1h4.4a1 1 0 0 1 1 1v4.4a1 1 0 0 1-1 1H7.4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1"
+            stroke-linejoin="round"
+          />
+        </svg>
+        <svg v-else width="12" height="12" viewBox="0 0 11 11" aria-hidden="true">
+          <rect
+            x="1"
+            y="1"
+            width="9"
+            height="9"
+            rx="1.5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.2"
+          />
+        </svg>
+      </button>
+    </Tooltip>
+    <Tooltip :text="i18n.t('window.close')" align="end">
+      <button
+        class="window-control-btn window-control-close"
+        :aria-label="i18n.t('window.close')"
+        @click="appWindow.close()"
+      >
+        <svg width="12" height="12" viewBox="0 0 11 11" aria-hidden="true">
+          <path
+            d="M1 1l9 9M10 1L1 10"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.2"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
+    </Tooltip>
   </div>
 </template>
 
 <style scoped>
 .window-controls {
+  height: 100%;
   display: flex;
   align-items: center;
   gap: 1px;
+  padding-right: 12px;
 }
-/* 与顶栏 .bar-btn 完全一致：34×34 圆形 MD3 图标按钮 */
 .window-control-btn {
   width: 34px;
   height: 34px;
@@ -78,6 +135,13 @@ onUnmounted(() => {
 .window-control-btn:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 1px;
+}
+.window-control-close:hover {
+  background-color: rgb(var(--md-error) / var(--md-state-hover-alpha));
+  color: rgb(var(--md-error));
+}
+.window-control-btn svg {
+  display: block;
 }
 
 @media (prefers-reduced-motion: reduce) {

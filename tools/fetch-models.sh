@@ -71,7 +71,7 @@ ls -l "$DEST/beat_this.onnx" "$DEST/mel_spectrogram.onnx"
 
 echo "==> SoulX-Singer（歌声合成，9 张图 + 5 个外部权重，约 1.4 GB）"
 # 不随包，正式版由应用内「管理器 → 模型」下载（id `soulx-singer-fp16`）；这里只是开发路径。
-# 源：魔搭（国内直连）。国际镜像待补，见 tools/mirror-soulx-hf.md。
+# 源：魔搭（国内直连）；国际镜像见 tools/mirror-soulx-hf.sh（fp16 不加参数，fp32 加 --fp32）。
 SVS_DIR="$DEST/soulx-singer-fp16"
 mkdir -p "$SVS_DIR"
 SVS_FILES=(

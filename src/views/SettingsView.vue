@@ -3,7 +3,7 @@
  * 设置页：自带一条侧栏（进入设置时应用侧栏隐藏，避免出现两条侧栏）。
  * 内容为居中列 + 分组卡片；全部控件自绘，不使用原生表单控件。
  */
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeftIcon } from "@heroicons/vue/24/outline";
 import {
@@ -19,10 +19,16 @@ import { useSettingsStore, MAX_DEFAULT_TEMPO, MIN_DEFAULT_TEMPO } from "@/stores
 import Md3Slider from "@/components/common/Md3Slider.vue";
 import NumberField from "@/components/common/NumberField.vue";
 import ComboField from "@/components/common/ComboField.vue";
+import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import { usePluginsStore } from "@/stores/plugins";
+import { useRuntimesStore } from "@/stores/runtimes";
+import EngineBackendPicker from "@/components/common/EngineBackendPicker.vue";
+import Md3Segmented from "@/components/common/Md3Segmented.vue";
+import type { SegmentedOption } from "@/components/common/segmented";
 import { useUpdaterStore } from "@/stores/updater";
-import { useI18n } from "@/i18n";
+import { useI18n, type Locale } from "@/i18n";
 import { copyText } from "@/utils/clipboard";
+import { restartApp as restartApplication } from "@/utils/restart";
 import { lastWorkspace } from "@/router";
 import {
   agentConfig,
@@ -106,6 +112,36 @@ function onTheme(t: Theme): void {
 }
 function onAccent(a: AccentColor): void {
   setAccent(a);
+}
+
+/*
+ * 设置页里的所有「几选一」都走同一个 `Md3Segmented`（滑块胶囊）：
+ * 语言 / 主题 / 代理方式 / 下载源，以及下面的两个 AI 后端。之前这里各自手写
+ * `.m3-seg`，而 AI 后端又用了另一套控件，宽度一紧就直接换行，看起来像两个组件。
+ */
+const localeSegOptions = computed<SegmentedOption[]>(() =>
+  i18n.locales.map((l) => ({ value: l.id, label: l.label })),
+);
+const themeSegOptions = computed<SegmentedOption[]>(() =>
+  THEMES.map((t) => ({ value: t.id, label: i18n.t(t.labelKey) })),
+);
+const proxyModeSegOptions = computed<SegmentedOption[]>(() =>
+  PROXY_MODES.map((p) => ({ value: p.id, label: i18n.t(p.labelKey) })),
+);
+const sourceSegOptions = computed<SegmentedOption[]>(() =>
+  SOURCE_PREFS.map((p) => ({ value: p.id, label: i18n.t(p.labelKey) })),
+);
+function onLocalePick(value: string): void {
+  i18n.setLocale(value as Locale);
+}
+function onThemePick(value: string): void {
+  onTheme(value as Theme);
+}
+function onProxyModePick(value: string): void {
+  proxyMode.value = value as ProxyMode;
+}
+function onSourcePick(value: string): void {
+  modelSourcePref.value = value as ModelSourcePreference;
 }
 
 // ---- MCP 服务器 ----
@@ -284,7 +320,22 @@ async function loadStoreNetwork(): Promise<void> {
 /** 执行后端（CPU / CoreML / DirectML）：只列出本机平台支持的那些。 */
 const backendInfo = ref<BackendInfo | null>(null);
 const backendSaving = ref(false);
+/** 运行时清单（切后端时要看那份运行时下没下、有多大）。 */
+const runtimes = useRuntimesStore();
 const availableBackends = computed(() => backendInfo.value?.options.filter((o) => o.available) ?? []);
+/** 分段控件用的选项（与 `availableBackends` 一一对应；文案走 i18n）。 */
+const backendSegOptions = computed<SegmentedOption[]>(() =>
+  availableBackends.value.map((o) => ({
+    value: o.kind,
+    label: backendText(o.kind, "label", o.label),
+    disabled: backendSaving.value,
+    title: o.runtime_installed ? undefined : i18n.t("settings.ai.runtimeMissing"),
+  })),
+);
+function onBackendPick(value: string): void {
+  void setBackend(value as BackendPreference);
+}
+/** audio.cpp 引擎的后端包（与上面 ONNX Runtime 的后端是两套独立的东西）。 */
 
 /**
  * 执行后端的文案。
@@ -311,16 +362,191 @@ async function loadBackend(): Promise<void> {
   }
 }
 
+/** CUDA provider 硬依赖的四个组件（后端没下发 `missing` 时的兜底清单）。 */
+function cudaParts(runtime: string): string[] {
+  const suffix = runtime === "cuda13" ? "13" : "";
+  return [`cudart${suffix}`, `cublas${suffix}`, `cufft${suffix}`, `cudnn${suffix}`];
+}
+
+/** 组件 id → 界面上显示的名字（清单还没加载时退回 id 本身）。 */
+function partName(id: string): string {
+  return runtimes.items.find((r) => r.id === id)?.label ?? id;
+}
+
+/**
+ * 「看起来能用、实际在跑 CPU」的提示。
+ *
+ * 两种情况都必须说出来，否则用户只会看到「CUDA 已选」，然后发现显卡闲着：
+ * 1. 组件缺（provider 载不进来）；
+ * 2. provider 没注册成功（本次会话建的会话只能是 CPU）。
+ */
+const backendWarning = computed(() => {
+  const info = backendInfo.value;
+  if (!info || !info.preference.startsWith("cuda")) return "";
+  const cuda = info.options.find((o) => o.kind === info.preference);
+  if (!cuda || !cuda.available) return "";
+  // 本体都没装：先说本体，别把「组件齐了」当成能跑。
+  if (!cuda.runtime_installed) {
+    return i18n.t("settings.ai.cudaCoreMissing", {
+      version: info.preference === "cuda13" ? "13" : "12",
+    });
+  }
+  const missing = cuda.missing ?? [];
+  if (missing.length > 0) {
+    return i18n.t("settings.ai.cudaPartsMissing", {
+      parts: missing.map(partName).join("、"),
+    });
+  }
+  // 运行时还没被加载过（启动后尚未建会话）时 `ep_ready` 必然是 false：
+  // 这不是失败，只有加载过、注册仍失败才提示。
+  if (!info.ep_ready && info.loaded_runtime) {
+    return i18n.t("settings.ai.cudaNotActive");
+  }
+  return "";
+});
+
 async function setBackend(preference: BackendPreference): Promise<void> {
   if (backendInfo.value?.preference === preference) return;
+  const option = backendInfo.value?.options.find((o) => o.kind === preference);
+  if (!option) return;
+  // 计算缺口：本体 +（CUDA 时）**全套组件**。**本体已装、组件缺**也要先补，
+  // 不能只看 `runtime_installed`（它只代表 ONNX Runtime 本体）。
+  // CUDA 的 provider dll 硬依赖这四个：cudart / cuBLAS / cuFFT / cuDNN，缺一个就载不进来，
+  // ORT 会静默回落 CPU（以前漏了 cuFFT，正好踩在这一条上）。
+  const pending: string[] = [];
+  const core = runtimes.items.find((r) => r.id === option.runtime);
+  if (!core || !core.installed) pending.push(option.runtime);
+  // 组件缺口以后端下发的 `missing` 为准（它按磁盘实时算）；再并上已知的四件套兜底，
+  // 这样即使清单还没加载完也不会漏装。CUDA 12 / 13 的组件 id 不同（13 带后缀）。
+  if (option.runtime.startsWith("cuda")) {
+    for (const id of [...(option.missing ?? []), ...cudaParts(option.runtime)]) {
+      const item = runtimes.items.find((r) => r.id === id);
+      if (item && !item.installed && !pending.includes(id)) pending.push(id);
+    }
+  }
+  if (pending.length > 0) {
+    const total = pending.reduce(
+      (sum, id) => sum + (runtimes.items.find((r) => r.id === id)?.bytes ?? 0),
+      0,
+    );
+    runtimePrompt.value = {
+      kind: "missing",
+      label: backendText(option.kind, "label", option.label),
+      id: option.runtime,
+      bytes: total,
+      preference,
+      pending,
+    };
+    return;
+  }
   backendSaving.value = true;
   try {
     backendInfo.value = await aiSetBackend(preference);
+    // 换运行时 = 换进程里那一份 dylib，下次启动才生效；
+    // 进程里还没加载过运行时 / 已经加载的就是这一份时，不需要重启，也要明确告诉用户。
+    if (backendInfo.value?.restart_required) {
+      runtimePrompt.value = { kind: "restart" };
+    } else {
+      const label = backendText(option.kind, "label", option.label);
+      const loaded = backendInfo.value?.loaded_runtime === option.runtime;
+      layout.notify(
+        i18n.t(
+          loaded ? "settings.ai.backendAppliedCurrent" : "settings.ai.backendAppliedNext",
+          { backend: label },
+        ),
+      );
+    }
   } catch (err) {
     layout.notify(String(err));
   } finally {
     backendSaving.value = false;
   }
+}
+
+/** 重启提示正文：开发模式下补一句「不会自动重启」，别让人点完才发现。 */
+const restartPromptBody = computed(() => {
+  const body = i18n.t("settings.ai.restartBody");
+  return import.meta.env.DEV ? `${body} ${i18n.t("settings.ai.restartDevHint")}` : body;
+});
+
+/** 切后端时的那两个提示：运行时缺失（先去下载）/ 已切换（重启生效）。 */
+const runtimePrompt = ref<
+  | {
+      kind: "missing";
+      label: string;
+      id: string;
+      bytes: number;
+      preference: BackendPreference;
+      pending: string[];
+    }
+  | { kind: "restart" }
+  | null
+>(null);
+
+/** 缺失提示的正文（知道体积就报体积）。 */
+const missingPromptBody = computed(() => {
+  const prompt = runtimePrompt.value;
+  if (prompt?.kind !== "missing") return "";
+  return prompt.bytes > 0
+    ? i18n.t("settings.ai.runtimeMissingBody", {
+        backend: prompt.label,
+        size: `${Math.round(prompt.bytes / 1048576)} MB`,
+      })
+    : i18n.t("settings.ai.runtimeMissingBodyUnknown", { backend: prompt.label });
+});
+
+/** 「去下载」：跳到下载管理器 → 聚焦「运行时」→ 下载 → 切回设置页 → 提示重启。 */
+async function downloadMissingRuntime(): Promise<void> {
+  const prompt = runtimePrompt.value;
+  runtimePrompt.value = null;
+  if (prompt?.kind !== "missing") return;
+  runtimes.requestFocus();
+  openManager();
+  for (const id of prompt.pending) {
+    // 下 CUDA 本体时会顺带补齐同大版本的全部组件；轮到后面的组件 id 时它已经装好了，
+    // 不要再把几 GB 的包重下一遍。
+    if (runtimes.items.find((r) => r.id === id)?.installed) continue;
+    await runtimes.install(id);
+    // 后端下载是独立线程：等 done 事件把 items 刷新成 installed。
+    if (!(await waitForInstalled(id))) return;
+  }
+  try {
+    const info = await aiSetBackend(prompt.preference);
+    backendInfo.value = info;
+    // 只有「已经加载过旧运行时」才需要重启；首次使用会直接加载新运行时，
+    // 这时弹重启只会打断用户（组件刚下完就弹窗的根因之一）。
+    if (info.restart_required) runtimes.requestRestartPrompt();
+  } catch (err) {
+    layout.notify(String(err));
+    return;
+  }
+  void router.push({ path: "/settings", query: { section: "ai" } });
+}
+
+/** 等运行时下载完成（done 事件会刷新 items）。 */
+async function waitForInstalled(id: string): Promise<boolean> {
+  for (let i = 0; i < 1800; i += 1) {
+    const item = runtimes.items.find((r) => r.id === id);
+    if (item?.installed) return true;
+    if (runtimes.error) return false;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return false;
+}
+
+/** 对话框关掉（取消 / 点遮罩）时清掉状态。 */
+function dismissRuntimePrompt(open: boolean): void {
+  if (!open) runtimePrompt.value = null;
+}
+
+/**
+ * 重启应用；开发模式下自动重启会丢掉前端 dev server，改成提示手动重启。
+ *
+ * 守卫本身挪到了 [`restartApp`](@/utils/restart)：AI 面板 / 下载管理器 / 设置页
+ * 都要走同一份逻辑，否则同一个「立即重启」按钮在三个地方行为不一致。
+ */
+function restartApp(): void {
+  void restartApplication();
 }
 
 async function saveStoreNetwork(): Promise<void> {
@@ -466,11 +692,19 @@ const updateMessage = computed(() => {
   return i18n.t("settings.update.hint");
 });
 
+/** 打开管理器并落到「运行时」标签。 */
+function openRuntimeManager(): void {
+  runtimes.requestFocus();
+  openManager();
+}
+
 onMounted(() => {
   void loadMcp();
   void loadCli();
   void loadStoreNetwork();
   void loadBackend();
+  // 子组件（EngineBackendPicker）的 onMounted 比这里先跑；别重复拉同一张清单。
+  if (runtimes.items.length === 0 && !runtimes.loading) void runtimes.load();
   void loadAgent();
   void updater.loadVersion();
   // 深链：`/settings?section=ai` 直接落到 AI / MCP 子页（写歌智能体的「去配置」会这么跳）。
@@ -478,6 +712,11 @@ onMounted(() => {
   if (typeof section === "string" && SECTIONS.some((s) => s.id === section)) {
     active.value = section as Section;
   }
+  // 运行时下载完自动切回设置页：把「重启生效」弹框补上。
+  if (runtimes.consumeRestartPrompt()) runtimePrompt.value = { kind: "restart" };
+});
+
+onUnmounted(() => {
 });
 </script>
 
@@ -550,17 +789,13 @@ onMounted(() => {
                   <span class="row-title">{{ i18n.t("settings.language.label") }}</span>
                   <span class="row-sub">{{ i18n.t("settings.language.hint") }}</span>
                 </div>
-                <div class="m3-seg" role="group" :aria-label="i18n.t('settings.language.label')">
-                  <button
-                    v-for="l in i18n.locales"
-                    :key="l.id"
-                    class="m3-seg-btn"
-                    :class="{ on: i18n.locale.value === l.id }"
-                    :aria-pressed="i18n.locale.value === l.id"
-                    @click="i18n.setLocale(l.id)"
-                  >
-                    {{ l.label }}
-                  </button>
+                <div class="row-control">
+                  <Md3Segmented
+                    :model-value="i18n.locale.value"
+                    :options="localeSegOptions"
+                    :aria-label="i18n.t('settings.language.label')"
+                    @update:model-value="onLocalePick"
+                  />
                 </div>
               </div>
             </div>
@@ -577,17 +812,13 @@ onMounted(() => {
                   <span class="row-title">{{ i18n.t("settings.theme.label") }}</span>
                   <span class="row-sub">{{ i18n.t("settings.theme.hint") }}</span>
                 </div>
-                <div class="m3-seg" role="group" :aria-label="i18n.t('settings.theme.label')">
-                  <button
-                    v-for="t in THEMES"
-                    :key="t.id"
-                    class="m3-seg-btn"
-                    :class="{ on: theme === t.id }"
-                    :aria-pressed="theme === t.id"
-                    @click="onTheme(t.id)"
-                  >
-                    {{ i18n.t(t.labelKey) }}
-                  </button>
+                <div class="row-control">
+                  <Md3Segmented
+                    :model-value="theme"
+                    :options="themeSegOptions"
+                    :aria-label="i18n.t('settings.theme.label')"
+                    @update:model-value="onThemePick"
+                  />
                 </div>
               </div>
             </div>
@@ -793,17 +1024,13 @@ onMounted(() => {
                   <span class="row-title">{{ i18n.t("settings.proxy.mode") }}</span>
                   <span class="row-sub">{{ i18n.t("settings.proxy.modeHint") }}</span>
                 </div>
-                <div class="m3-seg" role="group" :aria-label="i18n.t('settings.proxy.mode')">
-                  <button
-                    v-for="m in PROXY_MODES"
-                    :key="m.id"
-                    class="m3-seg-btn"
-                    :class="{ on: proxyMode === m.id }"
-                    :aria-pressed="proxyMode === m.id"
-                    @click="proxyMode = m.id"
-                  >
-                    {{ i18n.t(m.labelKey) }}
-                  </button>
+                <div class="row-control">
+                  <Md3Segmented
+                    :model-value="proxyMode"
+                    :options="proxyModeSegOptions"
+                    :aria-label="i18n.t('settings.proxy.mode')"
+                    @update:model-value="onProxyModePick"
+                  />
                 </div>
               </div>
 
@@ -867,17 +1094,13 @@ onMounted(() => {
                   <span class="row-title">{{ i18n.t("settings.store.source") }}</span>
                   <span class="row-sub">{{ i18n.t("settings.store.sourceHint") }}</span>
                 </div>
-                <div class="m3-seg" role="group" :aria-label="i18n.t('settings.store.source')">
-                  <button
-                    v-for="p in SOURCE_PREFS"
-                    :key="p.id"
-                    class="m3-seg-btn"
-                    :class="{ on: modelSourcePref === p.id }"
-                    :aria-pressed="modelSourcePref === p.id"
-                    @click="modelSourcePref = p.id"
-                  >
-                    {{ i18n.t(p.labelKey) }}
-                  </button>
+                <div class="row-control">
+                  <Md3Segmented
+                    :model-value="modelSourcePref"
+                    :options="sourceSegOptions"
+                    :aria-label="i18n.t('settings.store.source')"
+                    @update:model-value="onSourcePick"
+                  />
                 </div>
               </div>
               <div class="col-row">
@@ -970,18 +1193,14 @@ onMounted(() => {
                   <span class="row-title">{{ i18n.t("settings.ai.backend") }}</span>
                   <span class="row-sub">{{ i18n.t("settings.ai.backendHint") }}</span>
                 </div>
-                <div class="m3-seg" role="group" :aria-label="i18n.t('settings.ai.backend')">
-                  <button
-                    v-for="o in availableBackends"
-                    :key="o.kind"
-                    class="m3-seg-btn"
-                    :class="{ on: backendInfo?.preference === o.kind }"
-                    :aria-pressed="backendInfo?.preference === o.kind"
-                    :disabled="backendSaving"
-                    @click="setBackend(o.kind)"
-                  >
-                    {{ backendText(o.kind, "label", o.label) }}
-                  </button>
+                <div class="row-control">
+                  <Md3Segmented
+                    v-if="backendSegOptions.length"
+                    :model-value="backendInfo?.preference ?? ''"
+                    :options="backendSegOptions"
+                    :aria-label="i18n.t('settings.ai.backend')"
+                    @update:model-value="onBackendPick"
+                  />
                 </div>
               </div>
               <div class="col-row">
@@ -989,6 +1208,30 @@ onMounted(() => {
                 <span class="row-sub">
                   {{ i18n.t("settings.ai.platform", { platform: backendInfo?.platform ?? "…" }) }}
                 </span>
+              </div>
+              <div class="col-row" v-if="backendWarning">
+                <span class="row-sub warn">{{ backendWarning }}</span>
+              </div>
+            </div>
+
+            <div class="card">
+              <EngineBackendPicker row />
+            </div>
+
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.ai.runtimes") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.ai.runtimesHint") }}</span>
+                </div>
+                <div class="row-actions">
+                  <span class="row-sub restart-hint" v-if="backendInfo?.restart_required">
+                    {{ i18n.t("settings.ai.restartRequired") }}
+                  </span>
+                  <button class="scan-btn" @click="openRuntimeManager">
+                    {{ i18n.t("settings.ai.runtimeOpen") }}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1209,6 +1452,24 @@ onMounted(() => {
       </div>
     </section>
   </div>
+
+  <!-- 切后端后的两种提示：运行时缺失 → 去下载；已切换 → 重启生效 -->
+  <ConfirmDialog
+    :open="runtimePrompt?.kind === 'missing'"
+    :title="i18n.t('settings.ai.runtimeMissingTitle')"
+    :message="missingPromptBody"
+    :confirm-label="i18n.t('settings.ai.runtimeMissingGo')"
+    @confirm="downloadMissingRuntime"
+    @update:open="dismissRuntimePrompt"
+  />
+  <ConfirmDialog
+    :open="runtimePrompt?.kind === 'restart'"
+    :title="i18n.t('settings.ai.restartTitle')"
+    :message="restartPromptBody"
+    :confirm-label="i18n.t('settings.ai.restartNow')"
+    @confirm="restartApp"
+    @update:open="dismissRuntimePrompt"
+  />
 </template>
 
 <style scoped>
@@ -1382,7 +1643,17 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  /* 标题 / 说明吃掉剩余宽度，右侧控件按自身内容定宽，不会被长说明挤到换行。 */
+  flex: 1 1 0;
   min-width: 0;
+}
+/* 行右侧的控件：分段滑块、开关、按钮等都不参与收缩。 */
+.row-control {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  max-width: 100%;
 }
 /* 竖向排布的设置行（网络输入那种：标题在上、控件占满一整行）。 */
 .col-row {
@@ -1420,6 +1691,10 @@ onMounted(() => {
 .row-sub {
   font-size: 12px;
   color: rgb(var(--md-on-surface-variant));
+}
+/* 警告：后端看起来可用、但其实会回落 CPU（组件缺失 / provider 没注册成功）。 */
+.row-sub.warn {
+  color: rgb(var(--md-error));
 }
 .row-value {
   font-size: 13px;
@@ -1486,6 +1761,10 @@ onMounted(() => {
     align-items: flex-start;
     gap: 10px;
   }
+  .row-control {
+    width: 100%;
+    justify-content: flex-start;
+  }
   .row-slider {
     width: 100%;
   }
@@ -1532,6 +1811,7 @@ onMounted(() => {
 .row-actions {
   display: flex;
   gap: 6px;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -1553,5 +1833,36 @@ onMounted(() => {
   max-height: 160px;
   overflow-y: auto;
   white-space: pre-wrap;
+}
+
+/* ---- ONNX Runtime 运行时（下载 / 删除） ---- */
+.runtime-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-top: 1px solid rgb(var(--md-outline-variant) / 0.4);
+}
+.runtime-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.runtime-tag {
+  margin-left: 6px;
+  font-style: normal;
+  font-size: 0.85em;
+  color: rgb(var(--md-primary));
+}
+.restart-hint {
+  color: rgb(var(--md-primary));
+}
+.runtime-progress {
+  margin: 4px 0 10px;
+}
+.runtime-error {
+  color: #d93025;
 }
 </style>

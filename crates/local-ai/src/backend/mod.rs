@@ -1,21 +1,26 @@
-//! **执行后端（Execution Provider）**：探测 → 选择 → 建会话（含自动回落）。
+//! **执行后端（Execution Provider）**：探测 → 选择 → 加载运行时 → 建会话（含自动回落）。
 //!
 //! 这一层把「用哪个 ONNX Runtime 执行后端」从散落各处的环境变量收拢成一个模块：
 //! - [`detect`]：探测本机硬件（OS / 架构 / GPU 名称）。
 //! - [`catalog`]：后端清单（平台 / 架构门槛）。
+//! - [`runtime`]：运行时（dylib）的清单、安装状态与**进程内一次性加载**。
 //! - [`session`]：**唯一的建会话入口**，EP 注册失败自动回落 CPU，含 per-graph 排除。
 //!
-//! 三个后端全部随包（CPU / CoreML / DirectML），**默认 CPU**；用户可在设置页改。
-//! 本 crate 不依赖 Tauri：宿主读配置后调 [`set_backend`]，再调 [`init`] 校验并落定。
+//! 运行时是**下载来的**（`load-dynamic`）：CPU 一份、CUDA 一份，由宿主管理下载与目录；
+//! 本 crate 只负责「选哪一份、装没装、怎么加载」。**默认 CPU**，用户可在设置页改。
+//! 本 crate 不依赖 Tauri：宿主读配置后调 [`set_backend`] / [`runtime::set_root`]，再调 [`init`]。
 //! 设计文档：`docs/superpowers/specs/2026-10-16-backend-runtime-download.md`。
 
 pub mod catalog;
 pub mod detect;
+pub mod logfile;
+pub mod runtime;
 pub mod session;
 
 mod kind;
 
 pub use kind::{BackendKind, ALL as ALL_BACKENDS};
+pub use runtime::RuntimeId;
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -28,7 +33,7 @@ pub fn set_backend(kind: BackendKind) {
     CHOSEN.store(kind.as_u8(), Ordering::Relaxed);
 }
 
-/// 环境变量覆盖（`AIDAW_BACKEND=cpu|coreml|directml`）；给探针 / 无头排障用。
+/// 环境变量覆盖（`AIDAW_BACKEND=cpu|coreml|directml|cuda12|cuda13`）；给探针 / 无头排障用。
 fn env_backend() -> Option<BackendKind> {
     std::env::var("AIDAW_BACKEND")
         .ok()
@@ -62,17 +67,32 @@ pub fn init() -> BackendKind {
         _ => BackendKind::Cpu,
     };
     set_backend(resolved);
+    // 后端 → 要加载哪一份运行时。装载本身是惰性的（第一次建会话时），这里只落定选择。
+    runtime::set_runtime(runtime::for_backend(resolved));
     detect::warm_in_background();
 
-    // 不要用 `eprintln!`：它写 stderr 失败会 panic（终端/管道被关时启动即崩）。
-    use std::io::Write as _;
-    let _ = writeln!(
-        std::io::stderr(),
-        "[backend] {} / {} → {}",
+    // 不要用 `eprintln!`：它写 stderr 失败会 panic（终端/管道被关时启动即崩）；
+    // `logfile::note` 同时写文件，事后能翻（见该模块注释）。
+    // 顺序检查：运行时是一进程一份，如果在 init 之前就被别的路径加载了，偏好再对也用不上。
+    if let Some(false) = runtime::loaded_is(runtime::for_backend(resolved)) {
+        logfile::note(&format!(
+            "[backend] 警告：ONNX Runtime 已在本次启动里加载过（不是 {} 那一份），现在选 {} 也不会生效，需要重启应用",
+            runtime::for_backend(resolved).as_str(),
+            resolved.label()
+        ));
+    }
+    logfile::note(&format!(
+        "[backend] {} / {} → {}（运行时 {}，{}）",
         profile.os,
         profile.arch,
-        resolved.label()
-    );
+        resolved.label(),
+        runtime::for_backend(resolved).as_str(),
+        if runtime::installed(runtime::for_backend(resolved)) {
+            "已安装"
+        } else {
+            "未安装"
+        }
+    ));
     resolved
 }
 
@@ -102,6 +122,7 @@ mod tests {
     #[test]
     fn env_override_parses() {
         assert_eq!(BackendKind::parse("coreml"), Some(BackendKind::CoreMl));
-        assert_eq!(BackendKind::parse("cuda"), None);
+        assert_eq!(BackendKind::parse("cuda"), Some(BackendKind::Cuda12));
+        assert_eq!(BackendKind::parse("cuda13"), Some(BackendKind::Cuda13));
     }
 }

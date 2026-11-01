@@ -54,6 +54,8 @@ fn schedule() -> ScheduledEvents {
             plugin_id: "builtin.synth".into(),
             params: Default::default(),
             state: vec![],
+            enabled: true,
+            sidechain: None,
         }),
         // 效果器链**也必须在零分配门禁的覆盖范围内**：内置延迟/混响都在音频回调里跑，
         // 参数给非默认值是为了让湿声路径真的执行（干声路径太容易「碰巧不分配」）。
@@ -64,6 +66,8 @@ fn schedule() -> ScheduledEvents {
                     .into_iter()
                     .collect(),
                 state: vec![],
+                enabled: true,
+                sidechain: None,
             },
             PluginInstance {
                 plugin_id: ai_daw_engine::registry::BUILTIN_DELAY.into(),
@@ -71,6 +75,30 @@ fn schedule() -> ScheduledEvents {
                     .into_iter()
                     .collect(),
                 state: vec![],
+                enabled: true,
+                sidechain: None,
+            },
+            // 压缩器（接侧链）与限幅器：动态处理与键缓冲拷贝也在音频回调里跑。
+            PluginInstance {
+                plugin_id: ai_daw_engine::registry::BUILTIN_COMPRESSOR.into(),
+                params: [
+                    ("threshold".to_string(), -24.0),
+                    ("ratio".to_string(), 6.0),
+                    ("attack".to_string(), 1.0),
+                    ("release".to_string(), 80.0),
+                ]
+                .into_iter()
+                .collect(),
+                state: vec![],
+                enabled: true,
+                sidechain: Some(ai_daw_engine::model::SidechainSource { track: TrackId(2) }),
+            },
+            PluginInstance {
+                plugin_id: ai_daw_engine::registry::BUILTIN_LIMITER.into(),
+                params: [("ceiling".to_string(), -1.0)].into_iter().collect(),
+                state: vec![],
+                enabled: true,
+                sidechain: None,
             },
         ],
         clips: vec![Clip {
@@ -103,6 +131,8 @@ fn schedule() -> ScheduledEvents {
         sends: vec![ai_daw_engine::model::Send {
             target: TrackId(2),
             gain_db: -6.0,
+            mode: Default::default(),
+            mute: false,
         }],
         automation: vec![
             ai_daw_engine::model::AutomationLane {
@@ -175,6 +205,14 @@ fn schedule() -> ScheduledEvents {
         sends: vec![],
         automation: vec![],
     });
+    // 主总线插入链：限幅器在总加上跑，同样受零分配门禁约束。
+    project.master_effects = vec![PluginInstance {
+        plugin_id: ai_daw_engine::registry::BUILTIN_LIMITER.into(),
+        params: [("ceiling".to_string(), -1.0)].into_iter().collect(),
+        state: vec![],
+        enabled: true,
+        sidechain: None,
+    }];
     ScheduledEvents::from_project(&project, 48_000.0)
 }
 
@@ -184,6 +222,8 @@ fn realtime_block_path_does_not_allocate() {
 
     let registry = PluginRegistry::with_builtins();
     let mut player = Player::new(schedule(), &registry, 48_000.0, MAX_BLOCK);
+    // 计量写入也在回调里：挂一张表，门禁才会覆盖 `publish_*`。
+    player.set_meter(std::sync::Arc::new(ai_daw_engine::meter::MeterBank::new()));
     let (mut tx, mut rx) = command_queue(64);
     player.apply_command(TransportCommand::Play);
 
@@ -217,6 +257,12 @@ fn realtime_block_path_does_not_allocate() {
         let _ = tx.send(TransportCommand::Play);
         let _ = tx.send(mix(i % 2 == 0, i % 3 == 0));
         let _ = tx.send(TransportCommand::SetMasterGain { gain_db: -1.0 });
+        // 旁通同样是「就地改活实例」的路径，必须零分配（`track` / `effect` 都是 Copy）。
+        let _ = tx.send(TransportCommand::SetEffectEnabled {
+            track: TrackId(1),
+            effect: 2,
+            enabled: i % 2 == 0,
+        });
         player.drain_commands(&mut rx);
     }
     let allocations = ALLOCATIONS.load(Ordering::SeqCst);
@@ -298,5 +344,32 @@ fn realtime_block_path_does_not_allocate() {
     assert_eq!(
         allocations, 0,
         "效果器参数车道的 SetAutomation 必须在音频线程上零分配（saw {allocations}）"
+    );
+
+    // 主总线插入的参数 / 旁通：字符串在测量前构造好，进音频线程的只有移动与 `set_param`。
+    let command = TransportCommand::SetMasterEffectParam {
+        effect: 0,
+        param: "ceiling".into(),
+        value: -2.0,
+    };
+    ALLOCATIONS.store(0, Ordering::SeqCst);
+    player.apply_command(command);
+    player.process_block(&mut out, MAX_BLOCK);
+    let allocations = ALLOCATIONS.load(Ordering::SeqCst);
+    assert_eq!(
+        allocations, 0,
+        "主总线效果器参数必须零分配（saw {allocations}）"
+    );
+
+    ALLOCATIONS.store(0, Ordering::SeqCst);
+    player.apply_command(TransportCommand::SetMasterEffectEnabled {
+        effect: 0,
+        enabled: false,
+    });
+    player.process_block(&mut out, MAX_BLOCK);
+    let allocations = ALLOCATIONS.load(Ordering::SeqCst);
+    assert_eq!(
+        allocations, 0,
+        "主总线旁通必须零分配（saw {allocations}）"
     );
 }

@@ -22,10 +22,6 @@ export const useSoundMemoriesStore = defineStore("soundMemories", () => {
   const activeTag = ref("");
   /** 库里的两类东西：乐器 / 效果链，和人声参考（同一个库，切换看）。 */
   const kind = ref<"instrument" | "voice">("instrument");
-  /** 在音色库里点了「用作参考」的人声 id（AI 面板据此选中它并切过去）。 */
-  const pickedVoice = ref<string | null>(null);
-  /** 选择序号：重复选同一条也要能触发（值本身可能没变）。 */
-  const pickSeq = ref(0);
 
   const tags = computed<string[]>(() => {
     const set = new Set<string>();
@@ -57,19 +53,6 @@ export const useSoundMemoriesStore = defineStore("soundMemories", () => {
       return haystack.includes(q);
     });
   });
-
-  /** 把人声选作歌声合成的参考（由 AI 面板消费）。 */
-  function pickVoice(id: string): void {
-    pickedVoice.value = id;
-    pickSeq.value += 1;
-  }
-
-  /** 取走（并清空）这次「用作参考」的选择：AI 面板只在挂载时消费一次。 */
-  function consumeVoicePick(): string | null {
-    const id = pickedVoice.value;
-    pickedVoice.value = null;
-    return id;
-  }
 
   async function refresh(): Promise<void> {
     loading.value = true;
@@ -110,10 +93,6 @@ export const useSoundMemoriesStore = defineStore("soundMemories", () => {
     query,
     activeTag,
     kind,
-    pickedVoice,
-    pickSeq,
-    pickVoice,
-    consumeVoicePick,
     tags,
     filtered,
     refresh,

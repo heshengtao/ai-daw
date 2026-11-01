@@ -4631,6 +4631,8 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             .map(|s| ai_daw_engine::model::Send {
                 target: TrackId(s.target),
                 gain_db: s.gain_db,
+                mode: Default::default(),
+                mute: false,
             })
             .collect();
         commands::run_agent_as(
@@ -5033,7 +5035,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
                  再以 confirm=true 重试。"
                 .into());
         }
-        crate::manager::install_registry_plugin(app, args.slug.trim())
+        crate::manager::install_registry_plugin(app, args.slug.trim(), None)
     }
 
     /// 列出本地 AI 模型与安装状态（只读）。
@@ -5389,7 +5391,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
 
     /// 歌声合成：MIDI + 歌词 + 参考音色 → 新音频轨（一次事务）。
     pub(crate) fn sing_song(app: &AppHandle, args: SingSongArgs) -> Result<String, String> {
-        if !crate::singing::model_ready() {
+        if !crate::singing::singing_models().installed {
             return Err(
                 "未安装歌声合成模型（SoulX-Singer）。请先在「管理器 → 模型」下载 soulx-singer-fp16（1.44 GB）或 soulx-singer-fp32（2.85 GB）。"
                     .into(),
@@ -8153,6 +8155,8 @@ mod tests {
             plugin_id: "au:aumu:mlrs:mLab".into(),
             params,
             state: vec![1, 2, 3, 4],
+            enabled: true,
+            sidechain: None,
         });
         project.tracks.push(track);
 
@@ -8171,6 +8175,8 @@ mod tests {
             plugin_id: "builtin.synth".into(),
             params: std::collections::BTreeMap::new(),
             state: vec![0; 100],
+            enabled: true,
+            sidechain: None,
         });
         track.clips.push(Clip {
             id: ClipId(7),

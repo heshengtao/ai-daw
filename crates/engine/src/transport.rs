@@ -103,8 +103,35 @@ pub enum TransportCommand {
         /// 关键点（拍，升序）。
         points: Vec<crate::model::AutomationPoint>,
     },
-    /// 把当前活着的**插件实例**交给宿主预置的回收槽（重建播放器前调用）。
+    /// 就地启用 / 旁通某轨的一个效果器（不重建播放器）。
     ///
+    /// 旁通只改「跑不跑」，实例与内部状态都保留——点一下开关不该让延迟线清空、
+    /// 也不该让音频断一拍。
+    SetEffectEnabled {
+        /// 目标轨道。
+        track: crate::model::TrackId,
+        /// 效果链下标。
+        effect: usize,
+        /// `false` = 旁通。
+        enabled: bool,
+    },
+    /// 就地改主总线效果器的参数。
+    SetMasterEffectParam {
+        /// 主总线插入链下标。
+        effect: usize,
+        /// 参数标识。
+        param: String,
+        /// 目标值。
+        value: f32,
+    },
+    /// 就地启用 / 旁通主总线上的一个效果器。
+    SetMasterEffectEnabled {
+        /// 主总线插入链下标。
+        effect: usize,
+        /// `false` = 旁通。
+        enabled: bool,
+    },
+    /// 把当前活着的**插件实例**交给宿主预置的回收槽（重建播放器前调用）。
     /// 结构性变更会重建播放器；实例上挂着两样重建会丢的东西——外部插件的内部补丁，以及
     /// 绑定在实例上的原生界面窗口。收到这条命令时，回调把实例搬进回收槽，重建后的播放器
     /// 再复用它们，于是**改效果链 / 移动片段不会重置乐器配置、也不会关掉插件窗口**。

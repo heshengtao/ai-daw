@@ -119,7 +119,12 @@ pub fn separate(
         stems: STEM_NAMES
             .iter()
             .enumerate()
-            .map(|(s, name)| (*name, super::finish_stem(&out[s], channels, sample_rate, frames)))
+            .map(|(s, name)| {
+                (
+                    *name,
+                    super::finish_stem(&out[s], channels, sample_rate, frames),
+                )
+            })
             .collect(),
     })
 }

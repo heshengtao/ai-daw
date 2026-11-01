@@ -157,7 +157,7 @@ pub fn delete(state: &AppState, id: String) -> Result<(), String> {
     store.remove(&id)
 }
 
-/// 读取一条人声的 PCM（歌声合成用；单声道 24 kHz）。
+/// 读取一条人声的 PCM（歌声合成 / 音色替换用；单声道 24 kHz 的原始采样）。
 pub(crate) fn samples_for(state: &AppState, id: &str) -> Result<(Vec<f32>, f64), String> {
     let path = state
         .sound_memories
@@ -168,6 +168,47 @@ pub(crate) fn samples_for(state: &AppState, id: &str) -> Result<(Vec<f32>, f64),
     let audio = ai_daw_asset::decode(&path).map_err(|e| format!("读取人声音色失败：{e}"))?;
     let mono = to_mono(&audio.samples, audio.channels);
     Ok((mono, audio.sample_rate))
+}
+
+/// 取一条参考声线：音色库条目优先，其次工程内轨道的第一段音频，最后是文件路径。
+///
+/// 歌声合成与音色替换共用（两边的「参考音色」语义完全一样）。返回单声道 PCM 与原始
+/// 采样率——重采样交给各自的模型层（两条管线都要求 24 kHz）。
+pub(crate) fn load_reference(
+    state: &AppState,
+    voice: Option<&str>,
+    track: Option<u64>,
+    path: Option<&str>,
+) -> Result<Option<(Vec<f32>, f64)>, String> {
+    if let Some(id) = voice.filter(|id| !id.is_empty()) {
+        return Ok(Some(samples_for(state, id)?));
+    }
+    let source = if let Some(track) = track {
+        let engine = state.engine.lock().unwrap();
+        let project = engine.project();
+        let t = project
+            .tracks
+            .iter()
+            .find(|t| t.id == TrackId(track))
+            .ok_or("参考音色轨道不存在")?;
+        let clip = t
+            .clips
+            .iter()
+            .find(|c| c.audio.is_some())
+            .ok_or("参考音色轨道上没有音频片段")?;
+        Some(clip.audio.clone().expect("已确认是音频片段").path)
+    } else {
+        path.map(str::to_string)
+    };
+    let Some(path) = source else {
+        return Ok(None);
+    };
+    let audio = state.assets.load(&path)?;
+    if audio.frames() == 0 {
+        return Err("参考音色是空音频".into());
+    }
+    let mono = to_mono(&audio.samples, audio.channels);
+    Ok(Some((mono, audio.sample_rate)))
 }
 
 /// 把来源读成「单声道 24 kHz」，并给一个缺省名字。

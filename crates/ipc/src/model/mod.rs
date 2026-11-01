@@ -13,6 +13,6 @@ pub use project::{note_tag_key, parse_note_tag_key, HarmonyBar, NoteTag, Project
 pub use track::{
     lane_value_at, ArticulationEvent, ArticulationSource, ArticulationSwitch, AutomationLane,
     AutomationPoint, CcSwitch, MidiEventAt, MixerChannel, MpeConfig, MpeZone, PitchRange,
-    PluginInstance, Send, Track, TrackId, TrackMeta,
+    PluginInstance, Send, SendMode, SidechainSource, Track, TrackId, TrackMeta,
 };
 pub use transport::{Keyframe, Transport};

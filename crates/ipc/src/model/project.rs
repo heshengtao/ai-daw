@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::clip::ClipId;
-use super::track::{MixerChannel, Track, TrackId};
+use super::track::{MixerChannel, PluginInstance, Track, TrackId};
 use super::transport::Transport;
 
 /// 一个小节的和弦标记（编曲元数据）。
@@ -94,6 +94,9 @@ pub struct Project {
     pub transport: Transport,
     pub tracks: Vec<Track>,
     pub master: MixerChannel,
+    /// 主总线插入链（总加之后、master 推子之前处理）。空时不写进 JSON。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub master_effects: Vec<PluginInstance>,
     /// 小节和弦表。空时不写进 JSON（旧工程形状不变）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub harmony: Vec<HarmonyBar>,
@@ -113,6 +116,7 @@ impl Project {
             transport: Transport::default(),
             tracks: vec![],
             master: MixerChannel::default(),
+            master_effects: vec![],
             harmony: vec![],
             sections: vec![],
             note_tags: BTreeMap::new(),
@@ -293,6 +297,23 @@ mod tests {
         assert_eq!(back.tracks[0].name, "Lead");
     }
 
+    /// 主总线插入链：空时**不写进 JSON**（旧工程形状不变），非空时能往返。
+    #[test]
+    fn master_effects_are_omitted_when_empty_and_roundtrip_when_present() {
+        let empty = Project::new("demo");
+        let json = serde_json::to_string(&empty).unwrap();
+        assert!(!json.contains("master_effects"), "{json}");
+        let legacy: Project = serde_json::from_str(&json).unwrap();
+        assert!(legacy.master_effects.is_empty());
+
+        let mut with = Project::new("demo");
+        with.master_effects = vec![PluginInstance::new("builtin.limiter")];
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains("master_effects"), "{json}");
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.master_effects.len(), 1);
+    }
+
     #[test]
     fn note_tags_are_optional_and_roundtrip() {
         let mut p = Project::new("t");
@@ -424,6 +445,8 @@ mod tests {
             sends: vec![Send {
                 target: TrackId(2),
                 gain_db: -6.0,
+                mode: Default::default(),
+                mute: false,
             }],
             automation: vec![AutomationLane {
                 param: "gain_db".into(),

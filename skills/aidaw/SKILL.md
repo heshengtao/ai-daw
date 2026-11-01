@@ -1,6 +1,6 @@
 ---
 name: aidaw
-description: 通过内嵌 MCP 工具或 aidaw 命令行操作正在运行的 AI DAW——读写工程、保存/打开/新建与历史快照、轨道、片段、音符、批量编曲（转调/量化/摇摆/人性化/和弦分析）、乐理与曲风配方（音阶/调式/和弦进行/鼓谱/配器）、内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）、内置合成器音色设计（捏音色/调参数/离线预听）、跨工程音色记忆库（保存/检索/应用整条音色链）、效果器参数与效果链、混音（增益/声像/发送/自动化）、传输播放、音频导入与录音、音频转 MIDI/降噪/音源分离、**MIDI+歌词+参考声线合成歌声（SoulX-Singer ONNX）**、响度与频谱分析、导出 WAV、扫描插件；**搜索可下载插件与本地模型（含高风险安装/下载，必须先征得用户同意）**；以及**从 film.json 导入配乐骨架、按语义名找音色、按轨导出对齐 stems** 和**制作 CLAP 插件**（从零写 DSP、打包、验证、装进 AI DAW）。凡用户要求编曲、分析曲风、建轨、写音符、改和弦、量化节奏、调混音、捏音色、录音、转 MIDI、降噪、**合成歌声**、分析或导出音频、给影片配乐/对时间码、导出分轨，或想要一个现有目录里没有的乐器/效果器时使用。
+description: 通过内嵌 MCP 工具或 aidaw 命令行操作正在运行的 AI DAW——读写工程、保存/打开/新建与历史快照、轨道、片段、音符、批量编曲（转调/量化/摇摆/人性化/和弦分析）、乐理与曲风配方（音阶/调式/和弦进行/鼓谱/配器）、内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）、内置合成器音色设计（捏音色/调参数/离线预听）、跨工程音色记忆库（保存/检索/应用整条音色链）、效果器参数与效果链、混音（增益/声像/发送/自动化）、传输播放、音频导入与录音、音频转 MIDI/降噪/音源分离、**MIDI+歌词+参考声线合成歌声（SoulX-Singer ONNX）**、响度与频谱分析、导出 WAV / 标准 MIDI、扫描插件；**搜索可下载插件与本地模型（含高风险安装/下载，必须先征得用户同意）**、**AI 运行时/引擎安装、执行后端切换与任务取消**、**开工前能力预检（get_capabilities）与两条整曲路线（AI 写歌初稿 + 音源分离 / 自写 MIDI + 自主配器）**；以及**从 film.json 导入配乐骨架、按语义名找音色、按轨导出对齐 stems** 和**制作 CLAP 插件**（从零写 DSP、打包、验证、装进 AI DAW）。凡用户要求编曲、分析曲风、建轨、写音符、改和弦、量化节奏、调混音、捏音色、录音、转 MIDI、降噪、**合成歌声**、分析或导出音频、给影片配乐/对时间码、导出分轨，或想要一个现有目录里没有的乐器/效果器时使用。
 license: Apache-2.0
 ---
 
@@ -102,13 +102,35 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 3. **把「可以装什么」和「不装能用什么」一起告诉用户**，然后问要不要装。
    **不要自行下载或安装**——`search_plugin_store` 是只读的。
 4. 只有用户在当前对话中明确同意后，才可调用 `install_plugin(slug, confirm=true)`（高风险，
-   会真的下载并解压可执行插件；Harness 可能再弹一次审批）。也可以让用户打开
-   「插件管理器 → 可下载」自己点。装完会自动重扫，再用 `list_plugins` / `describe_plugin`。
+   会真的下载并解压可执行插件；Harness 可能再弹一次审批）。**来源是第三方域名时**
+   （`search_plugin_store` 里 `needs_acknowledgement=true`，域名见 `download_host`），
+   必须先把域名原样告诉用户，同意后再传 `acknowledged_host="那个域名"`，否则后端会拒绝下载。
+   也可以让用户打开「插件管理器 → 可下载」自己点（界面会亮出域名让他确认）。装完会自动重扫，
+   再用 `list_plugins` / `describe_plugin`。
 5. 用户不想装、替代方案也不够用时，再提议「可以为你做一个 CLAP 插件」，说明能做到什么、
    做不到什么；**得到同意再开工**。按 `references/clap-plugin-dev.md` 施工。CLAP 是 MIT 开源格式，
    AI DAW 原生托管；Rust + nih-plug 最快出可用产物，C++ 用官方 `clap-helpers`，零依赖场景才走纯 C。
 6. 交付前必须过 `clap-validator`，再装到 AI DAW 的扫描目录、`rescan_plugins`，
    用 `list_plugins` / `describe_plugin` / `export_wav` 走一遍真实链路。
+
+## 开工前先做能力预检：能不能用 AI 写歌，决定走哪条路
+
+**第一件事调 `get_capabilities`**（只读）。它逐项给出写歌 / 歌声合成 / 音色替换 / 音源分离 /
+节拍检测 / 转 MIDI / 降噪 / 母带 / MIDI 导出的 `available`、`degraded`、缺哪个模型或运行时
+（含体积）、修复工具（`download_model` / `install_runtime`）与替代方案，并直接给出
+`recommended_workflow`（`ai_draft` / `manual_midi`）。
+**`available=false` 的功能不要硬试**——写歌要加载几 GB 权重，硬试就是白等几分钟。
+
+- **写歌可用（`compose.available=true`）→ 优先「AI 初稿 + 分离 + 加工」**：
+  `compose_song`（风格 + 歌词 + 时长）→ `separate_stems`（鼓/贝斯/其他/人声，6 分轨多吉他/钢琴）
+  → 按需 `swap_voice` / `transcribe_audio` / `enhance_audio` → 混音 / 母带 / 导出。
+  初稿是音频，要改音符先 `transcribe_audio`；换人声音色用 `swap_voice`（都先看各自 capabilities）。
+- **写歌不可用 → 自己写 MIDI + 自主配器 / 捏音色**：按下面的「接到编曲需求」五步走，
+  用 `find_instrument` / `describe_plugin` / `set_params` 选音色与捏音色，`add_notes` 写音符。
+- 用户**明确想要** AI 初稿但组件没装：说清缺什么、多大、装完得到什么，同意后再
+  `install_runtime` / `download_model`（高风险、要 `confirm=true`）；不装就退回 MIDI 路线。
+
+详细的两条路线与工具顺序见 `references/workflow.md`。
 
 ## 接到编曲需求：先分析曲风，再动手
 
@@ -158,7 +180,7 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 - **可下载 ≠ 已安装，绝不自行下载**：缺音色先用 `search_plugin_store` 搜索，把 `matches` 与
   `alternatives`（不下载的替代方案）一起交给用户，问要不要装。只有用户在当前对话中明确同意后，
   才能调用 `install_plugin(slug, confirm=true)`；否则让用户在「插件管理器 → 可下载」里自己装。
-  模型同理：先 `list_models`，用户同意后才 `download_model(id, confirm=true)`。
+  模型同理：先 `list_models` / `get_capabilities`，用户同意后才 `download_model(id, confirm=true)`。
   这两个工具都标了高风险注解，但要记住：**没调用工具就是没装，不要假报完成**。
 - **批量优先，别一条条加**：写一个乐句用 `add_notes`（一次事务 = 一个撤销步），不要循环 `add_note`；
   改一批音符用 `update_notes` / `transpose_notes`，别删了重加（删了 id 就变了）。

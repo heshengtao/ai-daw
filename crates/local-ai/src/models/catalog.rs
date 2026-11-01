@@ -83,6 +83,37 @@ impl ModelEntry {
     }
 }
 
+/// YuE2 权重的一条文件：`path` 是仓库内路径（`sidecars/...` 也要写全），两边仓库同名。
+///
+/// 官方整理的那一份在 HF / 魔搭都叫 `audio-cpp/Yue2-3B-GGUF`，所以两条源只是域名不同。
+macro_rules! yue2_file {
+    ($path:literal, $size:expr, $sha:literal) => {
+        ModelFile {
+            filename: $path,
+            approx_bytes: $size,
+            sha256: $sha,
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: concat!(
+                        "https://huggingface.co/audio-cpp/Yue2-3B-GGUF/resolve/main/",
+                        $path
+                    ),
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: concat!(
+                        "https://modelscope.cn/models/audio-cpp/Yue2-3B-GGUF/resolve/master/",
+                        $path
+                    ),
+                },
+            ],
+        }
+    };
+}
+
 /// 清单。
 pub static CATALOG: &[ModelEntry] = &[
     ModelEntry {
@@ -509,13 +540,20 @@ pub static CATALOG: &[ModelEntry] = &[
         license: "Apache-2.0",
         dir: Some("soulx-singer-fp32"),
         bundled: false,
-        // 单源：魔搭（国内直连）。国际镜像待补——同一份字节需要一个 HF 仓库，上传脚本同 fp16。
+        // **国内外双源**：国内走魔搭（`syxppp/SoulX-Singer-onnx-directml`，注意这条没有 `-fp16`
+        // 后缀），国际走 HF（`ailm32442/SoulX-Singer-onnx-fp32`，由 `tools/mirror-soulx-hf.sh
+        // --fp32` 上传，逐文件 sha256 与魔搭完全一致）。下载器按网络位置排序，失败再换另一个源。
         files: &[
         ModelFile {
             filename: "note_text_encoder.onnx",
             approx_bytes: 433,
             sha256: "087db35205ce93dae9e2c65e0628511266ffbc21beb2c128d80793c150d66714",
             sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/note_text_encoder.onnx",
+                },
                 ModelSource {
                     kind: "modelscope",
                     region: "cn",
@@ -529,6 +567,11 @@ pub static CATALOG: &[ModelEntry] = &[
             sha256: "998889d7daff9cd50774abf23282d1acad01d2c753db3040b156d1a53b178e79",
             sources: &[
                 ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/note_text_encoder.onnx.data",
+                },
+                ModelSource {
                     kind: "modelscope",
                     region: "cn",
                     url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_text_encoder.onnx.data",
@@ -540,6 +583,11 @@ pub static CATALOG: &[ModelEntry] = &[
             approx_bytes: 433,
             sha256: "90f9ef1cd74e532e1cc89802888bedcf311bd835460b09e27c3eef1be9489bdb",
             sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/note_pitch_encoder.onnx",
+                },
                 ModelSource {
                     kind: "modelscope",
                     region: "cn",
@@ -553,6 +601,11 @@ pub static CATALOG: &[ModelEntry] = &[
             sha256: "20ddcaaea04315e5a46eb11d8cacb6dd6ecf6a9688ebc3af019ab7b27ee7b9c6",
             sources: &[
                 ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/note_pitch_encoder.onnx.data",
+                },
+                ModelSource {
                     kind: "modelscope",
                     region: "cn",
                     url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_pitch_encoder.onnx.data",
@@ -564,6 +617,11 @@ pub static CATALOG: &[ModelEntry] = &[
             approx_bytes: 432,
             sha256: "869d4d50a0ff5566346e72cf4fb36c110a52e10ef7292c53aecd008c3f74d594",
             sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/note_type_encoder.onnx",
+                },
                 ModelSource {
                     kind: "modelscope",
                     region: "cn",
@@ -577,6 +635,11 @@ pub static CATALOG: &[ModelEntry] = &[
             sha256: "becf918cd5e23b25783ae42480c13bfa04bf38b84a4075d7c4273befcb3af4a0",
             sources: &[
                 ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/note_type_encoder.onnx.data",
+                },
+                ModelSource {
                     kind: "modelscope",
                     region: "cn",
                     url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_type_encoder.onnx.data",
@@ -588,6 +651,11 @@ pub static CATALOG: &[ModelEntry] = &[
             approx_bytes: 425,
             sha256: "f63a5f8da66af2a50b6c3463f8e8a0b52022f6f14bbb79d7364149da2c576a0f",
             sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/f0_encoder.onnx",
+                },
                 ModelSource {
                     kind: "modelscope",
                     region: "cn",
@@ -601,6 +669,11 @@ pub static CATALOG: &[ModelEntry] = &[
             sha256: "8c3f3c514b1bf78f723b8fa785ed2f7dd5cb994ca2c1349f22c54ea4909b0f4b",
             sources: &[
                 ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/f0_encoder.onnx.data",
+                },
+                ModelSource {
                     kind: "modelscope",
                     region: "cn",
                     url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/f0_encoder.onnx.data",
@@ -612,6 +685,11 @@ pub static CATALOG: &[ModelEntry] = &[
             approx_bytes: 145261,
             sha256: "af0680d7356ba1131deb5a1801971934344f7ccd5394c875a612f8a66c8e1a60",
             sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/preflow.onnx",
+                },
                 ModelSource {
                     kind: "modelscope",
                     region: "cn",
@@ -625,6 +703,11 @@ pub static CATALOG: &[ModelEntry] = &[
             sha256: "ce2c424a3a22a22a1aff172767baacc3e6796df0eb83f979596d522d87d2422f",
             sources: &[
                 ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/preflow.onnx.data",
+                },
+                ModelSource {
                     kind: "modelscope",
                     region: "cn",
                     url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/preflow.onnx.data",
@@ -636,6 +719,11 @@ pub static CATALOG: &[ModelEntry] = &[
             approx_bytes: 689,
             sha256: "6825d68ea4d42bc83ca66dacf3a6440f5f2593af2a8ca40f956fdcde19559e54",
             sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/cond_emb.onnx",
+                },
                 ModelSource {
                     kind: "modelscope",
                     region: "cn",
@@ -649,6 +737,11 @@ pub static CATALOG: &[ModelEntry] = &[
             sha256: "fbfa95df1617d8dc12c1544c788be65d5bb08b365a68041c69953b02ac066dbe",
             sources: &[
                 ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/cond_emb.onnx.data",
+                },
+                ModelSource {
                     kind: "modelscope",
                     region: "cn",
                     url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/cond_emb.onnx.data",
@@ -660,6 +753,11 @@ pub static CATALOG: &[ModelEntry] = &[
             approx_bytes: 11263,
             sha256: "5652b9b8a46207413db3d2ff65139d78ab502d60fa7eb3a1a660ec8296d1d885",
             sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/mel_transform.onnx",
+                },
                 ModelSource {
                     kind: "modelscope",
                     region: "cn",
@@ -673,6 +771,11 @@ pub static CATALOG: &[ModelEntry] = &[
             sha256: "2d1e18edf37041270f999b15bbfd08c19cccca723a6111425ae9a8a228c87927",
             sources: &[
                 ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/mel_transform.onnx.data",
+                },
+                ModelSource {
                     kind: "modelscope",
                     region: "cn",
                     url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/mel_transform.onnx.data",
@@ -684,6 +787,11 @@ pub static CATALOG: &[ModelEntry] = &[
             approx_bytes: 1772509288,
             sha256: "bc6e95474793a0eb7dbf8ea4c7cd3820593f6bd5d136f222ea58684b64b07c13",
             sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/diff_step_dml.onnx",
+                },
                 ModelSource {
                     kind: "modelscope",
                     region: "cn",
@@ -697,6 +805,11 @@ pub static CATALOG: &[ModelEntry] = &[
             sha256: "8df53cf50ff7f91208fe613f5f777690a2b9ddb9d17fa59bc6efa0fdbf1e8535",
             sources: &[
                 ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/vocoder_dml.onnx",
+                },
+                ModelSource {
                     kind: "modelscope",
                     region: "cn",
                     url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/vocoder_dml.onnx",
@@ -705,7 +818,331 @@ pub static CATALOG: &[ModelEntry] = &[
         },
         ],
     },
-
+    ModelEntry {
+        id: "soulx-svc-fp16hq",
+        name: "SoulX-Singer-SVC（音色替换 · fp16_hq · 推荐）",
+        feature: "voice_swap",
+        // 上游 SoulX-Singer-SVC 权重来自 Soul AI Lab 的 SoulX-Singer（Apache-2.0）；
+        // ONNX 拆分导出（7 张自足图）由社区完成，以同一许可再分发。
+        license: "Apache-2.0",
+        // 7 张图必须同目录：其中 whisper / mel / f0 / cond 带外部权重（见下）。
+        dir: Some("soulx-svc-fp16hq"),
+        // 2.4 GB：不随包，用户在「管理器 → 模型」按需下载。
+        bundled: false,
+        // **国内外双源**：HF 仓库 `ailm32442/SoulX-Singer-SVC-ONNX` 与魔搭同名仓库，
+        // 目录名（onnx_fp16_hq）就是导出的原始布局，下载器按网络位置排序后逐文件校验 sha256。
+        files: &[
+            ModelFile {
+                filename: "whisper.frontend.onnx",
+                approx_bytes: 85_087_790,
+                sha256: "3573860a14b10a9fbc5960472ade57d66512ba4434da298eb97099a9d500f78d",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/whisper.frontend.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/whisper.frontend.onnx",
+                    },
+                ],
+            },
+            ModelFile {
+                filename: "mel.transform.onnx",
+                approx_bytes: 15_256_211,
+                sha256: "94b336ea1278b3b0bc38f283c1aa3e664e4fdfb1f36b0524420a72c60e81d2c1",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/mel.transform.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/mel.transform.onnx",
+                    },
+                ],
+            },
+            ModelFile {
+                filename: "f0.encoder.onnx",
+                approx_bytes: 742_014,
+                sha256: "b55a1d117d062dc6d31cf67b15627fc12dfdf593363966e68086d5ec1b2c146c",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/f0.encoder.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/f0.encoder.onnx",
+                    },
+                ],
+            },
+            ModelFile {
+                filename: "cond.emb.onnx",
+                approx_bytes: 1_051_173,
+                sha256: "5cdc78d193988c3ad66d6897497e6f30b0b19876f1f44f2a2e64b6039db48302",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/cond.emb.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/cond.emb.onnx",
+                    },
+                ],
+            },
+            ModelFile {
+                filename: "dit.step.onnx",
+                approx_bytes: 1_770_819_432,
+                sha256: "8465a04327719c2965645aa3291a04aebffdf94f16fd61572feb6ebb6dbece2f",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/dit.step.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/dit.step.onnx",
+                    },
+                ],
+            },
+            ModelFile {
+                filename: "vocoder.backbone.onnx",
+                approx_bytes: 510_185_830,
+                sha256: "3496a8100e0726393e5512fb90ec37c9cecaab96052d5047cde0fbf692bd6a37",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/vocoder.backbone.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/vocoder.backbone.onnx",
+                    },
+                ],
+            },
+            ModelFile {
+                filename: "vocoder.istft.onnx",
+                approx_bytes: 14_772_514,
+                sha256: "4647fef6f047d14bc198c5feb3a4a755384d6a5accb07f333add45e87a88a517",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/vocoder.istft.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/vocoder.istft.onnx",
+                    },
+                ],
+            },
+        ],
+    },
+    ModelEntry {
+        id: "soulx-svc-fp32",
+        name: "SoulX-Singer-SVC（音色替换 · fp32 · 最高保真）",
+        feature: "voice_swap",
+        license: "Apache-2.0",
+        dir: Some("soulx-svc-fp32"),
+        bundled: false,
+        // 与 hq 档同源同导出：扩散步（dit.step）字节完全相同，差别只在声码器与条件嵌入。
+        // 全 fp32 约 3.0 GB，只给确实需要最高保真的用户。
+        files: &[
+            ModelFile {
+                filename: "whisper.frontend.onnx",
+                approx_bytes: 85_087_790,
+                sha256: "3573860a14b10a9fbc5960472ade57d66512ba4434da298eb97099a9d500f78d",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/whisper.frontend.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/whisper.frontend.onnx",
+                    },
+                ],
+            },
+            ModelFile {
+                filename: "mel.transform.onnx",
+                approx_bytes: 15_256_211,
+                sha256: "94b336ea1278b3b0bc38f283c1aa3e664e4fdfb1f36b0524420a72c60e81d2c1",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/mel.transform.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/mel.transform.onnx",
+                    },
+                ],
+            },
+            ModelFile {
+                filename: "f0.encoder.onnx",
+                approx_bytes: 742_014,
+                sha256: "b55a1d117d062dc6d31cf67b15627fc12dfdf593363966e68086d5ec1b2c146c",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/f0.encoder.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/f0.encoder.onnx",
+                    },
+                ],
+            },
+            ModelFile {
+                filename: "cond.emb.onnx",
+                approx_bytes: 2_101_542,
+                sha256: "d3e35a2942ef0203c1fa6f3792d142044487be161363a51d867dcab0273af20f",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/cond.emb.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/cond.emb.onnx",
+                    },
+                ],
+            },
+            ModelFile {
+                filename: "dit.step.onnx",
+                approx_bytes: 1_770_819_432,
+                sha256: "8465a04327719c2965645aa3291a04aebffdf94f16fd61572feb6ebb6dbece2f",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/dit.step.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/dit.step.onnx",
+                    },
+                ],
+            },
+            ModelFile {
+                filename: "vocoder.backbone.onnx",
+                approx_bytes: 1_020_270_742,
+                sha256: "b120e64dcefdc1c0e7457a1f1f96860ee39c6d9e8dcc136514f41fe5fb6e479f",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/vocoder.backbone.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/vocoder.backbone.onnx",
+                    },
+                ],
+            },
+            ModelFile {
+                filename: "vocoder.istft.onnx",
+                approx_bytes: 14_772_514,
+                sha256: "4647fef6f047d14bc198c5feb3a4a755384d6a5accb07f333add45e87a88a517",
+                sources: &[
+                    ModelSource {
+                        kind: "hf",
+                        region: "intl",
+                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/vocoder.istft.onnx",
+                    },
+                    ModelSource {
+                        kind: "modelscope",
+                        region: "cn",
+                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/vocoder.istft.onnx",
+                    },
+                ],
+            },
+        ],
+    },
+    // ---- YuE2（audio.cpp / GGUF）：引擎在「运行时 → 音频引擎」里另下，这里只放权重 ----
+    //
+    // 权重钉在 `audio-cpp/Yue2-3B-GGUF`（audio.cpp 官方整理的那一份），**国内外双源**：
+    // 国际走 HF、国内走魔搭；两边逐文件 sha256 与体积一致（2026-10-31 核对）。
+    //
+    // 三档量化共用一份 VAE（f16）与同一批 sidecar，放在同一个目录 `yue2/` 里；换档时已经
+    // 在位的那几个文件会自动跳过（下载器逐文件比对）。**默认 Q8_0**（audio.cpp 的默认档，
+    // 也是文档里验证过的那一档）；Q4_0 省 1.6 GB，BF16 最接近原始权重但 7.3 GB。
+    //
+    // 注意：这四份 sidecar 必须和 gguf 在**同一个目录**（`yue2/sidecars/...`）——audio.cpp
+    // 按相对路径找它们，绝对路径会被拒绝。
+    ModelEntry {
+        id: "yue2-q8-0",
+        name: "YuE2 3B · Q8_0（默认）",
+        feature: "compose",
+        license: "CC-BY-NC-4.0",
+        dir: Some("yue2"),
+        bundled: false,
+        files: &[
+            yue2_file!("yue2-3b-q8_0.gguf", 4_264_195_616, "52be345b5155bf9ef0b2411e7df8d1d2b8e13b6d977a2f70c35612ec69b1f591"),
+            yue2_file!("yue2-vae-f16.gguf", 265_218_656, "d4f4a05d8f291ae820cd1e43609da3fa91b56465810091a2b08c3350b751719d"),
+            yue2_file!("sidecars/yue2-model-config.json", 959, "ad3477bbef890bf98ae196c1e4b44779494a6231c4ab66f32708eabadf265329"),
+            yue2_file!("sidecars/yue2-generation-config.json", 466, "203830cebde6e3644eb291925362990d198e66c3b6006cd11f1aaa21904bcc61"),
+            yue2_file!("sidecars/yue2-vae-config.json", 1_378, "f0191bb9694009956de44e0c361a6f1334760be4c8f848e599bde242a54a0970"),
+            yue2_file!("sidecars/yue2-qwen.tiktoken", 2_561_218, "b2b1b8dfb5cc5f024bafc373121c6aba3f66f9a5a0269e243470a1de16a33186"),
+        ],
+    },
+    ModelEntry {
+        id: "yue2-q4-0",
+        name: "YuE2 3B · Q4_0",
+        feature: "compose",
+        license: "CC-BY-NC-4.0",
+        dir: Some("yue2"),
+        bundled: false,
+        files: &[
+            yue2_file!("yue2-3b-q4_0.gguf", 2_665_641_504, "b80215b59a7fe41a4c76b6163c0ae1031672f892b5951d66fefaa2053a815029"),
+            yue2_file!("yue2-vae-f16.gguf", 265_218_656, "d4f4a05d8f291ae820cd1e43609da3fa91b56465810091a2b08c3350b751719d"),
+            yue2_file!("sidecars/yue2-model-config.json", 959, "ad3477bbef890bf98ae196c1e4b44779494a6231c4ab66f32708eabadf265329"),
+            yue2_file!("sidecars/yue2-generation-config.json", 466, "203830cebde6e3644eb291925362990d198e66c3b6006cd11f1aaa21904bcc61"),
+            yue2_file!("sidecars/yue2-vae-config.json", 1_378, "f0191bb9694009956de44e0c361a6f1334760be4c8f848e599bde242a54a0970"),
+            yue2_file!("sidecars/yue2-qwen.tiktoken", 2_561_218, "b2b1b8dfb5cc5f024bafc373121c6aba3f66f9a5a0269e243470a1de16a33186"),
+        ],
+    },
+    ModelEntry {
+        id: "yue2-bf16",
+        name: "YuE2 3B · BF16",
+        feature: "compose",
+        license: "CC-BY-NC-4.0",
+        dir: Some("yue2"),
+        bundled: false,
+        files: &[
+            yue2_file!("yue2-3b-bf16.gguf", 7_261_484_576, "4cf3fdffbaaed2d8e30a3122ac7cd27d0c96f8921805f173da9758c685b3c7d6"),
+            yue2_file!("yue2-vae-f16.gguf", 265_218_656, "d4f4a05d8f291ae820cd1e43609da3fa91b56465810091a2b08c3350b751719d"),
+            yue2_file!("sidecars/yue2-model-config.json", 959, "ad3477bbef890bf98ae196c1e4b44779494a6231c4ab66f32708eabadf265329"),
+            yue2_file!("sidecars/yue2-generation-config.json", 466, "203830cebde6e3644eb291925362990d198e66c3b6006cd11f1aaa21904bcc61"),
+            yue2_file!("sidecars/yue2-vae-config.json", 1_378, "f0191bb9694009956de44e0c361a6f1334760be4c8f848e599bde242a54a0970"),
+            yue2_file!("sidecars/yue2-qwen.tiktoken", 2_561_218, "b2b1b8dfb5cc5f024bafc373121c6aba3f66f9a5a0269e243470a1de16a33186"),
+        ],
+    },
 ];
 
 /// 全部条目。
@@ -780,34 +1217,60 @@ mod tests {
             assert!(!entry.files.is_empty(), "{} 一个文件都没有", entry.id);
             let mut names = std::collections::HashSet::new();
             for file in entry.files {
-                assert!(names.insert(file.filename), "{} 内文件重名：{}", entry.id, file.filename);
-                assert!(!file.sha256.is_empty() || file.sources.is_empty(), "{} / {} 缺 sha256", entry.id, file.filename);
+                assert!(
+                    names.insert(file.filename),
+                    "{} 内文件重名：{}",
+                    entry.id,
+                    file.filename
+                );
+                assert!(
+                    !file.sha256.is_empty() || file.sources.is_empty(),
+                    "{} / {} 缺 sha256",
+                    entry.id,
+                    file.filename
+                );
                 for source in file.sources {
-                    assert!(source.url.starts_with("http"), "源地址应以 http 开头：{}", source.url);
+                    assert!(
+                        source.url.starts_with("http"),
+                        "源地址应以 http 开头：{}",
+                        source.url
+                    );
                 }
             }
         }
     }
 
-    /// SoulX-Singer 是**国内外双源**：同一份字节，国内走魔搭、国际走 HF，
+    /// SoulX-Singer 的**两档都是国内外双源**：同一份字节，国内走魔搭、国际走 HF，
     /// 少一边就退化成单源（海外直连魔搭会很难受）。
     #[test]
     fn soulx_singer_has_both_cn_and_intl_sources() {
-        let entry = by_id("soulx-singer-fp16").expect("应存在 SoulX-Singer 条目");
-        assert_eq!(entry.files.len(), 16, "9 张图 + 7 个外部权重");
-        for file in entry.files {
-            assert!(
-                file.sources.iter().any(|s| s.kind == "modelscope" && s.region == "cn"),
-                "{} / {} 缺国内源",
-                entry.id,
-                file.filename
-            );
-            assert!(
-                file.sources.iter().any(|s| s.kind == "hf" && s.region == "intl"),
-                "{} / {} 缺国际源",
-                entry.id,
-                file.filename
-            );
+        for (id, host_dir) in [
+            ("soulx-singer-fp16", "SoulX-Singer-onnx-fp16"),
+            ("soulx-singer-fp32", "SoulX-Singer-onnx-fp32"),
+        ] {
+            let entry = by_id(id).unwrap_or_else(|| panic!("应存在 {id} 条目"));
+            assert_eq!(entry.files.len(), 16, "{id}：9 张图 + 7 个外部权重");
+            for file in entry.files {
+                assert!(
+                    file.sources
+                        .iter()
+                        .any(|s| s.kind == "modelscope" && s.region == "cn"),
+                    "{} / {} 缺国内源",
+                    entry.id,
+                    file.filename
+                );
+                assert!(
+                    file.sources.iter().any(|s| {
+                        s.kind == "hf"
+                            && s.region == "intl"
+                            && s.url.contains(&format!("huggingface.co/ailm32442/{host_dir}/"))
+                            && s.url.ends_with(&format!("/{}", file.filename))
+                    }),
+                    "{} / {} 缺国际源（或指错了仓库）",
+                    entry.id,
+                    file.filename
+                );
+            }
         }
     }
 
@@ -819,24 +1282,63 @@ mod tests {
         assert!(!entry.files[0].sources.is_empty(), "应有可下载源");
     }
 
-    /// 清单里**只允许官方源**：HF / GitHub / 魔搭。
+    /// 清单里**只允许官方 / 大厂域名**：魔搭 / Hugging Face / GitHub，加上国内几家大厂镜像站。
     ///
-    /// 开源项目不替用户选第三方镜像与代理站；要镜像请用户自己在设置里填。这条是**防回归**用的
+    /// 开源项目不替用户选第三方镜像与代理站（个人反代、hf-mirror 这类多一层中间人，
+    /// 一旦被接管就是所有人的权重来源被换）；要镜像请用户自己在设置里填。这条是**防回归**用的
     /// ——有人再往清单里塞第三方地址，它会直接失败。
+    ///
+    /// 白名单与 `src-tauri/src/manager.rs::is_trusted_download_host`（安装插件时的同一套闸）
+    /// 必须保持一致：这边是**清单里不许出现**，那边是**运行时必须用户确认**。
     #[test]
     fn every_source_is_an_official_host() {
-        const OFFICIAL: &[&str] = &[
-            "https://huggingface.co/",
-            "https://github.com/",
-            "https://modelscope.cn/",
-            "https://www.modelscope.cn/",
+        const TRUSTED_ROOTS: &[&str] = &[
+            // 代码托管 / 发布
+            "github.com",
+            "githubusercontent.com",
+            "gitee.com",
+            // 模型仓库
+            "modelscope.cn",
+            "huggingface.co",
+            "hf.co",
+            // 大厂镜像站
+            "mirrors.tuna.tsinghua.edu.cn",
+            "mirrors.aliyun.com",
+            "mirrors.huaweicloud.com",
+            "mirrors.ustc.edu.cn",
+            "mirrors.cloud.tencent.com",
+            // 运行时厂商自己
+            "api.nuget.org",
+            "nvidia.com",
+            "nvidia.cn",
+            "microsoft.com",
         ];
+        let host_of = |url: &str| -> String {
+            url.split_once("://")
+                .map(|(_, rest)| rest)
+                .unwrap_or(url)
+                .split(['/', '?', '#'])
+                .next()
+                .unwrap_or("")
+                .rsplit('@')
+                .next()
+                .unwrap_or("")
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .trim_start_matches("www.")
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+        };
         for entry in all() {
             for file in entry.files {
                 for source in file.sources {
+                    let host = host_of(source.url);
                     assert!(
-                        OFFICIAL.iter().any(|host| source.url.starts_with(host)),
-                        "{} / {} 用了非官方源：{}",
+                        TRUSTED_ROOTS
+                            .iter()
+                            .any(|root| host == *root || host.ends_with(&format!(".{root}"))),
+                        "{} / {} 用了非官方源：{}（域名 {host}）",
                         entry.id,
                         file.filename,
                         source.url
@@ -856,15 +1358,74 @@ mod tests {
         for (a, b) in fp16.files.iter().zip(fp32.files.iter()) {
             assert_eq!(a.filename, b.filename, "两档的文件顺序必须一致");
             if a.filename.ends_with(".onnx.data") {
-                assert_eq!(a.sha256, b.sha256, "{} 是编码器权重，两档应字节相同", a.filename);
+                assert_eq!(
+                    a.sha256, b.sha256,
+                    "{} 是编码器权重，两档应字节相同",
+                    a.filename
+                );
                 assert_eq!(a.approx_bytes, b.approx_bytes);
             }
         }
         // 两个大图必须真的不同（否则「fp32 档」就是假的）。
-        let diff16 = fp16.files.iter().find(|f| f.filename == "diff_step_dml.onnx").unwrap();
-        let diff32 = fp32.files.iter().find(|f| f.filename == "diff_step_dml.onnx").unwrap();
+        let diff16 = fp16
+            .files
+            .iter()
+            .find(|f| f.filename == "diff_step_dml.onnx")
+            .unwrap();
+        let diff32 = fp32
+            .files
+            .iter()
+            .find(|f| f.filename == "diff_step_dml.onnx")
+            .unwrap();
         assert_ne!(diff16.sha256, diff32.sha256);
         assert!(diff32.approx_bytes > diff16.approx_bytes * 19 / 10);
+    }
+
+    /// 音色替换（SVC）同样是**国内外双源**；两档各 7 张自足图，且 hq / fp32 的差别只该在
+    /// 声码器与条件嵌入上（扩散步两档字节相同）。
+    #[test]
+    fn soulx_svc_tiers_are_dual_sourced_and_share_the_diffusion_step() {
+        for id in ["soulx-svc-fp16hq", "soulx-svc-fp32"] {
+            let entry = by_id(id).unwrap_or_else(|| panic!("缺 {id} 条目"));
+            assert_eq!(entry.feature, "voice_swap");
+            assert_eq!(entry.files.len(), 7, "{id} 应是 7 张图");
+            for file in entry.files {
+                assert!(
+                    file.sources
+                        .iter()
+                        .any(|s| s.kind == "modelscope" && s.region == "cn"),
+                    "{} / {} 缺国内源",
+                    entry.id,
+                    file.filename
+                );
+                assert!(
+                    file.sources
+                        .iter()
+                        .any(|s| s.kind == "hf" && s.region == "intl"),
+                    "{} / {} 缺国际源",
+                    entry.id,
+                    file.filename
+                );
+            }
+        }
+        let hq = by_id("soulx-svc-fp16hq").unwrap();
+        let fp32 = by_id("soulx-svc-fp32").unwrap();
+        for name in [
+            "whisper.frontend.onnx",
+            "mel.transform.onnx",
+            "f0.encoder.onnx",
+            "dit.step.onnx",
+            "vocoder.istft.onnx",
+        ] {
+            let a = hq.files.iter().find(|f| f.filename == name).unwrap();
+            let b = fp32.files.iter().find(|f| f.filename == name).unwrap();
+            assert_eq!(a.sha256, b.sha256, "{name} 两档应字节相同");
+        }
+        for name in ["vocoder.backbone.onnx", "cond.emb.onnx"] {
+            let a = hq.files.iter().find(|f| f.filename == name).unwrap();
+            let b = fp32.files.iter().find(|f| f.filename == name).unwrap();
+            assert_ne!(a.sha256, b.sha256, "{name} 是两档的差别所在");
+        }
     }
 
     /// 多文件成组模型的约定：落在自己的子目录、体积按整组算、且 `.onnx` 与它的外部权重
@@ -881,7 +1442,18 @@ mod tests {
                     continue;
                 }
                 // 自足图（权重内嵌在 .onnx 里）没有外部权重，不算缺件。
-                const SELF_CONTAINED: &[&str] = &["diff_step_dml.onnx", "vocoder_dml.onnx"];
+                const SELF_CONTAINED: &[&str] = &[
+                    "diff_step_dml.onnx",
+                    "vocoder_dml.onnx",
+                    // SoulX-Singer-SVC 的 7 张图都是自足导出。
+                    "whisper.frontend.onnx",
+                    "mel.transform.onnx",
+                    "f0.encoder.onnx",
+                    "cond.emb.onnx",
+                    "dit.step.onnx",
+                    "vocoder.backbone.onnx",
+                    "vocoder.istft.onnx",
+                ];
                 if SELF_CONTAINED.contains(&file.filename) {
                     continue;
                 }
@@ -891,7 +1463,11 @@ mod tests {
                     .files
                     .iter()
                     .any(|f| f.filename == single || f.filename.starts_with(&shard));
-                assert!(found, "{} 缺配套的外部权重（{} 或分片）", file.filename, single);
+                assert!(
+                    found,
+                    "{} 缺配套的外部权重（{} 或分片）",
+                    file.filename, single
+                );
             }
         }
     }

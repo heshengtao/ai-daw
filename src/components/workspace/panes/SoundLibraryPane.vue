@@ -8,6 +8,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   BookmarkSquareIcon,
   PencilSquareIcon,
+  PlusIcon,
   TrashIcon,
 } from "@heroicons/vue/24/outline";
 
@@ -17,7 +18,9 @@ import { useSelectionStore } from "@/stores/selection";
 import { usePluginsStore } from "@/stores/plugins";
 import { useLayoutStore } from "@/stores/layout";
 import { useI18n } from "@/i18n";
-import type { SoundMemorySummary } from "@/api/types";
+import { voiceSave } from "@/api/tauri";
+import { pickAudioToOpen } from "@/api/dialogs";
+import type { SoundMemorySummary, VoiceEntry } from "@/api/types";
 
 const sounds = useSoundMemoriesStore();
 const project = useProjectStore();
@@ -35,6 +38,69 @@ const busyId = ref<string | null>(null);
 let stop: (() => void) | null = null;
 
 const track = computed(() => selection.track);
+
+// ---- 存入人声音色（当前音频轨 / 音频文件）----
+const voiceSaveOpen = ref(false);
+const voiceName = ref("");
+const savingVoice = ref(false);
+
+/** 当前选中的轨道是否是一条带音频片段的轨道（只有它才能直接存成音色）。 */
+const voiceTrack = computed(() => {
+  const t = track.value;
+  return t && t.clips.some((c) => c.audio) ? t : null;
+});
+
+function toggleVoiceSave(): void {
+  voiceSaveOpen.value = !voiceSaveOpen.value;
+  if (voiceSaveOpen.value) voiceName.value = "";
+}
+
+async function finishVoiceSave(entry: VoiceEntry): Promise<void> {
+  await sounds.refresh();
+  voiceSaveOpen.value = false;
+  voiceName.value = "";
+  layout.notify(t("sounds.voiceSaved", { name: entry.name }));
+}
+
+async function saveVoiceFromTrack(): Promise<void> {
+  const target = voiceTrack.value;
+  if (!target) {
+    layout.notify(t("sounds.voiceNeedsAudio"));
+    return;
+  }
+  if (savingVoice.value) return;
+  savingVoice.value = true;
+  try {
+    const entry = await voiceSave({
+      track: target.id,
+      name: voiceName.value.trim() || target.name,
+    });
+    await finishVoiceSave(entry);
+  } catch (err) {
+    layout.notify(t("sounds.saveFailed", { error: String(err) }));
+  } finally {
+    savingVoice.value = false;
+  }
+}
+
+async function saveVoiceFromFile(): Promise<void> {
+  if (savingVoice.value) return;
+  try {
+    const path = await pickAudioToOpen();
+    if (!path) return;
+    const stem = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "";
+    savingVoice.value = true;
+    const entry = await voiceSave({
+      path,
+      name: voiceName.value.trim() || stem || t("sounds.voiceDefaultName"),
+    });
+    await finishVoiceSave(entry);
+  } catch (err) {
+    layout.notify(t("sounds.saveFailed", { error: String(err) }));
+  } finally {
+    savingVoice.value = false;
+  }
+}
 
 function pluginName(id: string | null): string {
   return id ? plugins.name(id) : t("common.none");
@@ -85,12 +151,6 @@ async function apply(memory: SoundMemorySummary): Promise<void> {
   } finally {
     busyId.value = null;
   }
-}
-
-/** 在音色库里把人声直接选作歌声参考：切到 AI 面板，并带过去这条 id。 */
-function useVoice(memory: SoundMemorySummary): void {
-  sounds.pickVoice(memory.id);
-  layout.openTab("ai");
 }
 
 function startEdit(memory: SoundMemorySummary): void {
@@ -188,6 +248,43 @@ onUnmounted(() => stop?.());
         type="search"
         :placeholder="t('sounds.search')"
       />
+      <button
+        v-if="sounds.kind === 'voice'"
+        class="btn primary voice-add"
+        type="button"
+        @click="toggleVoiceSave"
+      >
+        <PlusIcon class="voice-add-icon" />
+        {{ t("sounds.saveVoice") }}
+      </button>
+    </div>
+
+    <div v-if="voiceSaveOpen && sounds.kind === 'voice'" class="voice-save">
+      <input
+        v-model="voiceName"
+        class="md3-field voice-name"
+        type="text"
+        maxlength="60"
+        spellcheck="false"
+        :placeholder="t('sounds.voiceNamePlaceholder')"
+      />
+      <div class="voice-save-actions">
+        <button
+          class="btn primary"
+          type="button"
+          :disabled="!voiceTrack || savingVoice"
+          @click="saveVoiceFromTrack"
+        >
+          {{ t("sounds.saveVoiceFromTrack") }}
+        </button>
+        <button class="btn" type="button" :disabled="savingVoice" @click="saveVoiceFromFile">
+          {{ savingVoice ? t("common.loading") : t("sounds.saveVoiceFromFile") }}
+        </button>
+        <button class="btn" type="button" @click="voiceSaveOpen = false">
+          {{ t("common.cancel") }}
+        </button>
+      </div>
+      <p v-if="!voiceTrack" class="hint">{{ t("sounds.voiceNeedsAudio") }}</p>
     </div>
 
     <div v-if="sounds.tags.length" class="tags">
@@ -272,10 +369,7 @@ onUnmounted(() => stop?.());
               {{ t("sounds.savedAt", { date: dateLabel(memory.updated_at || memory.created_at) }) }}
             </span>
           </p>
-          <div class="actions">
-            <button class="btn primary" type="button" @click="useVoice(memory)">
-              {{ t("sounds.useVoice") }}
-            </button>
+          <div class="actions end">
             <button class="icon-btn" :title="t('sounds.edit')" @click="startEdit(memory)">
               <PencilSquareIcon />
             </button>
@@ -424,10 +518,47 @@ onUnmounted(() => stop?.());
   font-weight: 600;
 }
 .toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 0 12px 8px;
 }
 .search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.voice-add {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.voice-add-icon {
+  width: 14px;
+  height: 14px;
+}
+.voice-save {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 12px 8px;
+  padding: 8px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.6);
+  border-radius: 10px;
+  background-color: var(--app-inset);
+}
+.voice-name {
   width: 100%;
+}
+.voice-save-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.voice-save .hint {
+  margin: 0;
+  font-size: 10px;
+  color: rgb(var(--md-on-surface-variant));
 }
 .tags {
   display: flex;
@@ -548,6 +679,10 @@ onUnmounted(() => stop?.());
   align-items: center;
   gap: 6px;
   margin-top: 4px;
+}
+/* 人声卡片没有「应用到轨道」那种主按钮，编辑 / 删除就贴右下角。 */
+.actions.end {
+  justify-content: flex-end;
 }
 .btn {
   height: 26px;

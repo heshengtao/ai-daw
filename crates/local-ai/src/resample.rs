@@ -164,6 +164,9 @@ mod tests {
         let before = tone_amplitude(&x, 440.0, 16_000.0);
         let y = resample(&x, 16_000.0, 48_000.0);
         let after = tone_amplitude(&y, 440.0, 48_000.0);
-        assert!((after - before).abs() < before * 0.05, "16k→48k：{before} -> {after}");
+        assert!(
+            (after - before).abs() < before * 0.05,
+            "16k→48k：{before} -> {after}"
+        );
     }
 }

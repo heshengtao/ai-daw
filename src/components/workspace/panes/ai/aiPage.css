@@ -1,0 +1,244 @@
+/*
+ * 「AI 功能」侧栏里的三个子页（写歌 / 歌声合成 / 音色替换）共用的排版。
+ *
+ * 为什么不是每个组件自带 scoped 样式：三页的骨架完全一样（返回 + 标题 + 徽标 + 一张卡片 +
+ * 底部主动作 + 进度条），抄三份样式只会越改越不一致。这里用统一前缀 `.ai-subpage` 收在一处，
+ * 侧栏只有 ~330 px，所以字段默认**单列**，只有能放下的成对控件才并排。
+ */
+.ai-subpage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 12px 12px;
+}
+.ai-subpage .sub-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-subpage .sub-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgb(var(--md-on-surface));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-subpage .sub-status {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgb(var(--md-on-surface-variant));
+  word-break: break-word;
+}
+.ai-subpage .sub-card {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  background-color: var(--app-inset);
+}
+.ai-subpage .sub-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  /* 竖向排列时**不许**长高：只有并排（`.sub-row`）里才按宽度分份。 */
+  flex: 0 0 auto;
+}
+.ai-subpage .sub-row > .sub-field {
+  flex: 1 1 132px;
+}
+.ai-subpage .sub-name {
+  font-size: 11px;
+  color: rgb(var(--md-on-surface-variant));
+}
+.ai-subpage .sub-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* 数值类控件挤在一行（下拉框有最小宽度，单独排更浪费纵向空间）。 */
+.ai-subpage .sub-pair,
+.ai-subpage .sub-trio {
+  display: grid;
+  gap: 6px;
+}
+.ai-subpage .sub-pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ai-subpage .sub-trio {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.ai-subpage .sub-pair > .sub-field,
+.ai-subpage .sub-trio > .sub-field {
+  flex: 0 0 auto;
+}
+.ai-subpage .sub-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.ai-subpage .sub-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: rgb(var(--md-on-surface-variant));
+}
+.ai-subpage .sub-spacer {
+  flex: 1 1 auto;
+}
+.ai-subpage .sub-input {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.6);
+  border-radius: 9px;
+  background-color: rgb(var(--md-surface-container-highest) / 0.6);
+  color: rgb(var(--md-on-surface));
+  font-size: 12px;
+  font-family: inherit;
+}
+.ai-subpage .sub-textarea {
+  min-height: 82px;
+  resize: vertical;
+  line-height: 1.45;
+}
+.ai-subpage .sub-textarea.mono {
+  min-height: 54px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.ai-subpage .sub-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.ai-subpage .sub-primary {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background-color: rgb(var(--md-primary));
+  color: rgb(var(--md-on-primary));
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ai-subpage .sub-primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ai-subpage .sub-ghost {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--md-on-surface-variant));
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ai-subpage .sub-ghost:hover:not(:disabled) {
+  background-color: rgb(var(--md-on-surface-variant) / var(--md-state-hover-alpha));
+}
+.ai-subpage .sub-ghost:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ai-subpage .sub-icon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--md-on-surface-variant));
+  cursor: pointer;
+}
+.ai-subpage .sub-icon:hover {
+  background-color: rgb(var(--md-on-surface-variant) / var(--md-state-hover-alpha));
+}
+.ai-subpage .sub-badge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  background-color: rgb(var(--md-surface-container-highest));
+  color: rgb(var(--md-on-surface-variant));
+}
+.ai-subpage .sub-badge.on {
+  background-color: rgb(var(--md-primary) / 0.16);
+  color: rgb(var(--md-primary));
+}
+/* 与列表卡片同一种进度条：卡片**下边缘**一条 3px，整宽。 */
+.ai-subpage .sub-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background-color: rgb(var(--md-primary) / 0.15);
+}
+.ai-subpage .sub-progress-fill {
+  height: 100%;
+  width: 0;
+  background-color: rgb(var(--md-primary));
+  transition: width 120ms linear;
+}
+/* 总量未知（下载的校验 / 安装阶段）时的不定长条纹。 */
+.ai-subpage .sub-progress-fill.indeterminate {
+  width: 35%;
+  animation: sub-progress-slide 1.1s ease-in-out infinite;
+}
+@keyframes sub-progress-slide {
+  0% {
+    margin-left: -35%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ai-subpage .sub-progress-fill.indeterminate {
+    width: 100%;
+    animation: none;
+  }
+}
+
+/* 引擎日志：默认收起，展开后一个小滚动区。 */
+.ai-subpage .sub-log {
+  margin-top: 10px;
+  font-size: 11px;
+  color: rgb(var(--md-on-surface-variant));
+}
+.ai-subpage .sub-log summary {
+  cursor: pointer;
+  user-select: none;
+}
+.ai-subpage .sub-log pre {
+  margin: 6px 0 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgb(var(--md-surface-container));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

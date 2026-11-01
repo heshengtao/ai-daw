@@ -30,6 +30,8 @@ pub struct RealtimeOptions {
     pub scope: Arc<ScopeBuffer>,
     /// 流状态：错误回调写入，控制侧读取。
     pub status: Arc<SharedStatus>,
+    /// 通道电平表；`None` = 新建一张（测试与离线渲染不关心表）。
+    pub meter: Option<Arc<crate::meter::MeterBank>>,
 }
 
 /// 实时宿主错误。
@@ -672,6 +674,13 @@ impl AudioHost {
             Arc::clone(&yield_sink),
         );
         let player_ms = player_at.elapsed().as_millis();
+        // 电平表：宿主建好播放器后把同一张表挂上去（重建时沿用同一张，界面不必重新订阅）。
+        player.set_meter(
+            options
+                .meter
+                .clone()
+                .unwrap_or_else(|| Arc::new(crate::meter::MeterBank::new())),
+        );
         // 重建宿主时延续循环开关：界面不必重新订阅，用户看到的状态也不会因编辑而复位。
         player.apply_command(TransportCommand::SetLoop(shared.is_looping()));
         // 节拍器同理：它是运行时开关，重建（如编辑后）不该把它悄悄关掉。
@@ -906,6 +915,8 @@ mod tests {
                 plugin_id: "builtin.synth".into(),
                 params: Default::default(),
                 state: vec![],
+                enabled: true,
+                sidechain: None,
             }),
             effects: vec![],
             clips: vec![],
@@ -928,6 +939,7 @@ mod tests {
                 volume: 127,
                 offset: 0.0,
                 legato: false,
+                expr: crate::model::PitchExpression::NONE,
                 lyric: None,
             }],
             audio: None,
@@ -1051,6 +1063,7 @@ mod tests {
             command_capacity: 64,
             scope: Arc::new(ScopeBuffer::new(crate::SCOPE_CAPACITY)),
             status: Arc::new(SharedStatus::new()),
+            meter: None,
         };
         match AudioHost::start(schedule(), &PluginRegistry::with_builtins(), options) {
             Ok(mut host) => {
@@ -1088,6 +1101,7 @@ mod tests {
             command_capacity: 64,
             scope: Arc::new(ScopeBuffer::new(crate::SCOPE_CAPACITY)),
             status: Arc::clone(&status),
+            meter: None,
         };
         let Ok(host) = AudioHost::start(schedule(), &PluginRegistry::with_builtins(), options)
         else {

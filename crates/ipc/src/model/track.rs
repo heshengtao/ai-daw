@@ -13,7 +13,54 @@ pub struct PluginInstance {
     pub plugin_id: String,
     pub params: BTreeMap<String, f32>,
     pub state: Vec<u8>,
+    /// 是否参与处理。`false` = 旁通（实例与状态都保留，随时可开回来）。
+    ///
+    /// 缺省 true：旧工程没有这个键，读入后自然是「全部启用」。为 true 时不写进 JSON，
+    /// 因此旧工程的输出形状逐字不变。
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub enabled: bool,
+    /// 侧链（键输入）来源。`None` = 不接。
+    ///
+    /// 只对**效果链槽位**有意义：乐器位上的值会被命令层丢弃。缺省不写进 JSON。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<SidechainSource>,
 }
+
+/// 侧链（键输入）来源：拿哪条轨道的推子后信号去做检测。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidechainSource {
+    /// 源轨道。
+    pub track: TrackId,
+}
+
+impl PluginInstance {
+    /// 一个「刚创建、未调参」的实例。测试与命令层都走它，省得每次写全字段。
+    pub fn new(plugin_id: impl Into<String>) -> Self {
+        PluginInstance {
+            plugin_id: plugin_id.into(),
+            params: BTreeMap::new(),
+            state: Vec::new(),
+            enabled: true,
+            sidechain: None,
+        }
+    }
+}
+
+/// `true`（`enabled` 的缺省值）。
+fn default_true() -> bool {
+    true
+}
+
+/// 是否等于 `true`（为 true 时不写进 JSON）。
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+/// 是否等于 `false`（为 false 时不写进 JSON）。
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 
 /// 混音通道。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -60,7 +107,7 @@ impl Default for MixerChannel {
     }
 }
 
-/// 一路发送（aux send）：把本轨的**推子后**信号按增益送进目标轨道。
+/// 一路发送（aux send）：把本轨的信号按增益送进目标轨道。
 ///
 /// 目标通常是一条「总线」轨道（一条没有片段、专门汇总的轨道）。总线本身也照常送往 master，
 /// 所以「发送」只是**额外**复制一份信号过去。
@@ -70,6 +117,30 @@ pub struct Send {
     pub target: TrackId,
     /// 发送增益（dB）；归一化到 `MixerChannel` 的区间。
     pub gain_db: f32,
+    /// 取点：推子前还是推子后。缺省推子后（旧工程即此语义，不写进 JSON）。
+    #[serde(default, skip_serializing_if = "SendMode::is_post")]
+    pub mode: SendMode,
+    /// 是否暂时哑掉这一路（不影响其它发送）。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mute: bool,
+}
+
+/// 发送的取点位置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SendMode {
+    /// 推子**后**（跟着推子 / 静音走）。传统「效果发送」用这个。
+    #[default]
+    Post,
+    /// 推子**前**（效果链之后、推子之前）。推子拉到底也照样送。
+    Pre,
+}
+
+impl SendMode {
+    /// 是否推子后（为真时不写进 JSON）。
+    fn is_post(&self) -> bool {
+        matches!(self, SendMode::Post)
+    }
 }
 
 impl Send {
@@ -612,7 +683,8 @@ impl Track {
 mod tests {
     use super::{
         lane_value_at, ArticulationEvent, ArticulationSource, ArticulationSwitch, AutomationPoint,
-        CcSwitch, MidiEventAt, MixerChannel, MpeConfig, MpeZone, Send, TrackId, TrackMeta,
+        CcSwitch, MidiEventAt, MixerChannel, MpeConfig, MpeZone, PluginInstance, Send, SendMode,
+        SidechainSource, TrackId, TrackMeta,
     };
 
     #[test]
@@ -667,7 +739,9 @@ mod tests {
         assert_eq!(
             Send {
                 target: TrackId(2),
-                gain_db: 999.0
+                gain_db: 999.0,
+                mode: Default::default(),
+                mute: false,
             }
             .normalize()
             .gain_db,
@@ -676,7 +750,9 @@ mod tests {
         assert_eq!(
             Send {
                 target: TrackId(2),
-                gain_db: f32::NAN
+                gain_db: f32::NAN,
+                mode: Default::default(),
+                mute: false,
             }
             .normalize()
             .gain_db,
@@ -878,5 +954,56 @@ mod tests {
                 .and_then(|source| source.product.as_deref()),
             Some("BBCSO")
         );
+    }
+
+    /// 新字段必须**不改变旧 JSON 的形状**：默认值（启用 / 不接侧链 / 推子后）都不写出来。
+    #[test]
+    fn plugin_instance_and_send_keep_the_legacy_wire_shape() {
+        let fx = PluginInstance::new("builtin.eq");
+        let json = serde_json::to_string(&fx).unwrap();
+        assert!(!json.contains("enabled"), "{json}");
+        assert!(!json.contains("sidechain"), "{json}");
+
+        // 旁通 / 接侧链时才出现。
+        let mut bypassed = fx.clone();
+        bypassed.enabled = false;
+        let json = serde_json::to_string(&bypassed).unwrap();
+        assert!(json.contains("\"enabled\":false"), "{json}");
+        bypassed.sidechain = Some(SidechainSource { track: TrackId(7) });
+        let json = serde_json::to_string(&bypassed).unwrap();
+        assert!(json.contains("\"sidechain\""), "{json}");
+
+        // 旧工程（没有这两个键）读进来是「启用 + 不接」。
+        let legacy: PluginInstance =
+            serde_json::from_str(r#"{"plugin_id":"x","params":{},"state":[]}"#).unwrap();
+        assert!(legacy.enabled);
+        assert!(legacy.sidechain.is_none());
+    }
+
+    #[test]
+    fn send_mode_and_mute_keep_the_legacy_wire_shape() {
+        let send = Send {
+            target: TrackId(2),
+            gain_db: -6.0,
+            mode: SendMode::Post,
+            mute: false,
+        };
+        let json = serde_json::to_string(&send).unwrap();
+        assert!(!json.contains("mode"), "{json}");
+        assert!(!json.contains("mute"), "{json}");
+
+        let pre = Send {
+            mode: SendMode::Pre,
+            mute: true,
+            ..send
+        };
+        let json = serde_json::to_string(&pre).unwrap();
+        assert!(json.contains("\"pre\""), "{json}");
+        assert!(json.contains("\"mute\":true"), "{json}");
+
+        // 旧工程里只有 target / gain_db。
+        let legacy: Send = serde_json::from_str(r#"{"target":3,"gain_db":-3.0}"#).unwrap();
+        assert_eq!(legacy.mode, SendMode::Post);
+        assert!(!legacy.mute);
     }
 }

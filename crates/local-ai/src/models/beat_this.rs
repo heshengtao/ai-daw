@@ -41,7 +41,10 @@ pub struct TempoDetection {
 
 /// 两个权重都就位时返回 `(mel 前端, 主模型)` 路径。
 pub fn model_paths() -> Option<(PathBuf, PathBuf)> {
-    Some((super::find(super::BEAT_THIS_MEL_FILE)?, super::find(super::BEAT_THIS_FILE)?))
+    Some((
+        super::find(super::BEAT_THIS_MEL_FILE)?,
+        super::find(super::BEAT_THIS_FILE)?,
+    ))
 }
 
 /// 对素材跑一遍 Beat This!，推出全局 BPM 与拍号。
@@ -111,7 +114,11 @@ pub fn time_signature_num(analysis: &BeatAnalysis) -> u8 {
         .iter()
         .filter_map(|d| {
             let at = analysis.beats.partition_point(|b| *b < *d - 1e-3);
-            analysis.beats.get(at).filter(|b| (**b - *d).abs() < 1e-3).map(|_| at)
+            analysis
+                .beats
+                .get(at)
+                .filter(|b| (**b - *d).abs() < 1e-3)
+                .map(|_| at)
         })
         .collect();
     let mut counts: std::collections::HashMap<u8, usize> = std::collections::HashMap::new();
@@ -138,7 +145,10 @@ mod tests {
         BeatAnalysis {
             beats,
             downbeats,
-            mel: Tensor { shape: vec![1, 0, 128], data: vec![] },
+            mel: Tensor {
+                shape: vec![1, 0, 128],
+                data: vec![],
+            },
             beat_logits: vec![],
             downbeat_logits: vec![],
         }
@@ -147,27 +157,27 @@ mod tests {
     #[test]
     fn four_four_is_detected_from_downbeat_spacing() {
         // 8 拍、每 4 拍一个重拍 → 4/4。
-        let a = analysis(
-            vec![0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5],
-            vec![0.0, 2.0],
-        );
+        let a = analysis(vec![0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5], vec![0.0, 2.0]);
         assert_eq!(time_signature_num(&a), 4);
     }
 
     #[test]
     fn three_four_is_detected_from_downbeat_spacing() {
         // 6 拍、每 3 拍一个重拍 → 3/4。
-        let a = analysis(
-            vec![0.0, 0.5, 1.0, 1.5, 2.0, 2.5],
-            vec![0.0, 1.5],
-        );
+        let a = analysis(vec![0.0, 0.5, 1.0, 1.5, 2.0, 2.5], vec![0.0, 1.5]);
         assert_eq!(time_signature_num(&a), 3);
     }
 
     #[test]
     fn falls_back_to_four_four_without_enough_downbeats() {
-        assert_eq!(time_signature_num(&analysis(vec![0.0, 0.5, 1.0], vec![])), 4);
-        assert_eq!(time_signature_num(&analysis(vec![0.0, 0.5, 1.0], vec![0.0])), 4);
+        assert_eq!(
+            time_signature_num(&analysis(vec![0.0, 0.5, 1.0], vec![])),
+            4
+        );
+        assert_eq!(
+            time_signature_num(&analysis(vec![0.0, 0.5, 1.0], vec![0.0])),
+            4
+        );
     }
 
     #[test]

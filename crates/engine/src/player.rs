@@ -334,6 +334,28 @@ fn audio_cursor(clip: &ScheduledAudioClip, position: u64) -> f64 {
     (offset + (position - clip.start_frame) as f64 * step).clamp(offset, end)
 }
 
+/// 把音频片段的读指针**按时间轴**推进到 `position`（不改输出）。
+///
+/// 静音 / 被别轨独奏压掉时，`process_block` 会整轨跳过；但**时间轴不该被跳过**：读指针若
+/// 不跟着走，解除静音后片段会从「按下静音那一刻」接着放，与同一时间轴上正在播放的其它
+/// 片段错位（听上去就是这轨整体晚了一截）。MIDI 那边早就用「游标照常推进」处理同一件事
+/// （见 `process_block` 里事件游标的注释）。
+///
+/// 实时安全：只做算术与 `Stretcher::seek`（复用既有缓冲，不分配）。
+fn advance_audio_clip(playback: &mut AudioPlayback, position: u64) {
+    let clip = &playback.clip;
+    if position <= clip.start_frame {
+        return;
+    }
+    if let Some(st) = playback.stretch.as_mut() {
+        // WSOLA 的读指针按「片段内输出帧」定位；越过方框末端后定位到末端即可
+        // （`next_frame` 随后会报告素材放完）。
+        st.seek(position.min(clip.end_frame) - clip.start_frame);
+    } else {
+        playback.cursor = audio_cursor(clip, position);
+    }
+}
+
 /// `rate`/`pitch` 都缺省时返回 `None`（走直读，零开销）；否则建一个 WSOLA 读指针。
 fn make_stretcher(clip: &ScheduledAudioClip) -> Option<Box<Stretcher>> {
     let unity = (clip.rate - 1.0).abs() < 1e-9 && clip.pitch_semitones.abs() < 1e-9;
@@ -483,6 +505,12 @@ struct TrackVoice {
     at_last: [i16; 16],
     /// 插件是否能接收通道触后；不支持时 `at:` 车道直接跳过。
     supports_channel_pressure: bool,
+    /// 每个效果器是否启用（可在音频线程就地切换，不必重建）。
+    effect_enabled: Vec<bool>,
+    /// 每个效果器对应的**键缓冲下标**（`None` = 没接侧链，或插件不支持）。
+    effect_key_buf: Vec<Option<usize>>,
+    /// 本轨在电平表里的槽位（= 工程轨道序号）。
+    meter_slot: usize,
 }
 
 /// 实时安全的逐块播放器：构造后 `process_block` 不再分配内存。
@@ -531,6 +559,20 @@ pub struct Player {
     tempo_map: TempoMap,
     /// 是否有任何自动化车道（没有就跳过每块的混音重算）。
     has_automation: bool,
+    /// 电平表（音频线程写、界面线程读）。测试里是一张空表，读出来全零。
+    meter: Arc<crate::meter::MeterBank>,
+    /// 主总线插入链（总加之后、master 推子之前）。
+    master_effects: Vec<Box<dyn Plugin>>,
+    /// 主总线每个效果器是否启用。
+    master_enabled: Vec<bool>,
+    /// 主总线每个效果器的键缓冲下标。
+    master_key_buf: Vec<Option<usize>>,
+    /// 侧链键缓冲：每个接了侧链的效果器一条，**平面**存放（左、右两个声道）。
+    key_bufs: Vec<[Vec<f32>; 2]>,
+    /// 每条键缓冲的来源轨道下标（与 `key_bufs` 一一对应）。
+    key_sources: Vec<usize>,
+    /// 独奏传播用的临时位图（预分配，避免音频线程分配）。
+    solo_mask: Vec<bool>,
 }
 
 impl Player {
@@ -625,6 +667,9 @@ impl Player {
             .max()
             .unwrap_or(0);
         let mut tracks = Vec::with_capacity(schedule.tracks.len());
+        // 侧链键缓冲：一边遍历轨道一边分配（控制侧，允许分配），下标与 `key_sources` 对齐。
+        let mut key_bufs: Vec<[Vec<f32>; 2]> = Vec::new();
+        let mut key_sources: Vec<usize> = Vec::new();
         for st in &schedule.tracks {
             // 乐器是**可选**的：没挂乐器（或插件缺失）的轨道仍然存在，只为它的音频片段出声。
             let instrument = st.instrument.as_ref();
@@ -729,6 +774,21 @@ impl Player {
                 }
                 effects.push(fx_plugin);
             }
+            // 旁通与侧链：都按**声明链下标**对齐（占位也占一个位置，自动化与槽位才不会错位）。
+            let effect_enabled: Vec<bool> = st.effects.iter().map(|fx| fx.enabled).collect();
+            let mut effect_key_buf: Vec<Option<usize>> = Vec::with_capacity(effects.len());
+            for (index, fx) in effects.iter().enumerate() {
+                let source = st.effect_keys.get(index).copied().flatten();
+                // 插件不支持侧链（`sidechain_channels() == 0`）就当作没接：键缓冲不必分配。
+                match source {
+                    Some(source) if fx.sidechain_channels() > 0 => {
+                        key_bufs.push([vec![0.0; max_block], vec![0.0; max_block]]);
+                        key_sources.push(source);
+                        effect_key_buf.push(Some(key_bufs.len() - 1));
+                    }
+                    _ => effect_key_buf.push(None),
+                }
+            }
             // 音频片段：素材已在调度前加载好，这里只克隆 `Arc` 并定出初始游标。
             let audio: Vec<AudioPlayback> = st
                 .audio_clips
@@ -781,8 +841,68 @@ impl Player {
                 cc_last: [-1; 128],
                 at_last: [-1; 16],
                 supports_channel_pressure: capabilities.channel_pressure,
+                effect_enabled,
+                effect_key_buf,
+                meter_slot: tracks.len(),
             });
         }
+        // 主总线插入链：用 `TrackId(0)` 作为「没有轨道」的哨兵（轨道 id 从 1 起），
+        // 这样外部插件的界面句柄仍能按「轨道 + 槽位」唯一寻址。
+        let master_track = crate::model::TrackId(0);
+        let mut carried_master: Vec<Option<Box<dyn Plugin>>> = carried
+            .effects
+            .remove(&master_track)
+            .unwrap_or_default()
+            .into_iter()
+            .map(Some)
+            .collect();
+        let reuse_master = carried_master.len() == schedule.master_effects.len()
+            && carried_master
+                .iter()
+                .flatten()
+                .zip(&schedule.master_effects)
+                .all(|(plugin, fx)| plugin.descriptor().id == fx.plugin_id);
+        let mut master_effects: Vec<Box<dyn Plugin>> =
+            Vec::with_capacity(schedule.master_effects.len());
+        for (index, fx) in schedule.master_effects.iter().enumerate() {
+            let mut plugin = if reuse_master {
+                carried_master[index].take().expect("复用链长度已校验")
+            } else {
+                match registry.create(&fx.plugin_id, master_track, PluginSlot::Effect(index)) {
+                    Some(plugin) => plugin,
+                    None => {
+                        master_effects.push(Box::new(Bypass));
+                        continue;
+                    }
+                }
+            };
+            if plugin.descriptor().kind != PluginKind::Effect {
+                master_effects.push(Box::new(Bypass));
+                continue;
+            }
+            plugin.prepare(sample_rate, max_block);
+            if !fx.state.is_empty() {
+                let _ = plugin.load_state(&fx.state);
+            }
+            for (id, value) in &fx.params {
+                plugin.set_param(&id.clone().into(), *value);
+            }
+            master_effects.push(plugin);
+        }
+        let master_enabled: Vec<bool> = schedule.master_effects.iter().map(|fx| fx.enabled).collect();
+        let mut master_key_buf: Vec<Option<usize>> = Vec::with_capacity(master_effects.len());
+        for (index, fx) in master_effects.iter().enumerate() {
+            let source = schedule.master_effect_keys.get(index).copied().flatten();
+            match source {
+                Some(source) if fx.sidechain_channels() > 0 => {
+                    key_bufs.push([vec![0.0; max_block], vec![0.0; max_block]]);
+                    key_sources.push(source);
+                    master_key_buf.push(Some(key_bufs.len() - 1));
+                }
+                _ => master_key_buf.push(None),
+            }
+        }
+        let track_count = tracks.len();
         let mut player = Player {
             bus_in: vec![vec![0.0f32; max_block * 2]; tracks.len()],
             tracks,
@@ -813,6 +933,13 @@ impl Player {
             order,
             tempo_map,
             has_automation,
+            meter: Arc::new(crate::meter::MeterBank::new()),
+            master_effects,
+            master_enabled,
+            master_key_buf,
+            key_bufs,
+            key_sources,
+            solo_mask: vec![false; track_count],
         };
         player.refresh_mix();
         player
@@ -906,18 +1033,51 @@ impl Player {
 
     /// 重新计算各轨的可听性与左右增益，并更新总输出。
     ///
-    /// 独奏语义：只要有任意一轨独奏，其余轨道全部静音。可听性发生变化时重置插件，
-    /// 避免解除静音后残留悬挂的声部（音符的 NoteOff 可能已被丢弃）。
+    /// 独奏语义：只要有任意一轨独奏，只有**独奏轨与它的下游**（发送目标 / 总线）发声。
+    /// 早先的「其余轨道全静音」会把独奏轨的混响总线一起哑掉——于是 solo 一条人声，空间感
+    /// 也没了。下游跟随是主流 DAW 的行为（Pro Tools / Cubase / Logic 都如此）。
     ///
-    /// 实时安全：只做算术与字段写入，不分配内存。
+    /// 可听性发生变化时重置插件，避免解除静音后残留悬挂的声部（音符的 NoteOff 可能已被丢弃）。
+    ///
+    /// 实时安全：只做算术与字段写入，不分配内存（`solo_mask` 在构造时分配好）。
     fn refresh_mix(&mut self) {
         // 自动化按「拍」求值：把当前帧位置换算成拍（速度表支持分段速度）。
         let beats = self
             .tempo_map
             .seconds_to_beats(self.position as f64 / self.sample_rate);
         let any_solo = self.tracks.iter().any(|t| t.solo);
-        for track in self.tracks.iter_mut() {
-            let want = !track.mute && (!any_solo || track.solo);
+        if any_solo {
+            self.solo_mask.iter_mut().for_each(|m| *m = false);
+            for (index, track) in self.tracks.iter().enumerate() {
+                if track.solo {
+                    self.solo_mask[index] = true;
+                }
+            }
+            // 传递闭包：被独奏轨送去的总线也要响，否则 solo 时听不到混响 / 并行压缩。
+            // 轨道数很少（通常 < 32），固定点迭代足够；循环在构造期已被 `routing_order` 兜住。
+            loop {
+                let mut changed = false;
+                for index in 0..self.tracks.len() {
+                    if !self.solo_mask[index] {
+                        continue;
+                    }
+                    for send in self.tracks[index].sends.iter() {
+                        if let Some(flag) = self.solo_mask.get_mut(send.target_index) {
+                            if !*flag {
+                                *flag = true;
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+        }
+        for (index, track) in self.tracks.iter_mut().enumerate() {
+            let want = !track.mute
+                && (!any_solo || self.solo_mask.get(index).copied().unwrap_or(false));
             if track.audible && !want {
                 if let Some(plugin) = track.plugin.as_mut() {
                     plugin.reset();
@@ -994,6 +1154,10 @@ impl Player {
             track.pitch_dirty = true;
             track.cc_last = [-1; 128];
             track.at_last = [-1; 16];
+        }
+        // 主总线插入链也要清：限幅器/压缩器的包络与延迟线不清，暂停后会继续出尾音。
+        for fx in self.master_effects.iter_mut() {
+            fx.reset();
         }
         self.audition.clear();
     }
@@ -1200,7 +1364,41 @@ impl Player {
                     }
                 }
             }
+            TransportCommand::SetEffectEnabled {
+                track,
+                effect,
+                enabled,
+            } => {
+                for voice in self.tracks.iter_mut().filter(|v| v.track_id == track) {
+                    if let Some(slot) = voice.effect_enabled.get_mut(effect) {
+                        *slot = enabled;
+                    }
+                }
+            }
+            TransportCommand::SetMasterEffectParam {
+                effect,
+                param,
+                value,
+            } => {
+                if !value.is_finite() {
+                    return;
+                }
+                let id = ParamId(param);
+                if let Some(fx) = self.master_effects.get_mut(effect) {
+                    fx.set_param(&id, value);
+                }
+            }
+            TransportCommand::SetMasterEffectEnabled { effect, enabled } => {
+                if let Some(slot) = self.master_enabled.get_mut(effect) {
+                    *slot = enabled;
+                }
+            }
         }
+    }
+
+    /// 换一张电平表（宿主在构建后调用；测试不调用，用的是空表）。
+    pub fn set_meter(&mut self, meter: Arc<crate::meter::MeterBank>) {
+        self.meter = meter;
     }
 
     /// 把当前**活着的**实例交给宿主预置的回收槽（见 [`ReusableInstances`]）。
@@ -1225,6 +1423,16 @@ impl Player {
                 }
                 carried.effects.insert(voice.track_id, chain);
             }
+        }
+        // 主总线插入链同样要交出去（用 `TrackId(0)` 这个哨兵，与构建时一致）。
+        if !self.master_effects.is_empty() {
+            let mut chain = std::mem::take(&mut self.master_effects);
+            for plugin in chain.iter_mut() {
+                plugin.release_processing();
+            }
+            carried
+                .effects
+                .insert(crate::model::TrackId(0), chain);
         }
         // 接收端已经走了（宿主放弃等待）也无所谓：实例就地释放，重建照常进行。
         let _ = sink.send(carried);
@@ -1287,11 +1495,30 @@ impl Player {
             scratch_right,
             scratch_events,
             audition,
+            meter,
+            key_bufs,
+            key_sources,
+            master_effects,
+            master_enabled,
+            master_key_buf,
             ..
         } = self;
 
         // 立体声长度：总线输入缓冲按它切片。
         let stereo = frames * 2;
+
+        // 键缓冲每块清零：源轨只往里**累加**，不清的话上一块的能量会一直留着。
+        // 块比预分配还大时按需扩容（与 scratch 同一策略：正常路径上永不发生）。
+        for buf in key_bufs.iter_mut() {
+            if buf[0].len() < frames {
+                buf[0].resize(frames, 0.0);
+            }
+            if buf[1].len() < frames {
+                buf[1].resize(frames, 0.0);
+            }
+            buf[0][..frames].fill(0.0);
+            buf[1][..frames].fill(0.0);
+        }
 
         // 按拓扑顺序逐轨处理：**被发送的目标排在其来源之后**，所以轮到一条总线时，
         // 上游送来的信号已经全部累加进 `bus_in[idx]`。
@@ -1393,6 +1620,14 @@ impl Player {
             if !track.audible {
                 // 不可听：丢弃累积到的总线输入（被静音的总线不该把上游信号透出去）。
                 bus_in[idx][..stereo].fill(0.0);
+                // 音频片段的读指针必须继续跟着时间轴走：静音 / 独奏只该让这一轨**不出声**，
+                // 不该把它从时间轴上摘下来。否则解除静音时片段从冻结处接着放，与正在播放的
+                // 其它片段错位（回归：`muting_or_soloing_mid_playback_keeps_audio_clips_on_the_timeline`）。
+                if playing {
+                    for playback in track.audio.iter_mut() {
+                        advance_audio_clip(playback, block_end);
+                    }
+                }
                 continue;
             }
 
@@ -1430,34 +1665,137 @@ impl Player {
                 }
             }
             // 效果链：输入就是上一级的输出（就地处理）。效果器不收 MIDI 事件。
-            for fx in track.effects.iter_mut() {
-                fx.process(&ctx, &mut [&mut left[..], &mut right[..]], &[]);
+            // 旁通的槽位直接跳过（实例与状态保留），接侧链的槽位把键缓冲递给它。
+            {
+                let TrackVoice {
+                    effects,
+                    effect_enabled,
+                    effect_key_buf,
+                    ..
+                } = track;
+                for (index, fx) in effects.iter_mut().enumerate() {
+                    if !effect_enabled.get(index).copied().unwrap_or(true) {
+                        continue;
+                    }
+                    match effect_key_buf.get(index).copied().flatten() {
+                        Some(buf) => {
+                            let key: [&[f32]; 2] =
+                                [&key_bufs[buf][0][..frames], &key_bufs[buf][1][..frames]];
+                            fx.process_with_sidechain(
+                                &ctx,
+                                &mut [&mut left[..], &mut right[..]],
+                                &[],
+                                Some(&key),
+                            );
+                        }
+                        None => {
+                            fx.process(&ctx, &mut [&mut left[..], &mut right[..]], &[]);
+                        }
+                    }
+                }
             }
 
             // 推子后的信号：进 master，并按发送**复制**一份到目标总线。
             let gl = track.left_gain;
             let gr = track.right_gain;
+            let mut peak_l = 0.0f32;
+            let mut peak_r = 0.0f32;
             for i in 0..frames {
-                out[i * 2] += left[i] * gl;
-                out[i * 2 + 1] += right[i] * gr;
+                let l = left[i] * gl;
+                let r = right[i] * gr;
+                out[i * 2] += l;
+                out[i * 2 + 1] += r;
+                peak_l = peak_l.max(l.abs());
+                peak_r = peak_r.max(r.abs());
             }
             for send in &track.sends {
+                if send.mute {
+                    continue;
+                }
                 let gain = send.gain;
+                // 预推子取点在效果链之后、推子之前——推子拉到底也照样送。
+                let (sl, sr) = if send.pre { (1.0f32, 1.0f32) } else { (gl, gr) };
                 let dest = &mut bus_in[send.target_index][..stereo];
                 for i in 0..frames {
-                    dest[i * 2] += left[i] * gl * gain;
-                    dest[i * 2 + 1] += right[i] * gr * gain;
+                    dest[i * 2] += left[i] * sl * gain;
+                    dest[i * 2 + 1] += right[i] * sr * gain;
                 }
+            }
+            // 侧链键：把本轨的**推子后**信号复制给所有以本轨为源的键缓冲。
+            for (buf, source) in key_sources.iter().enumerate() {
+                if *source != idx {
+                    continue;
+                }
+                for i in 0..frames {
+                    key_bufs[buf][0][i] += left[i] * gl;
+                    key_bufs[buf][1][i] += right[i] * gr;
+                }
+            }
+            // 电平表：推子后、进 master 之前——表头显示的就是这条轨真正送出去的东西。
+            let gr_db = track
+                .effects
+                .iter()
+                .filter_map(|fx| fx.gain_reduction_db())
+                .fold(0.0f32, f32::max);
+            meter.publish_track(track.meter_slot, peak_l, peak_r, gr_db);
+        }
+
+        // 主总线插入链：先反交错到 scratch，跑链，再交错回去乘推子。
+        // 顺序是「总加 → 插入 → 推子」：推子始终是最后的整体电平（与 Cubase / Pro Tools 一致）。
+        if !master_effects.is_empty() {
+            if scratch_left.len() < frames {
+                scratch_left.resize(frames, 0.0);
+            }
+            if scratch_right.len() < frames {
+                scratch_right.resize(frames, 0.0);
+            }
+            for i in 0..frames {
+                scratch_left[i] = out[i * 2];
+                scratch_right[i] = out[i * 2 + 1];
+            }
+            let (left, right) = (&mut scratch_left[..frames], &mut scratch_right[..frames]);
+            for (index, fx) in master_effects.iter_mut().enumerate() {
+                if !master_enabled.get(index).copied().unwrap_or(true) {
+                    continue;
+                }
+                match master_key_buf.get(index).copied().flatten() {
+                    Some(buf) => {
+                        let key: [&[f32]; 2] =
+                            [&key_bufs[buf][0][..frames], &key_bufs[buf][1][..frames]];
+                        fx.process_with_sidechain(
+                            &ctx,
+                            &mut [&mut left[..], &mut right[..]],
+                            &[],
+                            Some(&key),
+                        );
+                    }
+                    None => {
+                        fx.process(&ctx, &mut [&mut left[..], &mut right[..]], &[]);
+                    }
+                }
+            }
+            for i in 0..frames {
+                out[i * 2] = left[i];
+                out[i * 2 + 1] = right[i];
             }
         }
 
         // 总输出在「所有轨道混合之后」施加。
         let ml = self.master_left;
         let mr = self.master_right;
+        let mut master_peak_l = 0.0f32;
+        let mut master_peak_r = 0.0f32;
         for frame in out.chunks_exact_mut(2) {
             frame[0] *= ml;
             frame[1] *= mr;
+            master_peak_l = master_peak_l.max(frame[0].abs());
+            master_peak_r = master_peak_r.max(frame[1].abs());
         }
+        let master_gr = master_effects
+            .iter()
+            .filter_map(|fx| fx.gain_reduction_db())
+            .fold(0.0f32, f32::max);
+        meter.publish_master(master_peak_l, master_peak_r, master_gr);
 
         // 节拍器：按速度表在整数拍上打点（重音在小节头）。加在**总输出之后**——不受推子 /
         // 静音影响，永远听得见。只在播放时出声。
@@ -1677,6 +2015,8 @@ mod tests {
                 plugin_id: "builtin.synth".into(),
                 params: Default::default(),
                 state: vec![],
+                enabled: true,
+                sidechain: None,
             }),
             effects: vec![],
             clips: vec![Clip {
@@ -1908,6 +2248,8 @@ mod tests {
             plugin_id: "test.half".into(),
             params: Default::default(),
             state: vec![],
+            enabled: true,
+            sidechain: None,
         }]);
         assert!(dry > 0.01, "baseline must be audible: {dry}");
         assert!(
@@ -1933,6 +2275,8 @@ mod tests {
             params: Default::default(),
             // 255 → level 1.0：状态被还原时整块输出都是满幅。
             state: vec![255],
+            enabled: true,
+            sidechain: None,
         });
         let schedule = ScheduledEvents::from_project(&p, 48_000.0);
         let mut player = Player::new(schedule, &registry, 48_000.0, 512);
@@ -1967,6 +2311,8 @@ mod tests {
             plugin_id: "test.stateful".into(),
             params: Default::default(),
             state: vec![],
+            enabled: true,
+            sidechain: None,
         });
         let schedule = ScheduledEvents::from_project(&p, 48_000.0);
         let mut player = Player::with_carried(
@@ -2009,6 +2355,8 @@ mod tests {
             plugin_id: "test.other".into(),
             params: Default::default(),
             state: vec![],
+            enabled: true,
+            sidechain: None,
         });
         let schedule = ScheduledEvents::from_project(&p, 48_000.0);
         let mut player = Player::with_carried(
@@ -2051,6 +2399,8 @@ mod tests {
             params: Default::default(),
             // 真插件建出来时会还原成 level 1.0；占位 load_state 是空操作，复用了就一直是静音。
             state: vec![255],
+            enabled: true,
+            sidechain: None,
         });
         let schedule = ScheduledEvents::from_project(&p, 48_000.0);
         let mut player = Player::with_carried(
@@ -2085,6 +2435,8 @@ mod tests {
             plugin_id: "test.stateful".into(),
             params: Default::default(),
             state: vec![],
+            enabled: true,
+            sidechain: None,
         });
         let schedule = ScheduledEvents::from_project(&p, 48_000.0);
 
@@ -2118,6 +2470,8 @@ mod tests {
             plugin_id: "builtin.synth".into(),
             params: Default::default(),
             state: vec![],
+            enabled: true,
+            sidechain: None,
         }];
         let schedule = ScheduledEvents::from_project(&p, 48_000.0);
         let mut player = Player::new(schedule, &registry, 48_000.0, 512);
@@ -2150,11 +2504,15 @@ mod tests {
                 plugin_id: "test.missing.effect".into(),
                 params: Default::default(),
                 state: vec![],
+                enabled: true,
+                sidechain: None,
             },
             PluginInstance {
                 plugin_id: "test.param.effect".into(),
                 params: [("level".to_string(), 0.25)].into_iter().collect(),
                 state: vec![],
+                enabled: true,
+                sidechain: None,
             },
         ];
         t.automation = vec![AutomationLane {
@@ -2444,6 +2802,8 @@ mod tests {
             plugin_id: "test.drone".into(),
             params: Default::default(),
             state: vec![],
+            enabled: true,
+            sidechain: None,
         });
         let schedule = ScheduledEvents::from_project(&p, 48_000.0);
         let mut player = Player::new(schedule, &registry, 48_000.0, 24_000);
@@ -2656,6 +3016,8 @@ mod tests {
                 plugin_id: "builtin.synth".into(),
                 params: Default::default(),
                 state: vec![],
+                enabled: true,
+                sidechain: None,
             }),
             effects: vec![],
             clips: vec![Clip {
@@ -2787,6 +3149,8 @@ mod tests {
                 plugin_id: "test.stateful".into(),
                 params: Default::default(),
                 state: vec![state],
+                enabled: true,
+                sidechain: None,
             }),
             effects: vec![],
             clips: vec![],
@@ -2810,6 +3174,8 @@ mod tests {
         src.sends = vec![Send {
             target: TrackId(2),
             gain_db: 0.0,
+            mode: Default::default(),
+            mute: false,
         }];
         let bus = tone_track(2, "Bus", 0);
         let mut bus = bus;
@@ -2929,6 +3295,8 @@ mod tests {
             plugin_id: "test.cc".into(),
             params: Default::default(),
             state: vec![],
+            enabled: true,
+            sidechain: None,
         });
         track.automation = vec![AutomationLane {
             param: "cc:64".into(),
@@ -3039,6 +3407,8 @@ mod tests {
                 // 静态值 0.2；曲线要求 0.8 → 输出应当是 0.8（自动化覆盖静态值）。
                 params: [("level".to_string(), 0.2)].into_iter().collect(),
                 state: vec![],
+                enabled: true,
+                sidechain: None,
             }),
             effects: vec![],
             clips: vec![],
@@ -3087,6 +3457,8 @@ mod tests {
             // 静态 0.25；曲线要求 0.5 → 输出应当是 0.5。
             params: [("level".to_string(), 0.25)].into_iter().collect(),
             state: vec![],
+            enabled: true,
+            sidechain: None,
         }];
         t.automation = vec![AutomationLane {
             param: "fx0:level".into(),
@@ -3133,6 +3505,8 @@ mod tests {
                 // 静态值 0.2；曲线要求 0.8。
                 params: [("level".to_string(), 0.2)].into_iter().collect(),
                 state: vec![],
+                enabled: true,
+                sidechain: None,
             }),
             effects: vec![],
             clips: vec![],
@@ -3207,6 +3581,8 @@ mod tests {
             // 静态 0.25；曲线要求 0.5。
             params: [("level".to_string(), 0.25)].into_iter().collect(),
             state: vec![],
+            enabled: true,
+            sidechain: None,
         }];
         p.tracks.push(t);
 
@@ -3469,6 +3845,8 @@ mod tests {
             plugin_id: "test.pressure".into(),
             params: Default::default(),
             state: vec![],
+            enabled: true,
+            sidechain: None,
         });
         track.automation = vec![AutomationLane {
             param: "at:2".into(),
@@ -3496,5 +3874,249 @@ mod tests {
         player.apply_command(TransportCommand::Seek { frame: 0 });
         player.process_block(&mut out, 512);
         assert_eq!(log.lock().unwrap().len(), 2, "seek 后重发");
+    }
+
+    // ---- C4：旁通 / 主总线插入 / 计量 / 侧链 ----
+
+    /// 把输入**减半**的效果器（用来验证「旁通真的跳过处理」与主总线插入）。
+    struct Half;
+
+    impl Plugin for Half {
+        fn descriptor(&self) -> PluginDescriptor {
+            PluginDescriptor {
+                id: "test.half".into(),
+                name: "Half".into(),
+                kind: PluginKind::Effect,
+                io: IoLayout { inputs: 2, outputs: 2 },
+                capabilities: Default::default(),
+            }
+        }
+        fn params(&self) -> Vec<ParamInfo> {
+            Vec::new()
+        }
+        fn get_param(&self, _id: &ParamId) -> Option<f32> {
+            None
+        }
+        fn set_param(&mut self, _id: &ParamId, _value: f32) {}
+        fn prepare(&mut self, _sample_rate: f64, _block_size: usize) {}
+        fn reset(&mut self) {}
+        fn process(
+            &mut self,
+            _ctx: &ProcessContext,
+            audio: &mut [&mut [f32]],
+            _events: &[TimedMidiEvent],
+        ) {
+            for ch in audio.iter_mut() {
+                for s in ch.iter_mut() {
+                    *s *= 0.5;
+                }
+            }
+        }
+        fn save_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn load_state(&mut self, _state: &[u8]) -> Result<(), ai_daw_plugin_api::PluginError> {
+            Ok(())
+        }
+    }
+
+    fn registry_with_half() -> PluginRegistry {
+        let mut registry = PluginRegistry::new();
+        registry.register("test.stateful", |_track, _slot| {
+            Box::new(StateTone { level: 0.0 })
+        });
+        registry.register("test.half", |_track, _slot| Box::new(Half));
+        registry
+    }
+
+    /// 旁通：同一个播放器实例上切换，输出立刻变了——不重建、状態也不丢。
+    #[test]
+    fn bypassing_an_effect_changes_the_block_without_a_rebuild() {
+        let registry = registry_with_half();
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        let mut t = tone_track(1, "T", 255); // 1.0
+        t.effects = vec![PluginInstance {
+            plugin_id: "test.half".into(),
+            params: Default::default(),
+            state: vec![],
+            enabled: true,
+            sidechain: None,
+        }];
+        p.tracks.push(t);
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+        assert!((peak(&out) - 0.5).abs() < 0.02, "启用时减半：{}", peak(&out));
+
+        player.apply_command(TransportCommand::SetEffectEnabled {
+            track: TrackId(1),
+            effect: 0,
+            enabled: false,
+        });
+        player.process_block(&mut out, 512);
+        assert!((peak(&out) - 1.0).abs() < 0.02, "旁通后应是干声：{}", peak(&out));
+
+        player.apply_command(TransportCommand::SetEffectEnabled {
+            track: TrackId(1),
+            effect: 0,
+            enabled: true,
+        });
+        player.process_block(&mut out, 512);
+        assert!((peak(&out) - 0.5).abs() < 0.02, "再启用应当恢复：{}", peak(&out));
+    }
+
+    /// 主总线插入在「总加之后、推子之前」：所有轨道都过它。
+    #[test]
+    fn master_inserts_process_the_sum_before_the_master_fader() {
+        let registry = registry_with_half();
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        p.tracks.push(tone_track(1, "A", 255));
+        p.master_effects = vec![PluginInstance {
+            plugin_id: "test.half".into(),
+            params: Default::default(),
+            state: vec![],
+            enabled: true,
+            sidechain: None,
+        }];
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+        assert!((peak(&out) - 0.5).abs() < 0.02, "主总线插入应当生效：{}", peak(&out));
+
+        // 推子仍然作用在插入之后（推子 -6 dB → 再减半）。
+        player.apply_command(TransportCommand::SetMasterGain { gain_db: -6.0 });
+        player.process_block(&mut out, 512);
+        assert!(peak(&out) < 0.3, "推子在插入之后：{}", peak(&out));
+    }
+
+    /// 电平表：推子后峰值、主输出峰值都能读到，且「读一次就清零」。
+    #[test]
+    fn meters_report_post_fader_peaks_and_reset_on_read() {
+        let registry = registry_with_half();
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        let mut t = tone_track(1, "A", 255);
+        t.mixer.gain_db = -6.0; // ≈ 0.5
+        p.tracks.push(t);
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        let bank = std::sync::Arc::new(crate::meter::MeterBank::new());
+        player.set_meter(std::sync::Arc::clone(&bank));
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+
+        let track_meter = bank.read_track(0);
+        assert!((track_meter.peak_l - 0.5).abs() < 0.02, "{track_meter:?}");
+        let master_meter = bank.read_master();
+        assert!((master_meter.peak_l - 0.5).abs() < 0.02, "{master_meter:?}");
+        // 取走即清零（下一块还没跑）。
+        assert_eq!(bank.read_track(0).peak_l, 0.0);
+    }
+
+    /// 独奏一条轨时，它送去的总线必须跟着响（否则 solo 听不到混响/并行压缩）。
+    #[test]
+    fn soloing_a_track_keeps_its_bus_audible() {
+        let registry = registry_with_half();
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        let mut src = tone_track(1, "Src", 255);
+        src.sends = vec![Send {
+            target: TrackId(2),
+            gain_db: 0.0,
+            mode: Default::default(),
+            mute: false,
+        }];
+        let mut bus = tone_track(2, "Bus", 0);
+        bus.instrument = None;
+        p.tracks.push(src);
+        p.tracks.push(bus);
+        p.tracks.push(tone_track(3, "Other", 255));
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        player.apply_command(TransportCommand::Play);
+        player.apply_command(TransportCommand::SetTrackMix {
+            track: TrackId(1),
+            gain_db: 0.0,
+            pan: 0.0,
+            mute: false,
+            solo: true,
+        });
+        let mut out = vec![0.0f32; 512 * 2];
+        player.process_block(&mut out, 512);
+        // 源轨 1.0 + 总线（发送来的 1.0）= 2.0；第三条被压掉。
+        assert!(
+            (peak(&out) - 2.0).abs() < 0.05,
+            "独奏轨的总线必须跟着响（峰值 {}）",
+            peak(&out)
+        );
+    }
+
+    /// 侧链：压缩器在 B 上、键取 A。A 响 → B 被压；A 静 → B 不压。
+    #[test]
+    fn sidechain_compressor_ducks_the_target_track() {
+        let mut registry = registry_with_half();
+        registry.register(crate::registry::BUILTIN_COMPRESSOR, |_track, _slot| {
+            Box::new(ai_daw_effects::Compressor::new())
+        });
+        let mut p = Project::new("p");
+        p.transport.tempo = 120.0;
+        // A 很响（0 dBFS），只做键；B 很轻（-40 dBFS），自己压不动自己。
+        p.tracks.push(tone_track(1, "Key", 255));
+        let mut target = tone_track(2, "Target", 3); // ≈ 0.012
+        target.effects = vec![PluginInstance {
+            plugin_id: crate::registry::BUILTIN_COMPRESSOR.into(),
+            params: [
+                ("threshold".to_string(), -20.0),
+                ("ratio".to_string(), 20.0),
+                ("knee".to_string(), 0.0),
+                ("attack".to_string(), 0.1),
+                ("release".to_string(), 50.0),
+            ]
+            .into_iter()
+            .collect(),
+            state: vec![],
+            enabled: true,
+            sidechain: Some(crate::model::SidechainSource { track: TrackId(1) }),
+        }];
+        p.tracks.push(target);
+
+        let schedule = ScheduledEvents::from_project(&p, 48_000.0);
+        assert_eq!(schedule.tracks[1].effect_keys, vec![Some(0)], "键来源要解析成下标");
+        let mut player = Player::new(schedule, &registry, 48_000.0, 512);
+        let bank = std::sync::Arc::new(crate::meter::MeterBank::new());
+        player.set_meter(std::sync::Arc::clone(&bank));
+        player.apply_command(TransportCommand::Play);
+        let mut out = vec![0.0f32; 512 * 2];
+        // 多跑几块让包络稳定（键 0 dBFS、阈值 -20、20:1 → 约 19 dB 衰减）。
+        for _ in 0..4 {
+            player.process_block(&mut out, 512);
+        }
+        let gr = bank.read_track(1).gr_db;
+        assert!(gr > 15.0, "侧链应当把 B 压下去（GR {gr}）");
+
+        // 把键轨静音：键没了 → 不再压。
+        player.apply_command(TransportCommand::SetTrackMix {
+            track: TrackId(1),
+            gain_db: 0.0,
+            pan: 0.0,
+            mute: true,
+            solo: false,
+        });
+        for _ in 0..40 {
+            player.process_block(&mut out, 512);
+            // 表是「上次读取以来的峰值」：每块读走一次，最后读到的才是当前值。
+            let _ = bank.read_track(1);
+        }
+        let gr = bank.read_track(1).gr_db;
+        assert!(gr < 1.0, "键静音后应当放开（GR {gr}）");
     }
 }

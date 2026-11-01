@@ -71,6 +71,11 @@ impl SingingRuntime {
         }
     }
 
+    /// 请求取消（下一次进度回调时停下，什么都不落地）。与 `singing_cancel` 命令同一语义。
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
     fn set_progress(&self, p: f32) {
         self.progress
             .store((p.clamp(0.0, 1.0) * 1000.0) as u32, Ordering::Relaxed);
@@ -200,7 +205,8 @@ pub fn singing_render(
     let spawn = std::thread::Builder::new()
         .name("ai-daw-singing".into())
         .spawn(move || {
-            let outcome = render(&thread_app, &thread_runtime, &args);
+            // 线程里 panic 也要收尾：否则 `running` 永远为真、进度条卡住（见 crate::job）。
+            let outcome = crate::job::guard(|| render(&thread_app, &thread_runtime, &args));
             thread_runtime.finish(&thread_app, outcome);
         });
     if let Err(e) = spawn {
@@ -384,8 +390,25 @@ fn render(
         .filter(|s| *s >= 1.0)
         .map(|s| format!("，参考取自 {:.0} 秒", s))
         .unwrap_or_default();
+    // 图到底建在显卡上还是 CPU 上——「GPU 利用率没涨」时先看这一行。
+    let (gpu, cpu) = ai_daw_local_ai::backend::session::take_session_stats();
+    if gpu + cpu > 0 {
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stderr(),
+            "[backend] 歌声合成：GPU {gpu} 张图 / CPU {cpu} 张"
+        );
+    }
+    let ep = if gpu + cpu == 0 {
+        String::new()
+    } else if let (0, Some(reason)) = (gpu, ai_daw_local_ai::backend::session::last_fallback()) {
+        // 全在 CPU 上：把第一张图失败的原因直接写进摘要，不用去翻日志。
+        format!("，GPU {gpu} / CPU {cpu} 张图（{reason}）")
+    } else {
+        format!("，GPU {gpu} / CPU {cpu} 张图")
+    };
     Ok(format!(
-        "已生成「{name}」：{} 秒歌声、{} 个音、{} 段，{} 精度（{}{reference}，用时 {seconds:.0} 秒）",
+        "已生成「{name}」：{} 秒歌声、{} 个音、{} 段，{} 精度（{}{reference}，用时 {seconds:.0} 秒{ep}）",
         take.seconds.round(),
         take.notes,
         take.segments,
@@ -409,39 +432,16 @@ struct Score {
 
 /// 参考音色：优先音色库（`reference_voice`），其次工程内轨道，最后文件路径。
 fn load_reference(state: &AppState, args: &SingArgs) -> Result<Option<(Vec<f32>, f64)>, String> {
-    if let Some(id) = args.reference_voice.as_deref().filter(|id| !id.is_empty()) {
-        let (samples, rate) = crate::voices::samples_for(state, id)?;
-        return Ok(Some((samples, rate)));
-    }
-    let source = if let Some(track) = args.reference_track {
-        let engine = state.engine.lock().unwrap();
-        let project = engine.project();
-        let t = project
-            .tracks
-            .iter()
-            .find(|t| t.id == TrackId(track))
-            .ok_or("参考音色轨道不存在")?;
-        let clip = t
-            .clips
-            .iter()
-            .find(|c| c.audio.is_some())
-            .ok_or("参考音色轨道上没有音频片段")?;
-        Some(clip.audio.clone().expect("已确认是音频片段").path)
-    } else {
-        args.reference.clone()
-    };
-    let Some(path) = source else {
-        return Ok(None);
-    };
-    let audio = state.assets.load(&path)?;
-    if audio.frames() == 0 {
-        return Err("参考音色是空音频".into());
-    }
-    let mono = to_mono(&audio.samples, audio.channels);
-    Ok(Some((mono, audio.sample_rate)))
+    crate::voices::load_reference(
+        state,
+        args.reference_voice.as_deref(),
+        args.reference_track,
+        args.reference.as_deref(),
+    )
 }
 
 /// 交错多声道 → 单声道（平均）。
+#[cfg(test)]
 fn to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
     let channels = channels.max(1);
     if channels == 1 {
@@ -469,11 +469,6 @@ fn output_path(app: &tauri::AppHandle, kind: &str) -> Result<String, String> {
         .join(format!("{kind}-{stamp}.wav"))
         .to_string_lossy()
         .into_owned())
-}
-
-/// 模型是否就位（MCP 工具在开跑前先问一句，免得白等）。
-pub fn model_ready() -> bool {
-    singing::installed()
 }
 
 /// 模型目录（设置页「打开模型目录」用）。

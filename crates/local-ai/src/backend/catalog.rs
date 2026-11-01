@@ -1,11 +1,11 @@
-//! **后端清单**（编译期内嵌）：每个执行后端支持的平台 / 架构。
+//! **后端清单**（编译期内嵌）：每个执行后端支持的平台 / 架构，以及它需要哪一份运行时。
 //!
-//! 三个条目全部**随包、零下载**——预编译构建本就在 `ort` 的 dist 里（macOS 的 aarch64 构建含
-//! CoreML、Windows 构建含 DirectML），加对应 cargo 特性只解锁 `ort::ep::*` 的 API，
-//! **不改下载的二进制、不改包体积**。
+//! 「平台支不支持」与「运行时装没装」是两件事：本清单只管前者；
+//! 后者见 [`super::runtime`]（下载管理在宿主侧）。
 
 use super::detect::HardwareProfile;
 use super::kind::BackendKind;
+use super::runtime::{self, RuntimeId};
 
 /// 清单里的一个后端。
 #[derive(Debug, Clone, Copy)]
@@ -46,22 +46,43 @@ pub static BACKEND_CATALOG: &[BackendEntry] = &[
         id: "coreml",
         name: "Apple CoreML",
         kind: BackendKind::CoreMl,
-        // **只 macOS + aarch64**：dist.tsv 里 `aarch64-apple-darwin` 只有 coreml / coreml+webgpu
-        // 两个构建，`x86_64-apple-darwin` **一条都没有**（Intel Mac 只能 CPU）。
+        // 只 macOS + aarch64：Intel Mac 只能 CPU。
         platforms: &["macos"],
         arches: &["aarch64"],
-        note: "Apple 神经引擎 / GPU（实测在本机的这些小模型上比 CPU 慢）",
+        note: "Apple 神经引擎 / GPU（在这套小模型上实测不一定更快）",
     },
     BackendEntry {
         id: "directml",
         name: "DirectML",
         kind: BackendKind::DirectMl,
-        // Windows 的默认预编译构建就含 DirectML。
+        // DirectML 运行时只由 ORT 为 Windows 发布。
         platforms: &["windows"],
         arches: &["aarch64", "x86_64"],
         note: "DirectX 12 硬件加速（Windows）",
     },
+    BackendEntry {
+        id: "cuda12",
+        name: "CUDA 12",
+        kind: BackendKind::Cuda12,
+        // CUDA 运行时只发布 Windows / Linux x86_64（macOS 走 Metal / CoreML）。
+        platforms: &["windows", "linux"],
+        arches: &["x86_64"],
+        note: "NVIDIA 显卡加速（CUDA 12；老卡 / 驱动 < 580，兼容性最好）",
+    },
+    BackendEntry {
+        id: "cuda13",
+        name: "CUDA 13",
+        kind: BackendKind::Cuda13,
+        platforms: &["windows", "linux"],
+        arches: &["x86_64"],
+        note: "NVIDIA 新卡加速（CUDA 13；Turing 起且驱动 580+，更快）",
+    },
 ];
+
+/// 某个后端需要哪一份运行时（macOS 上 CPU 与 CoreML 共用一份）。
+pub fn runtime_for(kind: BackendKind) -> RuntimeId {
+    runtime::for_backend(kind)
+}
 
 /// 全部条目。
 pub fn all() -> &'static [BackendEntry] {
@@ -99,6 +120,7 @@ mod tests {
             gpu: Some(GpuVendor::Apple),
             gpu_name: None,
             driver: None,
+            compute_cap: None,
         }
     }
 
@@ -118,7 +140,7 @@ mod tests {
     fn coreml_is_apple_silicon_only() {
         let coreml = by_id("coreml").unwrap();
         assert!(coreml.platform_ok(&profile("macos", "aarch64")));
-        // Intel Mac 没有对应预编译构建。
+        // Intel Mac 没有对应运行时。
         assert!(!coreml.platform_ok(&profile("macos", "x86_64")));
         assert!(!coreml.platform_ok(&profile("windows", "x86_64")));
     }
@@ -135,11 +157,28 @@ mod tests {
         );
         assert_eq!(
             supported(&profile("windows", "x86_64")),
-            vec![BackendKind::Cpu, BackendKind::DirectMl]
+            vec![
+                BackendKind::Cpu,
+                BackendKind::DirectMl,
+                BackendKind::Cuda12,
+                BackendKind::Cuda13
+            ]
         );
         assert_eq!(
             supported(&profile("linux", "x86_64")),
-            vec![BackendKind::Cpu]
+            vec![BackendKind::Cpu, BackendKind::Cuda12, BackendKind::Cuda13]
         );
+    }
+
+    /// 后端与运行时的映射：CUDA 12 / 13 各是一份 dylib。
+    #[test]
+    fn backends_map_to_runtime_assets() {
+        assert_eq!(runtime_for(BackendKind::Cuda12), RuntimeId::Cuda);
+        assert_eq!(runtime_for(BackendKind::Cuda13), RuntimeId::Cuda13);
+        assert_eq!(runtime_for(BackendKind::DirectMl), RuntimeId::DirectMl);
+        #[cfg(target_os = "macos")]
+        assert_eq!(runtime_for(BackendKind::Cpu), RuntimeId::CoreMl);
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(runtime_for(BackendKind::Cpu), RuntimeId::Cpu);
     }
 }

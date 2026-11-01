@@ -965,6 +965,107 @@ impl Engine {
                     value: *value,
                 }]
             }
+            Command::SetEffectEnabled {
+                track,
+                index,
+                enabled,
+            } => {
+                vec![Event::EffectEnabledChanged {
+                    actor: actor.clone(),
+                    track: *track,
+                    index: *index,
+                    enabled: *enabled,
+                }]
+            }
+            Command::SetEffectSidechain {
+                track,
+                index,
+                source,
+            } => {
+                // 自侧链没有意义（自己检测自己 = 自激），在命令层就当「不接」。
+                let source = source.filter(|s| s != track).map(|s| crate::model::SidechainSource {
+                    track: s,
+                });
+                vec![Event::EffectSidechainChanged {
+                    actor: actor.clone(),
+                    track: *track,
+                    index: *index,
+                    source,
+                }]
+            }
+            Command::AddMasterEffect { plugin_id } => {
+                if plugin_id.is_empty() {
+                    return vec![];
+                }
+                let mut effects = self.project().master_effects.clone();
+                effects.push(crate::model::PluginInstance::new(plugin_id));
+                vec![Event::MasterEffectsChanged {
+                    actor: actor.clone(),
+                    effects,
+                }]
+            }
+            Command::RemoveMasterEffect { index } => {
+                let mut effects = self.project().master_effects.clone();
+                if *index >= effects.len() {
+                    return vec![];
+                }
+                effects.remove(*index);
+                vec![Event::MasterEffectsChanged {
+                    actor: actor.clone(),
+                    effects,
+                }]
+            }
+            Command::MoveMasterEffect { from, to } => {
+                let mut effects = self.project().master_effects.clone();
+                if *from >= effects.len() {
+                    return vec![];
+                }
+                let fx = effects.remove(*from);
+                let dest = (*to).min(effects.len());
+                effects.insert(dest, fx);
+                vec![Event::MasterEffectsChanged {
+                    actor: actor.clone(),
+                    effects,
+                }]
+            }
+            Command::SetMasterEffectParam {
+                index,
+                param,
+                value,
+            } => {
+                if !value.is_finite() || *index >= self.project().master_effects.len() {
+                    return vec![];
+                }
+                vec![Event::MasterEffectParamChanged {
+                    actor: actor.clone(),
+                    index: *index,
+                    param: param.clone(),
+                    value: *value,
+                }]
+            }
+            Command::SetMasterEffectEnabled { index, enabled } => {
+                if *index >= self.project().master_effects.len() {
+                    return vec![];
+                }
+                vec![Event::MasterEffectEnabledChanged {
+                    actor: actor.clone(),
+                    index: *index,
+                    enabled: *enabled,
+                }]
+            }
+            Command::SetMasterEffectSidechain { index, source } => {
+                let mut effects = self.project().master_effects.clone();
+                if *index >= effects.len() {
+                    return vec![];
+                }
+                // 总线上的效果器没有「自己」这条轨道，自侧链只可能是同一条源轨——由调用方去重。
+                effects[*index].sidechain =
+                    source.map(|track| crate::model::SidechainSource { track });
+                vec![Event::MasterEffectsChanged {
+                    actor: actor.clone(),
+                    effects,
+                }]
+            }
             Command::RenameProject { name } => {
                 vec![Event::ProjectRenamed {
                     actor: actor.clone(),
@@ -2203,6 +2304,8 @@ mod tests {
                 plugin_id: "builtin.synth".into(),
                 params: Default::default(),
                 state: vec![],
+                enabled: true,
+                sidechain: None,
             }),
             effects: vec![],
             clips: vec![Clip {
@@ -3619,10 +3722,14 @@ mod tests {
                     Send {
                         target: t2,
                         gain_db: 999.0,
+                        mode: Default::default(),
+                        mute: false,
                     },
                     Send {
                         target: t1,
                         gain_db: 0.0,
+                        mode: Default::default(),
+                        mute: false,
                     }, // 自发送 → 丢弃
                 ],
             },

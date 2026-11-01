@@ -208,6 +208,58 @@
   ② 采样器换成 **STORK-2**（RKG 二阶、s=8、1 NFE/步，首步 Euler），并补上 **dynamic
   thresholding**（逐帧 99.5 分位裁剪，rescale 用阈值前标准差）——两项都与 SXSEditor 的
   `samplers/stork2.js` 与 `combine()` 顺序一致。声码器块间仍是 Hann 淡化、响度仍是峰值归一（定位不同，暂不对齐）。
+- **第二十六次修订（2026-10-29）**：**音色替换（真·SVC）落地**。① SoulX-Singer 的 SVC
+  微调权重（2.66 GB `.pt`）已导出成 7 张自足 ONNX 图（`onnx_fp16_hq` 2.23 GiB / `onnx_fp32`
+  2.71 GiB），HF + 魔搭双源、逐文件 sha256，清单条目 `soulx-svc-fp16hq` / `soulx-svc-fp32`。
+  ② `crates/local-ai/src/svc/`：YIN 基频跟踪（50 fps、纯 DSP，不额外挂 RMVPE）+ flow-matching
+  32 步 + Vocos；目标 >30 s 按清音段切 15–30 s/段；输出按有声帧 + 整轨 RMS 对齐响度并软限幅。③ 宿主新增
+  `svc_*` 四个命令与 `engine://svc` 事件，结果走 `AddAudioTrack` 落在源轨下面（一次撤销）；
+  MCP 新增 `swap_voice`（**104 → 105**）。④ AI 面板新增「音色替换」卡片：目标人声轨 +
+  参考来源（工程轨 / 人声库）+ 模型 + 步数 + 整体移调，未装模型时先问再下载。
+  设计见 `specs/2026-10-29-voice-swap-svc-design.md`。
+- **第二十七次修订（2026-10-29）**：**修复编排视图滚到底部时左侧音轨栏与网格错位**。
+  根因是两边滚动容器的**可视高度不一致**：音轨栏列表一直延伸到窗口底部，而编排容器下方
+  还有自动化车道（默认 120px 曲线 + 30px 表头 + 分隔线）和横向滚动条（`thin` 下 10px），
+  所以编排能多滚一截、音轨栏更早触底，行就脱离了。现在 `ArrangeView` 用 `ResizeObserver`
+  实测「自动化块 + 横向滚动条」的总高度写进 `layout.arrangeBottomInset`，音轨栏在列表底部
+  加等高占位；同时编排侧把越界的 `scrollTop` 夹回自己的范围。实测两边 `scrollMax` 相等、
+  任意滚动位置行/ lane 顶边差为 0（含收起自动化车道的情况）。
+- **第二十八次修订（2026-10-29）**：**音色库入口与鼠标/右键交互**。① 「音色替换」卡片补上
+  「存入音色库」（与歌声合成共用命名流程，保存后自动把新音色选回该卡片的参考下拉）；
+  ② 音色库的「人声」页新增「存入人声音色」：当前选中的音频轨一键保存，或从音频文件导入；
+  ③ 鼠标模式新增**橡皮**（快捷键 5）：编排里点片段、钢琴卷帘里点音符删除；按住拖动可画框
+  批量删除（红色选框，一次撤销）；
+  ④ 右键从「点击即删 / 拖动框选删除」改成**右键菜单**（复制 / 剪切 / 粘贴 / 删除），
+  编排与钢琴卷帘共用 `ContextMenu` 组件；粘贴落在指针所在拍位。顺带补上 Ctrl/Cmd+X。
+- **第二十九次修订（2026-10-29）**：**修复长音频音色替换比原轨小约 13 dB**。旧后处理
+  用整段绝对峰值缩放：4 分钟素材在 192 秒处有一个 34 dB 峰均比的瞬态，峰值上限把整首歌
+  压到 −34.2 dBFS（目标 −21.3）。现在改为「有声帧估初始增益 → 按整轨 RMS 迭代收敛（≤3 次）
+  → 0.65 起点软限幅」：同一素材得到 −21.2 dBFS、峰值 0.99，有声段只低约 2 dB；
+  同时去掉 4× 增益上限。旧的 +12 dB 推子只是当时的补偿，重跑后新轨不需要它。
+- **第三十次修订（2026-10-30）**：**修复音色替换「音量不稳、大的地方失真、小的地方很小」**。
+  根因是三件事叠在一起：① 后处理只有**一个全局标量增益**，对齐的是整轨 RMS，**段内相对
+  动态一点没动**；② 0.65（−3.7 dBFS）起的 `tanh` 软饱和——持续的大音量唱段整句在阈值以上，
+  整句被压出谐波失真；③ 为补回限幅吃掉的 RMS 又继续推增益（最多 3 轮、上限 +30 dB），越补
+  越糊。另外长音频分段是「独立推理 + 硬拼」，接缝处还有电平台阶。现在：① 推理前按「有声帧
+  RMS → −20 dBFS」做一次标量归一化（±24 dB、峰值保护），让 mel / whisper 前端留在训练分布
+  内；② 输出端用 50 ms 帧 / 25 ms 跳步把**包络**逐帧对齐到目标（±24 dB，压 10 ms / 抬 60 ms，
+  增益插值到每个采样），且**先对齐、后限幅**——限幅吃掉的正是超过 −1 dBFS 的峰值，不该再靠
+  抬整体增益补；③ 峰值改走**前视限幅**（−1 dBFS 起、5 ms 前视、80 ms 释放、绝对上界
+  −0.45 dBFS），对 0.95 的正弦只整体缩 0.55 dB、峰均比仍是 √2（不再饱和变形）；④ 段间
+  20 ms 交叉淡化（后一段的推理段本来就覆盖前一段的整段核心），消掉接缝台阶与咔哒。
+  设计见 `specs/2026-10-29-voice-swap-svc-design.md` §3.2。**实测（45 秒真实人声 + 同一参考，
+  fp16_hq / 32 步 / CUDA）**：输出对源素材的帧电平差从「中位 −10.2 dB、σ 11.5 dB、包络相关
+  0.23」变成「**+0.1 dB、σ 1.2 dB、包络相关 0.975**」；90–10 分位动态 20.7 dB → **9.2 dB**
+  （目标 9.3，没被压平）；峰值 −0.09 → −1.00 dBFS；0.65 以上的时间占比 0.49% → 0.04%。
+  另记录一条**模型侧**的已知限制：SVC 在清音 / 停顿处会输出纯数字静音（真实素材里 21%–27%
+  的采样是零），后处理造不出气声，停顿处听感是「死寂」，后续可在这些帧混入源素材的清音残响。
+
+- **第三十一次修订（2026-10-31）**：**fp32 档补上国际源**。① `soulx-singer-fp32` 原来只有
+  魔搭一条源（海外用户直连魔搭很难受），现在同一份字节镜像到 HF `ailm32442/SoulX-Singer-onnx-fp32`
+  （16 文件、2.85 GB、逐文件 sha256 与魔搭一致），清单里每个文件变成 `hf/intl` + `modelscope/cn`
+  双源，与 fp16 那档对齐。② `soulx_singer_has_both_cn_and_intl_sources` 从只测 fp16 扩到两档，
+  并校验 HF 地址确实指到**各自**仓库（防止复制粘贴串仓库）。③ `tools/mirror-soulx-hf.sh` 支持
+  `--fp32`，两档共用同一套「下载 → 校验 → 上传」流程。
 
 ## 1. 现状总览
 
@@ -220,7 +272,7 @@
 | Plan 3 | VST3 / CLAP 宿主 | ✅ 完成（栈有变） | `crates/host-vst3`（VST3 用 `vst3-host`、CLAP 用 `clack-host`，**未用 truce-rack**）；`src-tauri/src/plugins.rs` 装配注册表 + 原生窗口 |
 | Plan 5 | 录音 | ✅ 完成 | `crates/engine/src/recorder.rs`（cpal 输入流 + 无锁环 + 消费线程）→ WAV → `AddAudioClip`；底部条录音键 + 输入设备选择 + 电平表 |
 | Plan 6 | 音频片段 / 采样器 | ✅ 完成 | `crates/asset`（symphonia）+ `Clip.audio` + 播放路径 + 宿主素材缓存 + `import_audio`/`audio_waveform` + 波形 UI；真机端到端验证 |
-| Plan 7 | AI 接口（MCP + skills + 可视化） | 🟡 进行中 | MCP ✅（`src-tauri/src/mcp.rs`，**33 工具**）+ 前端 AI 可视化 ✅（D4）+ **skills 文档包 + `aidaw_help` 网关 ✅（F3）**；本地 HTTP/WS 未做 |
+| Plan 7 | AI 接口（MCP + skills + 可视化） | 🟡 进行中 | MCP ✅（`src-tauri/src/mcp.rs`，**34 工具**）+ 前端 AI 可视化 ✅（D4）+ **skills 文档包 + `aidaw_help` 网关 ✅（F3）**；本地 HTTP/WS 未做 |
 | 新增 | `crates/ipc`（Command/Event schema） | ✅ 完成 | `crates/ipc`（`ai-daw-ipc`）：工程/命令/事件 schema 的**唯一来源**；engine 用 `pub use` 薄壳保持既有路径不变（零行为变化） |
 | 新增 | `crates/analysis`（响度/频谱） | ✅ 完成 | `crates/analysis`（ebur128 + rustfft）：LUFS/LRA/真峰值 + RMS + 平均幅度谱；`analyze_project` 命令 |
 | 新增 | 插件管理器（原「插件商店」） | ✅ E1 完成 | `src-tauri/src/manager.rs`：注册表（开放注册表静态 JSON）浏览 + 下载 + **sha256 校验** + 解压归档 + 安装 / 导入 / 删除 / 更新；托管库 `app_data/plugins/{vst3,clap}`（宿主额外扫描）。面板 `ManagerPane.vue`。**下载健壮性**：代理/原址双候选 + 重试 + `Range` 断点续传 + 卡片下边缘进度条。**网络设置独立成一节**（见 §4 技术栈）。**E2 崩溃隔离仍搁置**（见 Stage E） |
@@ -230,7 +282,7 @@
 | 新增 | 母带处理（纯 DSP） | ✅ 完成 | `crates/mastering`：响度归一 + **真峰值限幅（4× 过采样 + 前瞻）** + 立体声宽度；`ai.rs` 的 `kind = "master"` 任务（结果落到一条新轨道）+ MCP 工具 `master_project`；AI 面板一张卡片。**不依赖任何模型**。设计见 `specs/2026-10-10-local-ai-models-design.md` §6 |
 | 品牌 | 应用图标 / favicon | ✅ 完成 | `src-tauri/app-icon.svg`（薰衣草紫，与 `common/Logo.vue` 同图形）→ `tauri icon` 生成 `src-tauri/icons/*`；`public/logo.svg` 作网页 favicon |
 | 新方向 | skills 文档包 + `aidaw` CLI（AI harness 可挂载） | ✅ F1–F4 | **skills 包 + `aidaw_help` 网关（F3）**、**`aidaw` CLI（`crates/aidaw`，MCP 薄客户端 `tools`/`call`/`status`/`start`）+ 运行时发现文件 `mcp-url`（F1/F2）**、**随包分发并接进 PATH（F4，Ollama 式）**；F5 无 Tauri 运行时暂缓 |
-| 新方向 | 本地 AI 能力（转 MIDI / 降噪 / 音源分离 / 歌声合成） | 🟢 四项已接入 | **Basic Pitch（转 MIDI）+ LocalVQE（降噪）+ HTDemucs v4（音源分离）**（`crates/local-ai/src/models/`，`ort` rc.13 进程内、后台线程、可取消）；转 MIDI/降噪**权重缺失时退回内置 DSP**，音源分离无兜底。**模型分发基建 ✅**：清单 `models/catalog.rs` + 下载器 `src-tauri/src/models.rs`（多源 + sha256 + 断点续传 + 取消）+ 「管理器 → 模型」标签。**小模型随包**，大模型按需下载。**SoulX-Singer 歌声合成（G6）✅**：MIDI + 歌词 + 参考声线 → 新音频轨（9 张 ONNX 图，1.44 GB 按需下载）。AI 面板 ✅（G3） |
+| 新方向 | 本地 AI 能力（转 MIDI / 降噪 / 音源分离 / 歌声合成 / 音色替换） | 🟢 五项已接入 | **Basic Pitch（转 MIDI）+ LocalVQE（降噪）+ HTDemucs v4（音源分离）**（`crates/local-ai/src/models/`，`ort` rc.13 进程内、后台线程、可取消）；转 MIDI/降噪**权重缺失时退回内置 DSP**，音源分离无兜底。**模型分发基建 ✅**：清单 `models/catalog.rs` + 下载器 `src-tauri/src/models.rs`（多源 + sha256 + 断点续传 + 取消）+ 「管理器 → 模型」标签。**小模型随包**，大模型按需下载。**SoulX-Singer 歌声合成（G6）✅**：MIDI + 歌词 + 参考声线 → 新音频轨（9 张 ONNX 图，1.44 GB 按需下载）。**SoulX-Singer-SVC 音色替换 ✅**：一段人声 + 参考声线 → 同旋律新音色（7 张 ONNX 图，2.23 GB；自带 YIN F0）。AI 面板 ✅（G3） |
 
 ### 近期已提交、尚无设计文档的改动（commit `38ef87b`，2026-10-10）
 
@@ -451,6 +503,28 @@
   测试：`cargo test -p ai-daw-engine --features realtime` → 141 通过；`realtime_safety.rs` 门禁已覆盖发送 + 自动化
   （含 `SetAutomation` 的 `apply_command` 零分配断言）。
   设计与计划：`specs/2026-10-10-mixing-sends-buses-automation-design.md`、`plans/2026-10-10-mixing-sends-buses-automation.md`。
+
+- **C4 · 通道条工艺**：计量 / 动态 / 侧链 / 主总线插入。✅ **M1 + M2（内置部分）完成（2026-11-01）**：
+  - **计量**：`crates/engine/src/meter.rs`（固定 256 槽的无锁 `MeterBank`，`f32` 位模式
+    `fetch_max`、读侧 `swap(0)`）+ `mixer_meters` / `clear_meter_clip` 命令；前端 30 Hz 轮询、
+    弹道与峰值保持在 `stores/meters.ts`，组件 `ChannelMeter.vue`。
+  - **动态处理**：内置压缩器（0 延迟、软拐点、立体声联动、可接侧链）与限幅器（5 ms 前瞻、
+    采样间峰值）；`Plugin::gain_reduction_db()` 把 GR 送进表头。
+  - **侧链**：`PluginInstance.sidechain` + `Plugin::sidechain_channels` /
+    `process_with_sidechain`（默认实现，旧插件零改动）；调度期把键来源解析成下标并**补进
+    路由边**，播放时用预分配的键缓冲传递；内置压缩器已可用。
+  - **主总线插入**：`Project.master_effects`（空则不写 JSON），顺序「总加 → 插入 → 推子」，
+    限幅器可挂上面；参数 / 旁通走运行时命令，不重建。
+  - **旁通**：`PluginInstance.enabled`，开关不断音。
+  - **发送**：新增 `mode`（推子前 / 后）与 `mute`。
+  - **独奏语义**：solo 轨的**下游总线**保持可听（此前会被一起哑掉）。
+  - **界面**：混音台通道条重做（名字 / 插入 / 发送摘要 / 声像 / 推子 + 表 / 读数 / M-S，
+    固定 112 px、长名字省略号不再撑宽）；右面板补齐插入（旁通 + 侧链）与主总线插入就地调参。
+  - **未做**：外部插件（VST3 / CLAP / AU）的侧链（适配器仍返回 0，需要 bus 适配 + 探针）、
+    PDC、直接输出、编组/VCA、片段增益与淡化。
+  - 测试：`cargo test -p ai-daw-engine --features realtime` → 256 单测 + 集成全绿，
+    实时安全门禁已覆盖压缩器/限幅器/侧链/计量；`cargo test -p ai-daw-ipc` → 51（含 wire-shape）。
+  - 设计：`specs/2026-11-01-mixing-channel-strip-design.md`。
 - 可直接用的开源零件与参考项目（许可已核）：见 `research/2026-10-10-open-source-survey.md`。
 
 ### Stage D — AI 层（P1，项目定位所在）
@@ -577,7 +651,8 @@
 > **G3（AI 面板）✅ 完成**（开始/停止按钮：处理中条目下边缘是进度条）。
 > **G4 ② 音源分离 ✅ 完成（2026-10-11）**（HTDemucs v4 手写移植 + 四条分轨 + `separate_stems`）；
 > **模型分发基建 ✅ 完成**（清单 + 应用内下载器 + 「管理器 → 模型」标签 + 网络页「模型镜像」）。
-> G4 其余三项（SVC / SVS / 生成音乐）仍 ⬜。
+> G4 其余：**SVC ✅（2026-10-29，`soulx-svc-fp16hq` / `soulx-svc-fp32`）**、
+> **SVS ✅（2026-10-28，`soulx-singer-fp16` / `soulx-singer-fp32`）**；生成音乐仍 ⬜。
 > **识谱 / 分析并对齐 ❌ 已移除（2026-10-14）**：Beat This! 那一版集成（模型 + AI 面板卡片 +
 > MCP 工具 `detect_beats`）整体撤掉——模型本身准，但配这套**按「拍」线性绘制**的时间轴无法稳定对齐。
 > **保留**底部条的**节拍器**（`TransportCommand::SetMetronome`，与模型无关）。
@@ -649,9 +724,11 @@
     小模型一步到位（≤ 300 MB 直下），GB 级先确认体积（磁盘预检待补）。
   - **优先序**：① **母带处理** ✅（**纯 DSP、不下载模型**，见下）→ ② **音源分离** ✅
     （HTDemucs v4，**MIT**（源自 Meta 的 Demucs），209 MB，**手写移植进 `crates/local-ai/src/models/demucs.rs`**，
-    用自己的 `ort` rc.13；`stem-splitter-core` 因精确锁 rc.11 被弃用）→ ③ 歌声替换
-    `SoulX-Singer-SVC`（Apache-2.0，~2.8 GB，上游只有 `.pt` → **自建 ONNX 导出**）→
-    ④ MIDI 转歌声 `SoulX-Singer`（共用推理管线）→ ⑤ 生成音乐 **ACE-Step v1.5**（Apache-2.0，
+    用自己的 `ort` rc.13；`stem-splitter-core` 因精确锁 rc.11 被弃用）→ ③ **音色替换
+    `SoulX-Singer-SVC` ✅（2026-10-29）**（Apache-2.0，2.23 GiB，上游只有 `.pt` →
+    **自建 7 图 ONNX 导出**，见 `2026-10-29-voice-swap-svc-design.md`）→
+    ④ **MIDI 转歌声 `SoulX-Singer` ✅（2026-10-28）**（9 图、1.44 GB，共用推理管线）→
+    ⑤ 生成音乐 **ACE-Step v1.5**（Apache-2.0，
     **现成 ONNX**：HF `shreyask/ACE-Step-v1.5-ONNX` / 魔搭 `tak916/acestep-onnx-fp16` 等；
     **走 `ort` 进程内，不引 `candle` / sidecar**）。权重 7.5–25 GB，**按需下载**。
   - **统一运行线（2026-10-11 定，纯 Rust + `ort`、保轻量）**：③④⑤ 一律「**自建或现成 ONNX →

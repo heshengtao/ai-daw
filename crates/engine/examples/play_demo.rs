@@ -54,6 +54,9 @@ fn main() {
                     duration: 0.5,
                     velocity: 100,
                     volume: 127,
+                    offset: 0.0,
+                    legato: false,
+                    expr: ai_daw_engine::model::PitchExpression::NONE,
                     lyric: None,
                 },
             },
@@ -68,6 +71,7 @@ fn main() {
         command_capacity: 64,
         scope: std::sync::Arc::new(ai_daw_engine::scope::ScopeBuffer::new(8192)),
         status: std::sync::Arc::new(SharedStatus::new()),
+        meter: None,
     };
 
     let mut host = match AudioHost::start(schedule, &registry, options) {

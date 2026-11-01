@@ -3,13 +3,17 @@
 编曲的三件事在这里：**一次写一批音符**、**批量变换律动/音域**、**检查是否与和弦和其他轨道相容**。
 工具都走同一条命令管线：一次调用 = 一个撤销步骤，人在界面上看得见、随时能撤。
 
+> **整曲从哪开始？** 先 `get_capabilities`：写歌可用就走「`compose_song` 初稿 → `separate_stems`」
+> （想改音符再 `transcribe_audio`）；不可用就走「自己写 MIDI + 自主配器/捏音色」——也就是本页。
+> 两条路线的完整步骤见 `workflow.md` 的「开工前：能力预检与路线选择」。
+
 ## 批量音符（编曲主力）
 
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
 | `add_notes` | `track`,`clip`,`notes[]`,`snap?` | 一次写入一组音符（最多 5000）。返回 `added_ids` 与片段摘要。 |
 | `replace_notes` | `track`,`clip`,`notes[]` | **原子替换**片段内全部音符；空数组 = 清空片段。 |
-| `update_notes` | `track`,`clip`,`updates[]` | 按**稳定 id** 改写：`{id, pitch?, start?, duration?, velocity?, volume?, offset?, legato?, expr?}`。 |
+| `update_notes` | `track`,`clip`,`updates[]` | 按**稳定 id** 改写：`{id, pitch?, start?, duration?, velocity?, volume?, offset?, legato?, channel?, pressure?, expr?, lyric?}`。 |
 | `remove_notes` | `track`,`clip`,`ids[]` | 按稳定 id 删除。 |
 
 `notes[]` 的字段：`pitch`（0..127）、`start`/`duration`（拍，**片段内相对**）、

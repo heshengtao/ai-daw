@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 甯冨眬鍋忓ソ涓庤交閲忛€氱煡锛坰nackbar锛夛細闈㈡澘鍙鎬т笌瀹藉害銆佸彸渚ч潰鏉跨殑鏍囩椤碉紝鎸佷箙鍖栧埌 localStorage銆?
  */
 import { defineStore } from "pinia";
@@ -20,17 +20,19 @@ export type PaneId =
   | "ops";
 
 /**
- * 榧犳爣妯″紡锛堥《鏍忎笁閫変竴锛夛細
- * - `draw`锛氬湪绌虹櫧澶勫乏閿嫋鍔?= 鐢诲嚭鐗囨 / 闊崇锛堝垱寤?/ 鎷栧姩锛夛紱
- * - `select`锛氬乏閿嫋鍔?= 妗嗛€夛紱
- * - `split`锛氬乏閿偣鍑荤墖娈?= 鍦ㄨ澶勫垏寮€锛坮azor锛夈€?
+ * 鼠标模式（工具栏五选一）：
+ * - `draw`：在空白处左键拖动 = 画出片段 / 音符（创建 / 拖动）；
+ * - `select`：左键拖动 = 框选；
+ * - `split`：左键点击片段 = 在该处切开（razor）；
+ * - `lyric`：左键点音符 = 就地填词（编排视图无作用）；
+ * - `eraser`：左键点片段 / 音符 = 直接删除（右键仍出菜单）。
  *
- * 涓夎€呭叡鐢ㄥ悓涓€涓墜鍔匡紝鍙兘闈犳ā寮忓尯鍒嗭紝鍥犳蹇呴』鐢辩敤鎴锋樉寮忛€夋嫨銆?
+ * 共用同一个手势，只能靠模式区分，因此必须由用户显式选择。
  */
-export type Tool = "draw" | "select" | "split" | "lyric";
+export type Tool = "draw" | "select" | "split" | "lyric" | "eraser";
 
 /** 鍏ㄩ儴榧犳爣妯″紡锛堥『搴忓嵆椤舵爮閲岀殑灞曠ず椤哄簭锛夈€?*/
-export const TOOLS: Tool[] = ["draw", "select", "split", "lyric"];
+export const TOOLS: Tool[] = ["draw", "eraser", "select", "split", "lyric"];
 
 /** 鍏ㄩ儴鍙敤闈㈡澘鐨勫厓鏁版嵁锛堜緵"鏂板缓鏍囩"閫夋嫨鍣ㄥ睍绀猴級銆傛枃妗堟槸 i18n key锛屾覆鏌撴椂缈昏瘧銆?*/
 export const PANES: { id: PaneId; labelKey: string; hintKey: string }[] = [
@@ -203,6 +205,16 @@ export const useLayoutStore = defineStore("layout", () => {
   // 涓や釜搴曢儴绐楁牸榛樿閮芥墦寮€锛氬畠浠槸鍚勮嚜瑙嗗浘鐨勫父瑙勫伐浣滃尯锛屼笉鏄彲閫夌殑璋冭瘯闈㈡澘銆?
   const showAutomation = ref(saved.showAutomation ?? true);
   const showControllerLane = ref(saved.showControllerLane ?? true);
+  /**
+   * 编排视图底部要让出的**总高度**（px）：自动化块 + 横向滚动条。
+   *
+   * 只存在于运行时：左侧音轨栏要用它把列表底部收在同一个位置，否则音轨栏会比编排网格
+   * 多出一截可视区，滚到底部时两边的行就错位了（音轨栏滚得更早停）。
+   * 由 `ArrangeView` 实测写入——自动化块的高度随曲线画布 / 表头变，横向滚动条的高度
+   * 也随平台与内容宽度变（`scrollbar-width: thin` 下 10px，覆盖式滚动条为 0），
+   * 都不能拿常量估。
+   */
+  const arrangeBottomInset = ref(0);
   // 榛樿 1/16锛氫笌缂栨帓瑙嗗浘姝ゅ墠鐨勫惛闄勪竴鑷达紝涔熸槸鏃嬪緥/浼村鏈€甯哥敤鐨勭粏鍒嗐€?
   const noteGrid = ref<NoteGrid>(
     NOTE_GRIDS.includes(saved.noteGrid as NoteGrid) ? (saved.noteGrid as NoteGrid) : "1/16",
@@ -405,6 +417,7 @@ export const useLayoutStore = defineStore("layout", () => {
     laneHeight,
     showAutomation,
     showControllerLane,
+    arrangeBottomInset,
     noteGrid,
     controllerTarget,
     rollScope,

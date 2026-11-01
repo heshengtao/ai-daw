@@ -5,9 +5,21 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-ort = "2.0.0-rc.13"
+# **运行期加载**（`load-dynamic`）而不是静态链接：
+# `ort-sys` 的 build 脚本在 `disable-linking` 下**直接 return**——不下载预编译包、不链接、
+# 不解析 dist 的特性集，于是 EP 特性只是纯 API 开关，不会因为「平台没有对应构建」而炸。
+# ONNX Runtime 本体由 `backend::runtime` 从应用配置目录里的 `runtime/ort/<id>/` 加载，
+# 也就可以「装 CPU 一份，CUDA 按需下载」。
+#
+# `api-24`：锁定 C API 的低水位（ORT 1.24 起都能加载，含 1.30），这样 DirectML 那份
+# 只发布到 1.24 的构建也能用。升级 ORT 时把 `backend::runtime::ORT_VERSION` 一起换。
+ort = { version = "2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "half",
+    "load-dynamic",
+    "api-24",
+] }
 # 半精度张量：fp16 导出的 9 张图（歌声合成）在边界上要 f16 ↔ f32 转换。
-# 只是 API 层，不改变 `ort` 下载的预编译二进制，因此不影响各平台的零下载回落。
 half = "2"
 # 频谱：窗函数 + FFT（与 `crates/analysis` 同一个库，MIT OR Apache-2.0）。
 rustfft = "6"
@@ -16,19 +28,37 @@ rustfft = "6"
 # 只当库用：关掉 `cli` / `decode`——音频已经在本地解码成 f32，直接喂单声道采样即可。
 beat-this = { version = "1", default-features = false }
 
-# 执行后端的 API gate——**必须按 target 条件启用**（见上）。
-#
-# 裸依赖时 resolve 的回落逻辑本就拿到「含该 EP」的构建：`aarch64-apple-darwin` 只有
-# `coreml` / `coreml,webgpu` 两个预编译构建；`x86_64-pc-windows-msvc` 有 `directml`。
-# 所以加特性只解锁 `ort::ep::{CoreML, DirectML}` API，**不改变下载的二进制、不改变包体积**
-# ⇒ macOS / Windows 走这两个后端是**零下载**的。
-#
-# 但 resolve 要求特性集**精确匹配**（symmetric difference == 0），在缺少对应构建的平台上开
-# 会构建失败，所以不能无条件写进 [dependencies]。
+# 执行后端的 API gate。`load-dynamic` 之后特性集不再受 dist 约束，**按平台全开**即可：
+# 拿到的是运行时那一份 dylib 里真实编进去的 EP，注册不上就回落到 CPU（见 session.rs）。
+# **macOS 保持静态链接**：它没有 CUDA，不需要运行期换 dylib；而且静态链接时 ONNX Runtime
+# 的代码本来就在 app 里（安装包大小不变），改成随包 dylib 反而多一个文件、多一次加载。
 [target.'cfg(target_os = "macos")'.dependencies]
-ort = { version = "2.0.0-rc.13", features = ["coreml", "half"] }
+ort = { version = "2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "half",
+    "api-24",
+    "coreml",
+    "download-binaries",
+    "tls-native",
+] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-ort = { version = "2.0.0-rc.13", features = ["directml", "half"] }
+ort = { version = "2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "half",
+    "load-dynamic",
+    "api-24",
+    "cuda",
+    "directml",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ort = { version = "2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "half",
+    "load-dynamic",
+    "api-24",
+    "cuda",
+] }
 
 [dev-dependencies]

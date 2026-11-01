@@ -266,6 +266,73 @@ fn seek_realigns_the_audio_cursor() {
 }
 
 #[test]
+fn muting_or_soloing_mid_playback_keeps_audio_clips_on_the_timeline() {
+    // 早先 `process_block` 对不可听的轨道整轨 `continue`，连音频读指针一起冻住了：解除静音后
+    // 片段从「按下静音那一刻」接着放，与同一时间轴上正在播的其它片段错位（整轨晚了一截）。
+    // 两种「让本轨不可听」的方式（直接静音 / 别轨独奏）走的是同一条路径，这里都验一遍。
+    const BLOCK: usize = 512;
+    let mut project = project_with_audio("/tmp/ramp.wav", 0.0, 2.0);
+    // 第二条空轨：只用来「独奏别的轨」，把第 1 轨压成不可听。
+    project.tracks.push(Track {
+        meta: None,
+        id: TrackId(2),
+        name: "Empty".into(),
+        instrument: None,
+        effects: vec![],
+        clips: vec![],
+        mixer: Default::default(),
+        sends: vec![],
+        automation: vec![],
+    });
+    let audio = assets("/tmp/ramp.wav", ramp(48_000));
+    let schedule = ScheduledEvents::from_project_with_assets(&project, SR, &audio);
+    let mut player = Player::new(schedule, &PluginRegistry::with_builtins(), SR, BLOCK);
+
+    let mix = |track: TrackId, mute: bool, solo: bool| TransportCommand::SetTrackMix {
+        track,
+        gain_db: 0.0,
+        pan: 0.0,
+        mute,
+        solo,
+    };
+    let mut out = vec![0.0f32; BLOCK * 2];
+
+    player.apply_command(TransportCommand::Play);
+    player.process_block(&mut out, BLOCK);
+    // 此时位置 = 512；每个不可听窗口跨 4 块（2048 帧），解除后从新位置接上。
+    let check_resume = |player: &mut Player, out: &mut [f32], position: u64| {
+        player.process_block(out, BLOCK);
+        let expected = position as f32 / 48_000.0;
+        assert!(
+            (out[0] - expected).abs() < 1e-3,
+            "轨道恢复可听后片段必须回到时间轴：期待 {expected}，实际 {}",
+            out[0]
+        );
+        assert_eq!(player.position_frames(), position + BLOCK as u64);
+    };
+
+    // ① 直接静音：输出静音，但读指针跟着走到 2560。
+    player.apply_command(mix(TrackId(1), true, false));
+    for _ in 0..4 {
+        out.fill(1.0);
+        player.process_block(&mut out, BLOCK);
+        assert_eq!(max_abs(&out), 0.0, "被静音的轨道不得出声");
+    }
+    player.apply_command(mix(TrackId(1), false, false));
+    check_resume(&mut player, &mut out, 2_560);
+
+    // ② 独奏另一条（空）轨：同样压掉第 1 轨，读指针继续走到 5120。
+    player.apply_command(mix(TrackId(2), false, true));
+    for _ in 0..4 {
+        out.fill(1.0);
+        player.process_block(&mut out, BLOCK);
+        assert_eq!(max_abs(&out), 0.0, "被独奏压掉的轨道不得出声");
+    }
+    player.apply_command(mix(TrackId(2), false, false));
+    check_resume(&mut player, &mut out, 5_120);
+}
+
+#[test]
 fn paused_player_does_not_play_audio_clips() {
     // 音频片段是时间轴内容：暂停（没 Play）时不该出声。
     let project = project_with_audio("/tmp/a.wav", 0.0, 2.0);
@@ -300,6 +367,8 @@ fn audio_and_instrument_sum_on_the_same_track() {
         plugin_id: "builtin.synth".into(),
         params: Default::default(),
         state: vec![],
+        enabled: true,
+        sidechain: None,
     });
     project.tracks[0].clips.push(Clip {
         id: ClipId(2),

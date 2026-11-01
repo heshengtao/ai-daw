@@ -2,10 +2,12 @@
 
 mod agent;
 mod ai;
+mod abc;
 mod articulation_map;
 mod assets;
 mod audio;
 mod backends;
+mod capabilities;
 mod cli;
 mod commands;
 mod cue_sheet;
@@ -14,16 +16,22 @@ mod history;
 mod logging;
 mod main_thread;
 mod manager;
+mod job;
 mod mcp;
 mod models;
 mod plugin_info;
+mod pick;
 mod plugins;
 mod presets;
 mod quarantine;
+mod runtimes;
+mod yue;
+mod yue_engine;
 mod session;
 mod singing;
 mod sound_memories;
 mod state;
+mod svc;
 mod voices;
 
 use std::sync::{Arc, OnceLock};
@@ -68,7 +76,12 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWind
                 boot_ms()
             ));
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                start_audio_after_first_paint(&window.app_handle());
+                // 页面内容已经就绪，窗口可以出来了（`visible: false` 见 tauri.conf.json：
+                // 建窗到这一刻之前窗口是隐藏的，用户看不到那块「只有底色」的黑屏）。
+                // **音频宿主不在这里启动**：装载要解码工程里的全部素材（实测 4–21 秒），
+                // 和首帧抢 CPU/磁盘会把「窗口出来」再推后十几秒。改由前端的
+                // [`app_ready`] 在挂载之后触发。
+                let _ = window.show();
             }
         },
     );
@@ -86,21 +99,6 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWind
     }
 
     builder.build()
-}
-
-/// 首帧上屏之后，再把工程装进音频宿主。
-///
-/// AU / CLAP 的 `init` / `activate` 只能在主线程上跑。启动时立刻装载的话，插件实例化会和
-/// 「建窗口 + 加载页面」抢同一条主线程——窗口先出来、内容却要等它跑完（几秒白屏）。
-/// 这里让一拍（约一帧多）再装载：用户先看到界面，随后才有声音。
-fn start_audio_after_first_paint(app: &tauri::AppHandle) {
-    let app = app.clone();
-    let _ = thread::Builder::new()
-        .name("ai-daw-first-load".into())
-        .spawn(move || {
-            thread::sleep(Duration::from_millis(120));
-            app.state::<AppState>().start_audio();
-        });
 }
 
 /// 启动传输状态推送线程。
@@ -434,16 +432,20 @@ pub fn run() {
             // **必须在任何 ort 调用之前**（只决定「用哪个 EP」，不触发加载，所以放这儿安全）。
             crate::backends::init_runtime(app.handle());
             spawn_transport_ticker(app.handle().clone(), audio);
-            // 正常的装载由 `webview 加载完成` 触发（见 `start_audio_after_first_paint`）。
-            // 页面加载事件万一没来（dev server 没起、页面报错），也不能永远没声音：
-            // 兜底定时器与页面事件共用同一个一次性开关，谁先到算谁的。留 3 秒是给慢机器
-            // 的页面加载让路——正常路径约 0.4 秒就装好了，这个定时器根本轮不到。
+            // 正常的装载由前端的 `app_ready`（挂载之后的第一帧）触发。
+            // 页面万一根本没起来（dev server 没起、页面脚本报错），也不能永远不出窗口、
+            // 永远没声音：留一个 6 秒的兜底，超时就直接显示窗口并装载。
+            // （以前这里是 3 秒就装载音频，而 WebView 起得比 3 秒慢时它几乎每次都会抢跑，
+            //  正是「打开应用黑屏十几秒」的来源之一。）
             {
                 let handle = app.handle().clone();
                 let _ = thread::Builder::new()
                     .name("ai-daw-first-load-fallback".into())
                     .spawn(move || {
-                        thread::sleep(Duration::from_millis(3000));
+                        thread::sleep(Duration::from_secs(6));
+                        if let Some(window) = handle.get_webview_window("main") {
+                            let _ = window.show();
+                        }
                         handle.state::<AppState>().start_audio();
                     });
             }
@@ -575,6 +577,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::app_ready,
             commands::get_project,
             commands::add_track,
             commands::remove_track,
@@ -662,6 +665,7 @@ pub fn run() {
             commands::transport_set_metronome,
             commands::save_project,
             commands::export_score,
+            commands::export_midi,
             commands::import_project,
             commands::read_import_file,
             commands::open_project,
@@ -694,6 +698,16 @@ pub fn run() {
             commands::close_effect_plugin_window,
             commands::effect_plugin_window_open,
             commands::set_effect_params,
+            commands::set_effect_enabled,
+            commands::set_effect_sidechain,
+            commands::add_master_effect,
+            commands::remove_master_effect,
+            commands::move_master_effect,
+            commands::set_master_effect_param,
+            commands::set_master_effect_enabled,
+            commands::set_master_effect_sidechain,
+            commands::mixer_meters,
+            commands::clear_meter_clip,
             commands::scope_data,
             commands::audition_note,
             commands::audition_midi_events,
@@ -746,6 +760,10 @@ pub fn run() {
             singing::singing_status,
             singing::singing_render,
             singing::singing_cancel,
+            svc::svc_models,
+            svc::svc_status,
+            svc::svc_render,
+            svc::svc_cancel,
             models::model_catalog,
             models::model_download,
             models::model_cancel,
@@ -754,6 +772,30 @@ pub fn run() {
             models::model_resolve_url,
             backends::ai_backend_info,
             backends::ai_set_backend,
+            runtimes::ai_runtime_catalog,
+            runtimes::ai_runtime_discover,
+            runtimes::ai_runtime_import,
+            runtimes::ai_runtime_install,
+            runtimes::ai_runtime_cancel,
+            runtimes::ai_runtime_busy,
+            runtimes::ai_runtime_remove,
+            runtimes::ai_runtime_reveal,
+            yue::ai_yue_catalog,
+            yue::ai_yue_install,
+            yue::ai_yue_import,
+            yue::ai_yue_cancel,
+            yue::ai_yue_remove,
+            yue::ai_yue_reveal,
+            yue::ai_yue_select,
+            yue_engine::ai_yue_engine_status,
+            yue_engine::ai_yue_engine_log,
+            yue_engine::ai_yue_cuda_perf,
+            yue_engine::ai_yue_set_cuda_perf,
+            yue_engine::ai_yue_engine_start,
+            yue_engine::ai_yue_engine_stop,
+            yue_engine::ai_yue_compose,
+            yue_engine::ai_yue_compose_cancel,
+            yue_engine::ai_yue_import_abc,
         ])
         .build(tauri::generate_context!())
         .expect("error while building ai-daw");
@@ -768,6 +810,8 @@ pub fn run() {
             }
             // 会话缓存之外再留一份历史：下次打开即使点了「新建工程」，也能从历史回去。
             commands::remember_before_exit(app_handle);
+            // 别把 yue-server 留在后台占着几个 GB 显存。
+            yue_engine::shutdown_on_exit();
         }
     });
 }

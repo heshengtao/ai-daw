@@ -66,8 +66,10 @@ pub fn transcribe(
     sample_rate: f64,
     progress: Progress,
 ) -> Result<Vec<DetectedNote>, String> {
-    let path = model_path().ok_or_else(|| format!("未找到 Basic Pitch 权重（{}）", super::BASIC_PITCH_FILE))?;
-    let mut session = crate::backend::session::build(&path, crate::backend::session::GraphRole::BasicPitch)?;
+    let path = model_path()
+        .ok_or_else(|| format!("未找到 Basic Pitch 权重（{}）", super::BASIC_PITCH_FILE))?;
+    let mut session =
+        crate::backend::session::build(&path, crate::backend::session::GraphRole::BasicPitch)?;
 
     let mono = crate::to_mono(samples, channels);
     if mono.is_empty() || sample_rate <= 0.0 {
@@ -172,7 +174,8 @@ pub fn transcribe(
 fn frames_to_time(idx: usize) -> f64 {
     let t = idx as f64 * FFT_HOP as f64 / SR;
     let window = (idx as f64 / ANNOT_N_FRAMES as f64).floor();
-    let offset = (FFT_HOP as f64 / SR) * (ANNOT_N_FRAMES as f64 - (N_SAMPLES as f64 / FFT_HOP as f64))
+    let offset = (FFT_HOP as f64 / SR)
+        * (ANNOT_N_FRAMES as f64 - (N_SAMPLES as f64 / FFT_HOP as f64))
         + MAGIC_ALIGNMENT_OFFSET;
     t - offset * window
 }
@@ -236,7 +239,9 @@ fn decode(frames: &[f32], onsets: &[f32], n_frames: usize, progress: Progress) -
 
     // 第二遍：melodia 后处理——反复取剩余能量最大的点，向两侧扩展。
     // 维护「每行的最大值」以免每次迭代都全量扫描（长素材下快一个数量级）。
-    let mut row_peaks: Vec<f32> = (0..n_frames).map(|t| row_max(&remaining, t, bins)).collect();
+    let mut row_peaks: Vec<f32> = (0..n_frames)
+        .map(|t| row_max(&remaining, t, bins))
+        .collect();
     let mut guard = 0usize;
     let max_iters = n_frames * bins + 1;
     loop {
@@ -327,7 +332,14 @@ fn clear_cross(buf: &mut [f32], n_frames: usize, bins: usize, t: usize, f: usize
     }
 }
 
-fn column_mean(frames: &[f32], n_frames: usize, bins: usize, start: usize, end: usize, f: usize) -> f32 {
+fn column_mean(
+    frames: &[f32],
+    n_frames: usize,
+    bins: usize,
+    start: usize,
+    end: usize,
+    f: usize,
+) -> f32 {
     let end = end.min(n_frames);
     if start >= end {
         return 0.0;
@@ -340,7 +352,10 @@ fn column_mean(frames: &[f32], n_frames: usize, bins: usize, start: usize, end: 
 }
 
 fn row_max(buf: &[f32], t: usize, bins: usize) -> f32 {
-    buf[t * bins..(t + 1) * bins].iter().copied().fold(f32::NEG_INFINITY, f32::max)
+    buf[t * bins..(t + 1) * bins]
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max)
 }
 
 fn global_max(row_max: &[f32]) -> Option<(f32, usize)> {
@@ -364,7 +379,11 @@ fn infer_onsets(onsets: &[f32], frames: &[f32], n_frames: usize, bins: usize) ->
     for n in 1..=n_diff {
         for t in 0..n_frames {
             let cur = frames[t * bins..(t + 1) * bins].as_ref();
-            let prev = if t >= n { Some(&frames[(t - n) * bins..(t - n + 1) * bins]) } else { None };
+            let prev = if t >= n {
+                Some(&frames[(t - n) * bins..(t - n + 1) * bins])
+            } else {
+                None
+            };
             for f in 0..bins {
                 let d = cur[f] - prev.map(|p| p[f]).unwrap_or(0.0);
                 let v = if n == 1 { d } else { d.min(diff[t * bins + f]) };
@@ -470,7 +489,10 @@ mod tests {
     #[test]
     fn transcribes_a_synthetic_tone_when_the_model_is_present() {
         if model_path().is_none() {
-            eprintln!("跳过：未找到 {}（先跑 tools/fetch-models.sh）", super::super::BASIC_PITCH_FILE);
+            eprintln!(
+                "跳过：未找到 {}（先跑 tools/fetch-models.sh）",
+                super::super::BASIC_PITCH_FILE
+            );
             return;
         }
         let sr = 22_050.0;

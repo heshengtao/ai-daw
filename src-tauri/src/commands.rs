@@ -2452,6 +2452,35 @@ pub fn retry_audio(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// 前端首帧已经上屏：显示主窗口，并在这之后再把工程装进音频宿主。
+///
+/// **为什么由前端触发**：页面「加载完成」不等于「画出来了」，而装载音频宿主会解码工程
+/// 里的全部素材（本机实测 4–21 秒）、还可能实例化插件。这段活只要抢在首帧之前，WebView
+/// 的首次绘制就会被拖到十几秒之后——用户看到的就是「窗口出来了，里面黑很久」。
+/// 以前后端在页面加载完成（或等 3 秒）时自己装载，这两个时机都早于真正的首帧。
+#[tauri::command]
+pub fn app_ready(window: tauri::WebviewWindow) {
+    // 合成器 / 效果器 / 插件宿主这些独立窗口没有工程要装。
+    if window.label() != "main" {
+        return;
+    }
+    // 正常路径下窗口已经由「webview 加载完成」显示过了；这里再兜一次（幂等），
+    // 也覆盖「前端先调 app_ready、加载事件后到」的顺序。
+    let _ = window.show();
+    crate::logging::info(format!(
+        "[startup] 前端首帧就绪（进程入口 +{} ms），开始装载音频宿主",
+        crate::boot_ms()
+    ));
+    let app = window.app_handle().clone();
+    let _ = std::thread::Builder::new()
+        .name("ai-daw-first-load".into())
+        .spawn(move || {
+            // 让首帧真的上屏，再开始吃 CPU / 磁盘。
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            app.state::<AppState>().start_audio();
+        });
+}
+
 /// 本机可用的音频输出设备。
 #[tauri::command]
 pub fn list_output_devices() -> Vec<ai_daw_engine::realtime::OutputDeviceInfo> {
@@ -2559,6 +2588,32 @@ pub async fn export_score(path: String, xml: String) -> Result<String, String> {
             }
         }
         std::fs::write(&path, xml).map_err(|e| e.to_string())?;
+        Ok(path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 把当前工程导出为标准 MIDI 文件（SMF type 1），返回写入的绝对路径。
+///
+/// `tracks` 给定时只导出这些轨道；音频轨不进 MIDI（没有音符可写）。与 `export_score` 一样
+/// 是**只读派生**：不改工程状态、不进历史。时间轴按「1 拍 = 四分音符」换算，速度图与拍号图
+/// 写进指挥轨，`cc:` 自动化曲线与逐音歌词一并带过去。
+#[tauri::command]
+pub async fn export_midi(
+    state: State<'_, AppState>,
+    path: String,
+    tracks: Option<Vec<u64>>,
+) -> Result<String, String> {
+    let project = state.engine.lock().unwrap().project().clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let bytes = ai_daw_engine::midi::project_to_smf(&project, tracks.as_deref())?;
+        if let Some(dir) = std::path::Path::new(&path).parent() {
+            if !dir.as_os_str().is_empty() {
+                std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
         Ok(path)
     })
     .await
@@ -3811,10 +3866,180 @@ pub fn set_effect_params(
     project
 }
 
+/// 启用 / 旁通轨道上的一个效果器（不重建播放器，出声不断）。
+#[tauri::command]
+pub fn set_effect_enabled(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    index: usize,
+    enabled: bool,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::SetEffectEnabled {
+            track: TrackId(track),
+            index,
+            enabled,
+        },
+    )
+}
+
+/// 设置轨道效果器的侧链来源（`None` = 不接）。
+#[tauri::command]
+pub fn set_effect_sidechain(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    index: usize,
+    source: Option<u64>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::SetEffectSidechain {
+            track: TrackId(track),
+            index,
+            source: source.map(TrackId),
+        },
+    )
+}
+
+/// 在主总线插入链末尾追加一个效果器。
+#[tauri::command]
+pub fn add_master_effect(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    plugin_id: String,
+) -> Project {
+    run(&app, &state, Command::AddMasterEffect { plugin_id })
+}
+
+/// 从主总线插入链移除一个效果器（按链内序号）。
+#[tauri::command]
+pub fn remove_master_effect(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    index: usize,
+) -> Project {
+    run(&app, &state, Command::RemoveMasterEffect { index })
+}
+
+/// 调整主总线效果器在链中的位置。
+#[tauri::command]
+pub fn move_master_effect(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    from: usize,
+    to: usize,
+) -> Project {
+    run(&app, &state, Command::MoveMasterEffect { from, to })
+}
+
+/// 设置主总线效果器参数。
+#[tauri::command]
+pub fn set_master_effect_param(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    index: usize,
+    param: String,
+    value: f32,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::SetMasterEffectParam {
+            index,
+            param,
+            value,
+        },
+    )
+}
+
+/// 启用 / 旁通主总线上的一个效果器。
+#[tauri::command]
+pub fn set_master_effect_enabled(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    index: usize,
+    enabled: bool,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::SetMasterEffectEnabled { index, enabled },
+    )
+}
+
+/// 设置主总线效果器的侧链来源（`None` = 不接）。
+#[tauri::command]
+pub fn set_master_effect_sidechain(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    index: usize,
+    source: Option<u64>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::SetMasterEffectSidechain {
+            index,
+            source: source.map(TrackId),
+        },
+    )
+}
+
+/// 一帧电平表读数。
+#[derive(serde::Serialize)]
+pub struct MeterSnapshot {
+    /// 主输出（推子之后）。
+    pub master: ai_daw_engine::meter::MeterValue,
+    /// 各轨（推子后、进 master 之前）。
+    pub tracks: Vec<TrackMeter>,
+}
+
+/// 一条轨道的表读数。
+#[derive(serde::Serialize)]
+pub struct TrackMeter {
+    /// 轨道 id。
+    pub track: u64,
+    /// 读数。
+    pub value: ai_daw_engine::meter::MeterValue,
+}
+
+/// 读一次电平表：取走峰值并清零（界面按自己的节奏轮询）。
+///
+/// 槽位号 = 轨道在工程里的下标；这里再换算回 `TrackId`，界面不必知道槽位约定。
+#[tauri::command]
+pub fn mixer_meters(state: State<'_, AppState>) -> MeterSnapshot {
+    let (tracks, meter) = {
+        let engine = state.engine.lock().unwrap();
+        let ids: Vec<u64> = engine.project().tracks.iter().map(|t| t.id.0).collect();
+        (ids, std::sync::Arc::clone(&state.audio.meter()))
+    };
+    MeterSnapshot {
+        master: meter.read_master(),
+        tracks: tracks
+            .into_iter()
+            .enumerate()
+            .map(|(slot, track)| TrackMeter {
+                track,
+                value: meter.read_track(slot),
+            })
+            .collect(),
+    }
+}
+
+/// 清掉所有削波锁存（界面点表头时调用）。
+#[tauri::command]
+pub fn clear_meter_clip(state: State<'_, AppState>) {
+    state.audio.meter().clear_clip();
+}
+
 // ---------------------------------------------------------------------------
 // 插件原生界面（独立窗口）
 // ---------------------------------------------------------------------------
-
 /// 槽位在宿主窗口 label 里的短标记：`i` = 乐器，`f<n>` = 效果链第 n 个。
 fn slot_tag(slot: PluginSlot) -> String {
     match slot {

@@ -20,11 +20,19 @@ const router = createRouter({
   ],
 });
 
-/** 最近一个非设置页的工作区路径，供「从设置返回」使用。 */
+/**
+ * 最近一个**干活用**的工作区路径，供「从设置返回」使用。
+ *
+ * 设置页与独立窗口（合成器 / 效果器 / 插件宿主）不算：否则从设置返回会回到设置。
+ */
 export const lastWorkspace = ref("/arrange");
 
 router.afterEach((to) => {
-  if (!to.path.startsWith("/settings")) lastWorkspace.value = to.path;
+  if (to.path.startsWith("/settings")) return;
+  if (to.path.startsWith("/synth") || to.path.startsWith("/effect") || to.path.startsWith("/blank")) {
+    return;
+  }
+  lastWorkspace.value = to.path;
 });
 
 export default router;

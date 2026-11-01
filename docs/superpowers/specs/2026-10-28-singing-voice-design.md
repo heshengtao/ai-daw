@@ -210,9 +210,10 @@ SoulX-Singer 的 zero-shot 能力本来就是「参考音频决定音色」。�
   重新加载 + 删除条目连音频一起删」；早期版本还在运行中的 App 里跑通过「从轨道存 10 秒参考 →
   `reference_voice` 唱歌 → 改名 → 删除」的完整链路（当时的存储路径后来并入了
   `sound-memory-audio/`，命令与交互不变）。
-- **国内外双源**：16 个文件各自带 `hf/intl`（`ailm32442/SoulX-Singer-onnx-fp16`）与
-  `modelscope/cn` 两条源，逐文件 sha256 与魔搭一致（上传脚本 `tools/mirror-soulx-hf.sh`，
-  写完用 `cargo test -p ai-daw-local-ai models::catalog` 复核）；下载器按网络位置排序、
+- **国内外双源（两档都有）**：16 个文件各自带 `hf/intl`（fp16 → `ailm32442/SoulX-Singer-onnx-fp16`，
+  fp32 → `ailm32442/SoulX-Singer-onnx-fp32`）与 `modelscope/cn` 两条源，逐文件 sha256 与魔搭一致
+  （上传脚本 `tools/mirror-soulx-hf.sh`，fp32 档加 `--fp32`；写完用
+  `cargo test -p ai-daw-local-ai models::catalog` 复核）；下载器按网络位置排序、
   一边失败自动换另一边。
 
 ## 8.1 两个模型档（fp16 / fp32）

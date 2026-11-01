@@ -17,6 +17,12 @@ import type {
   SingingArgs,
   SingingModels,
   SingingStatus,
+  SvcModels,
+  SvcStatus,
+  SwapArgs,
+  YueComposeArgs,
+  YueEngineStatus,
+  YueJobStatus,
   VoiceEntry,
   VoiceSaveArgs,
   AnalysisReport,
@@ -24,6 +30,8 @@ import type {
   BackendInfo,
   BackendParam,
   BackendPreference,
+  RuntimeStatus,
+  DiscoveredRuntime,
   CatalogPlugin,
   Clip,
   ClipPlacement,
@@ -51,6 +59,7 @@ import type {
   ProxyStatus,
   McpConfig,
   McpStatus,
+  MeterSnapshot,
   MpeConfig,
   MidiEventAt,
   ArticulationMapSummary,
@@ -155,6 +164,25 @@ function mockCliStatus(): CliStatus {
 let aiState: AiStatus = { running: false, kind: null, progress: 0, message: null };
 let aiTimer: number | null = null;
 let singingState: SingingStatus = { running: false, progress: 0, message: null };
+let svcState: SvcStatus = { running: false, progress: 0, message: null };
+/** YuE2 写歌（浏览器预览里是假的：没有引擎进程，也没有几十 GB 的权重）。 */
+let yueEngine: YueEngineStatus = {
+  state: "stopped",
+  port: null,
+  device: "cpu",
+  model: "",
+  message: null,
+  log: "",
+};
+let yueJob: YueJobStatus = {
+  state: "idle",
+  elapsed: 0,
+  message: null,
+  audio: null,
+  score: null,
+  seconds: null,
+};
+let yueTimer: number | null = null;
 /** 浏览器预览的人声条目也存在「音色记忆」里（与真实后端一致：一个库，靠 voice 字段区分）。 */
 function readVoices(): VoiceEntry[] {
   return readSoundMemories()
@@ -172,6 +200,7 @@ function readVoices(): VoiceEntry[] {
     }));
 }
 let singingTimer: number | null = null;
+let svcTimer: number | null = null;
 
 function emitAi(): void {
   window.dispatchEvent(new CustomEvent("ai-daw-mock-ai", { detail: { ...aiState } }));
@@ -179,6 +208,18 @@ function emitAi(): void {
 
 function emitSinging(): void {
   window.dispatchEvent(new CustomEvent("ai-daw-mock-singing", { detail: { ...singingState } }));
+}
+
+function emitSvc(): void {
+  window.dispatchEvent(new CustomEvent("ai-daw-mock-svc", { detail: { ...svcState } }));
+}
+
+function emitYueEngine(): void {
+  window.dispatchEvent(new CustomEvent("ai-daw-mock-yue-engine", { detail: { ...yueEngine } }));
+}
+
+function emitYueJob(): void {
+  window.dispatchEvent(new CustomEvent("ai-daw-mock-yue-job", { detail: { ...yueJob } }));
 }
 
 /** 插件管理器预览里的下载进度定时器（一次只跑一个）。 */
@@ -274,6 +315,60 @@ let mockModels: ModelStatus[] = [
     path: null,
     downloadable: true,
   }),
+  // 歌声合成 / 音色替换：预览里不真跑推理，但**档位与 id 跟后端一致**，
+  // 这样「记住选的是哪一档」这类交互在预览里也能照常验证。
+  oneFile({
+    id: "soulx-singer-fp16",
+    name: "SoulX-Singer（歌声合成 · fp16）",
+    feature: "sing",
+    license: "Apache-2.0",
+    approx_bytes: 1503238553,
+    filename: "soulx-singer-fp16.onnx",
+    bundled: false,
+    installed: false,
+    bytes: null,
+    path: null,
+    downloadable: true,
+  }),
+  oneFile({
+    id: "soulx-singer-fp32",
+    name: "SoulX-Singer（歌声合成 · fp32 · 高精度）",
+    feature: "sing",
+    license: "Apache-2.0",
+    approx_bytes: 3010314240,
+    filename: "soulx-singer-fp32.onnx",
+    bundled: false,
+    installed: false,
+    bytes: null,
+    path: null,
+    downloadable: true,
+  }),
+  oneFile({
+    id: "soulx-svc-fp16hq",
+    name: "SoulX-Singer-SVC（音色替换 · fp16_hq · 推荐）",
+    feature: "voice_swap",
+    license: "Apache-2.0",
+    approx_bytes: 2581594112,
+    filename: "soulx-svc-fp16hq.onnx",
+    bundled: false,
+    installed: false,
+    bytes: null,
+    path: null,
+    downloadable: true,
+  }),
+  oneFile({
+    id: "soulx-svc-fp32",
+    name: "SoulX-Singer-SVC（音色替换 · fp32 · 最高保真）",
+    feature: "voice_swap",
+    license: "Apache-2.0",
+    approx_bytes: 3221225472,
+    filename: "soulx-svc-fp32.onnx",
+    bundled: false,
+    installed: false,
+    bytes: null,
+    path: null,
+    downloadable: true,
+  }),
 ];
 
 /** 模型下载预览定时器（一次只跑一个）。 */
@@ -285,28 +380,153 @@ function emitModel(p: ModelProgress): void {
 
 /** 预览里的后端选择（内存）。设备固定成 Apple M4，所以 CoreML 可选。 */
 let mockBackendPreference: BackendPreference = "cpu";
+/** 预览里「已装好」的运行时（内存）。 */
+const mockRuntimes = new Set<string>(["coreml"]);
 
 function mockBackendInfo(): BackendInfo {
+  const runtimeInstalled = (kind: string) =>
+    kind === "cpu" || mockRuntimes.has(kind);
   return {
     preference: mockBackendPreference,
     current: mockBackendPreference,
+    recommended: "cpu",
     platform: "macos / aarch64 · Apple M4",
+    loaded_runtime: "coreml",
+    restart_required: false,
+    ep_ready: true,
     options: [
-      { kind: "cpu", label: "CPU", note: "纯 CPU（默认，全平台可用）", available: true },
+      {
+        kind: "cpu",
+        label: "CPU",
+        note: "纯 CPU（默认，全平台可用）",
+        available: true,
+        runtime: "coreml",
+        runtime_installed: runtimeInstalled("coreml"),
+        download_bytes: 0,
+        missing: [],
+      },
       {
         kind: "coreml",
         label: "Apple CoreML",
-        note: "Apple 神经引擎 / GPU（实测在本机的这些小模型上比 CPU 慢）",
+        note: "Apple 神经引擎 / GPU（在这套小模型上实测不一定更快）",
         available: true,
+        runtime: "coreml",
+        runtime_installed: runtimeInstalled("coreml"),
+        download_bytes: 0,
+        missing: [],
       },
       {
         kind: "directml",
         label: "DirectML",
         note: "DirectX 12 硬件加速（Windows）",
         available: false,
+        runtime: "directml",
+        runtime_installed: false,
+        download_bytes: 0,
+        missing: [],
+      },
+      {
+        kind: "cuda12",
+        label: "CUDA 12",
+        note: "NVIDIA 显卡加速（CUDA 12；老卡 / 驱动 < 580）",
+        available: false,
+        runtime: "cuda",
+        runtime_installed: false,
+        download_bytes: 153_100_313,
+        missing: ["cudart", "cublas", "cufft", "cudnn"],
+      },
+      {
+        kind: "cuda13",
+        label: "CUDA 13",
+        note: "NVIDIA 新卡加速（CUDA 13；Turing 起且驱动 580+）",
+        available: false,
+        runtime: "cuda13",
+        runtime_installed: false,
+        download_bytes: 153_100_313,
+        missing: ["cudart13", "cublas13", "cufft13", "cudnn13"],
       },
     ],
   };
+}
+
+function mockRuntimeCatalog(): RuntimeStatus[] {
+  return [
+    {
+      id: "coreml",
+      label: "ONNX Runtime（CoreML）",
+      note: "Apple Silicon；含 CoreML EP，CPU 也用它",
+      bytes: 42_373_116,
+      installed: true,
+      selected: true,
+      bundled: true,
+      loaded: true,
+      dir: "/tmp/ai-daw-runtime/ort/coreml",
+      group: "ort",
+      core: false,
+      automatic: false,
+      device: "",
+    },
+    {
+      id: "audiocpp-cpu",
+      label: "audio.cpp 引擎 · CPU",
+      note: "纯 CPU，任何机器都能跑；慢，但不用显卡",
+      bytes: 30_409_504,
+      installed: mockRuntimes.has("audiocpp-cpu"),
+      selected: true,
+      bundled: false,
+      loaded: false,
+      dir: "/tmp/ai-daw-runtime/audiocpp/cpu",
+      group: "audiocpp",
+      core: true,
+      automatic: true,
+      device: "cpu",
+    },
+    {
+      id: "audiocpp-vulkan",
+      label: "audio.cpp 引擎 · Vulkan",
+      note: "通用 GPU（NVIDIA / AMD / Intel），需要显卡驱动带 Vulkan 1.2",
+      bytes: 82_088_153,
+      installed: mockRuntimes.has("audiocpp-vulkan"),
+      selected: false,
+      bundled: false,
+      loaded: false,
+      dir: "/tmp/ai-daw-runtime/audiocpp/vulkan",
+      group: "audiocpp",
+      core: false,
+      automatic: true,
+      device: "cpu",
+    },
+    {
+      id: "audiocpp-cuda12",
+      label: "audio.cpp 引擎 · CUDA 12",
+      note: "NVIDIA 老卡 / 老驱动（GTX 900/10、V100、驱动 < 580）",
+      bytes: 1_073_187_384,
+      installed: mockRuntimes.has("audiocpp-cuda12"),
+      selected: false,
+      bundled: false,
+      loaded: false,
+      dir: "/tmp/ai-daw-runtime/audiocpp/cuda12",
+      group: "audiocpp",
+      core: false,
+      automatic: true,
+      device: "cpu",
+    },
+    {
+      id: "audiocpp-cuda13",
+      label: "audio.cpp 引擎 · CUDA 13",
+      note: "NVIDIA 新卡（RTX 40/50、驱动 580+），最快",
+      bytes: 852_794_068,
+      installed: mockRuntimes.has("audiocpp-cuda13"),
+      selected: false,
+      bundled: false,
+      loaded: false,
+      dir: "/tmp/ai-daw-runtime/audiocpp/cuda13",
+      group: "audiocpp",
+      core: false,
+      automatic: true,
+      device: "cpu",
+    },
+  ];
 }
 
 /** 是否使用假数据。 */
@@ -560,6 +780,7 @@ let mockNetwork: StoreNetwork = {
   model_mirrors: [],
   model_source_preference: "auto",
   backend_preference: "cpu",
+  yue_cuda_perf: true,
 };
 
 /** 铺上默认分轨的空工程。`names` 是界面按当前语言给出的分轨名（按模板顺序）。 */
@@ -1205,6 +1426,7 @@ export const mockApi = {
       model_source_preference: modelSourcePreference,
       // 执行后端偏好不在这里改（由 `aiSetBackend` 单独管）。
       backend_preference: mockNetwork.backend_preference,
+      yue_cuda_perf: mockNetwork.yue_cuda_perf,
     };
     return { ...mockNetwork };
   },
@@ -1300,11 +1522,25 @@ export const mockApi = {
     return prefix.includes("{url}") ? prefix.replace("{url}", url) : `${prefix}${url}`;
   },
 
-  onModelEvent: (): (() => void) => () => {
-    if (mockModelTimer !== null) {
-      window.clearInterval(mockModelTimer);
-      mockModelTimer = null;
-    }
+  /**
+   * 订阅下载进度（预览里就是 `window` 上的自定义事件）。
+   *
+   * 以前这里只返回一个「清定时器」的函数、**没有真的订阅**：于是预览里任何模型下载都
+   * 收不到 `done`，`busyId` 永远不清、卡片一直显示「正在下载模型…」——看起来像卡死。
+   */
+  onModelEvent: (handler: (p: ModelProgress) => void): (() => void) => {
+    const listener = (event: Event): void => {
+      const detail = (event as CustomEvent<ModelProgress>).detail;
+      if (detail) handler(detail);
+    };
+    window.addEventListener("ai-daw-mock-model", listener);
+    return () => {
+      window.removeEventListener("ai-daw-mock-model", listener);
+      if (mockModelTimer !== null) {
+        window.clearInterval(mockModelTimer);
+        mockModelTimer = null;
+      }
+    };
   },
 
   // ---- 执行后端（预览：内存里的假清单 + 假进度）----
@@ -1315,6 +1551,87 @@ export const mockApi = {
     mockBackendPreference = preference;
     return mockBackendInfo();
   },
+
+  // ---- YuE2 写歌（预览里全程是假的：没有引擎进程，也没有几十 GB 权重）----
+  yueEngineStatus: (): YueEngineStatus => ({ ...yueEngine }),
+
+  yueEngineLog: (_lines?: number): string =>
+    "[mock] audiocpp_server 预览模式没有真实进程\n[mock] 引擎日志会显示在这里",
+
+  yueImportAbc: (_path: string): string => "已把谱面导入工程（预览模式）",
+
+  yueCudaPerf: (): boolean => mockNetwork.yue_cuda_perf,
+
+  yueSetCudaPerf: (enabled: boolean): void => {
+    mockNetwork = { ...mockNetwork, yue_cuda_perf: enabled };
+  },
+
+  yueEngineStart: (_model?: string | null): void => {
+    yueEngine = {
+      ...yueEngine,
+      state: "ready",
+      port: 18087,
+      device: "vulkan",
+      model: "yue2-q8-0",
+      message: null,
+    };
+    emitYueEngine();
+  },
+
+  yueEngineStop: (): void => {
+    yueEngine = { ...yueEngine, state: "stopped", port: null };
+    emitYueEngine();
+  },
+
+  yueCompose: (_args?: YueComposeArgs): void => {
+    if (yueTimer !== null) return;
+    yueJob = { state: "running", elapsed: 0, message: null, audio: null, score: null, seconds: null };
+    emitYueJob();
+    yueTimer = window.setInterval(() => {
+      yueJob = { ...yueJob, elapsed: yueJob.elapsed + 1 };
+      if (yueJob.elapsed >= 6) {
+        window.clearInterval(yueTimer!);
+        yueTimer = null;
+        yueJob = {
+          ...yueJob,
+          state: "done",
+          message: "已生成「YuE2 写歌」：90 秒（预览模式没有真音频）",
+          seconds: 90,
+        };
+      }
+      emitYueJob();
+    }, 1000);
+  },
+
+  yueComposeCancel: (): void => {
+    if (yueTimer !== null) {
+      window.clearInterval(yueTimer);
+      yueTimer = null;
+    }
+    yueJob = { ...yueJob, state: "cancelled", message: "已取消" };
+    emitYueJob();
+  },
+
+  onYueEngineEvent: (): (() => void) => {
+    window.setTimeout(emitYueEngine, 0);
+    return () => {};
+  },
+
+  onYueJobEvent: (): (() => void) => () => {},
+
+  aiRuntimeCatalog: (): RuntimeStatus[] => mockRuntimeCatalog(),
+
+  aiRuntimeInstall: (id: string): void => {
+    mockRuntimes.add(id);
+  },
+
+  aiRuntimeRemove: (id: string): void => {
+    mockRuntimes.delete(id);
+  },
+
+  aiRuntimeDiscover: (): DiscoveredRuntime[] => [],
+  aiRuntimeImport: (_dir: string): void => {},
+  aiRuntimeReveal: (_id: string): void => {},
 
   // ---- 插件原生界面（浏览器里没有原生窗口） ----
 
@@ -1374,6 +1691,90 @@ export const mockApi = {
         if (Number.isFinite(value)) fx.params[id] = value;
       }
     }),
+
+  setEffectEnabled: (trackId: number, index: number, enabled: boolean): Project =>
+    commit(() => {
+      const fx = track(trackId)?.effects[index];
+      if (fx) {
+        if (enabled) delete fx.enabled;
+        else fx.enabled = false;
+      }
+    }),
+
+  setEffectSidechain: (trackId: number, index: number, source: number | null): Project =>
+    commit(() => {
+      const fx = track(trackId)?.effects[index];
+      if (!fx) return;
+      if (source === null || source === trackId) delete fx.sidechain;
+      else fx.sidechain = { track: source };
+    }),
+
+  addMasterEffect: (pluginId: string): Project =>
+    commit(() => {
+      state.master_effects = [...(state.master_effects ?? []), { plugin_id: pluginId, params: {}, state: [] }];
+    }),
+
+  removeMasterEffect: (index: number): Project =>
+    commit(() => {
+      const list = state.master_effects ?? [];
+      if (index >= 0 && index < list.length) {
+        state.master_effects = list.filter((_, i) => i !== index);
+      }
+    }),
+
+  moveMasterEffect: (from: number, to: number): Project =>
+    commit(() => {
+      const list = [...(state.master_effects ?? [])];
+      if (from < 0 || from >= list.length) return;
+      const [fx] = list.splice(from, 1);
+      if (!fx) return;
+      list.splice(Math.min(Math.max(to, 0), list.length), 0, fx);
+      state.master_effects = list;
+    }),
+
+  setMasterEffectParam: (index: number, param: string, value: number): Project =>
+    commit(() => {
+      const fx = state.master_effects?.[index];
+      if (fx && Number.isFinite(value)) fx.params[param] = value;
+    }),
+
+  setMasterEffectEnabled: (index: number, enabled: boolean): Project =>
+    commit(() => {
+      const fx = state.master_effects?.[index];
+      if (!fx) return;
+      if (enabled) delete fx.enabled;
+      else fx.enabled = false;
+    }),
+
+  setMasterEffectSidechain: (index: number, source: number | null): Project =>
+    commit(() => {
+      const fx = state.master_effects?.[index];
+      if (!fx) return;
+      if (source === null) delete fx.sidechain;
+      else fx.sidechain = { track: source };
+    }),
+
+  // 浏览器预览里的「假表」：跟着传输状态起伏，够把界面画活。
+  mixerMeters: (): MeterSnapshot => {
+    const t = performance.now() / 1000;
+    const playing = transport.playing === true;
+    const level = (seed: number): number =>
+      playing ? Math.min(1, 0.15 + 0.55 * Math.abs(Math.sin(t * 1.7 + seed))) : 0;
+    return {
+      master: { peak_l: level(0.3), peak_r: level(0.9), gr_db: 0, clipped: false },
+      tracks: state.tracks.map((tr, i) => ({
+        track: tr.id,
+        value: {
+          peak_l: level(i * 0.7),
+          peak_r: level(i * 0.7 + 0.4),
+          gr_db: 0,
+          clipped: false,
+        },
+      })),
+    };
+  },
+
+  clearMeterClip: (): void => {},
 
   listPresets: (): Preset[] => readPresets(),
 
@@ -2373,6 +2774,8 @@ export const mockApi = {
   exportAudio: (path: string): string => path,
   // 浏览器预览没有文件系统：乐谱内容在前端生成，这里只回一个假路径。
   exportScore: (path: string): string => path,
+  // MIDI 由后端从工程生成；预览模式只回假路径。
+  exportMidi: (path: string): string => path,
   // 浏览器预览里没有真实文件可读：导入流程会以「文件为空」报错，属预期行为。
   readImportFile: (): Uint8Array => new Uint8Array(0),
   importProject: (next: Project): Project => {
@@ -2629,6 +3032,46 @@ export const mockApi = {
       if (singingTimer !== null) {
         window.clearInterval(singingTimer);
         singingTimer = null;
+      }
+    };
+  },
+
+  // ---- 音色替换（预览：模拟进度，不真正推理）----
+
+  svcModels: (): SvcModels => ({
+    installed: false,
+    dir: null,
+    approx_bytes: 2_397_914_964,
+  }),
+  svcStatus: (): SvcStatus => ({ ...svcState }),
+  svcRender: (_args?: SwapArgs): void => {
+    if (svcTimer !== null) return;
+    svcState = { running: true, progress: 0, message: null };
+    emitSvc();
+    svcTimer = window.setInterval(() => {
+      svcState.progress = Math.min(1, svcState.progress + 0.04);
+      if (svcState.progress >= 1) {
+        window.clearInterval(svcTimer!);
+        svcTimer = null;
+        svcState = { running: false, progress: 0, message: "浏览器预览：未做真实替换" };
+      }
+      emitSvc();
+    }, 200);
+  },
+  svcCancel: (): void => {
+    if (svcTimer !== null) {
+      window.clearInterval(svcTimer);
+      svcTimer = null;
+    }
+    svcState = { running: false, progress: 0, message: "已停止" };
+    emitSvc();
+  },
+  onSvcEvent: (): (() => void) => {
+    window.setTimeout(emitSvc, 0);
+    return () => {
+      if (svcTimer !== null) {
+        window.clearInterval(svcTimer);
+        svcTimer = null;
       }
     };
   },

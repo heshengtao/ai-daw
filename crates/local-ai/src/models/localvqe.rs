@@ -47,7 +47,8 @@ pub fn enhance(
     sample_rate: f64,
     progress: Progress,
 ) -> Result<Vec<f32>, String> {
-    let path = model_path().ok_or_else(|| format!("未找到 LocalVQE 权重（{}）", super::LOCALVQE_FILE))?;
+    let path =
+        model_path().ok_or_else(|| format!("未找到 LocalVQE 权重（{}）", super::LOCALVQE_FILE))?;
     let mut session =
         crate::backend::session::build(&path, crate::backend::session::GraphRole::LocalVqe)?;
 
@@ -61,8 +62,9 @@ pub fn enhance(
         let mono: Vec<f32> = (0..frames).map(|i| samples[i * channels + ch]).collect();
         let base = ch as f32 / channels as f32;
         let span = 1.0 / channels as f32;
-        let Some(clean) = enhance_channel(&mut session, &mono, sample_rate, &|p| progress(base + p * span))
-        else {
+        let Some(clean) = enhance_channel(&mut session, &mono, sample_rate, &|p| {
+            progress(base + p * span)
+        }) else {
             return Ok(out); // 取消：返回已完成的声道
         };
         let n = frames.min(clean.len());
@@ -88,7 +90,11 @@ fn enhance_channel(
     let mut acc = vec![0.0f32; audio.len()];
     let mut norm = vec![0.0f32; audio.len()];
 
-    let chunks = if audio.len() <= CHUNK { 1 } else { (audio.len() - 1) / HOP + 1 };
+    let chunks = if audio.len() <= CHUNK {
+        1
+    } else {
+        (audio.len() - 1) / HOP + 1
+    };
     let mut chunk = vec![0.0f32; CHUNK];
     for c in 0..chunks {
         if !progress(c as f32 / chunks as f32) {
@@ -131,7 +137,10 @@ mod tests {
     #[test]
     fn silence_stays_silent_when_the_model_is_present() {
         if model_path().is_none() {
-            eprintln!("跳过：未找到 {}（先跑 tools/fetch-models.sh）", super::super::LOCALVQE_FILE);
+            eprintln!(
+                "跳过：未找到 {}（先跑 tools/fetch-models.sh）",
+                super::super::LOCALVQE_FILE
+            );
             return;
         }
         let n = 32_000;
@@ -160,7 +169,10 @@ mod tests {
         let before = rms(&noise);
         let out = enhance(&noise, 1, sr, &|_| true).expect("降噪应成功");
         let after = rms(&out);
-        assert!(after < before * 0.2, "纯噪声应被显著压低：{before} -> {after}");
+        assert!(
+            after < before * 0.2,
+            "纯噪声应被显著压低：{before} -> {after}"
+        );
     }
 
     #[test]

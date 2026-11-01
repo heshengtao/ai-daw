@@ -59,8 +59,8 @@ pub fn separate(
     sample_rate: f64,
     progress: Progress,
 ) -> Result<super::Stems, String> {
-    let path = model_path()
-        .ok_or_else(|| format!("未找到音源分离权重（{}）", super::HTDEMUCS_FILE))?;
+    let path =
+        model_path().ok_or_else(|| format!("未找到音源分离权重（{}）", super::HTDEMUCS_FILE))?;
     let mut session =
         crate::backend::session::build(&path, crate::backend::session::GraphRole::Demucs)?;
 
@@ -93,7 +93,11 @@ pub fn separate(
     // 四条分轨在模型采样率下的交错 L/R 缓冲（长度 2*n）。
     let mut out: [Vec<f32>; 4] = std::array::from_fn(|_| vec![0.0f32; 2 * n]);
 
-    let num_windows = if n <= WINDOW_HOP { 1 } else { (n - 1) / WINDOW_HOP + 1 };
+    let num_windows = if n <= WINDOW_HOP {
+        1
+    } else {
+        (n - 1) / WINDOW_HOP + 1
+    };
     let mut lwin = vec![0.0f32; T];
     let mut rwin = vec![0.0f32; T];
     let mut pos = 0usize;
@@ -128,7 +132,8 @@ pub fn separate(
     }
 
     // 重采样回源采样率，并按输入的声道数拼装。
-    let finish = |interleaved: &[f32]| super::finish_stem(interleaved, channels, sample_rate, frames);
+    let finish =
+        |interleaved: &[f32]| super::finish_stem(interleaved, channels, sample_rate, frames);
     let [drums, bass, other, vocals] = out;
     Ok(super::Stems {
         stems: vec![
@@ -295,10 +300,8 @@ fn istft_cac_stereo(
         for fi in 0..f_bins {
             let b = fi * frames + fr;
             buf_l[fi] = Complex32::new(spec[b], spec[f_bins * frames + b]);
-            buf_r[fi] = Complex32::new(
-                spec[2 * f_bins * frames + b],
-                spec[3 * f_bins * frames + b],
-            );
+            buf_r[fi] =
+                Complex32::new(spec[2 * f_bins * frames + b], spec[3 * f_bins * frames + b]);
         }
         for fi in 1..f_bins {
             buf_l[n_fft - fi] = buf_l[fi].conj();
@@ -374,7 +377,9 @@ mod tests {
         let skip = t / 8;
         let mut max_err = 0.0f32;
         for i in skip..t - skip {
-            max_err = max_err.max((l2[i] - left[i]).abs()).max((r2[i] - right[i]).abs());
+            max_err = max_err
+                .max((l2[i] - left[i]).abs())
+                .max((r2[i] - right[i]).abs());
         }
         assert!(max_err < 1e-3, "重建误差过大：{max_err}");
     }
@@ -429,7 +434,11 @@ mod tests {
         let audio = vec![0.0f32; 1_000 * 2];
         let _ = tone(440.0, 0.02, 44_100.0);
         let stems = separate(&audio, 2, 44_100.0, &|_| false).expect("取消也应正常返回");
-        let drums = stems.stems.iter().find(|(n, _)| *n == "drums").map(|(_, v)| v);
+        let drums = stems
+            .stems
+            .iter()
+            .find(|(n, _)| *n == "drums")
+            .map(|(_, v)| v);
         assert_eq!(drums.map(Vec::len).unwrap_or(audio.len()), audio.len());
     }
 }
