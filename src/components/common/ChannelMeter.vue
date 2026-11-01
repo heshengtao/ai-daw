@@ -14,12 +14,10 @@ const i18n = useI18n();
 const props = withDefaults(
   defineProps<{
     value: ChannelLevel;
-    /** 紧凑模式：右侧面板里的小表（不画刻度、不画 GR）。 */
-    compact?: boolean;
-    /** 无障碍标签（屏幕阅读器读这个通道叫什么）。 */
+    /** 无障碍标签 / 悬停提示里的通道名。 */
     label?: string;
   }>(),
-  { compact: false, label: "" },
+  { label: "" },
 );
 
 const emit = defineEmits<{ (e: "reset"): void }>();
@@ -68,24 +66,27 @@ const title = computed(() => {
 <template>
   <div
     class="meter"
-    :class="{ compact, clipped }"
+    :class="{ clipped }"
     role="img"
     :aria-label="title"
     :title="title"
     @click="emit('reset')"
   >
-    <span class="clip-led" :class="{ on: clipped }" :title="i18n.t('meter.clipHint')" />
-    <div class="bars">
-      <div class="bar" :title="`L ${dbText(value.l)} dBFS`">
-        <span class="fill" :style="{ height: `${left * 100}%` }" />
-        <span v-if="holdLeft > 0" class="hold" :style="{ bottom: `${holdLeft * 100}%` }" />
-      </div>
-      <div class="bar" :title="`R ${dbText(value.r)} dBFS`">
-        <span class="fill" :style="{ height: `${right * 100}%` }" />
-        <span v-if="holdRight > 0" class="hold" :style="{ bottom: `${holdRight * 100}%` }" />
+    <!-- 灯与两条柱同一个「芯」里：灯按柱子的中线居中，并且**排在柱子上方**（不是浮在上面） -->
+    <div class="core">
+      <span class="clip-led" :class="{ on: clipped }" :title="i18n.t('meter.clipHint')" />
+      <div class="bars">
+        <div class="bar" :title="`L ${dbText(value.l)} dBFS`">
+          <span class="fill" :style="{ height: `${left * 100}%` }" />
+          <span v-if="holdLeft > 0" class="hold" :style="{ bottom: `${holdLeft * 100}%` }" />
+        </div>
+        <div class="bar" :title="`R ${dbText(value.r)} dBFS`">
+          <span class="fill" :style="{ height: `${right * 100}%` }" />
+          <span v-if="holdRight > 0" class="hold" :style="{ bottom: `${holdRight * 100}%` }" />
+        </div>
       </div>
     </div>
-    <div v-if="!compact" class="gr" :class="{ active: gr > 0.01 }">
+    <div class="gr" :class="{ active: gr > 0.01 }">
       <span class="gr-fill" :style="{ height: `${gr * 100}%` }" />
     </div>
   </div>
@@ -100,22 +101,23 @@ const title = computed(() => {
   width: 20px;
   min-width: 20px;
   height: 100%;
-  padding: 5px 0 0;
   cursor: pointer;
   user-select: none;
 }
-.meter.compact {
-  width: 12px;
-  min-width: 12px;
-  gap: 2px;
+/* 灯 + 两条柱：同一个竖列，灯在柱子上方、按柱子中线居中 */
+.core {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
 }
 .clip-led {
-  position: absolute;
-  top: 0;
-  left: 50%;
+  flex: 0 0 auto;
+  align-self: center;
   width: 6px;
   height: 6px;
-  margin-left: -3px;
   border-radius: 50%;
   background-color: rgb(var(--md-on-surface) / 0.12);
   box-shadow: 0 0 0 1px rgb(var(--md-outline-variant) / 0.7);
@@ -188,8 +190,5 @@ const title = computed(() => {
   left: 0;
   right: 0;
   background-color: rgb(var(--md-tertiary, 120 120 120));
-}
-.meter.compact .bars {
-  gap: 1px;
 }
 </style>
