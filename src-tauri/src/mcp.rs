@@ -1779,10 +1779,151 @@ pub(crate) struct ImportArticulationMapArgs {
     default: Option<String>,
 }
 
+// ---- AI 后端 / 运行时 / 引擎参数（与界面共用同一套命令） ----
+
+/// 运行时 id（`runtimes` 目录里的稳定标识，如 `ort-cpu` / `cuda12`）。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct RuntimeIdArgs {
+    /// 运行时 id（`list_runtimes` 返回的 `id`）。
+    id: String,
+}
+
+/// 模型 id（`list_models` 返回的 `id`）。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ModelIdArgs {
+    /// 模型 id。
+    id: String,
+}
+
+/// 执行后端偏好（`cpu` / `coreml` / `directml` / `cuda12` / `cuda13`）。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SetBackendArgs {
+    /// 后端标识；用 `get_ai_backend` 的 `recommended` 拿推荐值。
+    preference: String,
+}
+
+/// 启动 YuE2 引擎。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct StartYueEngineArgs {
+    /// 模型 id；省略 = 已安装的默认档。
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// 读引擎日志。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct EngineLogArgs {
+    /// 取最后多少行（默认 200）。
+    #[serde(default)]
+    lines: Option<usize>,
+}
+
+/// 切换 CUDA 性能档。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct CudaPerfArgs {
+    /// `true` = 高性能（更吃显存），`false` = 省显存。
+    enabled: bool,
+}
+
+/// AI 写歌（YuE2）：风格 + 歌词（或 ABC 谱）→ 新轨道。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ComposeSongArgs {
+    /// 风格标签（逗号分隔，例如 `pop, female vocal, city pop`）。
+    #[serde(default)]
+    style: String,
+    /// 歌词（带 `[Verse]` / `[Chorus]` 结构标签）。
+    #[serde(default)]
+    lyrics: String,
+    /// 直接给一段 ABC 谱；留空 = 让模型自己写。
+    #[serde(default)]
+    abc: String,
+    /// 目标时长（秒，15–360；默认 120）。
+    #[serde(default)]
+    duration: Option<f32>,
+    /// 流匹配步数（1–64；默认 8）。
+    #[serde(default)]
+    steps: Option<u32>,
+    /// 种子（-1 = 随机，>=0 可复现）。
+    #[serde(default)]
+    seed: Option<i64>,
+    /// 结构模式：`full`（带和弦）/ `melody`（只要旋律）/ `off`（跳过符号阶段）。
+    #[serde(default)]
+    cot: Option<String>,
+    /// CFG 强度；省略用协议默认。
+    #[serde(default)]
+    cfg_scale: Option<f32>,
+    /// 权重 id；省略 = 已安装的默认档。
+    #[serde(default)]
+    model: Option<String>,
+    /// 结果插到这条轨道下面（省略 = 追加到末尾）。
+    #[serde(default)]
+    after_track: Option<u64>,
+    /// 新轨道名。
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// 导出 MIDI 文件。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ExportMidiArgs {
+    /// 目标文件路径（`.mid`）。
+    path: String,
+    /// 只导出这些轨道；省略 = 全部。
+    #[serde(default)]
+    tracks: Option<Vec<u64>>,
+}
+
+/// 音色替换（SoulX-SVC）。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SwapVoiceArgs {
+    /// 目标音频轨（要换音色的那条人声）。
+    track: u64,
+    /// 指定片段 id；省略 = 这条轨第一个音频片段。
+    #[serde(default)]
+    clip: Option<u64>,
+    /// 参考音色：音频文件路径。
+    #[serde(default)]
+    reference: Option<String>,
+    /// 参考音色：这条轨的第一个音频片段。
+    #[serde(default)]
+    reference_track: Option<u64>,
+    /// 参考音色：人声音色库条目 id（优先级最高）。
+    #[serde(default)]
+    reference_voice: Option<String>,
+    /// 模型：`soulx-svc-fp16hq` / `soulx-svc-fp32`；省略 = 已装默认档。
+    #[serde(default)]
+    model: Option<String>,
+    /// 采样步数（8–64；默认 32）。
+    #[serde(default)]
+    steps: Option<u32>,
+    /// 噪声种子（同输入 + 同种子 = 同一条输出）。
+    #[serde(default)]
+    seed: Option<u64>,
+    /// 整体移调（半音，-24..=24）。
+    #[serde(default)]
+    pitch_shift: Option<i32>,
+    /// 新轨道名。
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// 混音电平预览。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct PreviewMixArgs {
+    /// 只看这条轨（单独渲染它）；省略 = 整首混音。
+    #[serde(default)]
+    track: Option<u64>,
+    /// 起始拍（省略 = 从头）。
+    #[serde(default)]
+    start_beat: Option<f64>,
+    /// 结束拍（省略 = 到结尾）。
+    #[serde(default)]
+    end_beat: Option<f64>,
+}
+
 // ---------------------------------------------------------------------------
 // 工具实现层（与协议无关）
 // ---------------------------------------------------------------------------
-
 /// 工具的**实现**：与 rmcp 无关，写操作统一走 [`commands::run_agent_as`]。
 ///
 /// rmcp 的 `#[tool]` 处理器与内置「写歌智能体」的循环**共用这一份实现**，避免出现两套会
@@ -5801,6 +5942,268 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         ))
     }
 
+    // ---- AI 后端 / 运行时 / 引擎（与界面共用同一套命令） ----
+
+    /// 线性峰值 → dBFS；静音给 -120（不给 -inf，JSON 里 -Infinity 不是合法数字）。
+    fn to_dbfs(peak: f32) -> f64 {
+        if peak > 1e-6 {
+            20.0 * (peak as f64).log10()
+        } else {
+            -120.0
+        }
+    }
+
+    /// 各功能的前置条件探针：能跑 / 缺什么 / 怎么补 / 替代方案。
+    pub(crate) fn get_capabilities(app: &AppHandle) -> Result<String, String> {
+        json_s(&crate::capabilities::report(app))
+    }
+
+    /// 当前 AI 任务状态（是否在跑、进度、消息）。
+    pub(crate) fn get_ai_status(app: &AppHandle) -> Result<String, String> {
+        let state = app.state::<AppState>();
+        json_s(&crate::ai::ai_status(state))
+    }
+
+    /// 取消当前 AI 任务（下一次进度回调时停下，已写入的内容不回滚）。
+    pub(crate) fn cancel_ai_task(app: &AppHandle) -> Result<String, String> {
+        let state = app.state::<AppState>();
+        crate::ai::ai_cancel(state);
+        Ok("已请求取消：当前 AI 任务会在下一次进度回调时停下。已写进工程的部分不会自动回滚，必要时 undo。".into())
+    }
+
+    /// 执行后端现状：偏好 / 当前 / 推荐 / 各后端可用性与运行时就位情况。
+    pub(crate) fn get_ai_backend(app: &AppHandle) -> Result<String, String> {
+        json_s(&crate::backends::ai_backend_info(app.clone()))
+    }
+
+    /// 保存执行后端偏好。
+    pub(crate) fn set_ai_backend(app: &AppHandle, args: SetBackendArgs) -> Result<String, String> {
+        let raw = args.preference.trim().to_lowercase();
+        let preference: crate::manager::BackendPreference =
+            serde_json::from_value(serde_json::Value::String(raw.clone())).map_err(|_| {
+                format!("未知后端：{raw}（可用：cpu / coreml / directml / cuda12 / cuda13）")
+            })?;
+        let info = crate::backends::ai_set_backend(app.clone(), preference)?;
+        json_s(&info)
+    }
+
+    /// 列出可安装 / 已安装的推理运行时。
+    pub(crate) fn list_runtimes(app: &AppHandle) -> Result<String, String> {
+        json_s(&crate::runtimes::ai_runtime_catalog(app.clone()))
+    }
+
+    /// **高风险**：下载并安装一个推理运行时（几十到几百 MB）。
+    pub(crate) fn install_runtime(app: &AppHandle, args: RuntimeIdArgs) -> Result<String, String> {
+        crate::runtimes::ai_runtime_install(app.clone(), args.id.clone())?;
+        Ok(format!("运行时 {} 已安装", args.id))
+    }
+
+    /// 移除一个已安装的运行时（释放磁盘）。
+    pub(crate) fn remove_runtime(app: &AppHandle, args: RuntimeIdArgs) -> Result<String, String> {
+        crate::runtimes::ai_runtime_remove(app.clone(), args.id.clone())?;
+        Ok(format!("运行时 {} 已移除", args.id))
+    }
+
+    /// 删除一个已下载的模型权重。
+    pub(crate) fn remove_model(app: &AppHandle, args: ModelIdArgs) -> Result<String, String> {
+        crate::models::model_remove(app.clone(), args.id.clone())?;
+        Ok(format!("模型 {} 已删除", args.id))
+    }
+
+    /// 启动 YuE2 写歌引擎（首次要加载几分钟），返回随后的引擎状态。
+    pub(crate) fn start_yue_engine(
+        app: &AppHandle,
+        args: StartYueEngineArgs,
+    ) -> Result<String, String> {
+        crate::yue_engine::ai_yue_engine_start(app.clone(), args.model)?;
+        json_s(&crate::yue_engine::ai_yue_engine_status())
+    }
+
+    /// 停止 YuE2 引擎（同时结束在跑的生成）。
+    pub(crate) fn stop_yue_engine(app: &AppHandle) -> Result<String, String> {
+        crate::yue_engine::ai_yue_engine_stop(app.clone())?;
+        Ok("引擎已停止".into())
+    }
+
+    /// 读引擎日志尾部（定位「为什么起不来」）。
+    pub(crate) fn get_yue_engine_log(
+        _app: &AppHandle,
+        args: EngineLogArgs,
+    ) -> Result<String, String> {
+        let log = crate::yue_engine::ai_yue_engine_log(args.lines);
+        json_s(&serde_json::json!({ "log": log }))
+    }
+
+    /// 切换 CUDA 性能档（更吃显存 / 更省显存）。
+    pub(crate) fn set_yue_cuda_perf(
+        app: &AppHandle,
+        args: CudaPerfArgs,
+    ) -> Result<String, String> {
+        crate::yue_engine::ai_yue_set_cuda_perf(app.clone(), args.enabled)?;
+        Ok(format!(
+            "CUDA 性能档已{}",
+            if args.enabled { "打开" } else { "关闭" }
+        ))
+    }
+
+    /// AI 写歌：风格 + 歌词（或 ABC）→ 新轨道。离线渲染，几分钟起步。
+    pub(crate) fn compose_song(
+        app: &AppHandle,
+        args: ComposeSongArgs,
+    ) -> Result<String, String> {
+        let request = crate::yue_engine::ComposeArgs {
+            style: args.style,
+            lyrics: args.lyrics,
+            abc: args.abc,
+            duration: args.duration,
+            steps: args.steps,
+            seed: args.seed,
+            cot: args.cot,
+            cfg_scale: args.cfg_scale,
+            model: args.model,
+            after_track: args.after_track,
+            name: args.name,
+        };
+        crate::yue_engine::compose_blocking(app, request)
+    }
+
+    /// 把工程导出成标准 MIDI 文件（多轨、含速度图与拍号图）。
+    pub(crate) fn export_midi(app: &AppHandle, args: ExportMidiArgs) -> Result<String, String> {
+        let state = app.state::<AppState>();
+        let project = state.engine.lock().unwrap().project().clone();
+        let bytes = ai_daw_engine::midi::project_to_smf(&project, args.tracks.as_deref())?;
+        let path = std::path::Path::new(&args.path);
+        if let Some(dir) = path.parent() {
+            if !dir.as_os_str().is_empty() {
+                std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::write(path, bytes).map_err(|e| e.to_string())?;
+        Ok(format!(
+            "已导出 MIDI：{}（{} 字节{}）",
+            args.path,
+            path.metadata().map(|m| m.len()).unwrap_or(0),
+            args.tracks
+                .as_ref()
+                .map(|t| format!("，仅 {} 条轨道", t.len()))
+                .unwrap_or_default()
+        ))
+    }
+
+    /// 音色替换（SoulX-SVC）：目标人声换参考声线，结果写成源轨下面的新音频轨。
+    pub(crate) fn swap_voice(app: &AppHandle, args: SwapVoiceArgs) -> Result<String, String> {
+        let request = crate::svc::SwapArgs {
+            track: args.track,
+            clip: args.clip,
+            reference: args.reference,
+            reference_track: args.reference_track,
+            reference_voice: args.reference_voice,
+            model: args.model,
+            steps: args.steps,
+            seed: args.seed,
+            pitch_shift: args.pitch_shift,
+            name: args.name,
+        };
+        crate::svc::render_blocking(app, &request)
+    }
+
+    /// 混音电平预览：离线渲染（整首，或只 solo 一条轨）并报响度 / 峰值。
+    pub(crate) fn preview_track_mix(
+        app: &AppHandle,
+        args: PreviewMixArgs,
+    ) -> Result<String, String> {
+        let mut inputs = commands::render_inputs(&app.state::<AppState>());
+        let range = resolve_beat_range(&inputs.project, args.start_beat, args.end_beat)?;
+        if let Some(track) = args.track {
+            mute_other_tracks(&mut inputs.project, &[track])?;
+        }
+        // 渲染前把这条轨的混音参数记下来（`inputs.project` 会被移进渲染器）。
+        let mixer = args.track.and_then(|id| {
+            inputs.project.track(TrackId(id)).map(|t| {
+                serde_json::json!({
+                    "track": id,
+                    "name": t.name,
+                    "gain_db": t.mixer.gain_db,
+                    "pan": t.mixer.pan,
+                    "mute": t.mixer.mute,
+                    "solo": t.mixer.solo,
+                    "sends": t.sends.len(),
+                    "effects": t.effects.len(),
+                })
+            })
+        });
+        let transport = inputs.project.transport.clone();
+        let warnings = std::sync::Arc::clone(&inputs.warnings);
+        let sample_rate = FALLBACK_SAMPLE_RATE;
+        let buffer = commands::render_offline(inputs, sample_rate, 0.0);
+        let buffer = match range {
+            Some((start, end)) => {
+                slice_render_by_beats(&buffer, &transport, sample_rate, start, end, 0.0)
+            }
+            None => buffer,
+        };
+        if buffer.frames() == 0 {
+            return Err("渲染范围为空（检查 start_beat / end_beat）".into());
+        }
+        let report = ai_daw_analysis::analyze(buffer.data(), buffer.channels(), sample_rate as f64)
+            .map_err(|e| e.to_string())?;
+        let mut value = serde_json::json!({
+            "sample_rate": sample_rate,
+            "frames": buffer.frames(),
+            "seconds": buffer.frames() as f64 / sample_rate as f64,
+            "peak_dbfs": report.loudness.sample_peak_dbfs,
+            "true_peak_dbtp": report.loudness.true_peak_dbtp,
+            "integrated_lufs": report.loudness.integrated_lufs,
+            "rms_dbfs": report.rms_dbfs,
+        });
+        if let Some(mixer) = mixer {
+            value["mixer"] = mixer;
+        }
+        if let Some((start, end)) = range {
+            value["range"] = serde_json::json!({ "start_beat": start, "end_beat": end });
+        }
+        let warnings: Vec<String> = warnings.lock().unwrap().clone();
+        if !warnings.is_empty() {
+            value["warnings"] = serde_json::Value::from(warnings);
+        }
+        json_s(&value)
+    }
+
+    /// 实时电平快照（**旁路读取**，不清零——界面轮询自己会取走）。
+    pub(crate) fn get_levels(app: &AppHandle) -> Result<String, String> {
+        let state = app.state::<AppState>();
+        let meter = state.audio.meter();
+        let project = state.engine.lock().unwrap().project().clone();
+        let master = meter.peek_master();
+        let tracks: Vec<serde_json::Value> = project
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(slot, t)| {
+                let v = meter.peek_track(slot);
+                serde_json::json!({
+                    "track": t.id,
+                    "name": t.name,
+                    "peak_dbfs": to_dbfs(v.peak_l.max(v.peak_r)),
+                    "peak_l_dbfs": to_dbfs(v.peak_l),
+                    "peak_r_dbfs": to_dbfs(v.peak_r),
+                    "gr_db": v.gr_db,
+                    "clipped": v.clipped,
+                })
+            })
+            .collect();
+        json_s(&serde_json::json!({
+            "master": {
+                "peak_dbfs": to_dbfs(master.peak_l.max(master.peak_r)),
+                "peak_l_dbfs": to_dbfs(master.peak_l),
+                "peak_r_dbfs": to_dbfs(master.peak_r),
+                "gr_db": master.gr_db,
+                "clipped": master.clipped,
+            },
+            "tracks": tracks,
+        }))
+    }
+
     // ---- 工具清单（供内置 agent 生成 OpenAI function 定义） ----
 
     /// 一个工具的对外定义：名字、描述、参数 JSON Schema。
@@ -5968,6 +6371,25 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("update_sound_memory", "只修改音色记忆的元数据（名称/描述/标签/分工），不动声音快照。", UpdateSoundMemoryArgs),
             tool_def!("delete_sound_memory", "删除一条音色记忆。**只在用户明确要求时调用**。", SoundMemoryIdArgs),
             tool_def!("apply_sound_memory", "把一条音色记忆应用到轨道：一次事务写入乐器、整条效果链、增益/声像（一个撤销步）。", ApplySoundMemoryArgs),
+            // ---- AI 后端 / 运行时 / 引擎 ----
+            tool_def!("get_capabilities", "**动手前的探针**：逐项报告本地 AI 功能现在能不能跑（写歌 / 歌声合成 / 换音色 / 音源分离 / 转 MIDI / 降噪 / 母带 / MIDI 导出），缺什么、怎么补、不能用时改走哪条内置 DSP 路线。代价大的工具（compose_song / sing_song / swap_voice）先调这个，别让用户白等几分钟。"),
+            tool_def!("get_ai_status", "当前 AI 任务状态：是否在跑、是哪个功能、进度、消息。轮询它来汇报「还要多久」。"),
+            tool_def!("cancel_ai_task", "取消当前 AI 任务（下一次进度回调时停下）。已写入工程的部分不会自动回滚，必要时 undo。"),
+            tool_def!("get_ai_backend", "推理后端现状：偏好 / 当前实际使用 / 硬件推荐，以及每个后端（cpu / coreml / directml / cuda12 / cuda13）是否可用、运行时是否就位、还差多少字节。"),
+            tool_def!("set_ai_backend", "保存推理后端偏好（cpu / coreml / directml / cuda12 / cuda13）。运行时没装时返回里会提示去 `install_runtime`；已加载的运行时要重启应用才换。", SetBackendArgs),
+            tool_def!("list_runtimes", "列出可安装 / 已安装的推理运行时（ONNX Runtime 等）及其 id、体积、是否已装、下载源。"),
+            tool_def!("install_runtime", "**高风险**：从互联网下载并安装一个推理运行时（几十到几百 MB）。**只有用户明确同意后才能调用**；不确定先 list_runtimes。", RuntimeIdArgs),
+            tool_def!("remove_runtime", "移除一个已安装的推理运行时，释放磁盘；之后依赖它的后端会不可用。", RuntimeIdArgs),
+            tool_def!("remove_model", "删除一个已下载的本地 AI 模型权重（释放磁盘）。用 list_models 查 id。", ModelIdArgs),
+            tool_def!("start_yue_engine", "启动 YuE2 写歌引擎（首次要加载几分钟），返回引擎状态。生成前必须先 ready。", StartYueEngineArgs),
+            tool_def!("stop_yue_engine", "停止 YuE2 引擎（同时结束在跑的生成）。"),
+            tool_def!("get_yue_engine_log", "读引擎日志尾部（默认 200 行）——定位「为什么起不来 / 为什么没声音」。", EngineLogArgs),
+            tool_def!("set_yue_cuda_perf", "切换 YuE2 的 CUDA 性能档：开 = 更快但更吃显存，关 = 省显存。", CudaPerfArgs),
+            tool_def!("compose_song", "**AI 写歌（YuE2）**：风格 + 歌词（或直接给 ABC 谱）→ 渲染成**新轨道**（一次撤销可整体去掉）。需要引擎已启动（start_yue_engine）且模型就位（get_capabilities）。离线渲染，一首歌几分钟起步；`cancel_ai_task` 可中止。", ComposeSongArgs),
+            tool_def!("export_midi", "把工程导出成标准 MIDI 文件（多轨、带速度图 / 拍号图 / CC 与逐音歌词）；可用 `tracks` 只导指定轨道。只读派生，不改工程、不进历史。", ExportMidiArgs),
+            tool_def!("swap_voice", "**音色替换（SoulX-SVC）**：把一条人声轨换成参考声线，旋律 / 歌词 / 节奏跟着原音频走，结果写成源轨下面的**新音频轨**（一次撤销）。目标与参考都应是单声部人声——混音先 separate_stems 取人声。离线渲染，10 秒约 1–2 分钟。", SwapVoiceArgs),
+            tool_def!("preview_track_mix", "混音电平预览：离线渲染整首（或只 solo 一条轨）并报峰值 / 真峰值 / 积分响度 / RMS，附这条轨的推子、声像、发送数与效果器数。调完推子/压缩后用它核对「到底多响」。", PreviewMixArgs),
+            tool_def!("get_levels", "实时电平快照（**不清零**，界面轮询不受影响）：主输出的峰值 / GR / 削波，以及每条轨的峰值 / GR / 削波。播放时用它回答「现在有没有信号、哪条轨在压」。"),
         ]
     }
 
@@ -6108,6 +6530,25 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             "update_sound_memory" => update_sound_memory(app, parse_args(args)?),
             "delete_sound_memory" => delete_sound_memory(app, parse_args(args)?),
             "apply_sound_memory" => apply_sound_memory(app, actor, parse_args(args)?),
+            // ---- AI 后端 / 运行时 / 引擎 ----
+            "get_capabilities" => get_capabilities(app),
+            "get_ai_status" => get_ai_status(app),
+            "cancel_ai_task" => cancel_ai_task(app),
+            "get_ai_backend" => get_ai_backend(app),
+            "set_ai_backend" => set_ai_backend(app, parse_args(args)?),
+            "list_runtimes" => list_runtimes(app),
+            "install_runtime" => install_runtime(app, parse_args(args)?),
+            "remove_runtime" => remove_runtime(app, parse_args(args)?),
+            "remove_model" => remove_model(app, parse_args(args)?),
+            "start_yue_engine" => start_yue_engine(app, parse_args(args)?),
+            "stop_yue_engine" => stop_yue_engine(app),
+            "get_yue_engine_log" => get_yue_engine_log(app, parse_args(args)?),
+            "set_yue_cuda_perf" => set_yue_cuda_perf(app, parse_args(args)?),
+            "compose_song" => compose_song(app, parse_args(args)?),
+            "export_midi" => export_midi(app, parse_args(args)?),
+            "swap_voice" => swap_voice(app, parse_args(args)?),
+            "preview_track_mix" => preview_track_mix(app, parse_args(args)?),
+            "get_levels" => get_levels(app),
             other => Err(format!("未知工具：{other}")),
         }
     }
@@ -7250,6 +7691,221 @@ impl DawMcpServer {
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
     }
+
+    // ---- AI 后端 / 运行时 / 引擎 ----
+
+    #[tool(
+        description = "**动手前的探针**：逐项报告本地 AI 功能现在能不能跑（写歌 / 歌声合成 / 换音色 / 音源分离 / 转 MIDI / 降噪 / 母带 / MIDI 导出），缺什么、怎么补、不能用时改走哪条内置 DSP 路线。代价大的工具（compose_song / sing_song / swap_voice）先调这个。",
+        annotations(title = "能力预检", read_only_hint = true, open_world_hint = false)
+    )]
+    fn get_capabilities(&self) -> Result<String, ErrorData> {
+        tools::get_capabilities(&self.app).map_err(fail)
+    }
+
+    #[tool(description = "当前 AI 任务状态：是否在跑、是哪个功能、进度、消息。")]
+    async fn get_ai_status(&self) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::get_ai_status(&app))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(description = "取消当前 AI 任务（下一次进度回调时停下）。已写入工程的部分不会自动回滚。")]
+    async fn cancel_ai_task(&self) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::cancel_ai_task(&app))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(
+        description = "推理后端现状：偏好 / 当前实际使用 / 硬件推荐，以及每个后端是否可用、运行时是否就位、还差多少字节。"
+    )]
+    async fn get_ai_backend(&self) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::get_ai_backend(&app))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(
+        description = "保存推理后端偏好（cpu / coreml / directml / cuda12 / cuda13）。运行时没装时返回里会提示去 install_runtime。"
+    )]
+    async fn set_ai_backend(
+        &self,
+        Parameters(args): Parameters<SetBackendArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::set_ai_backend(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(
+        description = "列出可安装 / 已安装的推理运行时及其 id、体积、是否已装。",
+        annotations(title = "列出推理运行时", read_only_hint = true, open_world_hint = false)
+    )]
+    fn list_runtimes(&self) -> Result<String, ErrorData> {
+        tools::list_runtimes(&self.app).map_err(fail)
+    }
+
+    #[tool(
+        description = "**高风险**：下载并安装一个推理运行时（几十到几百 MB）。只有用户明确同意后才能调用。",
+        annotations(
+            title = "下载并安装运行时（高风险）",
+            destructive_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn install_runtime(
+        &self,
+        Parameters(args): Parameters<RuntimeIdArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::install_runtime(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(description = "移除一个已安装的推理运行时，释放磁盘。")]
+    async fn remove_runtime(
+        &self,
+        Parameters(args): Parameters<RuntimeIdArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::remove_runtime(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(description = "删除一个已下载的本地 AI 模型权重（释放磁盘）。")]
+    async fn remove_model(
+        &self,
+        Parameters(args): Parameters<ModelIdArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::remove_model(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(
+        description = "启动 YuE2 写歌引擎（首次要加载几分钟），返回引擎状态。生成前必须先 ready。"
+    )]
+    async fn start_yue_engine(
+        &self,
+        Parameters(args): Parameters<StartYueEngineArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::start_yue_engine(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(description = "停止 YuE2 引擎（同时结束在跑的生成）。")]
+    async fn stop_yue_engine(&self) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::stop_yue_engine(&app))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(description = "读引擎日志尾部（默认 200 行）。")]
+    async fn get_yue_engine_log(
+        &self,
+        Parameters(args): Parameters<EngineLogArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::get_yue_engine_log(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(description = "切换 YuE2 的 CUDA 性能档：开 = 更快但更吃显存。")]
+    async fn set_yue_cuda_perf(
+        &self,
+        Parameters(args): Parameters<CudaPerfArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::set_yue_cuda_perf(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(
+        description = "**AI 写歌（YuE2）**：风格 + 歌词（或直接给 ABC 谱）→ 渲染成新轨道（一次撤销）。需要引擎已启动且模型就位。离线渲染，一首歌几分钟起步。"
+    )]
+    async fn compose_song(
+        &self,
+        Parameters(args): Parameters<ComposeSongArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::compose_song(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(
+        description = "把工程导出成标准 MIDI 文件（多轨、带速度图 / 拍号图 / CC 与逐音歌词）；可用 tracks 只导指定轨道。"
+    )]
+    async fn export_midi(
+        &self,
+        Parameters(args): Parameters<ExportMidiArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::export_midi(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(
+        description = "**音色替换（SoulX-SVC）**：把一条人声轨换成参考声线，结果写成源轨下面的新音频轨（一次撤销）。目标与参考都应是单声部人声。"
+    )]
+    async fn swap_voice(
+        &self,
+        Parameters(args): Parameters<SwapVoiceArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::swap_voice(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(
+        description = "混音电平预览：离线渲染整首（或只 solo 一条轨）并报峰值 / 真峰值 / 积分响度 / RMS，附这条轨的推子、声像、发送数与效果器数。"
+    )]
+    async fn preview_track_mix(
+        &self,
+        Parameters(args): Parameters<PreviewMixArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::preview_track_mix(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(
+        description = "实时电平快照（不清零）：主输出与每条轨的峰值 / GR / 削波。播放时用它回答「现在有没有信号、哪条轨在压」。",
+        annotations(title = "实时电平", read_only_hint = true, open_world_hint = false)
+    )]
+    fn get_levels(&self) -> Result<String, ErrorData> {
+        tools::get_levels(&self.app).map_err(fail)
+    }
 }
 
 /// `transport_set_loop` 的参数（没有轨道字段，但语义上仍是「开关」）。
@@ -7758,6 +8414,25 @@ mod tests {
             "update_sound_memory",
             "delete_sound_memory",
             "apply_sound_memory",
+            // ---- AI 后端 / 运行时 / 引擎 ----
+            "get_capabilities",
+            "get_ai_status",
+            "cancel_ai_task",
+            "get_ai_backend",
+            "set_ai_backend",
+            "list_runtimes",
+            "install_runtime",
+            "remove_runtime",
+            "remove_model",
+            "start_yue_engine",
+            "stop_yue_engine",
+            "get_yue_engine_log",
+            "set_yue_cuda_perf",
+            "compose_song",
+            "export_midi",
+            "swap_voice",
+            "preview_track_mix",
+            "get_levels",
         ];
         for name in expected {
             assert!(
@@ -8064,7 +8739,7 @@ mod tests {
     #[test]
     fn high_risk_tools_are_annotated() {
         let router = DawMcpServer::tool_router();
-        for name in ["install_plugin", "download_model"] {
+        for name in ["install_plugin", "download_model", "install_runtime"] {
             let tool = router
                 .get(name)
                 .unwrap_or_else(|| panic!("缺少工具 {name}"));
@@ -8083,7 +8758,7 @@ mod tests {
                 "{name} 必须 open_world"
             );
         }
-        for name in ["search_plugin_store", "list_models"] {
+        for name in ["search_plugin_store", "list_models", "list_runtimes", "get_capabilities", "get_levels"] {
             let tool = router
                 .get(name)
                 .unwrap_or_else(|| panic!("缺少工具 {name}"));

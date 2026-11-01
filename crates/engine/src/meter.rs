@@ -85,6 +85,17 @@ impl MeterSlot {
         }
     }
 
+    /// 读一次但**不清零**（MCP / 日志这类旁路观察用；界面轮询必须走 `take`，
+    /// 否则两边会互相把对方的峰值取走）。
+    pub fn peek(&self) -> MeterValue {
+        MeterValue {
+            peak_l: f32::from_bits(self.peak_l.load(Ordering::Relaxed)),
+            peak_r: f32::from_bits(self.peak_r.load(Ordering::Relaxed)),
+            gr_db: f32::from_bits(self.gr_db.load(Ordering::Relaxed)),
+            clipped: self.clipped.load(Ordering::Relaxed),
+        }
+    }
+
     /// 清掉削波锁存（不动峰值）。
     pub fn clear_clip(&self) {
         self.clipped.store(false, Ordering::Relaxed);
@@ -160,6 +171,16 @@ impl MeterBank {
     /// 取走主输出的读数并清零。
     pub fn read_master(&self) -> MeterValue {
         self.master.take()
+    }
+
+    /// 旁路读取某轨（不清零）。
+    pub fn peek_track(&self, slot: usize) -> MeterValue {
+        self.tracks.get(slot).map(MeterSlot::peek).unwrap_or_default()
+    }
+
+    /// 旁路读取主输出（不清零）。
+    pub fn peek_master(&self) -> MeterValue {
+        self.master.peek()
     }
 
     /// 清掉所有削波锁存。
