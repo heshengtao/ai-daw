@@ -1,14 +1,25 @@
 <script setup lang="ts">
 /**
- * 底部条：三栏网格（minmax(0,1fr) / auto / minmax(0,1fr)），中栏因此严格居中，左右容器等宽。
+ * 底部条：**两翼 + 正中播放键**。
  *
- * 按「功能相关」分三组：
- * - **左 · 编辑与工程读数**：撤销 / 重做 / 关键点 / 录音输入设备（电平即框内底色）/ 输出设备 / 工程小节数；
- * - **中 · 传输**：回到起点、录音 ｜ 播放暂停 ｜ 停止、循环；
- * - **右 · 时间与节拍**：位置读数 / 拍号 / BPM / 节拍器，再加 AI 与引擎状态。
+ * 结构上只有三个 flex 直接子项：左翼、播放键、右翼。两翼都是 `flex: 1 1 0`——
+ * 基数为 0、增长相同，所以两翼宽度**永远相等**，播放键作为中间项被钉在底栏中线上，
+ * 与两翼各塞了多少控件无关（不再靠"左右按钮数量相等"这种脆弱前提）。
  *
- * 中栏内部还有一层 `1fr auto 1fr`：**播放键左右各是一簇**，所以它恒落在底栏中线上——
- * 不再依赖「左右按钮数量相等」这个脆弱前提（节拍器搬去右栏后，靠数量已经对不齐了）。
+ * 两翼内部又是**贴住播放键**排布（左翼 `flex-end`、右翼 `flex-start`），于是底栏读作
+ * 一整条连续的控件带：左边是编辑 / 设备 / 工程读数，中间是传输，右边是时间与节拍。
+ * 富余空间只留在两端的外缘，不会再在"循环"和"时间读数"之间凭空裂出一道缝。
+ *
+ * 分组（用 1px 竖线隔开）：
+ * - 左翼：撤销 / 重做 ｜ 录音模式 + 输入设备 ｜ 工程小节数 ｜ 回到起点 + 录音；
+ * - 中：播放 / 暂停；
+ * - 右翼：停止 + 循环（+ 循环范围）｜ 位置读数 ｜ 输出设备 ｜ 拍号 / BPM / 节拍器 ｜ AI 忙碌提示 / 离线重试。
+ *
+ * 输入设备在左、输出设备在右：既是「进 → 出」的直觉，也让两翼宽度接近，
+ * 播放键居中时两侧留下的空桨不至于一边倒（左翼内容原本比右翼重得多）。
+ *
+ * 只在"有事要说"时才出现的状态：AI 忙碌胶囊（空闲时整块不渲染）、音频离线重试按钮。
+ * 采样率、实时/离线这类常驻信息不进底栏——设备提示里已有规格，设置页也有。
  *
  * 传输直接调用 `transport` store：实时播放走原生音频线程，设备不可用时自动降级为
  * 离线试听，两种模式下这些按钮的行为完全一致。
@@ -27,6 +38,8 @@ import {
   MicrophoneIcon,
 } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
+import Md3Segmented from "@/components/common/Md3Segmented.vue";
+import KeyboardIcon from "@/components/common/icons/KeyboardIcon.vue";
 import MetronomeIcon from "@/components/common/icons/MetronomeIcon.vue";
 import NumberField from "@/components/common/NumberField.vue";
 import TimeSignatureField from "@/components/common/TimeSignatureField.vue";
@@ -34,12 +47,14 @@ import Tooltip from "@/components/common/Tooltip.vue";
 import { retryAudio } from "@/api/tauri";
 import { useEngineEventsStore } from "@/stores/engineEvents";
 import { useLayoutStore } from "@/stores/layout";
+import { useMidiStore } from "@/stores/midi";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
 import { useI18n } from "@/i18n";
-import { barBeatAt, meterAt, tempoAt } from "@/utils/tempo";
+import { barBeatAt, beatsToSeconds, meterAt, tempoAt } from "@/utils/tempo";
+import type { SegmentedOption } from "@/components/common/segmented";
 
 const props = defineProps<{ aiActive: boolean }>();
 
@@ -48,11 +63,39 @@ const transport = useTransportStore();
 const timeline = useTimelineStore();
 const layout = useLayoutStore();
 const selection = useSelectionStore();
+const midi = useMidiStore();
 const i18n = useI18n();
 const aiEvents = useEngineEventsStore();
 
 /** 录音目标轨道：选中轨道，否则首轨。 */
-const recordTrack = computed(() => selection.trackId ?? store.project?.tracks[0]?.id ?? null);
+const recordTrack = computed(() => selection.track?.id ?? store.project?.tracks[0]?.id ?? null);
+
+/** 底栏录音模式小开关：音频 / MIDI。录制中只锁住显示，不影响正在进行的这一次。 */
+const recordModeOptions = computed<SegmentedOption[]>(() => [
+  {
+    value: "audio",
+    label: i18n.t("bottom.recordModeAudio"),
+    disabled: transport.recording,
+    title: i18n.t("bottom.recordModeAudioHint"),
+  },
+  {
+    value: "midi",
+    label: i18n.t("bottom.recordModeMidi"),
+    disabled: transport.recording,
+    title: i18n.t("bottom.recordModeMidiHint"),
+  },
+]);
+
+const recordMode = computed({
+  get: () => transport.recordMode,
+  set: (value: string) => transport.setRecordMode(value === "midi" ? "midi" : "audio"),
+});
+
+/** 录音键的提示：模式 + 状态一起说清楚。 */
+const recordHint = computed(() => {
+  if (transport.recording) return i18n.t("bottom.recordStop");
+  return transport.recordMode === "midi" ? i18n.t("bottom.recordMidi") : i18n.t("bottom.record");
+});
 
 /**
  * 输入设备下拉选项：首项固定「无输入设备」（id 为空串 = 关闭输入流、释放麦克风），
@@ -76,6 +119,24 @@ const inputOptions = computed(() => [
 /** 电平表填充宽度（0..100%）。 */
 const levelPct = computed(() => `${Math.round(Math.min(1, transport.inputLevelPeak) * 100)}%`);
 
+/** MIDI 输入设备下拉：录音模式为 MIDI 时替换输入组里的「麦克风 + 音频输入」块。 */
+const midiOptions = computed(() => [
+  {
+    id: "",
+    label: i18n.t("midi.inputNone"),
+    hint: i18n.t("midi.inputNoneHint"),
+  },
+  ...midi.inputs.map((d) => ({ id: d.name, label: d.name })),
+]);
+
+const midiDevice = computed({
+  get: () => midi.input ?? "",
+  set: (id: string) => void midi.select(id === "" ? null : id),
+});
+
+/** 有硬件音符正在响：给 MIDI 设备块一点活指示（没有电平表可用）。 */
+const midiActive = computed(() => midi.heldNotes.length > 0);
+
 /** 输出电平表填充宽度（0..100%）。 */
 const outputLevelPct = computed(() => `${Math.round(Math.min(1, transport.outputLevelPeak) * 100)}%`);
 
@@ -83,7 +144,7 @@ const outputLevelPct = computed(() => `${Math.round(Math.min(1, transport.output
 const outputOptions = computed(() => [
   { id: "", label: i18n.t("bottom.outputDefault"), hint: i18n.t("bottom.outputDefaultHint") },
   ...transport.outputDevices.map((d) => {
-    const parts = [`${d.sample_rate} Hz · ${d.channels}ch`];
+    const parts: string[] = [`${d.sample_rate} Hz · ${d.channels}ch`];
     if (d.is_default) parts.push(i18n.t("bottom.inputDefault"));
     return { id: d.name, label: d.name, hint: parts.join(" · ") };
   }),
@@ -116,9 +177,25 @@ async function onToggleRecord(): Promise<void> {
   await transport.startRecording(recordTrack.value, timeline.snapBeats(transport.positionBeats));
 }
 
+/** 停止键：录制中先收尾（写片段 / WAV），再回到起点。 */
+async function onStop(): Promise<void> {
+  if (transport.recording) {
+    await transport.stopRecording();
+    await transport.stop();
+    return;
+  }
+  await transport.stop();
+}
+
 onMounted(async () => {
   // 只拉设备列表，**不自动打开输入流**：麦克风只在用户显式选设备或开始录音时才被占用。
-  await Promise.all([transport.refreshInputDevices(), transport.refreshOutputDevices()]);
+  // MIDI 端口相反：它不涉及隐私、也不抢独占设备，选过的端口启动时就自动接回来。
+  await Promise.all([
+    transport.refreshInputDevices(),
+    transport.refreshOutputDevices(),
+    // MIDI 枚举 / 订阅失败不该拦住电平表与底栏其余功能。
+    midi.init().catch(() => {}),
+  ]);
   // 电平表轮询：只在底部条存在时跑。输入流没开 / 没在播放时 store 会直接归零，不发 IPC。
   levelTimer = window.setInterval(() => {
     void transport.pollInputLevel();
@@ -127,6 +204,7 @@ onMounted(async () => {
 });
 onUnmounted(() => {
   if (levelTimer !== null) window.clearInterval(levelTimer);
+  midi.dispose();
 });
 
 /** 当前工程的传输设置（分段换算用）。 */
@@ -181,11 +259,33 @@ const positionText = computed(() => {
   return `${p.bar}.${p.beatInBar}`;
 });
 
-/** 采样率展示（kHz，保留一位小数）。 */
-const rateText = computed(() => {
-  const khz = transport.effectiveSampleRate / 1000;
-  return `${khz.toFixed(1)} kHz`;
+/**
+ * 播放头的**时间**位置（秒）。
+ *
+ * 工程按拍记时间、速度可以随关键点变化，所以不能拿「拍数 × 当前 BPM」直接算——
+ * 必须走 `beatsToSeconds` 的分段换算，读数才和听到的位置一致。
+ */
+const positionSeconds = computed(() => beatsToSeconds(transport.positionBeats, settings.value));
+
+/** 时 / 分 / 秒三段（分秒补零，小时不补：超过一小时才占位，读数仍是等宽对齐）。 */
+const timeParts = computed(() => {
+  const total = Math.max(0, Math.floor(positionSeconds.value));
+  return {
+    hours: Math.floor(total / 3600),
+    minutes: String(Math.floor(total / 60) % 60).padStart(2, "0"),
+    seconds: String(total % 60).padStart(2, "0"),
+  };
 });
+
+/** 纯文本形式（tooltip / aria 用）。 */
+const timeText = computed(
+  () => `${timeParts.value.hours}:${timeParts.value.minutes}:${timeParts.value.seconds}`,
+);
+
+/** 读数的完整说明：时间 + 小节.拍（底栏只放时间，小节读数留给 tooltip）。 */
+const timeHint = computed(() =>
+  i18n.t("bottom.timeTitle", { time: timeText.value, bar: positionText.value }),
+);
 
 const isPlaying = computed(() => transport.playing);
 const isAiActive = computed(() => props.aiActive);
@@ -197,17 +297,18 @@ async function clearLoopRange(): Promise<void> {
   layout.notify(i18n.t("bottom.loopRangeCleared"));
 }
 
-/** AI 胶囊文案：代理在写时带上代理名，否则是空闲态。 */
+/**
+ * AI 胶囊文案：只在代理真的在写的时候出现（空闲时整块不渲染，底栏不留常驻状态灯）。
+ */
 const aiText = computed(() => {
-  if (!isAiActive.value) return i18n.t("bottom.aiIdle");
   const agent = aiEvents.activeAgent();
   return agent ? i18n.t("bottom.aiBusyNamed", { agent }) : i18n.t("bottom.aiBusy");
 });
 
-/** AI 胶囊 tooltip：最近由代理改动的处数与涉及的轨道。 */
+/** AI 胶囊 tooltip：本次由代理改动的处数与涉及的轨道；还没有改动时就说「正在写」。 */
 const aiHint = computed(() => {
   const actions = aiEvents.agentActions;
-  if (actions.length === 0) return i18n.t("bottom.aiNone");
+  if (actions.length === 0) return aiText.value;
   const agent = actions[actions.length - 1].agent;
   const tracks = [...new Set(actions.map((a) => a.track).filter((t): t is number => t !== null))].sort(
     (a, b) => a - b,
@@ -243,8 +344,11 @@ function onRetryAudio(): void {
 
 <template>
   <footer class="bottom-bar">
-    <!-- 左：编辑历史 + 录音输入 + 工程读数 -->
-    <div class="zone left">
+    <!--
+      左翼：编辑历史 → 录音输入 → 输出 → 工程读数 → 传输左簇。
+      `flex-end` 让它**贴住播放键**，富余空间全部留给窗口左缘。
+    -->
+    <div class="flank left">
       <Tooltip :text="i18n.t('bottom.undo')" place="above" align="center">
         <button
           class="t-btn"
@@ -273,31 +377,200 @@ function onRetryAudio(): void {
       </span>
 
       <!--
-        麦克风 / 输出：图标与设备下拉同处一行，电平直接铺成下拉框**内部的底色**。
-        这样两个设备块与撤销、小节读数同高，整条底栏只剩一条水平线，
-        电平也不再单独占一行高度。
+        输入组：录音模式 + 输入设备。模式决定这一块是「麦克风 + 电平」还是「MIDI 端口」，
+        两者必须挨着才读得懂，所以合成一组。窄窗口只藏设备下拉，模式开关留着。
       -->
-      <Tooltip class="device-tip" :text="i18n.t('bottom.recordLevel')" place="above" align="center">
-        <span class="device-block" :class="{ idle: !transport.inputActive }">
-          <MicrophoneIcon class="pick-icon" />
-          <Md3Select
-            :model-value="transport.inputDevice ?? ''"
-            :options="inputOptions"
-            :label="i18n.t('bottom.recordInputLabel')"
-            :placeholder="i18n.t('bottom.recordInputNone')"
-            @update:model-value="onSelectInput"
+      <div class="input-group">
+        <Tooltip :text="i18n.t('bottom.recordModeHint')" place="above" align="center">
+          <Md3Segmented
+            v-model="recordMode"
+            :options="recordModeOptions"
+            size="sm"
+            :aria-label="i18n.t('bottom.recordModeLabel')"
+            class="record-mode"
+          />
+        </Tooltip>
+
+        <Tooltip
+          v-if="transport.recordMode === 'audio'"
+          class="device-tip"
+          :text="i18n.t('bottom.recordLevel')"
+          place="above"
+          align="center"
+        >
+          <span class="device-block" :class="{ idle: !transport.inputActive }">
+            <MicrophoneIcon class="pick-icon" />
+            <Md3Select
+              :model-value="transport.inputDevice ?? ''"
+              :options="inputOptions"
+              :label="i18n.t('bottom.recordInputLabel')"
+              :placeholder="i18n.t('bottom.recordInputNone')"
+              @update:model-value="onSelectInput"
+            >
+              <template #background>
+                <span class="level-fill" :style="{ width: levelPct }" aria-hidden="true" />
+              </template>
+            </Md3Select>
+          </span>
+        </Tooltip>
+
+        <Tooltip
+          v-else
+          class="device-tip"
+          :text="i18n.t('midi.inputLabel')"
+          place="above"
+          align="center"
+        >
+          <span
+            class="device-block midi"
+            :class="{ idle: !midi.input, live: midiActive }"
+            @pointerdown="midi.refresh()"
           >
-            <template #background>
-              <span class="level-fill" :style="{ width: levelPct }" aria-hidden="true" />
-            </template>
-          </Md3Select>
-        </span>
+            <KeyboardIcon class="pick-icon" />
+            <Md3Select
+              v-model="midiDevice"
+              :options="midiOptions"
+              :label="i18n.t('midi.inputLabel')"
+              :placeholder="i18n.t('midi.inputNone')"
+            />
+          </span>
+        </Tooltip>
+      </div>
+
+      <span class="t-sep" />
+
+      <span class="readout">
+        <span class="strong tabular">{{ bars }}</span>
+        <span class="readout-label">{{ i18n.t("bottom.bar") }}</span>
+      </span>
+
+      <span class="t-sep" />
+
+      <!-- 传输左簇：回到起点 + 录音（与右簇的「停止 + 循环」等宽对称） -->
+      <Tooltip :text="i18n.t('bottom.toStart')" place="above" align="center">
+        <button class="t-btn" :aria-label="i18n.t('bottom.toStartLabel')" @click="transport.rewind()">
+          <BackwardIcon class="w-[17px] h-[17px]" />
+        </button>
+      </Tooltip>
+
+      <Tooltip :text="recordHint" place="above" align="center">
+        <button
+          class="rec-btn"
+          :class="{ on: transport.recording, midi: transport.recordMode === 'midi' }"
+          :disabled="recordTrack === null"
+          :aria-pressed="transport.recording"
+          :aria-label="
+            transport.recording
+              ? i18n.t('bottom.recordStopLabel')
+              : transport.recordMode === 'midi'
+                ? i18n.t('bottom.recordMidi')
+                : i18n.t('bottom.recordLabel')
+          "
+          @click="onToggleRecord"
+        >
+          <span class="rec-dot" />
+        </button>
+      </Tooltip>
+    </div>
+
+    <!-- 正中：播放 / 暂停。两翼等宽 → 它恒落在底栏中线上。 -->
+    <Tooltip
+      class="play-tip"
+      :text="isPlaying ? i18n.t('bottom.pause') : i18n.t('bottom.play')"
+      place="above"
+      align="center"
+    >
+      <button
+        class="play-btn"
+        :class="{ playing: isPlaying }"
+        :aria-label="isPlaying ? i18n.t('bottom.pauseLabel') : i18n.t('bottom.playLabel')"
+        @click="transport.toggle()"
+      >
+        <PauseIcon v-if="isPlaying" class="w-[18px] h-[18px]" />
+        <PlayIcon v-else class="w-[20px] h-[20px]" />
+      </button>
+    </Tooltip>
+
+    <!--
+      右翼：传输右簇（贴住播放键）→ 位置读数 → 拍号 / BPM / 节拍器 → 只在需要时出现的状态。
+    -->
+    <div class="flank right">
+      <Tooltip :text="i18n.t('bottom.stop')" place="above" align="center">
+        <button class="t-btn" :aria-label="i18n.t('bottom.stopLabel')" @click="onStop">
+          <StopIcon class="w-[17px] h-[17px]" />
+        </button>
+      </Tooltip>
+
+      <Tooltip :text="i18n.t('bottom.loop')" place="above" align="center">
+        <button
+          class="t-btn"
+          :class="{ on: transport.loop }"
+          :aria-pressed="transport.loop"
+          :aria-label="i18n.t('bottom.loopLabel')"
+          @click="transport.setLoop(!transport.loop)"
+        >
+          <ArrowPathIcon class="w-[17px] h-[17px]" />
+        </button>
+      </Tooltip>
+
+      <!--
+        循环范围徽标：只在标尺上划出了范围时出现。右键标尺也能取消，但那条手势太隐晦，
+        底栏给一个明面上的出口（点它即取消，并提示一下「回到整首循环」）。
+      -->
+      <Tooltip
+        v-if="transport.hasLoopRange"
+        :text="i18n.t('bottom.loopRangeClear')"
+        place="above"
+        align="center"
+      >
+        <button class="range-pill" :aria-label="i18n.t('bottom.loopRangeClear')" @click="clearLoopRange">
+          <span class="tabular">{{ transport.loopRangeLabel }}</span>
+          <XMarkIcon class="w-[12px] h-[12px]" />
+        </button>
       </Tooltip>
 
       <span class="t-sep" />
 
-      <!-- 输出：同一套结构；电平就是下拉框的底色，不再需要上方的细条。 -->
-      <Tooltip class="device-tip" :text="i18n.t('bottom.outputLevel')" place="above" align="center">
+      <!--
+        播放头位置：**时 / 分 / 秒**三段一组，上下两行（数字 + 单位）的 MD3 读数块。
+        底栏只有 60px 高，两行比「0时:01分:23秒」一行更省横向空间，也和右侧的拍号 / BPM
+        落在同一条水平线上。小节.拍 放进 tooltip——那仍然是编排时最常用的定位口径。
+      -->
+      <Tooltip :text="timeHint" place="above" align="center">
+        <span class="timecode" :class="{ on: isPlaying }" role="timer" :aria-label="timeHint">
+          <!-- 不足一小时只显示「分:秒」：多数工程都在这段，省下的宽度留给拍号 / BPM。 -->
+          <template v-if="timeParts.hours > 0">
+            <span class="timecode-cell">
+              <span class="timecode-num tabular">{{ timeParts.hours }}</span>
+              <span class="timecode-unit">{{ i18n.t("bottom.hours") }}</span>
+            </span>
+            <span class="timecode-sep" aria-hidden="true">:</span>
+          </template>
+          <span class="timecode-cell">
+            <span class="timecode-num tabular">{{ timeParts.minutes }}</span>
+            <span class="timecode-unit">{{ i18n.t("bottom.minutes") }}</span>
+          </span>
+          <span class="timecode-sep" aria-hidden="true">:</span>
+          <span class="timecode-cell sec">
+            <span class="timecode-num tabular">{{ timeParts.seconds }}</span>
+            <span class="timecode-unit">{{ i18n.t("bottom.seconds") }}</span>
+          </span>
+        </span>
+      </Tooltip>
+
+      <!--
+        输出设备（同一套结构；电平就是下拉框的底色）：夹在位置读数与拍号之间——
+        传输簇后先看时间，再是设备，最后才是拍号 / BPM 这类节拍设置。
+        输入在左、输出在右，两翼宽度也因此接近，播放键居中时两侧不至于一边倒。
+      -->
+      <span class="t-sep out-sep" />
+
+      <Tooltip
+        class="device-tip output-tip"
+        :text="i18n.t('bottom.outputLevel')"
+        place="above"
+        align="center"
+      >
         <span class="device-block" @pointerdown="onPickOutput">
           <SpeakerWaveIcon class="pick-icon" />
           <Md3Select
@@ -315,101 +588,6 @@ function onRetryAudio(): void {
 
       <span class="t-sep" />
 
-      <span class="readout">
-        <span class="strong tabular">{{ bars }}</span>
-        <span class="readout-label">{{ i18n.t("bottom.bar") }}</span>
-      </span>
-    </div>
-
-    <!-- 中：传输。左右各一簇、播放键夹在中间 → 它恒落在底栏中线上。 -->
-    <div class="core">
-      <div class="core-side left">
-        <Tooltip :text="i18n.t('bottom.toStart')" place="above" align="center">
-          <button class="t-btn" :aria-label="i18n.t('bottom.toStartLabel')" @click="transport.rewind()">
-            <BackwardIcon class="w-[17px] h-[17px]" />
-          </button>
-        </Tooltip>
-
-        <Tooltip
-          :text="transport.recording ? i18n.t('bottom.recordStop') : i18n.t('bottom.record')"
-          place="above"
-          align="center"
-        >
-          <button
-            class="rec-btn"
-            :class="{ on: transport.recording }"
-            :disabled="recordTrack === null"
-            :aria-pressed="transport.recording"
-            :aria-label="transport.recording ? i18n.t('bottom.recordStopLabel') : i18n.t('bottom.recordLabel')"
-            @click="onToggleRecord"
-          >
-            <span class="rec-dot" />
-          </button>
-        </Tooltip>
-      </div>
-
-      <Tooltip :text="isPlaying ? i18n.t('bottom.pause') : i18n.t('bottom.play')" place="above" align="center">
-        <button
-          class="play-btn"
-          :class="{ playing: isPlaying }"
-          :aria-label="isPlaying ? i18n.t('bottom.pauseLabel') : i18n.t('bottom.playLabel')"
-          @click="transport.toggle()"
-        >
-          <PauseIcon v-if="isPlaying" class="w-[18px] h-[18px]" />
-          <PlayIcon v-else class="w-[20px] h-[20px]" />
-        </button>
-      </Tooltip>
-
-      <div class="core-side right">
-        <Tooltip :text="i18n.t('bottom.stop')" place="above" align="center">
-          <button class="t-btn" :aria-label="i18n.t('bottom.stopLabel')" @click="transport.stop()">
-            <StopIcon class="w-[17px] h-[17px]" />
-          </button>
-        </Tooltip>
-
-        <Tooltip :text="i18n.t('bottom.loop')" place="above" align="center">
-          <button
-            class="t-btn"
-            :class="{ on: transport.loop }"
-            :aria-pressed="transport.loop"
-            :aria-label="i18n.t('bottom.loopLabel')"
-            @click="transport.setLoop(!transport.loop)"
-          >
-            <ArrowPathIcon class="w-[17px] h-[17px]" />
-          </button>
-        </Tooltip>
-
-        <!--
-          循环范围徽标：只在标尺上划出了范围时出现。右键标尺也能取消，但那条手势太隐晦，
-          底栏给一个明面上的出口（点它即取消，并提示一下「回到整首循环」）。
-        -->
-        <Tooltip
-          v-if="transport.hasLoopRange"
-          :text="i18n.t('bottom.loopRangeClear')"
-          place="above"
-          align="center"
-        >
-          <button
-            class="range-pill"
-            :aria-label="i18n.t('bottom.loopRangeClear')"
-            @click="clearLoopRange"
-          >
-            <span class="tabular">{{ transport.loopRangeLabel }}</span>
-            <XMarkIcon class="w-[12px] h-[12px]" />
-          </button>
-        </Tooltip>
-      </div>
-    </div>
-
-    <!-- 右：时间与节拍（位置 / 拍号 / BPM / 节拍器）+ AI 与引擎状态 -->
-    <div class="zone right">
-      <!-- 位置只给数字（`小节.拍`），名称交给 tooltip：右栏还要塞下拍号与 BPM，省掉标签更稳。 -->
-      <span class="readout" :title="i18n.t('bottom.positionTitle', { bar: positionText })">
-        <span class="strong tabular">{{ positionText }}</span>
-      </span>
-
-      <span class="t-sep" />
-
       <TimeSignatureField :num="timeSigNum" :den="timeSigDen" @change="onTimeSignature" />
       <NumberField v-model="tempo" :min="20" :max="300" label="BPM" />
       <Tooltip :text="i18n.t('bottom.metronome')" place="above" align="center">
@@ -424,41 +602,46 @@ function onRetryAudio(): void {
         </button>
       </Tooltip>
 
-      <span class="t-sep" />
+      <!--
+        状态区：只在「有事要说」时渲染，且**贴住右缘**（`margin-left: auto`）——
+        平时整块不存在，底栏右端就是空的；代理在写 / 音频离线时，提示才落在最右角，
+        不会挤动中间的传输与读数。
+      -->
+      <span v-if="isAiActive || isPreview" class="status">
+        <!-- 代理在写时才出现；空闲态不占位、不发光，底栏不留常驻状态灯。 -->
+        <Tooltip v-if="isAiActive" :text="aiHint" place="above" align="end">
+          <span class="ai-pill">
+            <span class="dot" />
+            <span class="ai-text">{{ aiText }}</span>
+          </span>
+        </Tooltip>
 
-      <Tooltip :text="aiHint" place="above" align="end">
-        <span class="ai-pill" :class="{ live: isAiActive }">
-          <span class="dot" />
-          <span class="ai-text">{{ aiText }}</span>
-        </span>
-      </Tooltip>
-      <!-- 实时可用：纯指示（与之前一致）；离线：变成可点的重试按钮，并把原因放进 tooltip。 -->
-      <span v-if="isPreview" class="engine fallback">
-        <Tooltip :text="offlineHint" place="above" align="center">
-          <button
-            class="audio-retry"
-            :aria-label="i18n.t('bottom.retryAudio')"
-            @click="onRetryAudio"
-          >
+        <!-- 实时可用时这里什么都没有；离线才长出可点的重试按钮（原因在 tooltip 里）。 -->
+        <Tooltip v-if="isPreview" :text="offlineHint" place="above" align="end">
+          <button class="audio-retry" :aria-label="i18n.t('bottom.retryAudio')" @click="onRetryAudio">
             <ArrowPathIcon class="w-[13px] h-[13px]" />
-            {{ i18n.t("bottom.offline") }}
+            {{
+              transport.previewPreparing
+                ? i18n.t("bottom.preparingPreview")
+                : i18n.t("bottom.offline")
+            }}
           </button>
         </Tooltip>
       </span>
-      <span v-else class="engine">{{ i18n.t("bottom.realtime") }} · {{ rateText }}</span>
     </div>
   </footer>
 </template>
 
 <style scoped>
-/* 三栏等宽（minmax(0,1fr) / auto / minmax(0,1fr)）→ 中栏严格居中：
-   两侧轨道允许收缩到 0，内容再多也不会把播放键挤偏。 */
+/*
+ * 两翼 + 播放键。两翼 `flex: 1 1 0`（基数 0、增长相同）→ 宽度恒相等，
+ * 中间项（播放键）因此**严格落在底栏中线上**，不论两翼各有多少控件。
+ */
 .bottom-bar {
   height: 60px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 0 14px;
   flex: 0 0 auto;
   background-color: var(--app-card);
@@ -467,36 +650,21 @@ function onRetryAudio(): void {
   letter-spacing: 0.3px;
   color: rgb(var(--md-on-surface-variant));
 }
-.zone {
+/*
+ * 翼内控件贴住播放键：左翼 `flex-end`、右翼 `flex-start`。
+ * 于是底栏读作一整条连续的控件带，富余空间只落在窗口两端。
+ */
+.flank {
+  flex: 1 1 0;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
 }
-.zone.left {
+.flank.left {
   justify-content: flex-end;
 }
-.zone.right {
-  justify-content: flex-start;
-}
-/* 中栏：左右各一簇 + 正中的播放键。`1fr auto 1fr` 让播放键**恒落在该栏中线上**，
-   与两簇各有几个按钮无关（外层等宽三栏已把中栏本身钉在底栏中线上）。 */
-.core {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  gap: 8px;
-}
-.core-side {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.core-side.left {
-  justify-content: flex-end;
-}
-.core-side.right {
+.flank.right {
   justify-content: flex-start;
 }
 .t-btn {
@@ -568,7 +736,7 @@ function onRetryAudio(): void {
   gap: 4px;
   height: 22px;
   padding: 0 8px;
-  margin-left: 4px;
+  margin-left: 2px;
   border: 0;
   border-radius: 999px;
   background-color: rgb(var(--md-primary));
@@ -587,6 +755,10 @@ function onRetryAudio(): void {
 .range-pill:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 1px;
+}
+/* 播放键：两翼等宽，所以它恒在底栏中线上；这里只需要固定尺寸、不参与伸缩。 */
+.play-tip {
+  flex: 0 0 auto;
 }
 .play-btn {
   width: 44px;
@@ -616,6 +788,10 @@ function onRetryAudio(): void {
 .play-btn.playing {
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
+}
+.play-btn:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 3px;
 }
 /* 录音键：空闲是暗红圆点，录制中点亮并放大。 */
 .rec-btn {
@@ -647,21 +823,45 @@ function onRetryAudio(): void {
   box-shadow: 0 0 0 4px rgb(var(--md-error) / 0.25);
   transform: scale(1.1);
 }
+/* MIDI 模式：红点外一圈主色细环，不看旁边小开关也知道这次录的是 MIDI。 */
+.rec-btn.midi .rec-dot {
+  box-shadow: 0 0 0 2px rgb(var(--md-primary) / 0.45);
+}
+.rec-btn.on.midi .rec-dot {
+  box-shadow: 0 0 0 4px rgb(var(--md-error) / 0.25), 0 0 0 6px rgb(var(--md-primary) / 0.22);
+}
+/* 录音模式小开关：紧贴输入设备，字号再收一点，避免底栏被撑宽。 */
+.record-mode {
+  flex: 0 0 auto;
+}
+.record-mode :deep(.md3-seg-btn) {
+  padding: 0 8px;
+  font-size: 10.5px;
+  letter-spacing: 0.2px;
+}
+/* 输入组：模式开关 + 设备块，两者共同决定「录什么」。 */
+.input-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
 /* Tooltip 的外壳默认按内容撑开、且带 `min-width:auto`；底栏变窄时它会把
-   两个设备块钉在 158px，宁可把撤销键挤出窗口也不肯收缩。这里放开下限，
+   设备块钉在 158px，宁可把撤销键挤出窗口也不肯收缩。这里放开下限，
    让内部的 `.device-block` 继续按自己的规则缩。 */
 .device-tip {
   min-width: 0;
   flex: 0 1 auto;
 }
 /* 设备块（输入 / 输出共用）：图标 + 下拉同处一行，与撤销、读数落在同一水平线上。
-   固定宽度 + 单行省略号，绝不撑大左栏（否则播放键会被挤偏）。 */
+   固定宽度 + 单行省略号，绝不撑大翼宽；空间不够时先缩到 96px，再窄就整块隐藏。 */
 .device-block {
   display: flex;
   align-items: center;
   gap: 4px;
   width: 158px;
-  min-width: 0;
+  min-width: 96px;
   flex: 0 1 auto;
 }
 .device-block :deep(.md3-select) {
@@ -679,6 +879,11 @@ function onRetryAudio(): void {
    电平本身没有信号时就是空的，不再额外保留一条底轨。 */
 .device-block.idle .pick-icon {
   opacity: 0.32;
+}
+/* MIDI 模式：有硬件音符在响时把键盘图标点亮（没有电平表，这是唯一的「收到消息」指示）。 */
+.device-block.midi.live .pick-icon {
+  opacity: 1;
+  color: rgb(var(--md-primary));
 }
 /* 电平：铺在下拉框**内部**的底色，从左侧随峰值长出来。
    底色刻意压得很淡（0.14 → 0.26），设备名始终压在上面；右缘叠一条 1px 的亮边，
@@ -698,9 +903,58 @@ function onRetryAudio(): void {
   background-repeat: no-repeat;
   transition: width 120ms linear;
 }
-.play-btn:focus-visible {
-  outline: 2px solid rgb(var(--md-primary));
-  outline-offset: 3px;
+/*
+ * 播放头时间读数（时 / 分 / 秒）。
+ *
+ * 每段是「数字在上、单位在下」的两行小格：底栏只有 60px 高，竖排比一行
+ * `0时:01分:23秒` 更省横向宽度；数字等宽，跳动时不会把旁边的拍号 / BPM 挤得左右晃。
+ * 底是 `surface-container-high` 的药丸 + 一圈极淡的 outline，和设备块同一档层级。
+ */
+.timecode {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 9px 2px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  background-color: rgb(var(--md-surface-container-high));
+  box-shadow: inset 0 0 0 1px rgb(var(--md-outline-variant) / 0.35);
+  transition: background-color var(--md-ease-emphasized);
+}
+.timecode-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-width: 16px;
+  line-height: 1;
+}
+.timecode-num {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: rgb(var(--md-on-surface));
+}
+.timecode-unit {
+  font-size: 9px;
+  line-height: 1;
+  color: rgb(var(--md-on-surface-variant));
+  opacity: 0.8;
+}
+/* 分隔号只跟「数字」那一行对齐：单位行是注脚，不参与。 */
+.timecode-sep {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 13px;
+  color: rgb(var(--md-outline));
+}
+/* 播放中：只把秒染色（活指示），整块不闪、不占宽度。 */
+.timecode.on {
+  background-color: rgb(var(--md-primary) / 0.1);
+}
+.timecode.on .timecode-cell.sec .timecode-num {
+  color: rgb(var(--md-primary));
 }
 .readout {
   display: inline-flex;
@@ -721,6 +975,7 @@ function onRetryAudio(): void {
   min-width: 20px;
   text-align: right;
 }
+/* AI 忙碌胶囊：只在代理写东西时出现，本身就是「活着」的信号，不再有空闲态。 */
 .ai-pill {
   display: inline-flex;
   align-items: center;
@@ -730,33 +985,16 @@ function onRetryAudio(): void {
   border-radius: 999px;
   white-space: nowrap;
   flex: 0 0 auto;
-  background-color: rgb(var(--md-surface-container-high));
-  transition: background-color var(--md-ease-emphasized), color var(--md-ease-emphasized);
+  background-color: rgb(var(--md-primary-container));
+  color: rgb(var(--md-on-primary-container));
 }
 .ai-pill .dot {
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background-color: rgb(var(--md-on-surface-muted));
   flex: 0 0 auto;
-  transition: background-color var(--md-ease-emphasized), box-shadow var(--md-ease-emphasized);
-}
-.ai-pill.live {
-  background-color: rgb(var(--md-primary-container));
-  color: rgb(var(--md-on-primary-container));
-}
-.ai-pill.live .dot {
   background-color: rgb(var(--md-primary));
   box-shadow: 0 0 0 3px rgb(var(--md-primary) / 0.25);
-}
-.engine {
-  white-space: nowrap;
-  opacity: 0.7;
-  flex: 0 0 auto;
-}
-.engine.fallback {
-  color: rgb(var(--md-tertiary));
-  opacity: 0.95;
 }
 /* 离线指示本身就是重试按钮：小药丸，配色沿用 tertiary（与原来的离线色一致）。 */
 .audio-retry {
@@ -765,12 +1003,13 @@ function onRetryAudio(): void {
   gap: 4px;
   height: 22px;
   padding: 0 9px;
+  flex: 0 0 auto;
   border: 0;
   border-radius: 999px;
   cursor: pointer;
   font: inherit;
   letter-spacing: inherit;
-  color: inherit;
+  color: rgb(var(--md-tertiary));
   background-color: rgb(var(--md-tertiary) / 0.12);
   transition:
     background-color var(--md-ease-emphasized),
@@ -787,21 +1026,33 @@ function onRetryAudio(): void {
   outline-offset: 1px;
 }
 
-/* 窄屏：先丢引擎信息与读数，保持左右对称不被破坏。
-   注意只隐藏**在线**指示（`.engine` 无 `fallback`）；离线状态是唯一可点的重试入口，
-   在窄窗口上恰恰最需要可操作，不能一起藏掉。 */
-@media (max-width: 1180px) {
-  .device-tip {
+/* 状态区：贴住底栏右缘。平时不渲染，所以这里只负责把它推到最右。 */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding-left: 8px;
+  flex: 0 0 auto;
+}
+
+/* 窄屏：由远及近地丢信息，两翼始终等宽 → 播放键不会被挤偏。 */
+@media (max-width: 1140px) {
+  /* 设备下拉先走（还要留出撤销/重做与传输）。录音模式的开关留着——
+     它是小控件，且没有它就没法切 MIDI 录音。输出设备前面那根竖线一起收掉，
+     不然会剩下一根悬空的隔断。 */
+  .device-tip,
+  .out-sep {
     display: none;
   }
 }
-@media (max-width: 1280px) {
-  .engine:not(.fallback) {
-    display: none;
-  }
-}
-@media (max-width: 900px) {
+@media (max-width: 980px) {
   .readout {
+    display: none;
+  }
+}
+@media (max-width: 860px) {
+  .timecode {
     display: none;
   }
 }
@@ -814,8 +1065,8 @@ function onRetryAudio(): void {
   .play-btn,
   .t-btn,
   .audio-retry,
-  .ai-pill,
-  .ai-pill .dot {
+  .ai-pill .dot,
+  .timecode {
     transition: background-color 0.15s ease;
   }
   .play-btn:hover,

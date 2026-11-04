@@ -88,6 +88,8 @@ pub struct AppState {
     pub project_key: Mutex<String>,
     /// 正在进行的一次录音的目标：`record_start` 记下，`record_stop` 取走。
     pub recording: Mutex<Option<RecordingTarget>>,
+    /// MIDI 输入连接（虚拟键盘 / 硬件键盘）。
+    pub midi: crate::midi_input::MidiInputManager,
     /// 「工程已经装进音频宿主」的一次性开关：见 [`AppState::start_audio`]。
     audio_started: AtomicBool,
     /// 本地 AI 任务（后台线程 + 进度 + 取消）。
@@ -186,6 +188,7 @@ impl AppState {
             session_path: Mutex::new(None),
             project_key: Mutex::new(crate::history::new_key()),
             recording: Mutex::new(None),
+            midi: crate::midi_input::MidiInputManager::default(),
             audio_started: AtomicBool::new(start_audio),
             ai: AiRuntime::new(),
             singing: crate::singing::SingingRuntime::new(),

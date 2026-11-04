@@ -23,7 +23,13 @@ import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, react
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useClipboardStore } from "@/stores/clipboard";
-import { useLayoutStore, gridStepFor, type RollScope } from "@/stores/layout";
+import {
+  useLayoutStore,
+  gridStepFor,
+  type EditLaneView,
+  type LaneView,
+  type RollScope,
+} from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import { useTransportStore } from "@/stores/transport";
 import { usePluginsStore } from "@/stores/plugins";
@@ -31,6 +37,7 @@ import { useParamBindingsStore } from "@/stores/paramBindings";
 import { useParamBrowserStore } from "@/stores/paramBrowser";
 import Md3Select from "@/components/common/Md3Select.vue";
 import ControllerLane from "@/components/workspace/ControllerLane.vue";
+import MidiKeyboardPane from "@/components/workspace/MidiKeyboardPane.vue";
 /**
  * 乐谱窗格按需加载：OSMD 的包有一兆多，不该进编辑视图的首包——用户不点「乐谱」就不下载。
  */
@@ -919,11 +926,21 @@ async function deleteNotes(indices: number[]): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * 卷帘下方泳道当前选中的目标键（`velocity` = 逐音符力度，`score` = 乐谱窗格）。
+ * 下窗口当前显示哪个视图：控制器 / 乐谱 / MIDI 键盘。
  *
- * 存在 layout store 里而不是组件本地：切到别的视图再回来，应该还是上次选的那个
- * （尤其是「乐谱」——不然每次回来都要重新点一次）。
+ * 视图与参数目标是**两个独立状态**：视图切换在表头左侧的三格图标里，参数下拉只负责
+ * 力度 / 压力 / 通道 / 自动化参数。持久化在 layout store，切走再回来不丢。
  */
+const controllerView = computed({
+  get: () => layout.controllerView,
+  set: (value: LaneView) => {
+    if (value === "lane" || value === "score" || value === "keyboard") {
+      layout.controllerView = value as EditLaneView;
+    }
+  },
+});
+
+/** 控制器泳道当前选中的参数目标（不再包含 `score` / `keyboard`）。 */
 const controllerTargetKey = computed({
   get: () => layout.controllerTarget,
   set: (value: string) => (layout.controllerTarget = value),
@@ -990,15 +1007,18 @@ watch(
   },
   { immediate: true },
 );
-// 目标消失（乐器 / 效果器被删）时回落到力度。逐音符属性（力度 / 压力 / 通道）不在曲线列表里，
-// 但它们是一直可用的目标；`score` 更不是参数——它是「把窗格换成乐谱」的视图开关，
-// 这三类都不能被这条兜底逻辑踢掉。
-watch(controllerTargets, (list) => {
-  const keep = new Set(["velocity", "pressure", "channel", "score"]);
-  if (!keep.has(controllerTargetKey.value) && !list.some((t) => t.key === controllerTargetKey.value)) {
-    controllerTargetKey.value = "velocity";
-  }
-});
+// 参数目标消失（乐器 / 效果器被删）时回落到力度。逐音符属性（力度 / 压力 / 通道）不在
+// 曲线列表里，但它们是一直可用的参数目标，不能被这条兜底逻辑踢掉。
+watch(
+  controllerTargets,
+  (list) => {
+    const keep = new Set(["velocity", "pressure", "channel"]);
+    if (!keep.has(controllerTargetKey.value) && !list.some((t) => t.key === controllerTargetKey.value)) {
+      controllerTargetKey.value = "velocity";
+    }
+  },
+  { immediate: true },
+);
 
 /** 把属性改动应用到全部所选音符（一次提交 = 一条撤销记录）。 */
 async function applyToSelection(patch: Partial<Note>): Promise<void> {
@@ -1458,21 +1478,26 @@ onUnmounted(() => {
     </div>
 
     <!-- 底部窗格（顶栏开关控制，默认打开）：分隔线 + 控制器泳道。
-         网格细分就在泳道表头里（「自动化 力度 网格 1/16」一行），不再单独占一条。 -->
+         视图切换独立在表头左侧（控制器 / 乐谱 / 键盘），参数目标留在控制器表头里。 -->
     <template v-if="layout.showControllerLane">
       <!-- 卷帘与控制器泳道之间可拖拽 -->
       <PanelResizer side="bottom" @resize="layout.resizeLane($event)" />
 
-      <!-- 乐谱窗格：与控制器泳道**互斥**，由同一个「目标」下拉切换（选「乐谱」就换成它）。
-           它自带表头（同一个下拉 + 总谱/分谱），所以这里不再包一层。 -->
+      <!-- 乐谱窗格：视图切换器在最左，不再和参数下拉混在一起 -->
       <ScorePane
-        v-if="controllerTargetKey === 'score'"
-        :target-key="controllerTargetKey"
-        :targets="controllerTargets"
-        @update:target-key="(k: string) => (controllerTargetKey = k)"
+        v-if="controllerView === 'score'"
+        context="edit"
+        @update:view="controllerView = $event"
       />
 
-      <!-- 参数车道：力度 = 逐音符直角条；其余目标 = 编排视图那条自动化曲线。
+      <!-- 虚拟 MIDI 键盘：同一个视图切换器里的第三格 -->
+      <MidiKeyboardPane
+        v-else-if="controllerView === 'keyboard'"
+        context="edit"
+        @update:view="controllerView = $event"
+      />
+
+      <!-- 控制器泳道：力度 = 逐音符直角条；其余目标 = 编排视图那条自动化曲线。
            本体高度比 `laneHeight` 少 6px（条形上下各 3px 留白），于是「顶边框 + 表头 + 本体」
            的总高与编排视图的自动化车道完全相等，浮动工具岛切视图时不会上下跳。 -->
       <ControllerLane
@@ -1484,6 +1509,7 @@ onUnmounted(() => {
         :offset-beats="clipStart"
         :content-height="layout.laneHeight - 6"
         :curve-points="controllerCurvePoints"
+        @update:view="controllerView = $event"
         @update:target-key="(k: string) => (controllerTargetKey = k)"
         @select="selection.setNoteSelection($event)"
         @apply="applyToSelection"

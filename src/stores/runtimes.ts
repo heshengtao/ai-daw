@@ -33,7 +33,7 @@ export const useRuntimesStore = defineStore("runtimes", () => {
   const busyId = ref<string | null>(null);
   const progress = ref<RuntimeProgress | null>(null);
   /** 「下载管理器」需要被聚焦到「运行时」标签（从设置页跳过来时用）。 */
-  const focus = ref(false);
+  const focus = ref<string | null>(null);
   /** 运行时装完后要回设置页弹「重启生效」（设置页可能已被跳走卸载）。 */
   const restartPrompt = ref(false);
 
@@ -70,16 +70,16 @@ export const useRuntimesStore = defineStore("runtimes", () => {
     return Math.min(100, Math.round((p.received / p.total) * 100));
   });
 
-  /** 请求把管理器切到「运行时」标签。 */
-  function requestFocus(): void {
-    focus.value = true;
+  /** 请求把管理器切到「运行时」标签；传 id 时会滚到那一行。 */
+  function requestFocus(id = "*"): void {
+    focus.value = id;
   }
 
-  /** 取走（并清空）聚焦请求；返回是否曾经请求过。 */
-  function consumeFocus(): boolean {
-    if (!focus.value) return false;
-    focus.value = false;
-    return true;
+  /** 取走（并清空）聚焦请求；返回要定位的 id（`"*"` = 只切页签）。 */
+  function consumeFocus(): string | null {
+    const value = focus.value;
+    focus.value = null;
+    return value;
   }
 
   async function load(): Promise<void> {

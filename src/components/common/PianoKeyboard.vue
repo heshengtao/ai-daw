@@ -1,30 +1,53 @@
 <script setup lang="ts">
 /**
- * 可弹的钢琴键盘（合成器界面里的那个键盘）。
+ * 可弹的钢琴键盘（合成器界面 / 下窗口虚拟 MIDI 键盘共用）。
  *
- * 按下即**试听**：走实时通道直接送给轨道的乐器，不写工程、不进撤销历史、不等传输
- * （传输停着也能弹）。松开走 NoteOff，让插件按自己的释音收尾。
+ * 传了 `track` 时按下即**试听**：走实时通道直接送给轨道的乐器，不写工程、不进撤销历史、
+ * 不等传输（传输停着也能弹）。`track = null` 时只发 `noteOn` / `noteOff` 事件，由宿主
+ * 统一走 MIDI store（下窗口要同时处理硬件输入与录音）。
  *
- * 除了鼠标，也认电脑键盘：`A W S E D F T G Y H U J K` 对应 C..C（和大多数 DAW 一样）。
+ * 除了鼠标，也认电脑键盘：`A W S E D F T G Y H U J K` 对应 C..C（和大多数 DAW 一样）；
+ * 宿主可以把 `computerKeyboard` 关掉，避免两个键盘抢同一批字母键。
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { auditionNote } from "@/api/tauri";
+import { shouldDeferToBrowser } from "@/utils/editable";
 import { useI18n } from "@/i18n";
 
 const i18n = useI18n();
 
 const props = withDefaults(
   defineProps<{
-    track: number;
+    /** 试听目标轨道；`null` = 不自己发声，只发事件（由宿主统一走 MIDI store）。 */
+    track?: number | null;
     /** 起始音高（默认 C4 = 60）。 */
     baseNote?: number;
     /** 几个八度。 */
     octaves?: number;
     /** 力度（0..=127）。 */
     velocity?: number;
+    /** 外部按住的音高（硬件 MIDI / 录音侧高亮），只影响显示。 */
+    heldNotes?: number[];
+    /** 是否把电脑键盘当钢琴弹（宿主可关掉）。 */
+    computerKeyboard?: boolean;
+    /** 在白键底部标出 C 音名（虚拟 MIDI 键盘用；合成器面板不标）。 */
+    showLabels?: boolean;
   }>(),
-  { baseNote: 60, octaves: 2, velocity: 100 },
+  {
+    track: null,
+    baseNote: 60,
+    octaves: 2,
+    velocity: 100,
+    heldNotes: () => [],
+    computerKeyboard: true,
+    showLabels: false,
+  },
 );
+
+const emit = defineEmits<{
+  (e: "noteOn", note: number, velocity: number, source: "mouse" | "key"): void;
+  (e: "noteOff", note: number, source: "mouse" | "key"): void;
+}>();
 
 /** 电脑键盘 → 相对起始音的偏移（两个八度）。 */
 const KEY_MAP: Record<string, number> = {
@@ -33,6 +56,13 @@ const KEY_MAP: Record<string, number> = {
 };
 
 const BLACK_OFFSETS = new Set([1, 3, 6, 8, 10]);
+
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+/** MIDI 音高 → 音名（中央 C = C4 = 60）。 */
+function noteName(note: number): string {
+  return `${NOTE_NAMES[note % 12]}${Math.floor(note / 12) - 1}`;
+}
 
 /** 正被按住的音高 → 来源（鼠标 / 键盘），用来正确处理「同时按住」。 */
 const held = ref<Map<number, "mouse" | "key">>(new Map());
@@ -71,19 +101,24 @@ function blackStyle(k: Key): Record<string, string> {
 }
 
 function isHeld(note: number): boolean {
-  return held.value.has(note);
+  return held.value.has(note) || props.heldNotes.includes(note);
 }
 
 function press(note: number, source: "mouse" | "key"): void {
   if (held.value.has(note)) return;
   held.value.set(note, source);
-  void auditionNote(props.track, note, props.velocity, true);
+  if (props.track !== null) void auditionNote(props.track, note, props.velocity, true);
+  emit("noteOn", note, props.velocity, source);
 }
 
-function release(note: number): void {
-  if (!held.value.has(note)) return;
+function release(note: number, source?: "mouse" | "key"): void {
+  const heldBy = held.value.get(note);
+  if (!heldBy) return;
+  // 同一个音可能先被鼠标按住、随后又按了电脑键盘：keyup / pointerup 只该松开自己那一路。
+  if (source !== undefined && heldBy !== source) return;
   held.value.delete(note);
-  void auditionNote(props.track, note, 0, false);
+  if (props.track !== null) void auditionNote(props.track, note, 0, false);
+  emit("noteOff", note, heldBy);
 }
 
 /** 鼠标按下后拖过别的键也要跟着响（像真的滑过键盘）。 */
@@ -100,7 +135,7 @@ function onEnter(note: number): void {
 }
 
 function onUp(note: number): void {
-  release(note);
+  release(note, "mouse");
 }
 
 function onDocPointerUp(): void {
@@ -112,9 +147,10 @@ function onDocPointerUp(): void {
 }
 
 function onKeyDown(e: KeyboardEvent): void {
+  if (!props.computerKeyboard) return;
   if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
-  const target = e.target as HTMLElement | null;
-  if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+  // 输入框 / 文本域 / 可编辑区里的按键归浏览器；否则在检查器里改参数会顺手弹出音符。
+  if (shouldDeferToBrowser(e)) return;
   const offset = KEY_MAP[e.key.toLowerCase()];
   if (offset === undefined) return;
   e.preventDefault();
@@ -122,14 +158,22 @@ function onKeyDown(e: KeyboardEvent): void {
 }
 
 function onKeyUp(e: KeyboardEvent): void {
+  if (!props.computerKeyboard) return;
   const offset = KEY_MAP[e.key.toLowerCase()];
   if (offset === undefined) return;
-  release(props.baseNote + offset);
+  release(props.baseNote + offset, "key");
 }
 
 /** 失焦时把所有音松开，免得留下挂住的音。 */
 function releaseAll(): void {
   for (const note of [...held.value.keys()]) release(note);
+}
+
+/** 只松开某个来源按住的音（关掉电脑键盘开关时用）。 */
+function releaseBySource(source: "mouse" | "key"): void {
+  for (const [note, heldBy] of [...held.value]) {
+    if (heldBy === source) release(note, source);
+  }
 }
 
 onMounted(() => {
@@ -147,6 +191,12 @@ onMounted(() => {
 watch(
   () => props.baseNote,
   () => releaseAll(),
+);
+watch(
+  () => props.computerKeyboard,
+  (on) => {
+    if (!on) releaseBySource("key");
+  },
 );
 onUnmounted(() => {
   window.removeEventListener("pointerup", onDocPointerUp);
@@ -170,7 +220,9 @@ onUnmounted(() => {
         @pointerenter="onEnter(k.note)"
         @pointerup="onUp(k.note)"
         @pointerleave="onUp(k.note)"
-      />
+      >
+        <span v-if="showLabels && k.note % 12 === 0" class="key-label">{{ noteName(k.note) }}</span>
+      </button>
     </div>
     <div class="blacks">
       <button
@@ -205,6 +257,7 @@ onUnmounted(() => {
   height: 100%;
 }
 .white {
+  position: relative;
   flex: 1 1 0;
   min-width: 0;
   border: 0;
@@ -218,6 +271,23 @@ onUnmounted(() => {
 }
 .white.on {
   background-color: rgb(var(--md-primary));
+}
+/* C 音名：只标 C，既不挡视线又能一眼看出每个八度的分界。 */
+.key-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 3px;
+  text-align: center;
+  font-size: 9px;
+  line-height: 1;
+  letter-spacing: 0.2px;
+  color: rgb(var(--md-on-surface-muted));
+  pointer-events: none;
+  user-select: none;
+}
+.white.on .key-label {
+  color: rgb(var(--md-on-primary));
 }
 .blacks {
   position: absolute;

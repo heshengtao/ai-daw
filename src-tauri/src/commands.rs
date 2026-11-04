@@ -1328,6 +1328,28 @@ pub fn add_clip(
     )
 }
 
+/// 新增一个**带音符**的 MIDI 片段（MIDI 录音落盘用；片段 + 全部音符 = 一条撤销记录）。
+#[tauri::command]
+pub fn add_midi_clip(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    track: u64,
+    start: f64,
+    length: f64,
+    notes: Vec<Note>,
+) -> Project {
+    run(
+        &app,
+        &state,
+        Command::AddMidiClip {
+            track: TrackId(track),
+            start,
+            length,
+            notes,
+        },
+    )
+}
+
 /// 删除一个片段。
 #[tauri::command]
 pub fn remove_clip(
@@ -2631,7 +2653,10 @@ pub async fn import_project(app: tauri::AppHandle, project: Project) -> Result<P
 }
 
 /// 导入工程的同步实现。
-pub(crate) fn import_project_impl(app: &tauri::AppHandle, project: Project) -> Result<Project, String> {
+pub(crate) fn import_project_impl(
+    app: &tauri::AppHandle,
+    project: Project,
+) -> Result<Project, String> {
     let state = app.state::<AppState>();
     remember_current(app, &state);
 
@@ -3374,6 +3399,34 @@ pub fn input_level(state: State<'_, AppState>, points: usize) -> Vec<f32> {
     state.audio.input_scope_snapshot(points)
 }
 
+// ---------------------------------------------------------------------------
+// MIDI 输入
+// ---------------------------------------------------------------------------
+
+/// 本机可用的 MIDI 输入端口。
+#[tauri::command]
+pub fn list_midi_inputs() -> Vec<crate::midi_input::MidiInputDeviceInfo> {
+    crate::midi_input::list_devices()
+}
+
+/// 打开 / 替换 / 关闭 MIDI 输入（`None` = 关闭并释放端口）。
+///
+/// 只维护一条连接：同一颗键从两个端口进来会响两遍，所以换设备时先关旧的。
+#[tauri::command]
+pub fn set_midi_input(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    device: Option<String>,
+) -> Result<(), String> {
+    state.midi.set_device(&app, device)
+}
+
+/// 当前打开的 MIDI 输入端口（`None` = 没占用任何端口）。
+#[tauri::command]
+pub fn midi_input_device(state: State<'_, AppState>) -> Option<String> {
+    state.midi.device()
+}
+
 /// 开始录音：打开输入设备、开始采集，并从播放头走带。
 #[tauri::command]
 pub fn record_start(
@@ -3471,11 +3524,7 @@ pub(crate) fn record_stop_as(
 
 /// 录音文件路径：应用数据目录下的 `recordings/rec-<epochms>.wav`。
 fn recording_path(app: &tauri::AppHandle) -> Result<String, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("拿不到应用数据目录：{e}"))?
-        .join("recordings");
+    let dir = crate::paths::data_dir(app)?.join("recordings");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

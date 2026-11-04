@@ -54,6 +54,11 @@
     "macOS": {
       "signingIdentity": "-",
       "hardenedRuntime": false
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/data-dir-hook.nsh"
+      }
     }
   },
   "plugins": {

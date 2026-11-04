@@ -114,9 +114,70 @@ macro_rules! yue2_file {
     };
 }
 
+/// SheetSage2（听音记谱）的文件：仓库内只有一个 GGUF，HF / 魔搭同名。
+macro_rules! sheetsage2_file {
+    ($path:literal, $size:expr, $sha:literal) => {
+        ModelFile {
+            filename: $path,
+            approx_bytes: $size,
+            sha256: $sha,
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: concat!(
+                        "https://huggingface.co/audio-cpp/SheetSage2-GGUF/resolve/main/",
+                        $path
+                    ),
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: concat!(
+                        "https://modelscope.cn/models/audio-cpp/SheetSage2-GGUF/resolve/master/",
+                        $path
+                    ),
+                },
+            ],
+        }
+    };
+}
+
+/// ACE-Step 权重的一条文件。
+///
+/// `$path` 是**仓库内路径**（`ACE-Step1.5-GGUF/turbo/...`），`$name` 是**落地文件名**
+/// ——两个 GGUF 拉平放进 `models/ace-step/`，换档时不用再建一层目录。
+/// 官方整理的那一份在 HF / 魔搭都叫 `audio-cpp/audio.cpp-gguf`，所以两条源只是域名不同。
+macro_rules! ace_step_file {
+    ($name:literal, $path:literal, $size:expr, $sha:literal) => {
+        ModelFile {
+            filename: $name,
+            approx_bytes: $size,
+            sha256: $sha,
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: concat!(
+                        "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/",
+                        $path
+                    ),
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: concat!(
+                        "https://modelscope.cn/models/audio-cpp/audio.cpp-gguf/resolve/master/",
+                        $path
+                    ),
+                },
+            ],
+        }
+    };
+}
+
 /// 清单。
-pub static CATALOG: &[ModelEntry] = &[
-    ModelEntry {
+pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
         id: "basic-pitch",
         name: "Basic Pitch（音频转 MIDI）",
         feature: "to_midi",
@@ -1143,6 +1204,147 @@ pub static CATALOG: &[ModelEntry] = &[
             yue2_file!("sidecars/yue2-qwen.tiktoken", 2_561_218, "b2b1b8dfb5cc5f024bafc373121c6aba3f66f9a5a0269e243470a1de16a33186"),
         ],
     },
+    // ---- ACE-Step 1.5（audio.cpp `ace_step` 家族）：另一套写歌权重 ----
+    //
+    // 与 YuE2 并列在「AI 写歌」的模型下拉里，但走路方式不同：YuE2 先写谱再唱（有 ABC 谱、
+    // 语义码续写、翻唱），ACE-Step 是「一句描述 + 歌词 → 整首」，不写谱。两家**共用同一个
+    // audio.cpp 引擎进程**，差别只在引擎配置里的 `family` 与请求体的形状
+    // （见 `src-tauri/src/yue_engine.rs`），所以这里只是多两档权重，不需要第二套引擎。
+    //
+    // 权重钉在 `audio-cpp/audio.cpp-gguf` 的 `ACE-Step1.5-GGUF/turbo/`：HF 与魔搭
+    // **同名同字节**（逐文件 sha256 一致，2026-11 核对），下载器按网络位置排序、失败换源。
+    // 只收 Turbo 档：Base 慢一倍、曲风差别不大；Turbo 的扩散步数上限是 8（见文档）。
+    ModelEntry {
+        id: "ace-step-turbo-q8",
+        name: "ACE-Step 1.5 Turbo · Q8_0（默认 · 省空间）",
+        feature: "compose",
+        // ACE-Step 1.5 上游（ACE-Step/Ace-Step1.5）是 **MIT**——和 YuE2 的 CC-BY-NC 不同，
+        // 商业项目可以用。
+        license: "MIT",
+        dir: Some("ace-step"),
+        bundled: false,
+        files: &[ace_step_file!(
+            "ace-step-1.5-turbo-q8_0.gguf",
+            "ACE-Step1.5-GGUF/turbo/ace-step-1.5-turbo-q8_0.gguf",
+            6_185_468_096,
+            "1f0015f81c10a1182531e6207c7aeaa060b8cad3470a2f88daa3cb74ed636e63"
+        )],
+    },
+    ModelEntry {
+        id: "ace-step-turbo-bf16",
+        name: "ACE-Step 1.5 Turbo · BF16（最接近原版权重）",
+        feature: "compose",
+        license: "MIT",
+        dir: Some("ace-step"),
+        bundled: false,
+        // 全 BF16（10 GB）：规划器也是 bf16，固定种子能复现；Q8_0 那份规划器被量化后
+        // 同种子会走到另一条采样路径（audio.cpp 的 gguf 文档把 ace_step q8_0 评为「No」）。
+        files: &[ace_step_file!(
+            "ace-step-1.5-turbo-bf16.gguf",
+            "ACE-Step1.5-GGUF/turbo/ace-step-1.5-turbo-bf16.gguf",
+            10_090_406_336,
+            "7aa8cc911bb7e47647bba619cf25afc22a42e35c568a102cd9a3b28a54b94013"
+        )],
+    },
+    // ---- SheetSage2（听音记谱）：YuE2「翻唱」的前置——录音 → ABC 谱 ----
+    //
+    // 只有 original-dtype 一档：官方文档明说 **Q8 不支持**。一个 2.5 GB 的 GGUF 自包含
+    // （编码器 + 解码头在同一个文件里，不需要像 yu2.cpp 那样另配 MERT 底座）。
+    //
+    // 授权是 CC-BY-NC-4.0（和 YuE2 权重的「个人创作者可用」不是一回事）：商业分发要另谈。
+    ModelEntry {
+        id: "sheetsage2-orig",
+        name: "SheetSage2（录音转谱）",
+        feature: "cover",
+        license: "CC-BY-NC-4.0",
+        dir: Some("sheetsage2"),
+        bundled: false,
+        files: &[sheetsage2_file!(
+            "sheetsage2-orig.gguf",
+            2_708_224_256,
+            "d858bfdf5ac7be16261ac6ee38754d6fca502149131b44a5262b4039fb72876e"
+        )],
+    },
+    // ---- 抓歌词用的 ASR（翻唱 → 获取歌词）----
+    //
+    // 三个档位共用 `feature = "lyrics"`：界面一个下拉选档，缺哪个下哪个。
+    // 都是 audio.cpp 的现成 ASR：跑法与本机写歌/转谱同一套（一次性引擎进程）。
+    // 只收听得懂「唱」的模型：SenseVoice-Small 是纯语音 ASR，抓歌词会听成念白，已移除。
+    ModelEntry {
+        id: "qwen3-asr-1.7b",
+        name: "Qwen3-ASR 1.7B（抓歌词 · 多语最强）",
+        feature: "lyrics",
+        license: "Apache-2.0",
+        dir: Some("qwen3-asr-1.7b"),
+        bundled: false,
+        files: &[ModelFile {
+            filename: "qwen3-asr-1.7b-q8_0.gguf",
+            approx_bytes: 2_473_017_600,
+            sha256: "3bc2462eca3a3a8f56abcd860d0943ffdc0546547dde55a9d08589607d6f3936",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/audio-cpp/audio.cpp-gguf/resolve/master/Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf",
+                },
+            ],
+        }],
+    },
+    ModelEntry {
+        id: "qwen3-asr-0.6b",
+        name: "Qwen3-ASR 0.6B（抓歌词 · 轻量）",
+        feature: "lyrics",
+        license: "Apache-2.0",
+        dir: Some("qwen3-asr-0.6b"),
+        bundled: false,
+        files: &[ModelFile {
+            filename: "qwen3-asr-0.6b-q8_0.gguf",
+            approx_bytes: 1_151_279_968,
+            sha256: "5c53bbb9a6b2ade85c16c290c560658ca18b78a23c323378528f1f945683fcbe",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Qwen3-ASR-0.6B-GGUF/qwen3-asr-0.6b-q8_0.gguf",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/audio-cpp/audio.cpp-gguf/resolve/master/Qwen3-ASR-0.6B-GGUF/qwen3-asr-0.6b-q8_0.gguf",
+                },
+            ],
+        }],
+    },
+    ModelEntry {
+        id: "crisperwhisper-2-large",
+        name: "CrisperWhisper 2.0 Large（抓歌词 · 逐字，英语向）",
+        feature: "lyrics",
+        license: "MIT",
+        dir: Some("crisperwhisper-2-large"),
+        bundled: false,
+        files: &[ModelFile {
+            filename: "crisperwhisper-2-large-q8_0.gguf",
+            approx_bytes: 1_716_306_528,
+            sha256: "392e636876d6d5ae8716f0f98b78480b61bb8c199d63f20523e95308b3425c2e",
+            sources: &[
+                ModelSource {
+                    kind: "hf",
+                    region: "intl",
+                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/CrisperWhisper2.0-GGUF/crisperwhisper-2-large-q8_0.gguf",
+                },
+                ModelSource {
+                    kind: "modelscope",
+                    region: "cn",
+                    url: "https://modelscope.cn/models/audio-cpp/audio.cpp-gguf/resolve/master/CrisperWhisper2.0-GGUF/crisperwhisper-2-large-q8_0.gguf",
+                },
+            ],
+        }],
+    },
 ];
 
 /// 全部条目。
@@ -1153,6 +1355,24 @@ pub fn all() -> &'static [ModelEntry] {
 /// 按 id 找条目。
 pub fn by_id(id: &str) -> Option<&'static ModelEntry> {
     CATALOG.iter().find(|m| m.id == id)
+}
+
+/// 写歌权重属于哪个 audio.cpp **家族**（`yue2` / `ace_step`）；不是写歌模型返回 `None`。
+///
+/// 家族决定三件事：引擎配置里的 `family` 字段、`/v1/tasks/run` 请求体的形状
+/// （YuE2 走「谱 → 语义码 → 音频」，ACE-Step 走 `text2music`）、以及界面上能开哪几个
+/// 开关（YuE2 有谱面 / 续写 / 翻唱，ACE-Step 只有「描述 + 歌词」）。
+///
+/// 按 **id 前缀**判定：同一家族再加一档量化不用改这里，加新家族才需要动。
+pub fn compose_family(entry: &ModelEntry) -> Option<&'static str> {
+    if entry.feature != "compose" {
+        return None;
+    }
+    const FAMILIES: &[(&str, &str)] = &[("yue2-", "yue2"), ("ace-step-", "ace_step")];
+    FAMILIES
+        .iter()
+        .find(|(prefix, _)| entry.id.starts_with(prefix))
+        .map(|(_, family)| *family)
 }
 
 /// 找到**同时**包含 `files` 全部文件的子目录。
@@ -1470,5 +1690,61 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 写歌模型**都是国内外双源**：这些权重是几 GB 级的一次性下载，只有单边网络就等于用不了。
+    /// 同时钉住两个家族的家族解析：界面与引擎都靠它决定请求体形状。
+    #[test]
+    fn compose_weights_are_dual_sourced_and_declare_their_family() {
+        let mut seen: Vec<(&str, &str)> = Vec::new();
+        for entry in all().iter().filter(|e| e.feature == "compose") {
+            let family = compose_family(entry)
+                .unwrap_or_else(|| panic!("{} 没写明 audio.cpp 家族", entry.id));
+            seen.push((entry.id, family));
+            for file in entry.files {
+                assert!(
+                    file.sources
+                        .iter()
+                        .any(|s| s.kind == "hf" && s.region == "intl"),
+                    "{} / {} 缺国际源",
+                    entry.id,
+                    file.filename
+                );
+                assert!(
+                    file.sources
+                        .iter()
+                        .any(|s| s.kind == "modelscope" && s.region == "cn"),
+                    "{} / {} 缺国内源",
+                    entry.id,
+                    file.filename
+                );
+            }
+        }
+        // YuE2 三档 + ACE-Step 两档：少了哪一档都说明清单被人动过。
+        assert!(seen.contains(&("yue2-q8-0", "yue2")));
+        assert!(seen.contains(&("ace-step-turbo-q8", "ace_step")));
+        assert!(seen.contains(&("ace-step-turbo-bf16", "ace_step")));
+        assert_eq!(seen.iter().filter(|(_, f)| *f == "ace_step").count(), 2);
+        // 非写歌模型不该有家族（否则引擎会去加载一份不是它管的权重）。
+        assert!(compose_family(by_id("htdemucs-ort-v1").unwrap()).is_none());
+    }
+
+    /// 抓歌词（`feature = "lyrics"`）只收**听得懂唱**的 ASR：纯语音模型（如 SenseVoice-Small）
+    /// 会把歌词听成念白。这条防的是「顺手把一档加回来」——界面下拉与下载管理器都吃这份清单。
+    #[test]
+    fn lyrics_feature_keeps_only_singing_capable_asr() {
+        let ids: Vec<&str> = all()
+            .iter()
+            .filter(|entry| entry.feature == "lyrics")
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(
+            ids,
+            ["qwen3-asr-1.7b", "qwen3-asr-0.6b", "crisperwhisper-2-large"]
+        );
+        assert!(
+            by_id("sensevoice-small").is_none(),
+            "SenseVoice-Small 已下线（纯语音 ASR，抓歌词不成句）"
+        );
     }
 }

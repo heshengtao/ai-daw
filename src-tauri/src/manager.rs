@@ -273,11 +273,7 @@ struct ManagedDirs {
 
 impl ManagedDirs {
     fn resolve(app: &AppHandle) -> Result<Self, String> {
-        let root = app
-            .path()
-            .app_data_dir()
-            .map_err(|e| format!("拿不到应用数据目录：{e}"))?
-            .join("plugins");
+        let root = crate::paths::data_dir(app)?.join("plugins");
         Ok(Self {
             vst3: root.join("vst3"),
             clap: root.join("clap"),
@@ -449,11 +445,7 @@ pub fn rescan_with_managed(app: &AppHandle) -> Vec<CatalogPlugin> {
 
 /// 注册表缓存目录（应用缓存目录下的 `plugin-manager`）。
 fn registry_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| format!("拿不到缓存目录：{e}"))?
-        .join("plugin-manager"))
+    Ok(crate::paths::cache_dir(app)?.join("plugin-manager"))
 }
 
 /// 后台预热注册表缓存（启动时调用，纯尽力而为）。
@@ -996,6 +988,37 @@ pub struct StoreNetwork {
     /// audio.cpp 引擎在 CUDA 上是否启用 `cuda_perf` 预设（默认开；显存小的卡可关）。
     #[serde(default = "default_true")]
     pub yue_cuda_perf: bool,
+    /// YuE2 的 LoRA 适配器（`ar` = 作曲一侧，`nar` = 音色一侧）。改完要重启引擎。
+    #[serde(default)]
+    pub yue_lora: YueLora,
+}
+
+/// YuE2 的 LoRA 设置：两半各一份路径 + 强度。
+///
+/// `ar`（自回归）那一半决定「怎么写」，`nar`（流匹配）那一半决定「听起来像什么」；
+/// 社区发布的适配器通常只训练了其中一半，所以两个槽位是分开的。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct YueLora {
+    /// AR 适配器（`.safetensors`，绝对路径或相对模型目录）。
+    pub ar_path: String,
+    /// AR 强度（0 = 停用）。
+    pub ar_scale: f32,
+    /// NAR 适配器。
+    pub nar_path: String,
+    /// NAR 强度（0 = 停用）。
+    pub nar_scale: f32,
+}
+
+impl Default for YueLora {
+    fn default() -> Self {
+        Self {
+            ar_path: String::new(),
+            ar_scale: 1.0,
+            nar_path: String::new(),
+            nar_scale: 1.0,
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -1011,9 +1034,7 @@ pub struct StoreRuntime {
 impl StoreRuntime {
     /// 从应用配置目录读入 `store.json`（没有或损坏就用默认 = 直连官方源）。
     pub fn load(app: &AppHandle) -> Self {
-        let file = app
-            .path()
-            .app_config_dir()
+        let file = crate::paths::config_dir(app)
             .ok()
             .map(|dir| dir.join("store.json"));
         let network = file
@@ -2442,6 +2463,8 @@ pub fn plugin_manager_set_network(
         backend_preference: runtime.network().backend_preference,
         // 引擎的 CUDA 预设由 `ai_yue_set_cuda_perf` 单独管，这里原样保留。
         yue_cuda_perf: runtime.network().yue_cuda_perf,
+        // LoRA 由 `ai_yue_set_lora` 单独管，这里原样保留。
+        yue_lora: runtime.network().yue_lora,
     };
     runtime.set(next.clone())?;
     Ok(next)

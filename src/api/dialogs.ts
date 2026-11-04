@@ -134,8 +134,18 @@ export async function pickScoreToOpen(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
-/** 选择要导入的插件（`.vst3` bundle / 文件、`.clap` 文件，或 macOS 的 `.component`）；取消返回 null。 */
-export async function pickPluginToImport(): Promise<string | null> {
+/** 选择 YuE2 的 LoRA 适配器（`.safetensors`）；取消返回 null。 */
+export async function pickLoraFile(): Promise<string | null> {
+  if (!isTauri()) return "mock://style-lora.safetensors";
+  const selected = await openDialog({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "LoRA", extensions: ["safetensors"] }],
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+/** 选择要导入的插件（`.vst3` bundle / 文件、`.clap` 文件，或 macOS 的 `.component`）；取消返回 null。 */export async function pickPluginToImport(): Promise<string | null> {
   if (!isTauri()) return "mock://CoolSynth.vst3";
   const selected = await openDialog({
     multiple: false,

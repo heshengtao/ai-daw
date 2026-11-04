@@ -203,7 +203,8 @@ pub fn ai_start(
             .name("ai-daw-master".into())
             .spawn(move || {
                 // 线程里 panic 也要收尾：否则 `running` 永远为真、进度条卡住（见 crate::job）。
-                let outcome = crate::job::guard(|| run_master_job(&thread_app, &thread_runtime, &options));
+                let outcome =
+                    crate::job::guard(|| run_master_job(&thread_app, &thread_runtime, &options));
                 finish(&thread_app, &thread_runtime, outcome);
             })
             .map_err(|e| e.to_string())?;
@@ -930,11 +931,7 @@ pub(crate) fn master_to_track(
 
 /// AI 产出的文件路径：应用数据目录 `local-ai/<kind>-<epochms>.wav`。
 fn ai_output_path(app: &tauri::AppHandle, kind: &str) -> Result<String, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("拿不到应用数据目录：{e}"))?
-        .join("local-ai");
+    let dir = crate::paths::data_dir(app)?.join("local-ai");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

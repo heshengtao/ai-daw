@@ -10,17 +10,18 @@
  * 横向与编排视图共用同一条时间轴：坐标原点从编排视图的 `TIMELINE_INSET_PX` 起算并按共享滚动
  * 位置平移（由 `insetPx` 传进曲线），所以曲线的小节线严格压在编排网格的小节线上。
  */
-import { computed, ref, watch } from "vue";
+import { computed, watch } from "vue";
 import { PlusIcon, XMarkIcon } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
 import GridSelect from "@/components/common/GridSelect.vue";
 import AutomationCurve from "./AutomationCurve.vue";
+import LaneViewSwitch from "@/components/workspace/LaneViewSwitch.vue";
 import { useI18n } from "@/i18n";
 import { useProjectStore } from "@/stores/project";
 import { usePluginsStore } from "@/stores/plugins";
 import { useSelectionStore } from "@/stores/selection";
 import { useTransportStore } from "@/stores/transport";
-import { NOTE_GRIDS, useLayoutStore, type NoteGrid } from "@/stores/layout";
+import { NOTE_GRIDS, useLayoutStore, type LaneView, type NoteGrid } from "@/stores/layout";
 import { useParamBindingsStore } from "@/stores/paramBindings";
 import { useParamBrowserStore } from "@/stores/paramBrowser";
 import {
@@ -38,6 +39,11 @@ const props = defineProps<{
   insetPx: number;
 }>();
 
+const emit = defineEmits<{
+  /** 表头的视图切换器：自动化 / 乐谱 / MIDI 键盘。 */
+  (e: "update:view", value: LaneView): void;
+}>();
+
 const store = useProjectStore();
 const plugins = usePluginsStore();
 const selection = useSelectionStore();
@@ -47,8 +53,11 @@ const bindings = useParamBindingsStore();
 const browser = useParamBrowserStore();
 const i18n = useI18n();
 
-/** 当前选中的目标键（`Track.automation[].param` 里存的就是它）。 */
-const param = ref<string>("gain_db");
+/** 当前选中的目标键：存 layout，切去乐谱 / 键盘再回来仍是同一条曲线。 */
+const param = computed({
+  get: () => layout.arrangeParam,
+  set: (value: string) => (layout.arrangeParam = value),
+});
 
 const track = computed(() => selection.track);
 const trackId = computed(() => track.value?.id ?? null);
@@ -151,16 +160,24 @@ watch(
 );
 
 /** 选中的目标消失时（乐器 / 效果器没了、或被解绑且没曲线）回落到 gain_db。 */
-watch(targets, (list) => {
-  if (!list.some((t) => t.key === param.value)) param.value = "gain_db";
-});
+watch(
+  targets,
+  (list) => {
+    if (list.length === 0) return;
+    if (!list.some((t) => t.key === param.value)) param.value = "gain_db";
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
   <div class="auto-lane">
     <!-- 表头：一行读完「自动化 + 参数 + 网格」，右侧只留读数与清空 / 添加参数 / 收起 -->
     <div class="auto-head">
-      <span class="auto-title">{{ i18n.t("auto.title") }}</span>
+      <LaneViewSwitch
+        :model-value="'automation'"
+        @update:model-value="emit('update:view', $event)"
+      />
       <div class="auto-chooser">
         <Md3Select
           :model-value="param"

@@ -25,8 +25,10 @@
 适合「做一首 X」，用户没有具体 MIDI 编写要求，或想先要一个能听的草稿。
 
 1. **AI 初稿**：`compose_song(style="city pop, female vocal", lyrics="...", duration=120)`
-   → 新音频轨（一次撤销）。参数：`model` 选 `yue2-q8-0` / `yue2-q4-0` / `yue2-bf16`（省略用已装默认）；
-   `cot`（full/melody/off）、`cfg_scale`、`seed` 可复现；`after_track` 指定插入位置。
+   → 新音频轨（一次撤销）。参数：`model` 选 `yue2-q8-0` / `yue2-q4-0` / `yue2-bf16`（省略用已装默认）
+   或 `ace-step-turbo-q8` / `ace-step-turbo-bf16`（MIT 许可、不写谱，`style` 必须是一句音乐描述）；
+   `cot`（full/melody/off）与 `stop_after` 只对 YuE2 有效；`cfg_scale`、`seed` 可复现；
+   `after_track` 指定插入位置。
 2. **拆轨**：`separate_stems(track=<初稿轨>, model="htdemucs-6s")` → 鼓 / 贝斯 / 其他 / 人声
    （`-6s` 多吉他/钢琴）。先看 `capabilities.separate`：没装 HTDemucs 就跳过这一步，
    或先按 `fix` 征得用户同意再下（约 209 MB）。

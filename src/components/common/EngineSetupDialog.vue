@@ -13,12 +13,11 @@
  * - 已经装好时作为「更换后端」的普通对话框（`dismissible = true`）。
  */
 import { computed, ref, watch } from "vue";
-import { useRouter } from "vue-router";
 import type { RuntimeStatus } from "@/api/types";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import ModalShell from "@/components/common/ModalShell.vue";
 import { useI18n } from "@/i18n";
-import { lastWorkspace } from "@/router";
+import { useDownloadsStore } from "@/stores/downloads";
 import { useLayoutStore } from "@/stores/layout";
 import { useRuntimesStore } from "@/stores/runtimes";
 import { useYueStore } from "@/stores/yue";
@@ -44,8 +43,8 @@ const emit = defineEmits<{
 const i18n = useI18n();
 const layout = useLayoutStore();
 const runtimes = useRuntimesStore();
+const downloads = useDownloadsStore();
 const yue = useYueStore();
-const router = useRouter();
 
 /** 平台支持的 audio.cpp 引擎包（ONNX Runtime / CUDA 组件不在这里）。 */
 const packs = computed(() => runtimes.items.filter((r) => r.group === "audiocpp"));
@@ -76,11 +75,17 @@ function noteFor(item: RuntimeStatus): string {
   return text === key ? item.note : text;
 }
 
-/** 默认选当前在用的那份；一份都没装就选 CPU（任何机器都能跑）。 */
+/**
+ * 默认选哪一份：当前在用的 → 已装好的 → **本机最优**（不要求已装）→ CPU 兜底。
+ *
+ * 关键在第三档：以前这里直接退到 `core`（CPU），于是全新 N 卡机器打开向导看到的是
+ * 「CPU」被选中，用户很容易以为软件不支持显卡。
+ */
 function pickDefault(): void {
   if (packs.value.some((p) => p.id === picked.value)) return;
   const best =
     packs.value.find((p) => p.installed && p.selected) ??
+    packs.value.find((p) => p.usable && p.recommended) ??
     packs.value.find((p) => p.installed) ??
     packs.value.find((p) => p.core) ??
     packs.value[0];
@@ -117,13 +122,25 @@ function cancel(): void {
   emit("cancel");
 }
 
-/** 打开下载管理器并落到「运行时」（设置页是独立路由，得先回工作区）。 */
-function openManager(): void {
-  runtimes.requestFocus();
-  layout.openTab("manager");
-  if (router.currentRoute.value.path.startsWith("/settings")) {
-    void router.push(lastWorkspace.value);
+/** 装一份引擎并选中它。
+ *
+ * `jump` 决定「跳下载管理器看着下」还是「留在本页后台下」——两条路都走同一条串行队列，
+ * 不会因为用户先前点过别的下载而被静默吞掉。
+ */
+async function installPack(item: RuntimeStatus, jump: boolean): Promise<boolean> {
+  const ok = await downloads.run(
+    [{ section: "engine", id: item.id, label: labelFor(item), bytes: item.bytes }],
+    { jump },
+  );
+  if (!ok) {
+    if (downloads.running) layout.notify(i18n.t("setup.busyOther"));
+    return false;
   }
+  if (!(await runtimes.select(item.id))) return false;
+  await stopIfRunning();
+  layout.notify(i18n.t("engine.changed"));
+  emit("done", item.id);
+  return true;
 }
 
 async function confirm(): Promise<void> {
@@ -144,16 +161,17 @@ async function confirm(): Promise<void> {
     return;
   }
 
-  // 没装：关掉向导，跳下载管理器真正开始下载；装完自动选中。
-  // 这一步之后页面/管理器通常会切走，不再叠一个「现在重启」的对话框。
+  // 没装：关掉向导，走下载队列（默认跳管理器看着下）。
   close();
-  openManager();
-  const ok = await runtimes.installAndWait(item.id);
-  if (!ok) return; // 失败 / 取消的原因由管理器那边的 watcher 弹出
-  if (!(await runtimes.select(item.id))) return;
-  await stopIfRunning();
-  layout.notify(i18n.t("engine.changed"));
-  emit("done", item.id);
+  await installPack(item, true);
+}
+
+/** 「在后台下载」：不跳转，留在当前页面（设置页 / 写歌页）等它装完。 */
+async function background(): Promise<void> {
+  const item = selected.value;
+  if (!item || item.installed) return;
+  close();
+  await installPack(item, false);
 }
 
 const restartBody = computed(() =>
@@ -196,9 +214,11 @@ async function stopIfRunning(): Promise<void> {
           :key="item.id"
           type="button"
           class="option"
-          :class="{ on: picked === item.id }"
+          :class="{ on: picked === item.id, off: !item.usable }"
           role="radio"
           :aria-checked="picked === item.id"
+          :aria-disabled="!item.usable"
+          :disabled="!item.usable"
           @click="picked = item.id"
         >
           <span class="radio" aria-hidden="true" />
@@ -207,8 +227,13 @@ async function stopIfRunning(): Promise<void> {
               {{ labelFor(item) }}
               <span v-if="item.installed && item.selected" class="pill">{{ i18n.t("yue.engineCurrent") }}</span>
               <span v-else-if="item.installed" class="pill">{{ i18n.t("yue.engineInstalled") }}</span>
+              <span v-else-if="item.usable && item.recommended" class="pill rec">
+                {{ i18n.t("engine.recommended") }}
+              </span>
             </span>
-            <span class="m3-row-sub">{{ noteFor(item) }}</span>
+            <span class="m3-row-sub">
+              {{ item.usable ? noteFor(item) : i18n.t("engine.notUsable") }}
+            </span>
           </span>
           <span class="m3-row-value">{{ humanSize(item.bytes) }}</span>
         </button>
@@ -221,6 +246,14 @@ async function stopIfRunning(): Promise<void> {
       <div class="m3-dialog-foot">
         <button class="m3-btn text" type="button" @click="cancel">
           {{ i18n.t(dismissible ? "common.cancel" : "yue.engineSetupBack") }}
+        </button>
+        <button
+          v-if="selected && !selected.installed"
+          class="m3-btn text"
+          type="button"
+          @click="background"
+        >
+          {{ i18n.t("setup.background") }}
         </button>
         <span class="spacer" />
         <button class="m3-btn filled" type="button" :disabled="!canConfirm" @click="confirm">
@@ -277,6 +310,14 @@ async function stopIfRunning(): Promise<void> {
   border-color: rgb(var(--md-primary));
   background-color: rgb(var(--md-primary) / 0.08);
 }
+/* 本机跑不了的后端（AMD 机器上的 CUDA）：灰掉但保留，说明「为什么不能用」。 */
+.option.off {
+  opacity: 0.45;
+  cursor: default;
+}
+.option.off:hover {
+  border-color: rgb(var(--md-outline-variant) / 0.45);
+}
 .radio {
   width: 18px;
   height: 18px;
@@ -301,6 +342,10 @@ async function stopIfRunning(): Promise<void> {
   color: rgb(var(--md-primary));
   font-size: 10px;
   font-weight: 500;
+}
+.pill.rec {
+  background-color: rgb(var(--md-primary));
+  color: rgb(var(--md-on-primary));
 }
 .spacer {
   flex: 1 1 auto;

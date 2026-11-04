@@ -12,6 +12,7 @@
  * 松手才提交给引擎。
  */
 import { computed, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import Md3Knob from "@/components/common/Md3Knob.vue";
 import Oscilloscope from "@/components/common/Oscilloscope.vue";
@@ -25,8 +26,12 @@ import {
   type ParamSpec,
 } from "@/data/plugins";
 import { useI18n } from "@/i18n";
+import { useLayoutStore } from "@/stores/layout";
 import { usePresetsStore, type PresetOption } from "@/stores/presets";
 import type { WaveParams } from "@/utils/waveform";
+
+const route = useRoute();
+const layout = useLayoutStore();
 
 const props = defineProps<{
   params: Record<string, number>;
@@ -200,6 +205,19 @@ function noteName(note: number): string {
 /** 当前音域，写成 `C2 – C6`。 */
 const keyboardRange = computed(
   () => `${noteName(keyboardBase.value)} – ${noteName(keyboardBase.value + KB_OCTAVES * 12)}`,
+);
+
+/**
+ * 下窗口的虚拟键盘正在占用电脑键盘时，合成器面板让出字母键。
+ *
+ * 两个键盘同时监听 `keydown` 会让同一个键弹出两条轨道的音；下窗口的键盘是用户明确打开的
+ * 录音入口，优先级更高。独立合成器窗口（路由 `/synth`）没有下窗口，不受影响。
+ */
+const bottomKeyboardOwnsKeys = computed(
+  () =>
+    route.path.startsWith("/edit") &&
+    layout.showControllerLane &&
+    layout.controllerTarget === "keyboard",
 );
 
 const basicKnobs = computed(() =>
@@ -622,7 +640,12 @@ function pickPad(option: PresetOption): void {
           <span class="kb-range">{{ keyboardRange }}</span>
         </div>
         <div class="kb-keys">
-          <PianoKeyboard :track="props.track" :base-note="keyboardBase" :octaves="KB_OCTAVES" />
+          <PianoKeyboard
+            :track="props.track"
+            :base-note="keyboardBase"
+            :octaves="KB_OCTAVES"
+            :computer-keyboard="!bottomKeyboardOwnsKeys"
+          />
         </div>
       </div>
   </div>

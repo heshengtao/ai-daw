@@ -1,33 +1,54 @@
 <script setup lang="ts">
 /**
- * 下窗口的乐谱窗格：只画**当前片段**（和上面钢琴卷帘是同一条 MIDI），跟着播放头走。
+ * 下窗口的乐谱窗格。
  *
- * 它和控制器泳道共用同一个「目标」下拉（`LaneTargetSelect`）：选「乐谱」就换成这里，选回去
- * 就回到力度 / 自动化。所以这里不再有自己的「总谱 / 分谱」——下窗口的谱必须和上面的片段
- * 一一对应，整首谱去独立的乐谱视图看。
+ * - 编辑视图：只画**当前片段**（和上面钢琴卷帘是同一条 MIDI），跟着播放头走；
+ * - 编排视图：画**选中轨道**里所有带音符的片段（用户没选轨道 / 轨道只有音频时显示占位文字）。
+ *
+ * 视图切换器（编排：自动化 / 乐谱 / 键盘；编辑：控制器 / 乐谱 / 键盘）由 `LaneViewSwitch`
+ * 统一画在表头最左侧；参数下拉只留在控制器 / 自动化窗格里。
  */
 import { computed } from "vue";
 import { XMarkIcon } from "@heroicons/vue/24/outline";
 import Md3Select from "@/components/common/Md3Select.vue";
-import LaneTargetSelect from "@/components/workspace/LaneTargetSelect.vue";
+import LaneViewSwitch from "@/components/workspace/LaneViewSwitch.vue";
 import { defaultNotationFor, type Notation } from "@/utils/notation";
 import ScoreCanvas from "@/components/workspace/ScoreCanvas.vue";
 import { useI18n } from "@/i18n";
-import { useLayoutStore } from "@/stores/layout";
+import {
+  ARRANGE_LANE_VIEWS,
+  EDIT_LANE_VIEWS,
+  useLayoutStore,
+  type LaneView,
+} from "@/stores/layout";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { barBeatAt } from "@/utils/tempo";
-import type { AutomationTarget } from "@/utils/automation";
 
-defineProps<{
-  /** 「目标」下拉的当前值（一定是 `score`；这里只是为了让下拉保持选中）。 */
-  targetKey: string;
-  targets: AutomationTarget[];
-}>();
+const props = withDefaults(
+  defineProps<{
+    /**
+     * 宿主：编辑视图只画当前片段；编排视图画**选中轨道**的整段内容。
+     */
+    context?: "edit" | "arrange";
+  }>(),
+  { context: "edit" },
+);
 
 const emit = defineEmits<{
-  (e: "update:targetKey", value: string): void;
+  /** 视图切换器：控制器 / 自动化 / 乐谱 / MIDI 键盘（由宿主决定可用项）。 */
+  (e: "update:view", value: LaneView): void;
 }>();
+
+const isArrange = computed(() => props.context === "arrange");
+/** 这个宿主能切哪几格：编排是「自动化 / 乐谱 / 键盘」，编辑是「控制器 / 乐谱 / 键盘」。 */
+const views = computed(() => (isArrange.value ? ARRANGE_LANE_VIEWS : EDIT_LANE_VIEWS));
+
+/** 收起下窗口：编排视图关 `showAutomation`，编辑视图关 `showControllerLane`。 */
+function hidePane(): void {
+  if (isArrange.value) layout.showAutomation = false;
+  else layout.showControllerLane = false;
+}
 
 const i18n = useI18n();
 const layout = useLayoutStore();
@@ -59,11 +80,29 @@ const notationOptions = computed(() => [
   { id: "drums", label: i18n.t("score.notationDrums") },
 ]);
 
-/** 只出当前这一小段：片段不一定压在小节线上，`buildMusicXML` 会自动从所在小节起排。 */
+/** 编排视图里「选中轨道的内容范围」：第一颗有音符的片段到最后一颗，整首范围太大时更好读。 */
+const arrangeRange = computed(() => {
+  const t = selection.track;
+  if (!t) return null;
+  const clips = t.clips.filter((c) => c.notes.length > 0);
+  if (clips.length === 0) return null;
+  const start = Math.min(...clips.map((c) => c.start));
+  const end = Math.max(...clips.map((c) => c.start + c.length));
+  return { start, end };
+});
+
+/**
+ * 编辑视图只出当前片段；编排视图出**选中轨道**里所有带音符的片段。
+ * 片段不一定压在小节线上，`buildMusicXML` 会自动从所在小节起排。
+ */
 const range = computed(() => {
+  if (isArrange.value) return arrangeRange.value ?? undefined;
   const c = clip.value;
   return c ? { start: c.start, end: c.start + c.length } : undefined;
 });
+
+/** 有没有可画的内容：编辑视图看片段，编排视图看选中轨道里有没有音符。 */
+const hasScore = computed(() => (isArrange.value ? arrangeRange.value !== null : clip.value !== null));
 
 /**
  * 只出当前轨道。
@@ -71,15 +110,15 @@ const range = computed(() => {
  * 没有选中轨道时返回**空数组**而不是 `undefined`——`undefined` 在 `buildMusicXML` 里
  * 等于「全部轨道」，下窗口就会莫名其妙显示一张总谱。下窗口永远只出单轨。
  */
-const tracks = computed(() => (selection.trackId === null ? [] : [selection.trackId]));
+const tracks = computed(() => (selection.track ? [selection.track.id] : []));
 
 /** 表头里的「轨道 · 第几到第几小节」，让用户知道这段谱对应哪里。 */
 const rangeLabel = computed(() => {
-  const c = clip.value;
+  const r = range.value;
   const transport = project.project?.transport;
-  if (!c || !transport) return "";
-  const from = barBeatAt(c.start, transport).bar;
-  const to = barBeatAt(Math.max(c.start, c.start + c.length - 1e-6), transport).bar;
+  if (!r || !transport) return "";
+  const from = barBeatAt(r.start, transport).bar;
+  const to = barBeatAt(Math.max(r.start, r.end - 1e-6), transport).bar;
   return i18n.t("score.bars", { from, to: Math.max(from, to) });
 });
 </script>
@@ -87,14 +126,11 @@ const rangeLabel = computed(() => {
 <template>
   <div class="score-block" :style="{ height: `${layout.laneHeight + LANE_CHROME}px` }">
     <div class="lane-head">
-      <span class="lane-title">{{ i18n.t("lane.score") }}</span>
-      <div class="lane-chooser">
-        <LaneTargetSelect
-          :target-key="targetKey"
-          :targets="targets"
-          @update:target-key="emit('update:targetKey', $event)"
-        />
-      </div>
+      <LaneViewSwitch
+        :model-value="'score'"
+        :views="views"
+        @update:model-value="emit('update:view', $event)"
+      />
 
       <!-- 谱式：和乐谱视图同一套选项 -->
       <div class="notation-chooser">
@@ -111,14 +147,16 @@ const rangeLabel = computed(() => {
         class="lane-btn"
         type="button"
         :aria-label="i18n.t('lane.hide')"
-        @click="layout.showControllerLane = false"
+        @click="hidePane"
       >
         <XMarkIcon class="lane-btn-icon" />
       </button>
     </div>
 
-    <ScoreCanvas v-if="clip" :tracks="tracks" :range="range" />
-    <p v-else class="score-empty">{{ i18n.t("score.noClip") }}</p>
+    <ScoreCanvas v-if="hasScore" :tracks="tracks" :range="range" />
+    <p v-else class="score-empty">
+      {{ i18n.t(isArrange ? (selection.track ? "score.empty" : "score.noTrack") : "score.noClip") }}
+    </p>
   </div>
 </template>
 
@@ -202,7 +240,8 @@ const rangeLabel = computed(() => {
   height: 15px;
 }
 .score-empty {
-  margin: 24px 0;
+  margin: auto;
+  padding: 0 12px;
   text-align: center;
   font-size: 12.5px;
   color: rgb(var(--md-on-surface-muted));

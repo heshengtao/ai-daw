@@ -1825,19 +1825,79 @@ pub(crate) struct CudaPerfArgs {
     enabled: bool,
 }
 
-/// AI 写歌（YuE2）：风格 + 歌词（或 ABC 谱）→ 新轨道。
+/// 一组采样旋钮（谱规划 `/` 语义码各一套，对应协议里的 `abc_*` / `semantic_*`）。
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SamplingKnobs {
+    /// 采样温度（0–5）。
+    #[serde(default)]
+    temperature: Option<f32>,
+    /// 核采样概率（0–1]）。
+    #[serde(default)]
+    top_p: Option<f32>,
+    /// top-k 上限。
+    #[serde(default)]
+    top_k: Option<u32>,
+    /// 重复惩罚（> 0）。
+    #[serde(default)]
+    repetition_penalty: Option<f32>,
+    /// 重复惩罚窗口。
+    #[serde(default)]
+    penalty_window: Option<u32>,
+    /// 最少 token（早停保护）。
+    #[serde(default)]
+    min_tokens: Option<u32>,
+    /// 最多 token（截断）。
+    #[serde(default)]
+    max_tokens: Option<u32>,
+}
+
+impl SamplingKnobs {
+    fn into_args(self) -> crate::yue_engine::SamplingArgs {
+        crate::yue_engine::SamplingArgs {
+            temperature: self.temperature,
+            top_p: self.top_p,
+            top_k: self.top_k,
+            repetition_penalty: self.repetition_penalty,
+            penalty_window: self.penalty_window,
+            min_tokens: self.min_tokens,
+            max_tokens: self.max_tokens,
+        }
+    }
+}
+
+/// 把工程里的 MIDI 片段写成 ABC 谱（翻唱的 MIDI 参考：旋律已知，零推理）。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct MidiToAbcArgs {
+    /// 轨道 id（`get_project` 里查）。
+    track: u64,
+    /// 片段 id；省略 = 该轨道第一个 MIDI 片段。
+    #[serde(default)]
+    clip: Option<u64>,
+}
+
+/// 读一份落盘产物（`.abc` / `.semantic.json` / 生成记录 `.json`）的文本。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ReadTextArgs {
+    /// 文件路径（生成 / 转谱返回里的 `score` / `semantic` / `record`）。
+    path: String,
+}
+
+/// AI 写歌（YuE2）：风格 + 歌词（或 ABC 谱）→ 新轨道 / 谱面 / 语义码。
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct ComposeSongArgs {
     /// 风格标签（逗号分隔，例如 `pop, female vocal, city pop`）。
     #[serde(default)]
     style: String,
-    /// 歌词（带 `[Verse]` / `[Chorus]` 结构标签）。
+    /// 歌词（带 `[Verse]` / `[Chorus]` 结构标签）。留空 = 纯器乐。
     #[serde(default)]
     lyrics: String,
     /// 直接给一段 ABC 谱；留空 = 让模型自己写。
     #[serde(default)]
     abc: String,
-    /// 目标时长（秒，15–360；默认 120）。
+    /// 从文件读 ABC 谱（`abc` 为空时生效）——转谱结果是文件，用它接最省事。
+    #[serde(default)]
+    abc_file: Option<String>,
+    /// 目标时长（秒，15–600；默认 120）。
     #[serde(default)]
     duration: Option<f32>,
     /// 流匹配步数（1–64；默认 8）。
@@ -1849,18 +1909,49 @@ pub(crate) struct ComposeSongArgs {
     /// 结构模式：`full`（带和弦）/ `melody`（只要旋律）/ `off`（跳过符号阶段）。
     #[serde(default)]
     cot: Option<String>,
+    /// 生成停在哪一段：`abc`（只写谱，不入轨）/ `semantic`（谱 + 语义码）/ `audio`（整首，默认）。
+    #[serde(default)]
+    stop_after: Option<String>,
+    /// 把语义码作为 artifact 一起导出（续写 / 精确复现的前提）。
+    #[serde(default)]
+    export_semantic: Option<bool>,
+    /// 续写：用这份语义码文件（上一次生成的 `.semantic.json`）当开头。
+    /// 带了前缀时，结果是一段**只含新长出来部分**的片段，接在 `after_track` 那条轨道的末尾。
+    #[serde(default)]
+    semantic_prefix_file: Option<String>,
+    /// 谱规划的采样旋钮。
+    #[serde(default)]
+    abc_sampling: Option<SamplingKnobs>,
+    /// 语义码的采样旋钮。
+    #[serde(default)]
+    semantic_sampling: Option<SamplingKnobs>,
     /// CFG 强度；省略用协议默认。
     #[serde(default)]
     cfg_scale: Option<f32>,
     /// 权重 id；省略 = 已安装的默认档。
     #[serde(default)]
     model: Option<String>,
-    /// 结果插到这条轨道下面（省略 = 追加到末尾）。
+    /// 插到哪条轨道旁边：普通生成 = 新建一条轨插在它下面（省略 = 追加到末尾）；
+    /// 续写（带了 `semantic_prefix_file`）= 新片段接在这条轨道最后一个音频片段的末尾。
     #[serde(default)]
     after_track: Option<u64>,
     /// 新轨道名。
     #[serde(default)]
     name: Option<String>,
+}
+
+/// 录音转谱（SheetSage2）：把一条音频轨 / 一个文件转成 ABC 谱。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct TranscribeScoreArgs {
+    /// 音频文件路径（WAV）；与 `track` 二选一，同时给时以它为准。
+    #[serde(default)]
+    audio: Option<String>,
+    /// 用这条轨道的第一个音频片段。
+    #[serde(default)]
+    track: Option<u64>,
+    /// 指定片段 id（省略 = 该轨道第一个音频片段）。
+    #[serde(default)]
+    clip: Option<u64>,
 }
 
 /// 导出 MIDI 文件。
@@ -6010,7 +6101,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         Ok(format!("模型 {} 已删除", args.id))
     }
 
-    /// 启动 YuE2 写歌引擎（首次要加载几分钟），返回随后的引擎状态。
+    /// 启动写歌引擎（首次要加载几分钟），返回随后的引擎状态。
     pub(crate) fn start_yue_engine(
         app: &AppHandle,
         args: StartYueEngineArgs,
@@ -6046,7 +6137,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         ))
     }
 
-    /// AI 写歌：风格 + 歌词（或 ABC）→ 新轨道。离线渲染，几分钟起步。
+    /// AI 写歌：风格 + 歌词（或 ABC）→ 新轨道 / 谱面 / 语义码。离线渲染，几分钟起步。
     pub(crate) fn compose_song(
         app: &AppHandle,
         args: ComposeSongArgs,
@@ -6055,16 +6146,65 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             style: args.style,
             lyrics: args.lyrics,
             abc: args.abc,
+            abc_file: args.abc_file,
             duration: args.duration,
             steps: args.steps,
             seed: args.seed,
             cot: args.cot,
+            stop_after: args.stop_after,
+            export_semantic: args.export_semantic,
+            semantic_prefix: None,
+            semantic_prefix_file: args.semantic_prefix_file,
+            abc_sampling: args.abc_sampling.map(SamplingKnobs::into_args),
+            semantic_sampling: args.semantic_sampling.map(SamplingKnobs::into_args),
             cfg_scale: args.cfg_scale,
             model: args.model,
             after_track: args.after_track,
             name: args.name,
         };
         crate::yue_engine::compose_blocking(app, request)
+    }
+
+    /// 录音转谱：SheetSage2 听出 ABC 谱（YuE2 翻唱的第一步）。
+    pub(crate) fn transcribe_score(
+        app: &AppHandle,
+        args: TranscribeScoreArgs,
+    ) -> Result<String, String> {
+        let outcome = crate::yue_transcribe::transcribe_blocking(
+            app,
+            crate::yue_transcribe::TranscribeArgs {
+                audio: args.audio,
+                track: args.track,
+                clip: args.clip,
+            },
+        )?;
+        Ok(format!(
+            "已转出 ABC 谱：{}（{} 字符，输入 {:.0} 秒，用时 {:.0} 秒）。下一步：compose_song 用 abc_file=\"{}\" + cot=\"melody\" 按谱重唱。",
+            outcome.score,
+            outcome.chars,
+            outcome.seconds,
+            outcome.elapsed,
+            outcome.score,
+        ))
+    }
+
+    /// 读一份落盘的谱面 / 语义码 / 生成记录。
+    pub(crate) fn read_yue_score(_app: &AppHandle, args: ReadTextArgs) -> Result<String, String> {
+        std::fs::read_to_string(&args.path).map_err(|e| format!("读 {} 失败：{e}", args.path))
+    }
+
+    /// MIDI 片段 → ABC（翻唱的 MIDI 参考）。
+    ///
+    /// 不给 MIDI 参考时，翻唱要先 `transcribe_score`（音频，需 2.5 GB 权重、分钟级）；
+    /// 旋律本来就在工程里的话，这条是**零推理**的，还顺带把逐音歌词带回来。
+    pub(crate) fn midi_to_abc(app: &AppHandle, args: MidiToAbcArgs) -> Result<String, String> {
+        let state = app.state::<AppState>();
+        let project = {
+            let engine = state.engine.lock().unwrap();
+            engine.project().clone()
+        };
+        let score = crate::yue_midi::clip_to_abc(&project, args.track, args.clip)?;
+        json_s(&score)
     }
 
     /// 把工程导出成标准 MIDI 文件（多轨、含速度图与拍号图）。
@@ -6381,11 +6521,14 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("install_runtime", "**高风险**：从互联网下载并安装一个推理运行时（几十到几百 MB）。**只有用户明确同意后才能调用**；不确定先 list_runtimes。", RuntimeIdArgs),
             tool_def!("remove_runtime", "移除一个已安装的推理运行时，释放磁盘；之后依赖它的后端会不可用。", RuntimeIdArgs),
             tool_def!("remove_model", "删除一个已下载的本地 AI 模型权重（释放磁盘）。用 list_models 查 id。", ModelIdArgs),
-            tool_def!("start_yue_engine", "启动 YuE2 写歌引擎（首次要加载几分钟），返回引擎状态。生成前必须先 ready。", StartYueEngineArgs),
+            tool_def!("start_yue_engine", "启动写歌引擎（首次要加载几分钟），返回引擎状态。生成前必须先 ready。", StartYueEngineArgs),
             tool_def!("stop_yue_engine", "停止 YuE2 引擎（同时结束在跑的生成）。"),
             tool_def!("get_yue_engine_log", "读引擎日志尾部（默认 200 行）——定位「为什么起不来 / 为什么没声音」。", EngineLogArgs),
             tool_def!("set_yue_cuda_perf", "切换 YuE2 的 CUDA 性能档：开 = 更快但更吃显存，关 = 省显存。", CudaPerfArgs),
-            tool_def!("compose_song", "**AI 写歌（YuE2）**：风格 + 歌词（或直接给 ABC 谱）→ 渲染成**新轨道**（一次撤销可整体去掉）。需要引擎已启动（start_yue_engine）且模型就位（get_capabilities）。离线渲染，一首歌几分钟起步；`cancel_ai_task` 可中止。", ComposeSongArgs),
+            tool_def!("compose_song", "**AI 写歌（YuE2）**：风格 + 歌词（或直接给 ABC 谱）→ 新轨道 / 谱面 / 语义码。`stop_after=abc` 只写谱（不入轨，配合 `read_yue_score` 取回文本）、`semantic` 连语义码一起出（续写、精确复现用）、默认 `audio` 出整首歌。`cot` 选符号路线，`abc_sampling` / `semantic_sampling` 各 7 个采样旋钮。需要引擎已启动（start_yue_engine）且模型就位（get_capabilities）。离线渲染，一首歌几分钟起步；`cancel_ai_task` 可中止。", ComposeSongArgs),
+            tool_def!("transcribe_score", "**录音转谱（SheetSage2）**：把一条音频轨或一个 WAV 文件转成 **ABC 谱**（YuE2 翻唱的第一步：转谱 → compose_song 给 `abc_file` + `cot=melody` 按谱重唱）。需要 2.5 GB 的 SheetSage2 权重（管理器里下载）。会先停掉写歌引擎腾显存，跑完自动结束；一首 3 分钟的歌约 1–3 分钟。", TranscribeScoreArgs),
+            tool_def!("read_yue_score", "读一份生成时落盘的产物（`.abc` / `.semantic.json` / 生成记录 `.json`），返回文本。", ReadTextArgs),
+            tool_def!("midi_to_abc", "**MIDI 片段 → ABC 谱**（翻唱的 MIDI 参考）：旋律已在工程里就不必用 SheetSage2 听一遍，零推理、瞬间完成；返回 `abc` / `lyrics` / `bars` / `notes`，把 `abc` 给 `compose_song(abc=…, cot=\"melody\")` 就是按这段 MIDI 重唱。", MidiToAbcArgs),
             tool_def!("export_midi", "把工程导出成标准 MIDI 文件（多轨、带速度图 / 拍号图 / CC 与逐音歌词）；可用 `tracks` 只导指定轨道。只读派生，不改工程、不进历史。", ExportMidiArgs),
             tool_def!("swap_voice", "**音色替换（SoulX-SVC）**：把一条人声轨换成参考声线，旋律 / 歌词 / 节奏跟着原音频走，结果写成源轨下面的**新音频轨**（一次撤销）。目标与参考都应是单声部人声——混音先 separate_stems 取人声。离线渲染，10 秒约 1–2 分钟。", SwapVoiceArgs),
             tool_def!("preview_track_mix", "混音电平预览：离线渲染整首（或只 solo 一条轨）并报峰值 / 真峰值 / 积分响度 / RMS，附这条轨的推子、声像、发送数与效果器数。调完推子/压缩后用它核对「到底多响」。", PreviewMixArgs),
@@ -6545,6 +6688,9 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             "get_yue_engine_log" => get_yue_engine_log(app, parse_args(args)?),
             "set_yue_cuda_perf" => set_yue_cuda_perf(app, parse_args(args)?),
             "compose_song" => compose_song(app, parse_args(args)?),
+            "transcribe_score" => transcribe_score(app, parse_args(args)?),
+            "read_yue_score" => read_yue_score(app, parse_args(args)?),
+            "midi_to_abc" => midi_to_abc(app, parse_args(args)?),
             "export_midi" => export_midi(app, parse_args(args)?),
             "swap_voice" => swap_voice(app, parse_args(args)?),
             "preview_track_mix" => preview_track_mix(app, parse_args(args)?),
@@ -7797,7 +7943,7 @@ impl DawMcpServer {
     }
 
     #[tool(
-        description = "启动 YuE2 写歌引擎（首次要加载几分钟），返回引擎状态。生成前必须先 ready。"
+        description = "启动写歌引擎（首次要加载几分钟），返回引擎状态。生成前必须先 ready。"
     )]
     async fn start_yue_engine(
         &self,
@@ -7844,7 +7990,7 @@ impl DawMcpServer {
     }
 
     #[tool(
-        description = "**AI 写歌（YuE2）**：风格 + 歌词（或直接给 ABC 谱）→ 渲染成新轨道（一次撤销）。需要引擎已启动且模型就位。离线渲染，一首歌几分钟起步。"
+        description = "**AI 写歌（YuE2）**：风格 + 歌词（或直接给 ABC 谱）→ 新轨道 / 谱面 / 语义码。`stop_after=abc` 只写谱，`semantic` 连语义码一起出（续写 / 精确复现），默认出整首。需要引擎已启动且模型就位。离线渲染，一首歌几分钟起步。"
     )]
     async fn compose_song(
         &self,
@@ -7852,6 +7998,46 @@ impl DawMcpServer {
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
         tauri::async_runtime::spawn_blocking(move || tools::compose_song(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(
+        description = "**录音转谱（SheetSage2）**：音频轨或 WAV → ABC 谱，YuE2 翻唱的第一步。需要 2.5 GB SheetSage2 权重；会先停写歌引擎腾显存，跑完自动结束。"
+    )]
+    async fn transcribe_score(
+        &self,
+        Parameters(args): Parameters<TranscribeScoreArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::transcribe_score(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(description = "读一份落盘产物（.abc / .semantic.json / 生成记录 .json）的文本。")]
+    async fn read_yue_score(
+        &self,
+        Parameters(args): Parameters<ReadTextArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::read_yue_score(&app, args))
+            .await
+            .map_err(|e| fail(e.to_string()))?
+            .map_err(fail)
+    }
+
+    #[tool(
+        description = "**MIDI 片段 → ABC 谱**（翻唱的 MIDI 参考）：零推理，返回 abc / lyrics / bars / notes；把 abc 给 compose_song(cot=\"melody\") 即按这段 MIDI 重唱。"
+    )]
+    async fn midi_to_abc(
+        &self,
+        Parameters(args): Parameters<MidiToAbcArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn_blocking(move || tools::midi_to_abc(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -8429,6 +8615,9 @@ mod tests {
             "get_yue_engine_log",
             "set_yue_cuda_perf",
             "compose_song",
+            "transcribe_score",
+            "read_yue_score",
+            "midi_to_abc",
             "export_midi",
             "swap_voice",
             "preview_track_mix",

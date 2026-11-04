@@ -31,6 +31,26 @@ export type PaneId =
  */
 export type Tool = "draw" | "select" | "split" | "lyric" | "eraser";
 
+/**
+ * 下窗口的视图标识。
+ *
+ * - `automation`：编排视图的自动化曲线；
+ * - `lane`：编辑视图的控制器泳道（力度 / 压力 / 通道 / 参数曲线）；
+ * - `score`：选中轨道的乐谱；
+ * - `keyboard`：选中轨道的虚拟 MIDI 键盘。
+ *
+ * 编排与编辑各自只暴露其中三格：编排是「自动化 / 乐谱 / 键盘」，编辑是「控制器 / 乐谱 / 键盘」。
+ */
+export type LaneView = "automation" | "lane" | "score" | "keyboard";
+
+/** 编排视图下窗口的三种视图（顺序即切换器里的顺序）。 */
+export type ArrangeLaneView = Exclude<LaneView, "lane">;
+export const ARRANGE_LANE_VIEWS: ArrangeLaneView[] = ["automation", "score", "keyboard"];
+
+/** 编辑视图下窗口的三种视图（顺序即切换器里的顺序）。 */
+export type EditLaneView = Exclude<LaneView, "automation">;
+export const EDIT_LANE_VIEWS: EditLaneView[] = ["lane", "score", "keyboard"];
+
 /** 鍏ㄩ儴榧犳爣妯″紡锛堥『搴忓嵆椤舵爮閲岀殑灞曠ず椤哄簭锛夈€?*/
 export const TOOLS: Tool[] = ["draw", "eraser", "select", "split", "lyric"];
 
@@ -79,11 +99,18 @@ interface Persisted {
   laneHeight: number;
   /** 缂栨帓瑙嗗浘搴曢儴鐨勮嚜鍔ㄥ寲鏇茬嚎缂栬緫鍣ㄦ槸鍚︽墦寮€銆?*/
   showAutomation: boolean;
+  /** 编排视图下窗口显示哪个视图：自动化 / 乐谱 / MIDI 键盘。 */
+  arrangeLaneView: ArrangeLaneView;
+  /** 编排视图自动化车道当前选中的参数键（切去乐谱 / 键盘再回来时不丢）。 */
+  arrangeParam: string;
   /** 閽㈢惔鍗峰笜涓嬫柟鐨勬帶鍒跺櫒锛堝姏搴?/ 闊抽噺锛夋吵閬撴槸鍚︽墦寮€銆?*/
   showControllerLane: boolean;
   /** 缃戞牸缁嗗垎锛氬嵎甯樼殑鍚搁檮姝ラ暱 + 缂栨帓瑙嗗浘鐨勫叏灞€鍚搁檮锛?*鍚屼竴浠借缃?*銆?*/
   noteGrid: NoteGrid;
   /** 搴曢儴绐楁牸鐨勫綋鍓嶇洰鏍囷紙`velocity` / 鑷姩鍖栧弬鏁伴敭 / `score`锛夈€?*/
+  /** 编辑视图下窗口显示哪个视图：控制器 / 乐谱 / MIDI 键盘。 */
+  controllerView: EditLaneView;
+  /** 编辑视图下窗口的当前参数目标（`velocity` / `pressure` / `channel` / 自动化键）。 */
   controllerTarget: string;
   /** 閽㈢惔鍗峰笜鐨勫彲瑙佽寖鍥达細褰撳墠鐗囨 / 鏁存潯杞ㄩ亾 / 鍏ㄩ儴杞ㄩ亾銆?*/
   rollScope: RollScope;
@@ -204,7 +231,42 @@ export const useLayoutStore = defineStore("layout", () => {
   const laneHeight = ref(clampLaneHeight(saved.laneHeight ?? saved.automationHeight ?? 120));
   // 涓や釜搴曢儴绐楁牸榛樿閮芥墦寮€锛氬畠浠槸鍚勮嚜瑙嗗浘鐨勫父瑙勫伐浣滃尯锛屼笉鏄彲閫夌殑璋冭瘯闈㈡澘銆?
   const showAutomation = ref(saved.showAutomation ?? true);
+  /** 编排视图下窗口的当前视图（持久化：切走再回来还是上次那个）。 */
+  const arrangeLaneView = ref<ArrangeLaneView>(
+    ARRANGE_LANE_VIEWS.includes(saved.arrangeLaneView as ArrangeLaneView)
+      ? (saved.arrangeLaneView as ArrangeLaneView)
+      : "automation",
+  );
+  /** 自动化车道的参数选择：切到乐谱 / 键盘再切回来仍是同一条曲线。 */
+  const arrangeParam = ref(
+    typeof saved.arrangeParam === "string" && saved.arrangeParam ? saved.arrangeParam : "gain_db",
+  );
   const showControllerLane = ref(saved.showControllerLane ?? true);
+
+  /**
+   * 老布局把「视图（乐谱 / 键盘）」也写进了 `controllerTarget`。
+   *
+   * 现在视图独立成 `controllerView`，参数下拉只放力度 / 压力 / 通道 / 自动化目标；这里把
+   * 旧值一次性迁过来：旧值是 `score` / `keyboard` 时视图跟着走、参数落回力度。
+   */
+  const legacyControllerTarget =
+    typeof saved.controllerTarget === "string" ? saved.controllerTarget : "velocity";
+  const legacyControllerView: EditLaneView | null =
+    legacyControllerTarget === "score" || legacyControllerTarget === "keyboard"
+      ? legacyControllerTarget
+      : null;
+  /** 编辑视图下窗口的当前视图（控制器 / 乐谱 / 键盘）。 */
+  const controllerView = ref<EditLaneView>(
+    EDIT_LANE_VIEWS.includes(saved.controllerView as EditLaneView)
+      ? (saved.controllerView as EditLaneView)
+      : (legacyControllerView ?? "lane"),
+  );
+  /** 控制器泳道的参数目标；视图独立后不再承担 `score` / `keyboard`。 */
+  const controllerTarget = ref(
+    legacyControllerView !== null || !legacyControllerTarget
+      ? "velocity"
+      : legacyControllerTarget,
+  );
   /**
    * 编排视图底部要让出的**总高度**（px）：自动化块 + 横向滚动条。
    *
@@ -219,8 +281,6 @@ export const useLayoutStore = defineStore("layout", () => {
   const noteGrid = ref<NoteGrid>(
     NOTE_GRIDS.includes(saved.noteGrid as NoteGrid) ? (saved.noteGrid as NoteGrid) : "1/16",
   );
-  // 搴曢儴绐楁牸鐨勭洰鏍囷細鍒囧埌涔愯氨銆佸垏璧拌鍥惧啀鍥炴潵锛屽簲璇ヨ繕鏄箰璋憋紙鐢ㄦ埛鐨勯€夋嫨鏄寔涔呯殑锛夈€?
-  const controllerTarget = ref(typeof saved.controllerTarget === "string" ? saved.controllerTarget : "velocity");
   // 鍗峰笜鍙鑼冨洿锛氶粯璁ゅ彧鐪嬪綋鍓嶇墖娈点€?
   const rollScope = ref<RollScope>(
     // 鏃х増鏈瓨杩?`clip`锛氬畠宸茬粡涓嶅瓨鍦ㄤ簡锛岃惤鍒伴粯璁ょ殑銆岃建閬撱€嶃€?
@@ -251,7 +311,10 @@ export const useLayoutStore = defineStore("layout", () => {
       tool,
       laneHeight,
       showAutomation,
+      arrangeLaneView,
+      arrangeParam,
       showControllerLane,
+      controllerView,
       noteGrid,
       controllerTarget,
       rollScope,
@@ -273,7 +336,10 @@ export const useLayoutStore = defineStore("layout", () => {
           tool: tool.value,
           laneHeight: laneHeight.value,
           showAutomation: showAutomation.value,
+          arrangeLaneView: arrangeLaneView.value,
+          arrangeParam: arrangeParam.value,
           showControllerLane: showControllerLane.value,
+          controllerView: controllerView.value,
           noteGrid: noteGrid.value,
           controllerTarget: controllerTarget.value,
           rollScope: rollScope.value,
@@ -416,7 +482,10 @@ export const useLayoutStore = defineStore("layout", () => {
     tool,
     laneHeight,
     showAutomation,
+    arrangeLaneView,
+    arrangeParam,
     showControllerLane,
+    controllerView,
     arrangeBottomInset,
     noteGrid,
     controllerTarget,

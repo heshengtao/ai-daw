@@ -39,3 +39,7 @@ ai-daw-analysis = { path = "../analysis" }
 [[example]]
 name = "play_demo"
 required-features = ["realtime"]
+
+[[example]]
+name = "audio_probe"
+required-features = ["realtime"]

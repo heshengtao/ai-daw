@@ -53,6 +53,15 @@ pub struct ModelProgress {
     pub total: u64,
     /// 出错 / 取消时的一句话。
     pub message: Option<String>,
+    /// 当前**正在尝试**的下载地址（镜像 / 官方源）。
+    ///
+    /// 下载器按候选顺序逐个回退，这里报的是本文件的首选地址——界面据此写
+    /// 「正在从 HuggingFace 下载」，用户不必猜「到底在跟谁要字节」。
+    pub source: Option<String>,
+    /// 该地址的源类型：`hf` / `modelscope` / `custom`。
+    pub source_kind: Option<String>,
+    /// 该地址所在区域：`intl` / `cn`。
+    pub region: Option<String>,
 }
 
 /// 下载运行时（一次只下一个）。
@@ -71,13 +80,29 @@ fn runtime() -> &'static ModelRuntime {
 
 /// 权重落地目录（应用配置目录的 `models/`）。
 pub fn models_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| format!("拿不到应用配置目录：{e}"))?
-        .join("models");
+    let dir = crate::paths::config_dir(app)?.join("models");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
+}
+
+/// 已经下线的模型：清单里删掉后用户就没法在管理器里「删除」了，只能由我们收尾。
+///
+/// 只认应用自己的 `models/`（下载落点），不碰 `AIDAW_MODELS` / 随包资源目录这些
+/// 用户或安装包管的地方——那里多一个目录不是我们该动的。
+const RETIRED_MODEL_DIRS: &[&str] = &["sensevoice-small"];
+
+/// 清掉已下线模型留在落点里的权重目录（幂等；启动时调一次）。
+pub fn purge_retired(app: &AppHandle) {
+    let Ok(base) = crate::paths::config_dir(app) else {
+        return;
+    };
+    for name in RETIRED_MODEL_DIRS {
+        let dir = base.join("models").join(name);
+        if dir.is_dir() {
+            // 失败就下次启动再试：权重没删掉也不影响任何功能。
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
 }
 
 /// 某个条目的下载落点目录（**不创建子目录**；查询状态时用）。
@@ -94,6 +119,17 @@ fn entry_dir(app: &AppHandle, entry: &ModelEntry) -> Result<PathBuf, String> {
     let dir = entry_dir_path(app, entry)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
+}
+
+/// 清单里的一个**官方源**（界面展示「魔搭 / HuggingFace」，悬停看 URL）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelSourceStatus {
+    /// 源类型：`hf` / `modelscope` / `custom`。
+    pub kind: String,
+    /// 源所在区域：`intl` / `cn`。
+    pub region: String,
+    /// 直链地址。
+    pub url: String,
 }
 
 /// 组内单个文件的状态（界面用：一个 3 GB 的组光有整组百分比不够，
@@ -119,6 +155,11 @@ pub struct ModelStatus {
     pub name: String,
     /// 所属功能。
     pub feature: String,
+    /// 写歌权重用的 audio.cpp **家族**（`yue2` / `ace_step`；不是写歌模型时是空串）。
+    ///
+    /// 界面靠它决定「能开哪几个开关」：YuE2 有谱面 / 续写 / 翻唱，ACE-Step 只有
+    /// 「描述 + 歌词 → 整首」。引擎配置与请求体也按它分叉（见 `yue_engine`）。
+    pub family: String,
     /// SPDX 许可。
     pub license: String,
     /// 整组预估体积（字节）。
@@ -135,6 +176,10 @@ pub struct ModelStatus {
     pub path: Option<String>,
     /// 是否有可下载的源。
     pub downloadable: bool,
+    /// 覆盖的区域（`intl` / `cn`）：界面给源加「国内 / 国外」徽标。
+    pub regions: Vec<String>,
+    /// 全部官方源（去重后；界面显示「魔搭 + HuggingFace」，悬停看 URL）。
+    pub sources: Vec<ModelSourceStatus>,
     /// 组内文件总数。
     pub total_files: u32,
     /// 组内已就位的文件数。
@@ -167,10 +212,28 @@ pub(crate) fn statuses(app: &AppHandle) -> Vec<ModelStatus> {
                 })
                 .collect();
             let path = catalog::installed_path(entry);
+            // 源清单按 URL 去重：组条目每个文件都带同一批源，逐文件展开会重复十几次。
+            let mut sources: Vec<ModelSourceStatus> = Vec::new();
+            for file in entry.files {
+                for source in file.sources {
+                    let status = ModelSourceStatus {
+                        kind: source.kind.to_string(),
+                        region: source.region.to_string(),
+                        url: source.url.to_string(),
+                    };
+                    if !sources.iter().any(|s| s.url == status.url) {
+                        sources.push(status);
+                    }
+                }
+            }
+            let mut regions: Vec<String> = sources.iter().map(|s| s.region.clone()).collect();
+            regions.sort();
+            regions.dedup();
             ModelStatus {
                 id: entry.id.to_string(),
                 name: entry.name.to_string(),
                 feature: entry.feature.to_string(),
+                family: catalog::compose_family(entry).unwrap_or_default().to_string(),
                 license: entry.license.to_string(),
                 approx_bytes: entry.total_bytes(),
                 filename: entry
@@ -185,6 +248,8 @@ pub(crate) fn statuses(app: &AppHandle) -> Vec<ModelStatus> {
                     .map(|m| m.len()),
                 path: path.map(|p| p.to_string_lossy().into_owned()),
                 downloadable: entry.files.iter().any(|f| !f.sources.is_empty()),
+                regions,
+                sources,
                 total_files: entry.files.len() as u32,
                 installed_files: files.iter().filter(|f| f.installed).count() as u32,
                 files,
@@ -312,10 +377,85 @@ pub async fn model_resolve_url(app: AppHandle, id: String) -> Result<String, Str
     .map_err(|e| e.to_string())?
 }
 
+/// 一次源探测的结果（界面「测试源」按钮用）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SourceProbe {
+    /// 源类型：`hf` / `modelscope` / `custom`。
+    pub kind: String,
+    /// 源所在区域：`intl` / `cn`。
+    pub region: String,
+    /// 直链地址。
+    pub url: String,
+    /// 是否可达。
+    pub ok: bool,
+    /// HTTP 状态码（连不上为 `None`）。
+    pub status: Option<u16>,
+    /// 首字节延迟（毫秒）。
+    pub ms: u64,
+    /// 失败原因（成功为 `None`）。
+    pub error: Option<String>,
+}
+
+/// 逐源探测「这个模型能从哪下、各自多快」。
+///
+/// 只取代表文件（第一个）的各源：区域连通性跟具体文件无关，用户点「测试源」是为了
+/// 判断**该不该换国内 / 国外源**，逐个文件探一遍只会白等几十秒。
+#[tauri::command]
+pub async fn model_probe(app: AppHandle, id: String) -> Result<Vec<SourceProbe>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = catalog::by_id(&id).ok_or_else(|| format!("未知模型：{id}"))?;
+        let file = entry
+            .primary()
+            .ok_or_else(|| "这个模型没有文件".to_string())?;
+        let network = app.state::<StoreRuntime>().network();
+        let proxy = resolve_proxy(&network).proxy;
+        let agent = probe_agent(proxy.as_ref());
+        let mut out = Vec::new();
+        for source in file.sources {
+            let started = Instant::now();
+            let result = agent
+                .get(source.url)
+                .header("Range", "bytes=0-0")
+                .call();
+            let ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            match result {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let ok = status == 200 || status == 206;
+                    out.push(SourceProbe {
+                        kind: source.kind.to_string(),
+                        region: source.region.to_string(),
+                        url: source.url.to_string(),
+                        ok,
+                        status: Some(status),
+                        ms,
+                        error: if ok {
+                            None
+                        } else {
+                            Some(format!("HTTP {status}"))
+                        },
+                    });
+                }
+                Err(e) => out.push(SourceProbe {
+                    kind: source.kind.to_string(),
+                    region: source.region.to_string(),
+                    url: source.url.to_string(),
+                    ok: false,
+                    status: None,
+                    ms,
+                    error: Some(e.to_string()),
+                }),
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ---------------------------------------------------------------------------
 // 内部实现
 // ---------------------------------------------------------------------------
-
 /// 单个源地址套上镜像前缀（含 `{url}` 占位符就替换，否则前缀拼接）。
 fn apply_prefix(prefix: &str, url: &str) -> String {
     let prefix = prefix.trim();
@@ -431,6 +571,17 @@ fn candidates_for(
     out
 }
 
+/// 当前正在尝试的下载地址（给「正在从 X 下载」用）。
+///
+/// 只记**首选**候选：下载器内部换源时不再逐次上报，界面显示的是「这一份字节主要从哪来」，
+/// 而不是每一次重试都要闪一下域名。
+#[derive(Debug, Clone)]
+struct SourceHint {
+    url: String,
+    kind: String,
+    region: String,
+}
+
 fn emit_model(
     app: &AppHandle,
     id: &str,
@@ -438,6 +589,7 @@ fn emit_model(
     received: u64,
     total: u64,
     message: Option<String>,
+    source: Option<&SourceHint>,
 ) {
     let _ = app.emit(
         EVENT_MODEL,
@@ -447,6 +599,9 @@ fn emit_model(
             received,
             total,
             message,
+            source: source.map(|s| s.url.clone()),
+            source_kind: source.map(|s| s.kind.clone()),
+            region: source.map(|s| s.region.clone()),
         },
     );
 }
@@ -467,7 +622,10 @@ fn run_download(app: &AppHandle, entry: &ModelEntry) {
     let group_total = entry.total_bytes();
     let cancel = &runtime().cancel;
 
-    emit_model(app, entry.id, "downloading", 0, group_total, None);
+    /// 最近一次上报的源（跨文件保留：跳过的文件不该把「正在从哪下」清空）。
+    let mut hint: Option<SourceHint> = None;
+
+    emit_model(app, entry.id, "downloading", 0, group_total, None, hint.as_ref());
 
     // 已完成文件的累计字节：界面只画一根条，进度是**跨文件的累计值**。
     let mut done_bytes: u64 = 0;
@@ -490,6 +648,7 @@ fn run_download(app: &AppHandle, entry: &ModelEntry) {
                 done_bytes.min(group_total),
                 group_total,
                 None,
+                hint.as_ref(),
             );
             continue;
         }
@@ -509,7 +668,16 @@ fn run_download(app: &AppHandle, entry: &ModelEntry) {
             entry.name, file.filename, region, candidates[0]
         );
 
+        // 首选源的类型 / 区域：镜像前缀会改写 URL，所以 kind 取自清单里的第一个源。
+        let primary = ordered_sources(file, region).into_iter().next();
+        hint = Some(SourceHint {
+            url: candidates[0].clone(),
+            kind: primary.map(|s| s.kind).unwrap_or("custom").to_string(),
+            region: primary.map(|s| s.region).unwrap_or("intl").to_string(),
+        });
+
         let base = done_bytes;
+        let current = hint.clone();
         let mut progress = |received: u64, _file_total: u64| {
             emit_model(
                 app,
@@ -518,6 +686,7 @@ fn run_download(app: &AppHandle, entry: &ModelEntry) {
                 (base + received).min(group_total),
                 group_total,
                 None,
+                current.as_ref(),
             );
         };
 
@@ -548,6 +717,7 @@ fn run_download(app: &AppHandle, entry: &ModelEntry) {
                             done_bytes.min(group_total),
                             group_total,
                             None,
+                            hint.as_ref(),
                         );
                     }
                     Err(e) => {
@@ -571,8 +741,8 @@ fn finish(app: &AppHandle, entry: &ModelEntry, result: Result<(), String>) {
     let total = entry.total_bytes();
     runtime().running.store(false, Ordering::SeqCst);
     match result {
-        Ok(()) => emit_model(app, entry.id, "done", total, total, None),
-        Err(e) => emit_model(app, entry.id, "error", 0, 0, Some(e)),
+        Ok(()) => emit_model(app, entry.id, "done", total, total, None, None),
+        Err(e) => emit_model(app, entry.id, "error", 0, 0, Some(e), None),
     }
 }
 
@@ -597,7 +767,11 @@ fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), String> {
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut command = {
         // Linux：没有统一「选中文件」接口，直接打开所在目录。
-        let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+        let dir = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
         let mut c = std::process::Command::new("xdg-open");
         c.arg(dir);
         c

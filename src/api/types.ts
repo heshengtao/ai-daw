@@ -848,9 +848,43 @@ export interface CliStatus {
   full_path: string | null;
 }
 
+/** 数据目录来源：命令行 / 环境变量 / 设置页 / 安装器 / 系统默认。 */
+export type DataDirSource = "cli" | "env" | "settings" | "installer" | "default";
+
+/** 当前数据目录概况（与后端 `paths::DataDirInfo` 一一对应）。 */
+export interface DataDirInfo {
+  /** 当前生效的数据目录。 */
+  current: string;
+  /** 系统默认数据目录。 */
+  default: string;
+  /** 当前缓存目录。 */
+  cache: string;
+  /** 这个目录是谁定的。 */
+  source: DataDirSource;
+  /** 已占用字节数。 */
+  size_bytes: number;
+  /** 便携模式（命令行 / 环境变量指定）：设置页改不了。 */
+  portable: boolean;
+  /** 上一次迁移留下的旧目录（重启后可清理）。 */
+  previous: string | null;
+  /** 指针里的新目录（与 `current` 不同 = 已迁移、等重启）。 */
+  next: string | null;
+  /** 是否需要重启才能切到 `next`。 */
+  restart_required: boolean;
+}
+
+/** 数据目录迁移进度。 */
+export interface DataDirProgress {
+  /** `scan` / `copy` / `write` / `done`。 */
+  phase: "scan" | "copy" | "write" | "done";
+  done: number;
+  total: number;
+  files: number;
+  message: string | null;
+}
+
 /** 一个音频输入设备（与后端 `recorder::InputDeviceInfo` 一一对应）。 */
-export interface InputDeviceInfo {
-  /** 设备显示名。 */
+export interface InputDeviceInfo {  /** 设备显示名。 */
   name: string;
   /** 默认输入采样率（Hz）。 */
   sample_rate: number;
@@ -872,6 +906,31 @@ export interface OutputDeviceInfo {
   channels: number;
   /** 是否系统默认输出设备。 */
   is_default: boolean;
+}
+
+/** 一个 MIDI 输入端口（与后端 `midi_input::MidiInputDeviceInfo` 一一对应）。 */
+export interface MidiInputDeviceInfo {
+  /** 端口显示名（系统给出的名称）。 */
+  name: string;
+}
+
+/**
+ * 一条 MIDI 输入消息（与后端 `midi_input::MidiMessage` 的外部标记一致）。
+ *
+ * 只包含前端会用到的几类；系统实时消息（时钟等）不会广播。
+ */
+export type MidiInputMessage =
+  | { kind: "note_on"; note: number; velocity: number; channel: number }
+  | { kind: "note_off"; note: number; velocity: number; channel: number }
+  | { kind: "control_change"; controller: number; value: number; channel: number }
+  | { kind: "pitch_bend"; value: number; channel: number }
+  | { kind: "program_change"; program: number; channel: number };
+
+/** 带来源端口名的 MIDI 输入事件。 */
+export interface MidiInputEvent {
+  /** 来自哪个端口；设备换掉后迟到的旧消息可以据此忽略。 */
+  device: string;
+  message: MidiInputMessage;
 }
 
 /** 输入设备的连接类型（后端的稳定短名）。 */
@@ -1037,8 +1096,115 @@ export interface YueJobStatus {
   audio: string | null;
   /** 落地的 ABC 谱（模型给得出时）。 */
   score: string | null;
+  /** 落地的语义码（每次生成都默认导出：续写 / 精确复现都靠它，界面不暴露开关）。 */
+  semantic: string | null;
+  /** 这次生成的参数存档（`.json`，可「载入参数」重放）。 */
+  record: string | null;
   /** 成品时长（秒）。 */
   seconds: number | null;
+}
+
+/** 一条能续写的轨道：语义码在哪、它有多长，以及原曲是怎么生成的。 */
+export interface ContinuableTrack {
+  /** 轨道 id。 */
+  track: number;
+  /** 语义码文件路径（直接当 `semantic_prefix_file` 用）。 */
+  semantic: string;
+  /** 前缀时长（秒）：语义码 25 帧/秒。 */
+  seconds: number;
+  /** 原曲的风格（生成记录里的 `style`）：续写沿用，语义码才对得上。 */
+  style: string | null;
+  /** 原曲的歌词。 */
+  lyrics: string | null;
+  /** 原曲用的权重 id：换一档量化，同一段语义码也会漂。 */
+  model: string | null;
+}
+
+/** 一组采样旋钮（谱规划 / 语义码各一套，对应协议的 `abc_*` / `semantic_*`）。 */
+export interface YueSampling {
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  repetition_penalty?: number;
+  penalty_window?: number;
+  min_tokens?: number;
+  max_tokens?: number;
+}
+
+/** YuE2 的 LoRA 设置（`ar` = 作曲一侧，`nar` = 音色一侧）。 */
+export interface YueLora {
+  ar_path: string;
+  ar_scale: number;
+  nar_path: string;
+  nar_scale: number;
+}
+
+/** 录音转谱的输入。 */
+export interface TranscribeArgs {
+  /** 音频文件路径；与 `track` 二选一。 */
+  audio?: string | null;
+  /** 用这条轨道的第一个音频片段。 */
+  track?: number | null;
+  /** 指定片段 id。 */
+  clip?: number | null;
+}
+
+/** 转谱结果。 */
+export interface TranscribeOutcome {
+  /** 落盘的 `.abc` 路径。 */
+  score: string;
+  /** ABC 文本。 */
+  abc: string;
+  /** 字符数。 */
+  chars: number;
+  /** 输入时长（秒）。 */
+  seconds: number;
+  /** 用时（秒）。 */
+  elapsed: number;
+}
+
+/** 抓歌词的输入（翻唱的「获取歌词」）。 */
+export interface LyricsArgs {
+  /** 音频文件路径；与 `track` 二选一。 */
+  audio?: string | null;
+  /** 用这条轨道的第一个音频片段。 */
+  track?: number | null;
+  /** 指定片段 id。 */
+  clip?: number | null;
+  /** 模型条目 id（`qwen3-asr-1.7b` / `qwen3-asr-0.6b` / `crisperwhisper-2-large`）。 */
+  model?: string | null;
+  /** 先分离人声再听（默认开）。 */
+  separate?: boolean | null;
+}
+
+/** 抓歌词的结果。 */
+export interface LyricsOutcome {
+  /** 整理后的歌词（按行，`\n` 分隔）。 */
+  text: string;
+  /** 分行结果。 */
+  lines: string[];
+  /** 音节数（汉字逐字 + 西文按词）。 */
+  syllables: number;
+  /** 输入时长（秒）。 */
+  seconds: number;
+  /** 用时（秒）。 */
+  elapsed: number;
+  /** 实际用的模型条目 id。 */
+  model: string;
+  /** 是否真的先跑了人声分离。 */
+  separated: boolean;
+}
+
+/** MIDI 片段 → ABC 的结果（翻唱的另一条参考来源，零推理）。 */
+export interface MidiScore {
+  /** ABC 文本。 */
+  abc: string;
+  /** 从音符上收集的歌词。 */
+  lyrics: string;
+  /** 小节数。 */
+  bars: number;
+  /** 用到的音符数。 */
+  notes: number;
 }
 
 /** 写歌参数（与后端 `yue_engine::ComposeArgs` 一一对应）。 */
@@ -1049,14 +1215,26 @@ export interface YueComposeArgs {
   lyrics: string;
   /** 直接给一段 ABC 谱（空 = 让模型自己写）。 */
   abc?: string;
-  /** 目标时长（秒，15..=360）。 */
+  /** 从文件读 ABC 谱（`abc` 为空时生效）。 */
+  abc_file?: string | null;
+  /** 目标时长（秒，15..=600）。 */
   duration?: number;
-  /** 流匹配步数（1..=128）。 */
+  /** 流匹配步数（1..=64）。 */
   steps?: number;
   /** 种子（-1 = 随机）。 */
   seed?: number;
   /** 结构模式：`full`（带和弦的谱）/ `melody`（只要旋律）/ `off`（跳过符号阶段）。 */
   cot?: string;
+  /** 生成停在哪一段：`abc`（只写谱）/ `semantic`（谱 + 语义码）/ `audio`（整首，默认）。 */
+  stop_after?: "abc" | "semantic" | "audio";
+  /** 顺带导出语义码。 */
+  export_semantic?: boolean;
+  /** 续写：用这份语义码文件当开头。 */
+  semantic_prefix_file?: string | null;
+  /** 谱规划的采样旋钮。 */
+  abc_sampling?: YueSampling | null;
+  /** 语义码的采样旋钮。 */
+  semantic_sampling?: YueSampling | null;
   /** CFG：负值 = 用协议默认。 */
   cfg_scale?: number;
   /** 指定权重 id；省略 = 已安装的默认档。 */
@@ -1106,6 +1284,41 @@ export interface SwapArgs {
 }
 
 /**
+ * 模型下载源的区域：`intl`（HF / GitHub 这类国外直连友好）/ `cn`（魔搭这类国内友好）。
+ *
+ * 与后端 `catalog::ModelSource.region` 一一对应；下载时会按用户网络偏好把对应区域排前面。
+ */
+export type ModelRegion = "intl" | "cn";
+
+/** 清单里的一个官方源（与后端 `models::ModelSourceStatus` 一一对应）。 */
+export interface ModelSourceStatus {
+  /** 源类型：`hf` / `modelscope` / `custom`。 */
+  kind: string;
+  /** 源所在区域。 */
+  region: ModelRegion;
+  /** 直链地址。 */
+  url: string;
+}
+
+/**
+ * 一个源探测的结果（与后端 `models::SourceProbe` 一一对应）。
+ *
+ * 「测试源」按钮用它告诉用户「现在哪条线通、各自多少毫秒」——6 GB 的权重下到一半才发现
+ * 走的是慢线，比一开始就知道要难受得多。
+ */
+export interface SourceProbe {
+  kind: string;
+  region: ModelRegion;
+  url: string;
+  ok: boolean;
+  /** HTTP 状态码（连不上为 `null`）。 */
+  status: number | null;
+  /** 首字节延迟（毫秒）。 */
+  ms: number;
+  error: string | null;
+}
+
+/**
  * 一个模型清单条目 + 本地状态（与后端 `models::ModelStatus` 一一对应）。
  *
  * 用户到「管理器 → 模型」里查看 / 下载 / 删除；小模型随包（`bundled = true`）。
@@ -1117,6 +1330,13 @@ export interface ModelStatus {
   name: string;
   /** 所属功能。 */
   feature: string;
+  /**
+   * 跑这份权重用的 audio.cpp **家族**（`yue2` / `ace_step`；不是引擎模型时为空串）。
+   *
+   * 写歌页按它决定能开哪几个开关：YuE2 有谱面 / 续写 / 翻唱，ACE-Step 只有
+   * 「描述 + 歌词 → 整首」。
+   */
+  family: string;
   /** SPDX 许可。 */
   license: string;
   /** 预估体积（字节）。 */
@@ -1133,6 +1353,10 @@ export interface ModelStatus {
   path: string | null;
   /** 是否有可下载的源。 */
   downloadable: boolean;
+  /** 覆盖的区域（用于「国内 / 国外」徽标）。 */
+  regions: ModelRegion[];
+  /** 全部官方源（界面显示「魔搭 + HuggingFace」，悬停看 URL）。 */
+  sources: ModelSourceStatus[];
   /** 组内文件总数（单文件模型为 1）。 */
   total_files: number;
   /** 组内已就位的文件数。 */
@@ -1174,6 +1398,12 @@ export interface ModelProgress {
   total: number;
   /** 出错 / 取消时的一句话。 */
   message: string | null;
+  /** 当前正在尝试的下载地址（镜像 / 官方源）。 */
+  source: string | null;
+  /** 该地址的源类型：`hf` / `modelscope` / `custom`。 */
+  source_kind: string | null;
+  /** 该地址所在区域。 */
+  region: ModelRegion | null;
 }
 
 /**
@@ -1235,6 +1465,10 @@ export interface RuntimeStatus {
   automatic: boolean;
   /** 引擎「自动模式」会用的设备（`cpu` / `vulkan` / `cuda12` / `cuda13`）；ORT 恒为空。 */
   device: string;
+  /** 是不是本机**最优**的那一份（与装没装无关）；ORT 恒为 false。 */
+  recommended: boolean;
+  /** 本机能不能真跑（AMD 机器上的 CUDA = false）；ORT 恒为 true。 */
+  usable: boolean;
 }
 
 /** 本机已有的一份 CUDA 版 ONNX Runtime（与后端 `runtimes::DiscoveredRuntime` 一一对应）。 */

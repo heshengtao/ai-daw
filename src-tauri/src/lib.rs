@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod abc;
 mod agent;
 mod ai;
-mod abc;
 mod articulation_map;
 mod assets;
 mod audio;
@@ -13,26 +13,31 @@ mod commands;
 mod cue_sheet;
 mod factory_presets;
 mod history;
+mod job;
 mod logging;
 mod main_thread;
 mod manager;
-mod job;
 mod mcp;
+mod midi_input;
 mod models;
-mod plugin_info;
+mod paths;
 mod pick;
+mod plugin_info;
 mod plugins;
 mod presets;
 mod quarantine;
 mod runtimes;
-mod yue;
-mod yue_engine;
 mod session;
 mod singing;
 mod sound_memories;
 mod state;
 mod svc;
 mod voices;
+mod yue;
+mod yue_engine;
+mod yue_lyrics;
+mod yue_midi;
+mod yue_transcribe;
 
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -65,8 +70,8 @@ pub(crate) fn boot_ms() -> u128 {
 /// - Windows / Linux：完全无边框，窗口按钮由前端自绘
 fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWindow> {
     let config = &app.config().app.windows[0];
-    let mut builder = tauri::WebviewWindowBuilder::from_config(app, config)?.on_page_load(
-        |window, payload| {
+    let mut builder =
+        tauri::WebviewWindowBuilder::from_config(app, config)?.on_page_load(|window, payload| {
             let stage = match payload.event() {
                 tauri::webview::PageLoadEvent::Started => "开始加载",
                 tauri::webview::PageLoadEvent::Finished => "加载完成",
@@ -83,8 +88,7 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWind
                 // [`app_ready`] 在挂载之后触发。
                 let _ = window.show();
             }
-        },
-    );
+        });
 
     #[cfg(target_os = "macos")]
     {
@@ -314,34 +318,31 @@ fn service_editor_windows(app: &tauri::AppHandle, plugin_thread: bool) {
 ///
 /// 拿不到目录时返回 `None`（预设仍能用，只是重启后不保留），不因此启动失败。
 fn preset_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_config_dir()
+    crate::paths::config_dir(app)
         .ok()
         .map(|dir| dir.join("presets.json"))
 }
 
 /// 音色记忆库文件的位置：应用配置目录下的 `sound-memories.json`。
 fn sound_memory_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_config_dir()
+    crate::paths::config_dir(app)
         .ok()
         .map(|dir| dir.join("sound-memories.json"))
 }
 
-/// MCP 服务器配置文件的位置：应用配置目录下的 `mcp.json`。
+/// MCP 服务器配置文件的位置：**系统默认**配置目录下的 `mcp.json`。
+///
+/// `mcp-url` 与 `cli-path` 都是给外部工具按 bundle id 找的发现文件，必须留在默认位置，
+/// 不能跟着数据目录搬走（它们只有几十字节，留在系统盘无所谓）。
 fn mcp_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_config_dir()
-        .ok()
-        .map(|dir| dir.join("mcp.json"))
+    crate::paths::default_config_dir(app).map(|dir| dir.join("mcp.json"))
 }
 
 /// 会话缓存文件的位置：应用配置目录下的 `session.json`。
 ///
 /// 它记录「上次退出时的工作状态」，供下次启动还原；拿不到配置目录时返回 `None`（不缓存）。
 pub(crate) fn session_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_config_dir()
+    crate::paths::config_dir(app)
         .ok()
         .map(|dir| dir.join("session.json"))
 }
@@ -350,24 +351,21 @@ pub(crate) fn session_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf>
 ///
 /// 拿不到配置目录时返回 `None`（历史功能不可用，但不影响编辑）。
 pub(crate) fn history_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_config_dir()
+    crate::paths::config_dir(app)
         .ok()
         .map(|dir| dir.join("history"))
 }
 
 /// 写歌智能体配置文件的位置：应用配置目录下的 `ai.json`。
 fn agent_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_config_dir()
+    crate::paths::config_dir(app)
         .ok()
         .map(|dir| dir.join("ai.json"))
 }
 
 /// 写歌智能体会话目录：应用配置目录下的 `agent/sessions/`。
 fn agent_sessions_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_config_dir()
+    crate::paths::config_dir(app)
         .ok()
         .map(|dir| dir.join("agent").join("sessions"))
 }
@@ -375,6 +373,8 @@ fn agent_sessions_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = BOOT.set(Instant::now());
+    // 数据目录必须在**任何路径解析之前**定下来：日志、会话、插件缓存都按它落盘。
+    crate::paths::init_from_args();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         // 自动更新：`updater` 负责检查 / 下载 / 验签安装，`process` 负责装完重启。
@@ -386,6 +386,8 @@ pub fn run() {
             let setup_started = std::time::Instant::now();
             // 日志要最先装上：启动阶段的崩溃也得留下线索。
             crate::logging::init(app.handle());
+            // 数据目录迁移后，旧工程文件里的素材引用还要能找到新位置。
+            crate::paths::init_remap(app.handle());
             crate::logging::info(format!(
                 "[startup] setup 开始（进程入口 +{} ms）",
                 boot_ms()
@@ -394,8 +396,7 @@ pub fn run() {
             ai_daw_host_vst3::set_log_sink(|line| crate::logging::info(format!("[host] {line}")));
             // 「加载未响应」的插件隔离名单：下次启动不再为它等一次超时。
             crate::quarantine::init(
-                app.path()
-                    .app_config_dir()
+                crate::paths::config_dir(app.handle())
                     .ok()
                     .map(|dir| dir.join("plugin-quarantine.json")),
             );
@@ -475,7 +476,7 @@ pub fn run() {
             // （见 `cli.rs`）。启动时碰 PATH 会平白弹一次密码框，体验很差。
             // 但要**登记自己在哪**：别的 AI harness 按 bundle id 推导配置目录、读 `cli-path`
             // 就能拿到全路径，不必搜索、也不必用户开挂载开关。
-            if let Ok(dir) = app.path().app_config_dir() {
+            if let Some(dir) = crate::paths::default_config_dir(app.handle()) {
                 crate::cli::publish_path(&dir);
             }
             // 让模型层知道去哪找权重：**下载落点**（应用配置目录的 models/）与**随包小模型**
@@ -485,11 +486,14 @@ pub fn run() {
                 if let Ok(dir) = app.path().resource_dir() {
                     extra.push(dir.join("models"));
                 }
-                if let Ok(dir) = app.path().app_config_dir() {
+                if let Ok(dir) = crate::paths::config_dir(app.handle()) {
                     extra.push(dir.join("models"));
                 }
                 ai_daw_local_ai::models::set_extra_dirs(extra);
             }
+            // 已下线模型（清单里没有、权重可能还在盘上）：顺手收掉，别让它们变成
+            // 管理器里找不到入口的无主文件（如抓歌词的 SenseVoice-Small）。
+            crate::models::purge_retired(app.handle());
             // 诊断开关：`AIDAW_EDITOR_SELFTEST` 驱动一条不依赖鼠标的插件界面回归链路。
             //
             // - `1`      启动 12 秒后给 1 号轨道开一次界面（默认）；
@@ -578,6 +582,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_ready,
+            paths::data_dir_info,
+            paths::data_dir_migrate,
+            paths::data_dir_cleanup_previous,
             commands::get_project,
             commands::add_track,
             commands::remove_track,
@@ -679,6 +686,10 @@ pub fn run() {
             commands::list_input_devices,
             commands::set_input_device,
             commands::input_level,
+            commands::list_midi_inputs,
+            commands::set_midi_input,
+            commands::midi_input_device,
+            commands::add_midi_clip,
             commands::record_start,
             commands::record_stop,
             commands::list_plugins,
@@ -770,6 +781,8 @@ pub fn run() {
             models::model_remove,
             models::model_reveal,
             models::model_resolve_url,
+            models::model_probe,
+            paths::disk_free_bytes,
             backends::ai_backend_info,
             backends::ai_set_backend,
             runtimes::ai_runtime_catalog,
@@ -796,6 +809,16 @@ pub fn run() {
             yue_engine::ai_yue_compose,
             yue_engine::ai_yue_compose_cancel,
             yue_engine::ai_yue_import_abc,
+            yue_engine::ai_yue_score,
+            yue_engine::ai_yue_record,
+            yue_engine::ai_yue_continuable,
+            yue_engine::ai_yue_lora,
+            yue_engine::ai_yue_set_lora,
+            yue_transcribe::ai_yue_transcribe,
+            yue_transcribe::ai_yue_transcribe_cancel,
+            yue_midi::ai_yue_midi_abc,
+            yue_lyrics::ai_yue_lyrics,
+            yue_lyrics::ai_yue_lyrics_cancel,
         ])
         .build(tauri::generate_context!())
         .expect("error while building ai-daw");

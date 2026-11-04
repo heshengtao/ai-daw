@@ -16,6 +16,7 @@ import Md3Segmented from "@/components/common/Md3Segmented.vue";
 import type { SegmentedOption } from "@/components/common/segmented";
 import { useI18n } from "@/i18n";
 import { lastWorkspace } from "@/router";
+import { useDownloadsStore } from "@/stores/downloads";
 import { useLayoutStore } from "@/stores/layout";
 import { useRuntimesStore } from "@/stores/runtimes";
 import { useYueStore } from "@/stores/yue";
@@ -26,6 +27,7 @@ withDefaults(defineProps<{ compact?: boolean; row?: boolean }>(), { compact: fal
 const i18n = useI18n();
 const layout = useLayoutStore();
 const runtimes = useRuntimesStore();
+const downloads = useDownloadsStore();
 const yue = useYueStore();
 const router = useRouter();
 
@@ -111,9 +113,8 @@ const statusHint = computed(() => {
  * 设置页是独立路由，只切侧栏标签用户是看不到的——得先回工作区，
  * 否则点完像「什么也没发生」。
  */
-function openManager(): void {
-  runtimes.requestFocus();
-  layout.openTab("manager");
+function openManager(target?: string): void {
+  downloads.jumpTo("runtime", target ?? "*");
   if (router.currentRoute.value.path.startsWith("/settings")) {
     void router.push(lastWorkspace.value);
   }
@@ -157,7 +158,7 @@ async function download(): Promise<void> {
   const item = pending.value;
   pending.value = null;
   if (!item) return;
-  openManager();
+  openManager(item.id);
   const ok = await runtimes.installAndWait(item.id);
   if (!ok) return;
   await apply(item);

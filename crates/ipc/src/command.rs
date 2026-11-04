@@ -62,6 +62,16 @@ pub enum Command {
         start: f64,
         length: f64,
     },
+    /// 在轨道上新增一个**带音符**的 MIDI 片段（**一次事务** = 一条撤销记录）。
+    ///
+    /// 与「AddClip + AddNotes」等价，但片段 / 音符 id 在同一次 `translate` 里分配。
+    /// MIDI 录音用它把一次 take 落成一条可撤销的片段。
+    AddMidiClip {
+        track: TrackId,
+        start: f64,
+        length: f64,
+        notes: Vec<Note>,
+    },
     /// 在轨道上新增一个**音频片段**（素材由 `source.path` 指向）。
     ///
     /// `length`（拍）决定时间轴跨度；素材会**铺满**该跨度（缩放/改速度 → 按比例重采样，会变调）。

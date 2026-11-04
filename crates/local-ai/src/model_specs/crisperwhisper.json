@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "family": "crisperwhisper",
+  "display_name": "CrisperWhisper 2.0",
+  "description": "Whisper-based verbatim and intended speech transcription.",
+  "category": "asr",
+  "status": "supported",
+  "tasks": [
+    "asr"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "auto",
+    "en",
+    "zh",
+    "yue",
+    "ja",
+    "ko",
+    "ru",
+    "es",
+    "fr",
+    "de",
+    "pt",
+    "it"
+  ],
+  "capabilities": {
+    "asr": [
+      "partial_results"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "language",
+        "type": "string",
+        "description": "Audio language code.",
+        "required": false,
+        "default": "en"
+      },
+      {
+        "name": "transcription_mode",
+        "type": "enum",
+        "description": "Verbatim speech, intended clean text, or transcript-conditioned verbatimize.",
+        "values": [
+          "verbatim",
+          "intended",
+          "verbatimize"
+        ],
+        "required": false,
+        "default": "verbatim"
+      },
+      {
+        "name": "audio_chunk_mode",
+        "type": "enum",
+        "description": "Continuation window planning.",
+        "values": [
+          "auto",
+          "fixed",
+          "none"
+        ],
+        "required": false,
+        "default": "auto"
+      },
+      {
+        "name": "audio_chunk_duration_sec",
+        "type": "float",
+        "description": "Duration of each encoder window in seconds.",
+        "required": false,
+        "default": 30
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated tokens per window.",
+        "required": false,
+        "default": 256
+      }
+    ],
+    "session": [],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf",
+      "cuda",
+      "cpu"
+    ]
+  },
+  "packages": [
+    {
+      "id": "crisperwhisper_2_large_q8_0",
+      "display_name": "CrisperWhisper 2.0 Large GGUF Q8_0",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "CrisperWhisper2.0-GGUF",
+      "files": [
+        "crisperwhisper-2-large-q8_0.gguf"
+      ]
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "crisperwhisper_2_large_q8_0",
+    "tags": [
+      "ASR",
+      "GGUF"
+    ],
+    "docs": []
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {},
+      "optional_files": {},
+      "tensors": {
+        "weights": "weights:"
+      }
+    }
+  ]
+}

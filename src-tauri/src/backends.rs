@@ -76,9 +76,7 @@ pub struct BackendInfo {
 
 /// 后端编译产物缓存目录（CoreML 用；跨重启复用）。
 pub fn coreml_cache_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
-    let dir = app
-        .path()
-        .app_config_dir()
+    let dir = crate::paths::config_dir(app)
         .ok()?
         .join("backend-cache")
         .join("coreml");

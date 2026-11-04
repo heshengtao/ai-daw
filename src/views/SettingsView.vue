@@ -38,23 +38,49 @@ import {
   aiBackendInfo,
   aiSetBackend,
   cliStatus,
+  dataDirCleanupPrevious,
+  dataDirInfo,
+  dataDirMigrate,
   installCli,
   managerNetwork,
   managerProbeProxy,
   managerProxyStatus,
   managerSetNetwork,
   mcpStatus,
+  onDataDirProgress,
   setMcpConfig,
   uninstallCli,
 } from "@/api/tauri";
-import type { BackendInfo, BackendPreference, CliStatus, McpStatus, ModelSourcePreference, ProxyMode } from "@/api/types";
+import { pickDirectory } from "@/api/dialogs";
+import { humanSize } from "@/utils/models";
+import type {
+  BackendInfo,
+  BackendPreference,
+  CliStatus,
+  DataDirInfo,
+  DataDirProgress,
+  DataDirSource,
+  McpStatus,
+  ModelSourcePreference,
+  ProxyMode,
+} from "@/api/types";
 
-type Section = "general" | "appearance" | "layout" | "plugins" | "network" | "ai" | "cli" | "about";
+type Section =
+  | "general"
+  | "appearance"
+  | "layout"
+  | "storage"
+  | "plugins"
+  | "network"
+  | "ai"
+  | "cli"
+  | "about";
 
 const SECTIONS: { id: Section; labelKey: string; captionKey: string }[] = [
   { id: "general", labelKey: "settings.section.general", captionKey: "settings.section.general.caption" },
   { id: "appearance", labelKey: "settings.section.appearance", captionKey: "settings.section.appearance.caption" },
   { id: "layout", labelKey: "settings.section.layout", captionKey: "settings.section.layout.caption" },
+  { id: "storage", labelKey: "settings.section.storage", captionKey: "settings.section.storage.caption" },
   { id: "plugins", labelKey: "settings.section.plugins", captionKey: "settings.section.plugins.caption" },
   { id: "network", labelKey: "settings.section.network", captionKey: "settings.section.network.caption" },
   { id: "ai", labelKey: "settings.section.ai", captionKey: "settings.section.ai.caption" },
@@ -500,7 +526,8 @@ async function downloadMissingRuntime(): Promise<void> {
   const prompt = runtimePrompt.value;
   runtimePrompt.value = null;
   if (prompt?.kind !== "missing") return;
-  runtimes.requestFocus();
+  // 带上第一个要装的 id：管理器会滚到那一行，而不是让用户在清单里找。
+  runtimes.requestFocus(prompt.pending[0] ?? "*");
   openManager();
   for (const id of prompt.pending) {
     // 下 CUDA 本体时会顺带补齐同大版本的全部组件；轮到后面的组件 id 时它已经装好了，
@@ -694,8 +721,124 @@ const updateMessage = computed(() => {
 
 /** 打开管理器并落到「运行时」标签。 */
 function openRuntimeManager(): void {
-  runtimes.requestFocus();
+  const current = backendInfo.value?.preference;
+  const target = current === "cuda13" ? "cuda13" : current === "cuda12" ? "cuda" : "*";
+  runtimes.requestFocus(target);
   openManager();
+}
+
+// ---- 数据目录：查看 / 一键迁移 / 清理旧目录 ----
+
+const dataDir = ref<DataDirInfo | null>(null);
+const dataDirLoading = ref(false);
+const dataDirBusy = ref(false);
+const dataDirError = ref("");
+const dataDirProgress = ref<DataDirProgress | null>(null);
+/** 用户选好、等待确认的目标目录。 */
+const dataDirPending = ref<string | null>(null);
+const cleanupPrompt = ref(false);
+const cleanupBusy = ref(false);
+let offDataDir: (() => void) | null = null;
+
+const dataDirSize = computed(() => humanSize(dataDir.value?.size_bytes ?? 0));
+/** 已迁移、等重启时的新目录；没有则为空。 */
+const dataDirNext = computed(() =>
+  dataDir.value?.restart_required ? dataDir.value.next : null,
+);
+
+const dataDirSource = computed(() => {
+  const source: DataDirSource = dataDir.value?.source ?? "default";
+  return i18n.t(`settings.storage.source.${source}`);
+});
+
+/** 迁移进度文案：扫描阶段不知道总量，复制阶段按字节报百分比。 */
+const dataDirProgressText = computed(() => {
+  const p = dataDirProgress.value;
+  if (!p || p.phase === "scan") return i18n.t("settings.storage.scanning");
+  if (p.total <= 0) return i18n.t("settings.storage.copying", { done: humanSize(p.done) });
+  const percent = Math.min(100, Math.round((p.done / p.total) * 100));
+  return `${i18n.t("settings.storage.copying", { done: `${humanSize(p.done)} / ${humanSize(p.total)}` })} · ${percent}%`;
+});
+
+const dataDirPercent = computed(() => {
+  const p = dataDirProgress.value;
+  if (!p || p.total <= 0) return 0;
+  return Math.min(100, Math.round((p.done / p.total) * 100));
+});
+
+async function loadDataDir(): Promise<void> {
+  dataDirLoading.value = true;
+  dataDirError.value = "";
+  try {
+    dataDir.value = await dataDirInfo();
+  } catch (err) {
+    dataDirError.value = String(err);
+  } finally {
+    dataDirLoading.value = false;
+  }
+}
+
+async function chooseDataDir(): Promise<void> {
+  const dir = await pickDirectory();
+  if (dir) dataDirPending.value = dir;
+}
+
+function onDataDirConfirmOpen(open: boolean): void {
+  if (!open) dataDirPending.value = null;
+}
+
+function onCleanupConfirmOpen(open: boolean): void {
+  if (!open) cleanupPrompt.value = false;
+}
+
+/** 执行迁移：复制 → 写指针 → 提示重启。旧目录留到重启后再清理。 */
+async function migrateDataDir(): Promise<void> {
+  const target = dataDirPending.value;
+  if (!target || dataDirBusy.value) return;
+  dataDirPending.value = null;
+  dataDirBusy.value = true;
+  dataDirError.value = "";
+  dataDirProgress.value = { phase: "scan", done: 0, total: 0, files: 0, message: null };
+  // 把当前工作状态先落盘（10 秒一次的自动缓存可能还没轮到），否则迁移复制的是旧快照。
+  await project.cacheSession().catch(() => {});
+  try {
+    offDataDir = await onDataDirProgress((p) => {
+      dataDirProgress.value = p;
+    });
+    const next = await dataDirMigrate(target);
+    dataDir.value = next;
+    await loadDataDir();
+    layout.notify(
+      i18n.t("settings.storage.done", { path: next.next ?? target }),
+    );
+  } catch (err) {
+    dataDirError.value = String(err);
+    layout.notify(i18n.t("settings.storage.failed", { error: String(err) }));
+  } finally {
+    offDataDir?.();
+    offDataDir = null;
+    dataDirBusy.value = false;
+  }
+}
+
+/** 清理上一次迁移留下的旧目录（重启后才会真的释放）。 */
+async function cleanupPreviousDataDir(): Promise<void> {
+  if (cleanupBusy.value) return;
+  cleanupBusy.value = true;
+  cleanupPrompt.value = false;
+  try {
+    const removed = await dataDirCleanupPrevious();
+    if (dataDir.value) dataDir.value = { ...dataDir.value, previous: null };
+    layout.notify(
+      removed
+        ? i18n.t("settings.storage.cleaned", { path: removed })
+        : i18n.t("settings.storage.nothingToClean"),
+    );
+  } catch (err) {
+    layout.notify(i18n.t("settings.storage.cleanupFailed", { error: String(err) }));
+  } finally {
+    cleanupBusy.value = false;
+  }
 }
 
 onMounted(() => {
@@ -703,6 +846,7 @@ onMounted(() => {
   void loadCli();
   void loadStoreNetwork();
   void loadBackend();
+  void loadDataDir();
   // 子组件（EngineBackendPicker）的 onMounted 比这里先跑；别重复拉同一张清单。
   if (runtimes.items.length === 0 && !runtimes.loading) void runtimes.load();
   void loadAgent();
@@ -717,6 +861,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  offDataDir?.();
+  offDataDir = null;
 });
 </script>
 
@@ -797,6 +943,98 @@ onUnmounted(() => {
                     @update:model-value="onLocalePick"
                   />
                 </div>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- 存储：数据目录（模型 / 运行时 / 插件 / AI 产物） -->
+        <template v-else-if="active === 'storage'">
+          <div class="group">
+            <div class="group-title">{{ i18n.t("settings.storage.location") }}</div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.storage.current") }}</span>
+                  <span class="row-sub path">{{ dataDir?.current ?? i18n.t("common.loading") }}</span>
+                </div>
+                <span class="row-value">{{ dataDirSize }}</span>
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.storage.source.label") }}</span>
+                  <span class="row-sub">{{ dataDirSource }}</span>
+                </div>
+              </div>
+              <div v-if="dataDir && dataDir.default !== dataDir.current" class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.storage.default") }}</span>
+                  <span class="row-sub path">{{ dataDir.default }}</span>
+                </div>
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.storage.move") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.storage.moveHint") }}</span>
+                </div>
+                <button
+                  class="scan-btn"
+                  :disabled="dataDirBusy || dataDirLoading || dataDir?.portable === true"
+                  @click="chooseDataDir"
+                >
+                  {{ i18n.t("settings.storage.choose") }}
+                </button>
+              </div>
+              <div v-if="dataDir?.portable" class="col-row">
+                <span class="row-sub warn">{{ i18n.t("settings.storage.portable") }}</span>
+              </div>
+              <div v-if="dataDirBusy" class="col-row">
+                <div
+                  class="update-progress"
+                  role="progressbar"
+                  :aria-valuenow="dataDirPercent"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                >
+                  <div class="update-progress-fill" :style="{ width: `${dataDirPercent}%` }" />
+                </div>
+                <span class="row-sub">{{ dataDirProgressText }}</span>
+              </div>
+              <div v-if="dataDirError" class="col-row">
+                <span class="row-sub warn">{{ dataDirError }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 迁移完成：重启前当前进程仍写旧目录，必须显眼地提醒。 -->
+          <div v-if="dataDirNext" class="group">
+            <div class="group-title">{{ i18n.t("settings.storage.migratedTitle") }}</div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.storage.migrated", { path: dataDirNext }) }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.storage.migratedHint") }}</span>
+                </div>
+                <button class="scan-btn" @click="restartApp">
+                  {{ i18n.t("settings.storage.restartNow") }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 旧目录清理：重启后执行；指针文件留在默认目录，不受影响。 -->
+          <div v-if="dataDir?.previous && !dataDir?.restart_required" class="group">
+            <div class="group-title">{{ i18n.t("settings.storage.previousTitle") }}</div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.storage.previous") }}</span>
+                  <span class="row-sub path">{{ dataDir.previous }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.storage.previousHint") }}</span>
+                </div>
+                <button class="scan-btn" :disabled="cleanupBusy" @click="cleanupPrompt = true">
+                  {{ i18n.t("settings.storage.cleanup") }}
+                </button>
               </div>
             </div>
           </div>
@@ -1470,6 +1708,26 @@ onUnmounted(() => {
     @confirm="restartApp"
     @update:open="dismissRuntimePrompt"
   />
+
+  <!-- 数据目录迁移确认：说清楚「复制而不是移动」以及要重启。 -->
+  <ConfirmDialog
+    :open="dataDirPending !== null"
+    :title="i18n.t('settings.storage.confirmTitle')"
+    :message="i18n.t('settings.storage.confirmBody', { path: dataDirPending ?? '' })"
+    :confirm-label="i18n.t('settings.storage.confirmGo')"
+    @confirm="migrateDataDir"
+    @update:open="onDataDirConfirmOpen"
+  />
+
+  <!-- 清理旧目录确认：不可撤销。 -->
+  <ConfirmDialog
+    :open="cleanupPrompt"
+    :title="i18n.t('settings.storage.cleanupTitle')"
+    :message="i18n.t('settings.storage.cleanupBody', { path: dataDir?.previous ?? '' })"
+    :confirm-label="i18n.t('settings.storage.cleanupGo')"
+    @confirm="cleanupPreviousDataDir"
+    @update:open="onCleanupConfirmOpen"
+  />
 </template>
 
 <style scoped>
@@ -1665,6 +1923,13 @@ onUnmounted(() => {
 .col-row + .col-row,
 .col-row + .row {
   border-top: 1px solid rgb(var(--md-outline-variant) / 0.3);
+}
+/* 数据目录路径：长、可选中复制；用等宽字体避免 `\` 与 `l` 看混。 */
+.row-sub.path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 .net-input {
   width: 100%;

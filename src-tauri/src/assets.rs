@@ -46,10 +46,15 @@ impl AssetCache {
             }
         }
         // 解码在锁外做：它很慢，别把其它路径的查询一起堵住。
-        let outcome = match ai_daw_asset::decode_with_progress(path, &mut on_progress) {
+        //
+        // 数据目录迁过之后，用户工程里存的可能仍是旧目录的绝对路径；能重映射到新目录
+        // 里的同一文件就透明地用它（只认「旧前缀 + 文件确实存在」，不做模糊匹配）。
+        let resolved =
+            crate::paths::remap_legacy(path).unwrap_or_else(|| std::path::PathBuf::from(path));
+        let outcome = match ai_daw_asset::decode_with_progress(&resolved, &mut on_progress) {
             Ok(audio) => Some(Arc::new(audio)),
             Err(err) => {
-                eprintln!("[asset] 解码失败 {path}：{err}");
+                eprintln!("[asset] 解码失败 {}：{err}", resolved.display());
                 None
             }
         };

@@ -93,6 +93,20 @@ fn describe_one(project: &Project, command: &Command) -> (String, Option<String>
             track_name(project, *track),
             vec![num("start", *start), num("length", *length)],
         ),
+        Command::AddMidiClip {
+            track,
+            start,
+            length,
+            notes,
+        } => (
+            "add_midi_clip",
+            track_name(project, *track),
+            vec![
+                num("start", *start),
+                num("length", *length),
+                num("count", notes.len() as f64),
+            ],
+        ),
         Command::AddAudioClip {
             track,
             start,

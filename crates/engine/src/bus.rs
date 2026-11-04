@@ -534,6 +534,36 @@ impl Engine {
                     length: crate::model::Clip::normalize_length(*length),
                 }]
             }
+            Command::AddMidiClip {
+                track,
+                start,
+                length,
+                notes,
+            } => {
+                // 片段与全部音符在**同一次** translate 里生成：录音 take 是一条撤销记录，
+                // 按撤销时整段消失，而不是先删片段、再逐个删音符。
+                let clip = self.alloc_clip_id();
+                let mut events = vec![Event::ClipAdded {
+                    actor: actor.clone(),
+                    track: *track,
+                    clip,
+                    start: crate::model::Clip::normalize_start(*start),
+                    length: crate::model::Clip::normalize_length(*length),
+                }];
+                if !notes.is_empty() {
+                    // 一次 take 可能有几百上千个音：用 `NotesAdded` 批量投递，事件流只多一条。
+                    events.push(Event::NotesAdded {
+                        actor: actor.clone(),
+                        track: *track,
+                        clip,
+                        notes: notes
+                            .iter()
+                            .map(|note| crate::model::Note::normalize(note.clone()))
+                            .collect(),
+                    });
+                }
+                events
+            }
             Command::AddAudioClip {
                 track,
                 start,
@@ -1912,6 +1942,50 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(e.project().track(track).unwrap().clips[0].id, clip);
+    }
+
+    #[test]
+    fn add_midi_clip_is_one_op_and_undoable() {
+        let mut e = Engine::new("demo");
+        let ev = e.execute(Command::AddTrack { name: "Rec".into() }, Actor::Human);
+        let track = match ev[0] {
+            crate::event::Event::TrackAdded { id, .. } => id,
+            _ => unreachable!(),
+        };
+        let note = |pitch: u8, start: f64| crate::model::Note {
+            id: 0,
+            channel: None,
+            pressure: None,
+            pitch,
+            start,
+            duration: 0.5,
+            velocity: 100,
+            volume: 127,
+            offset: 0.0,
+            legato: false,
+            expr: crate::model::PitchExpression::NONE,
+            lyric: None,
+        };
+        let ev = e.execute(
+            Command::AddMidiClip {
+                track,
+                start: 0.0,
+                length: 2.0,
+                notes: vec![note(60, 0.0), note(64, 0.5)],
+            },
+            Actor::Human,
+        );
+        assert!(matches!(ev[0], crate::event::Event::ClipAdded { .. }));
+        assert!(matches!(
+            ev.get(1),
+            Some(crate::event::Event::NotesAdded { .. })
+        ));
+        let clip = &e.project().track(track).unwrap().clips[0];
+        assert_eq!(clip.notes.len(), 2);
+
+        // 一次录音 take 只占一条撤销记录：撤销后片段（连同里面的音符）整段消失。
+        assert!(e.undo());
+        assert!(e.project().track(track).unwrap().clips.is_empty());
     }
 
     #[test]

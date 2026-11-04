@@ -22,8 +22,10 @@ import Md3Select from "@/components/common/Md3Select.vue";
 import AiYuePage from "@/components/workspace/panes/ai/AiYuePage.vue";
 import AiSingingPage from "@/components/workspace/panes/ai/AiSingingPage.vue";
 import AiSvcPage from "@/components/workspace/panes/ai/AiSvcPage.vue";
+import AiBackendBadge from "@/components/workspace/panes/ai/AiBackendBadge.vue";
 import "@/components/workspace/panes/ai/aiPage.css";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
+import DownloadStrip from "@/components/common/DownloadStrip.vue";
 import EngineBackendPicker from "@/components/common/EngineBackendPicker.vue";
 import Md3Segmented from "@/components/common/Md3Segmented.vue";
 import type { SegmentedOption } from "@/components/common/segmented";
@@ -50,20 +52,20 @@ import type {
   BackendInfo,
   BackendPreference,
   McpStatus,
-  ModelStatus,
   SingingStatus,
   SvcStatus,
 } from "@/api/types";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useLayoutStore } from "@/stores/layout";
+import { useDownloadsStore } from "@/stores/downloads";
 import { useModelsStore } from "@/stores/models";
 import { useRuntimesStore } from "@/stores/runtimes";
 import { useModelChoice } from "@/composables/useModelChoice";
+import { useModelDownloadPrompt } from "@/composables/useModelDownloadPrompt";
 import { useYueStore } from "@/stores/yue";
 import { useI18n } from "@/i18n";
 import { copyText } from "@/utils/clipboard";
-import { humanSize, missingBytes, modelName } from "@/utils/models";
 import { restartApp } from "@/utils/restart";
 
 const KIND_MIDI = "to_midi";
@@ -79,6 +81,7 @@ const project = useProjectStore();
 const selection = useSelectionStore();
 const layout = useLayoutStore();
 const modelsStore = useModelsStore();
+const downloads = useDownloadsStore();
 const i18n = useI18n();
 
 /**
@@ -194,7 +197,7 @@ async function pickBackend(kind: BackendPreference): Promise<void> {
         ? i18n.t("ai.backendPartsMissing", { parts: missing.map(partLabel).join("、") })
         : i18n.t("ai.backendMissing"),
     );
-    layout.openTab("manager");
+    downloads.jumpTo("runtime", option.runtime);
     return;
   }
   backendBusy.value = true;
@@ -228,19 +231,24 @@ const chosenYueModel = yueChoice.current;
 /** 下拉选项与其它模型卡片同一套（名称 + 「已下载 / 需下载 · 体积」）。 */
 const yueModelOptions = yueChoice.selectOptions;
 
+/** audio.cpp 引擎至少装了一份（安装包默认不带：权重和引擎都要就位才算「能写歌」）。 */
+const engineInstalled = computed(() =>
+  runtimes.items.some((r) => r.group === "audiocpp" && r.installed),
+);
+/** 写歌能不能跑：引擎 + 选中的那份权重都在位。后端标签的空心点看它。 */
+const yueFeatureReady = computed(
+  () => engineInstalled.value && chosenYueModel.value?.installed === true,
+);
+
 /** 「开始」：引擎没装先进页（页里强制选引擎）；模型没下就弹下载确认。 */
 function startYue(): void {
   // 安装包默认不带引擎：先让写歌页的安装向导处理，别先去下几 GB 权重。
-  if (!runtimes.items.some((r) => r.group === "audiocpp" && r.installed)) {
+  if (!engineInstalled.value) {
     aiPage.value = "yue";
     return;
   }
   const model = chosenYueModel.value;
-  if (model && !model.installed) {
-    pendingModel.value = model;
-    promptOpen.value = true;
-    return;
-  }
+  if (model && !requireModel(model)) return;
   aiPage.value = "yue";
 }
 
@@ -263,22 +271,16 @@ function deviceLabel(device: string): string {
   }
 }
 
-/** 条目上的小徽标：未启动 / 加载中 / 就绪 / 出错。 */
-const yueBadge = computed(() => {
-  const state = yue.engine?.state ?? "stopped";
-  if (state === "ready") return deviceLabel(yue.engine?.device ?? "cpu");
-  if (state === "starting") return i18n.t("ai.yueBadgeLoading");
-  if (state === "error") return i18n.t("ai.yueBadgeError");
-  return i18n.t("ai.yueBadgeStopped");
-});
-
 /** 条目 / 对话框里那一行说明。 */
 const yueStatusLine = computed(() => {
   const engine = yue.engine;
   if (yue.busy) {
     return i18n.t("ai.yueElapsed", { seconds: Math.round(yue.job.elapsed) });
   }
-  if (!engine || engine.state === "stopped") return i18n.t("ai.yueHint");
+  if (!engine || engine.state === "stopped") {
+    // 后端标签现在只标「audio.cpp」，引擎的起停状态放在这一行里说。
+    return `${i18n.t("ai.yueBadgeStopped")} · ${i18n.t("ai.yueHint")}`;
+  }
   if (engine.state === "error") {
     return engine.message ?? engine.log ?? i18n.t("ai.yueEngineError");
   }
@@ -358,9 +360,9 @@ function busy(kind: string): boolean {
   return ai.value.running && ai.value.kind === kind;
 }
 
-/** 这个功能会走哪个后端：权重就位就是真模型，否则退回内置 DSP。 */
-function backendLabel(kind: string): string {
-  return hasModel(kind) ? i18n.t("ai.backendModel") : i18n.t("ai.backendDsp");
+/** 这个功能会走哪个后端：权重就位就是 ONNX 真模型，否则转 MIDI / 降噪退回内置 DSP。 */
+function backendOf(kind: string): "onnx" | "dsp" {
+  return hasModel(kind) ? "onnx" : "dsp";
 }
 function hasModel(kind: string): boolean {
   if (kind === KIND_MIDI) return models.value.basic_pitch;
@@ -381,28 +383,21 @@ const {
   selectOptions: sepOptions,
 } = useModelChoice("separate", () => modelsStore.catalog.filter((m) => m.feature === "separate"));
 
-/** 待下载的分离模型（用于 MD3 确认框）。 */
-const pendingModel = ref<ModelStatus | null>(null);
-/** 确认框是否打开。 */
-const promptOpen = ref(false);
-/** 确认框正文。 */
-const downloadPromptMessage = computed(() => {
-  const m = pendingModel.value;
-  return m
-    ? i18n.t("dialog.downloadModelMessage", { name: modelName(m), size: humanSize(missingBytes(m)) })
-    : "";
-});
+/** 缺权重时的确认框：确认即跳「管理器 → 模型」并开始下载（所有卡片共用这一套）。 */
+const {
+  open: promptOpen,
+  message: downloadPromptMessage,
+  require: requireModel,
+  confirm: confirmDownloadModel,
+  background: backgroundDownloadModel,
+} = useModelDownloadPrompt();
 
 /** 点「开始分离」：权重缺就弹 MD3 确认框，确认后下载并跳到「管理器 → 可下载 → 模型」。 */
 async function runSeparation(): Promise<void> {
   const t = track.value;
   const model = sepModel.value;
-  if (!t || !model || !canRun.value) return;
-  if (!model.installed) {
-    pendingModel.value = model;
-    promptOpen.value = true;
-    return;
-  }
+  if (!t || !canRun.value) return;
+  if (!model || !requireModel(model)) return;
   try {
     await aiStart(KIND_SEPARATE, t.id, undefined, model.id);
   } catch (err) {
@@ -420,19 +415,7 @@ function openCliSettings(): void {
   void router.push({ name: "settings", query: { section: "cli" } });
 }
 
-/** 确认框点了「下载」：跳到「管理器 → 模型」并开始下载。 */
-async function confirmDownloadModel(): Promise<void> {
-  const model = pendingModel.value;
-  if (!model) return;
-  layout.openTab("manager");
-  modelsStore.requestFocus();
-  try {
-    await modelsStore.download(model.id);
-  } catch (err) {
-    layout.notify(String(err));
-  }
-}
-
+/** 取消正在进行的下载（卡片进度条上的「取消」）。 */
 async function cancelModelDownload(): Promise<void> {
   await modelsStore.cancel();
 }
@@ -463,11 +446,7 @@ const singBusy = computed(() => singing.value.running);
 /** 点「开始」：模型没下就先问下载；没有清单条目也先进页（页里能直接去下载）。 */
 function startSinging(): void {
   const model = singModel.value;
-  if (model && !model.installed) {
-    pendingModel.value = model;
-    promptOpen.value = true;
-    return;
-  }
+  if (model && !requireModel(model)) return;
   aiPage.value = "singing";
 }
 
@@ -493,11 +472,7 @@ const svcBusy = computed(() => svc.value.running);
 /** 点「开始」：同歌声合成，进音色替换页。 */
 function startSvc(): void {
   const model = svcModel.value;
-  if (model && !model.installed) {
-    pendingModel.value = model;
-    promptOpen.value = true;
-    return;
-  }
+  if (model && !requireModel(model)) return;
   aiPage.value = "svc";
 }
 
@@ -527,9 +502,10 @@ async function runTempo(): Promise<void> {
   if (!t || !canRun.value) return;
   const model = tempoModel.value;
   if (!tempoReady.value) {
-    if (!model) return;
-    pendingModel.value = model;
-    promptOpen.value = true;
+    // 缺权重 → 确认框；装了却不被后端认（mel 前端没到）时 require 返回 true，这里同样不跑。
+    if (model && !model.installed) {
+      requireModel(model);
+    }
     return;
   }
   try {
@@ -661,6 +637,10 @@ watch(
 
 <template>
   <div class="pane">
+    <!-- 全局下载条：子页 / 列表都在同一个容器里，进度与「取消」始终看得见。
+         「在后台下载」之后用户仍留在本页，靠的就是这一条。 -->
+    <DownloadStrip />
+
     <!-- 三个子页占满侧栏（从卡片进来，左上角返回到列表） -->
     <AiYuePage v-if="aiPage === 'yue'" @back="aiPage = null" />
     <AiSingingPage v-else-if="aiPage === 'singing'" @back="aiPage = null" />
@@ -705,7 +685,7 @@ watch(
           <div class="item-main">
             <span class="item-name">
               {{ i18n.t("ai.yueTitle") }}
-              <span class="badge" :class="{ on: yue.ready }">{{ yueBadge }}</span>
+              <AiBackendBadge backend="audiocpp" :ready="yueFeatureReady" />
             </span>
             <span class="item-note">{{ yueStatusLine }}</span>
           </div>
@@ -812,7 +792,7 @@ watch(
           <div class="item-main">
             <span class="item-name">
               {{ i18n.t("ai.toMidi") }}
-              <span class="badge" :class="{ on: hasModel(KIND_MIDI) }">{{ backendLabel(KIND_MIDI) }}</span>
+              <AiBackendBadge :backend="backendOf(KIND_MIDI)" />
             </span>
             <span class="item-note">{{ busy(KIND_MIDI) ? i18n.t("ai.busy") : noteFor(KIND_MIDI) }}</span>
           </div>
@@ -837,9 +817,7 @@ watch(
           <div class="item-main">
             <span class="item-name">
               {{ i18n.t("ai.enhanceVoice") }}
-              <span class="badge" :class="{ on: hasModel(KIND_VOICE) }">
-                {{ backendLabel(KIND_VOICE) }}
-              </span>
+              <AiBackendBadge :backend="backendOf(KIND_VOICE)" />
             </span>
             <span class="item-note">{{ busy(KIND_VOICE) ? i18n.t("ai.busy") : noteFor(KIND_VOICE) }}</span>
           </div>
@@ -873,9 +851,7 @@ watch(
           <div class="item-main">
             <span class="item-name">
               {{ i18n.t("ai.separate") }}
-              <span class="badge" :class="{ on: separateModelReady }">
-                {{ i18n.t(separateModelReady ? "ai.backendModel" : "ai.modelMissing") }}
-              </span>
+              <AiBackendBadge backend="onnx" :ready="separateModelReady" />
             </span>
             <span class="item-note">
               {{
@@ -937,9 +913,7 @@ watch(
           <div class="item-main">
             <span class="item-name">
               {{ i18n.t("ai.tempo") }}
-              <span class="badge" :class="{ on: tempoReady }">
-                {{ i18n.t(tempoReady ? "ai.backendModel" : "ai.modelMissing") }}
-              </span>
+              <AiBackendBadge backend="onnx" :ready="tempoReady" />
             </span>
             <span class="item-note">
               {{
@@ -993,9 +967,7 @@ watch(
           <div class="item-main">
             <span class="item-name">
               {{ i18n.t("ai.singing") }}
-              <span class="badge" :class="{ on: singReady }">
-                {{ i18n.t(singReady ? "ai.backendModel" : "ai.modelMissing") }}
-              </span>
+              <AiBackendBadge backend="onnx" :ready="singReady" />
             </span>
             <span class="item-note">
               {{
@@ -1053,9 +1025,7 @@ watch(
           <div class="item-main">
             <span class="item-name">
               {{ i18n.t("ai.voiceSwap") }}
-              <span class="badge" :class="{ on: svcReady }">
-                {{ i18n.t(svcReady ? "ai.backendModel" : "ai.modelMissing") }}
-              </span>
+              <AiBackendBadge backend="onnx" :ready="svcReady" />
             </span>
             <span class="item-note">
               {{
@@ -1110,7 +1080,9 @@ watch(
       :title="i18n.t('dialog.downloadModelTitle')"
       :message="downloadPromptMessage"
       :confirm-label="i18n.t('dialog.downloadModelOk')"
+      :extra-label="i18n.t('setup.background')"
       @confirm="confirmDownloadModel"
+      @extra="backgroundDownloadModel"
     />
 
 
@@ -1184,22 +1156,6 @@ watch(
   font-size: 11px;
   line-height: 1.45;
   color: rgb(var(--md-on-surface-variant) / 0.78);
-}
-/* 后端标签：权重就位时点亮（走真模型），否则是灰的内置 DSP。 */
-.badge {
-  margin-left: 6px;
-  padding: 0 6px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 15px;
-  vertical-align: 1px;
-  background-color: var(--app-inset);
-  color: rgb(var(--md-on-surface-variant));
-}
-.badge.on {
-  background-color: rgb(var(--md-primary) / 0.14);
-  color: rgb(var(--md-primary));
 }
 .endpoint {
   font-weight: 400;

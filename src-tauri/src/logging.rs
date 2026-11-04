@@ -11,14 +11,13 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use tauri::Manager;
-
 /// 日志文件路径。没装成（拿不到配置目录）时所有写入都是空操作。
 static LOG: OnceLock<PathBuf> = OnceLock::new();
 
 /// 装上日志：定文件位置、轮转、接管 panic。`setup` 一开始调一次。
 pub fn init(app: &tauri::AppHandle) {
-    let Ok(dir) = app.path().app_config_dir() else {
+    // 用统一的数据目录解析：设置里把数据搬走之后，日志也跟着走。
+    let Ok(dir) = crate::paths::config_dir(app) else {
         return;
     };
     let dir = dir.join("logs");

@@ -8,7 +8,7 @@
  *
  * 装完 / 删完由后端重扫插件库，结果经 `engine://plugins` 回到「插件」面板——本面板不直接改那份清单。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   AdjustmentsHorizontalIcon,
   ArrowDownTrayIcon,
@@ -22,12 +22,14 @@ import {
 } from "@heroicons/vue/24/outline";
 import { useRouter } from "vue-router";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
+import DownloadStrip from "@/components/common/DownloadStrip.vue";
 import { managerResolveUrl, modelResolveUrl } from "@/api/tauri";
 import { useManagerStore } from "@/stores/manager";
 import { useModelsStore } from "@/stores/models";
 import { useRuntimesStore } from "@/stores/runtimes";
 import { usePluginsStore } from "@/stores/plugins";
 import { useLayoutStore } from "@/stores/layout";
+import { useDownloadsStore } from "@/stores/downloads";
 import { useYueStore } from "@/stores/yue";
 import { useI18n } from "@/i18n";
 import { pickPluginToImport } from "@/api/dialogs";
@@ -48,6 +50,7 @@ const models = useModelsStore();
 const runtimes = useRuntimesStore();
 const plugins = usePluginsStore();
 const layout = useLayoutStore();
+const downloads = useDownloadsStore();
 const yue = useYueStore();
 const i18n = useI18n();
 const router = useRouter();
@@ -131,16 +134,44 @@ async function doCopyModelLink(id: string): Promise<void> {
   }
 }
 
-/** 从别处（如 AI 面板点「开始分离」）请求聚焦到「可下载 → 模型」。 */
+/** 刚被定位到的条目（3 秒后自然消失）。 */
+const highlight = ref<string | null>(null);
+let highlightTimer: number | null = null;
+
+/**
+ * 从别处（AI 面板 / 设置页）请求聚焦到「可下载 → 模型 / 运行时」。
+ *
+ * 只切页签是不够的：清单里有几十条，用户落地后还得自己找那一行。
+ * 带上 id 时滚到它并高亮一下。
+ */
 function applyFocus(): void {
-  if (models.consumeFocus()) {
+  const model = models.consumeFocus();
+  if (model) {
     tab.value = "available";
     kindFilter.value = "model";
+    void revealRow(model);
   }
-  if (runtimes.consumeFocus()) {
+  const runtime = runtimes.consumeFocus();
+  if (runtime) {
     tab.value = "available";
     kindFilter.value = "runtime";
+    void revealRow(runtime);
   }
+}
+
+/** 滚动到 `[data-row-id]` 对应的那一行并高亮 3 秒。 */
+async function revealRow(id: string): Promise<void> {
+  if (!id || id === "*") return;
+  await nextTick();
+  const element = document.querySelector<HTMLElement>(`[data-row-id="${id}"]`);
+  if (!element) return;
+  element.scrollIntoView({ block: "center", behavior: "smooth" });
+  highlight.value = id;
+  if (highlightTimer !== null) window.clearTimeout(highlightTimer);
+  highlightTimer = window.setTimeout(() => {
+    if (highlight.value === id) highlight.value = null;
+    highlightTimer = null;
+  }, 3000);
 }
 
 onMounted(() => {
@@ -196,6 +227,41 @@ function modelSummary(m: ModelStatus): string {
 /** 摘要的悬停提示：组条目列出组内全部文件名。 */
 function modelSummaryTitle(m: ModelStatus): string {
   return m.total_files <= 1 ? m.filename : m.files.map((f) => f.filename).join("\n");
+}
+
+// ---- 下载源（与「设置 → 网络」里的镜像 / 区域偏好是同一份配置） ----
+
+/** 源类型 → 界面名字。 */
+function sourceKindLabel(kind: string | null | undefined): string {
+  if (kind === "hf") return i18n.t("manager.sourceHf");
+  if (kind === "modelscope") return i18n.t("manager.sourceModelscope");
+  return i18n.t("manager.sourceCustom");
+}
+
+/** 这个模型能从哪些官方源下（去重、按类型合并）。 */
+function sourceSummary(m: ModelStatus): string {
+  const kinds = [...new Set(m.sources.map((source) => sourceKindLabel(source.kind)))];
+  return kinds.join(" / ");
+}
+
+/** 区域徽标：国内 / 国外。 */
+function regionLabel(region: string): string {
+  return i18n.t(region === "cn" ? "manager.regionCn" : "manager.regionIntl");
+}
+
+/** 正在从哪个源下（进度事件里带的 `source_kind`）；没在下就返回空串。 */
+function downloadingFrom(id: string): string {
+  if (models.busyId !== id) return "";
+  const kind = models.progress?.source_kind;
+  if (!kind) return "";
+  return i18n.t("manager.downloadingFrom", { source: sourceKindLabel(kind) });
+}
+
+/** 下载 / 重装一个模型：失败原因由 store 的 `error`（管理器顶部红条）统一展示。 */
+function doDownloadModel(id: string): void {
+  void models.download(id).catch(() => {
+    // 失败 / 取消：`models.error` 已经写好原因；取消不当错误弹。
+  });
 }
 
 function platformLabel(p: string): string {
@@ -336,8 +402,9 @@ const availableTotal = computed(
 
 /** 运行时组件（搜索过滤）。
  *
- * 「已安装」页签**只列真的装好的**：组件卡片以前无条件出现，删掉一份之后它仍然留在
- * 「已安装」里（只是按钮变回「下载」），所以看起来像「卸载了还在已安装里」。
+ * **两个页签都列全**：以前「已安装」只保留装好的组件，没装过 CUDA 13 的机器上整块
+ * CUDA 13 卡片直接消失，用户以为「这个版本根本没有组件」。现在缺的也摆出来，
+ * 只是按钮变成「下载」——和 AI Cut 的下载管理器同一套做法。
  */
 const visibleComponents = computed(() => {
   const installedTab = tab.value === "installed";
@@ -345,9 +412,7 @@ const visibleComponents = computed(() => {
     return [];
   }
   const q = (installedTab ? installedQuery.value : query.value).trim().toLowerCase();
-  return runtimeComponents.value.filter(
-    (r) => (!installedTab || r.installed) && (!q || r.label.toLowerCase().includes(q)),
-  );
+  return runtimeComponents.value.filter((r) => !q || r.label.toLowerCase().includes(q));
 });
 
 /** CUDA 12 / CUDA 13 的组件分两张卡片显示，别把两套版本挤在一起。 */
@@ -523,6 +588,17 @@ async function doRevealModel(id: string): Promise<void> {
         {{ i18n.t("manager.restartLater") }}
       </button>
     </div>
+    <!-- 队列进度：从 AI 页「在后台下载」过来时也在这里看得见、可以取消 -->
+    <DownloadStrip />
+
+    <!-- 还没开始的那几项：一次「准备运行环境」会串着下好几样，别让用户以为只下一样 -->
+    <ul v-if="downloads.queue.length" class="queue">
+      <li class="queue-title">{{ i18n.t("manager.queueTitle") }}</li>
+      <li v-for="task in downloads.queue" :key="task.section + '-' + task.id" class="queue-item">
+        <span class="queue-label">{{ task.label }}</span>
+        <span v-if="task.bytes" class="queue-size">{{ humanSize(task.bytes) }}</span>
+      </li>
+    </ul>
     <!-- 标签 + 显眼的「导入插件」按钮 -->
     <div class="head">
       <div class="tabs" role="tablist">
@@ -758,7 +834,8 @@ async function doRevealModel(id: string): Promise<void> {
             v-for="c in group.items"
             :key="'part-' + c.id"
             class="part-row"
-            :class="{ busy: runtimes.busyId === c.id }"
+            :data-row-id="c.id"
+            :class="{ busy: runtimes.busyId === c.id, focused: highlight === c.id }"
           >
             <div class="part-main">
               <span class="part-name">{{ c.label }}</span>
@@ -1009,7 +1086,8 @@ async function doRevealModel(id: string): Promise<void> {
           v-for="m in visibleModels"
           :key="m.id"
           class="card col"
-          :class="{ busy: models.installing(m.id) }"
+          :data-row-id="m.id"
+          :class="{ busy: models.installing(m.id), focused: highlight === m.id }"
         >
           <div class="card-top">
             <span class="card-name">{{ modelName(m) }}</span>
@@ -1021,6 +1099,13 @@ async function doRevealModel(id: string): Promise<void> {
           </div>
           <p class="card-author">
             {{ humanSize(m.approx_bytes) }}<span v-if="m.license"> · {{ m.license }}</span>
+          </p>
+          <!-- 下载源：从哪下、国外还是国内（悬停看具体 URL）；6 GB 的权重值得说清楚 -->
+          <p v-if="m.sources.length" class="card-source" :title="m.sources.map((s) => s.url).join('\n')">
+            {{ i18n.t("manager.modelSource") }}：{{ sourceSummary(m) }}
+            <span v-for="region in m.regions" :key="region" class="badge region">
+              {{ regionLabel(region) }}
+            </span>
           </p>
 
           <div class="files">
@@ -1038,12 +1123,27 @@ async function doRevealModel(id: string): Promise<void> {
                 <LinkIcon class="w-[14px] h-[14px]" />
               </button>
 
+              <!-- 测速：一眼看出该不该换国内 / 国外源 -->
+              <button
+                v-if="m.sources.length"
+                class="mini-btn"
+                :title="i18n.t('manager.modelSourceHint')"
+                :disabled="models.probingId !== null || models.installing(m.id)"
+                @click="models.probe(m.id)"
+              >
+                {{
+                  models.probingId === m.id
+                    ? i18n.t("manager.modelSourceTesting")
+                    : i18n.t("manager.modelSourceTest")
+                }}
+              </button>
+
               <!-- 未安装：下载 -->
               <button
                 v-if="m.downloadable && !m.installed && !models.installing(m.id)"
                 class="mini-btn primary"
                 :disabled="models.busyId !== null"
-                @click="models.download(m.id)"
+                @click="doDownloadModel(m.id)"
               >
                 {{ i18n.t("manager.modelDownload", { size: humanSize(missingBytes(m)) }) }}
               </button>
@@ -1060,12 +1160,31 @@ async function doRevealModel(id: string): Promise<void> {
                 v-else-if="m.installed && m.downloadable && !m.bundled"
                 class="mini-btn"
                 :disabled="models.busyId !== null"
-                @click="models.download(m.id)"
+                @click="doDownloadModel(m.id)"
               >
                 {{ i18n.t("manager.reinstall") }}
               </button>
             </div>
+
+            <!-- 测源结果：每条线一个「通 / 不通 · 毫秒」 -->
+            <div v-if="models.probes[m.id]?.length" class="probes">
+              <span
+                v-for="probe in models.probes[m.id]"
+                :key="probe.url"
+                class="probe-chip"
+                :class="{ ok: probe.ok, fail: !probe.ok }"
+                :title="probe.error ?? probe.url"
+              >
+                {{ sourceKindLabel(probe.kind) }}
+                · {{ probe.ok ? `${probe.ms}ms` : i18n.t("manager.modelSourceFailed") }}
+              </span>
+            </div>
           </div>
+
+          <!-- 正在从哪个源下：下载器会在源之间回退，这里报的是当前首选 -->
+          <p v-if="downloadingFrom(m.id)" class="card-source">
+            {{ downloadingFrom(m.id) }}
+          </p>
 
           <div v-if="models.installing(m.id)" class="progress">
             <div
@@ -1082,7 +1201,8 @@ async function doRevealModel(id: string): Promise<void> {
           v-for="r in visibleRuntimes"
           :key="'runtime-' + r.id"
           class="card col"
-          :class="{ busy: runtimes.busyId === r.id }"
+          :data-row-id="r.id"
+          :class="{ busy: runtimes.busyId === r.id, focused: highlight === r.id }"
         >
           <div class="card-top">
             <span class="card-name">{{ r.label }}</span>
@@ -1148,7 +1268,8 @@ async function doRevealModel(id: string): Promise<void> {
             v-for="c in group.items"
             :key="'part-' + c.id"
             class="part-row"
-            :class="{ busy: runtimes.busyId === c.id }"
+            :data-row-id="c.id"
+            :class="{ busy: runtimes.busyId === c.id, focused: highlight === c.id }"
           >
             <div class="part-main">
               <span class="part-name">{{ c.label }}</span>
@@ -1347,6 +1468,39 @@ async function doRevealModel(id: string): Promise<void> {
   min-height: 0;
   overflow-y: auto;
   padding-bottom: 12px;
+}
+/* ---- 排队中的下载项 ---- */
+.queue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 12px 0;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background-color: rgb(var(--md-surface-container-high) / 0.6);
+  list-style: none;
+}
+.queue-title {
+  flex: 0 0 auto;
+  color: rgb(var(--md-on-surface-muted));
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+.queue-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background-color: rgb(var(--md-surface-container-highest));
+  color: rgb(var(--md-on-surface-variant));
+  font-size: 10.5px;
+}
+.queue-size {
+  color: rgb(var(--md-on-surface-muted));
+  font-variant-numeric: tabular-nums;
 }
 /* ---- 运行库变更后的「重启生效」横幅 ---- */
 .restart-banner {
@@ -1604,6 +1758,11 @@ async function doRevealModel(id: string): Promise<void> {
   align-items: stretch;
   gap: 4px;
 }
+/* 从 AI 面板 / 设置页跳过来时定位到的那一行（3 秒后消失）。 */
+.card.focused,
+.part-row.focused {
+  box-shadow: 0 0 0 2px rgb(var(--md-primary) / 0.65);
+}
 /* 安装 / 下载进度：贴在卡片**下边缘**（与 AI 面板同一套观感）。 */
 .progress {
   position: absolute;
@@ -1685,6 +1844,45 @@ async function doRevealModel(id: string): Promise<void> {
   margin: 2px 0 0;
   font-size: 11px;
   color: rgb(var(--md-on-surface-variant));
+}
+/* 下载源那一行：比作者信息再弱一档，但可点开悬停看真实 URL。 */
+.card-source {
+  margin: 2px 0 0;
+  font-size: 10.5px;
+  color: rgb(var(--md-on-surface-muted));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.badge.region {
+  margin-left: 4px;
+  font-size: 9.5px;
+  padding: 1px 6px;
+  background-color: rgb(var(--md-primary) / 0.1);
+  color: rgb(var(--md-primary));
+}
+/* 测源结果：一行小胶囊，通的是中性色、不通的用警示色。 */
+.probes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.probe-chip {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background-color: rgb(var(--md-surface-container-highest));
+  color: rgb(var(--md-on-surface-variant));
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.probe-chip.ok {
+  background-color: rgb(var(--md-primary) / 0.12);
+  color: rgb(var(--md-primary));
+}
+.probe-chip.fail {
+  background-color: rgb(var(--md-error) / 0.12);
+  color: rgb(var(--md-error));
 }
 .card-desc {
   margin: 2px 0 0;

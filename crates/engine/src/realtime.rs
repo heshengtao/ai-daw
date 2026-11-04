@@ -223,6 +223,22 @@ pub fn device_changed(
     previous != current
 }
 
+/// 设备**名字**是否变了（采样率变化不算）。
+///
+/// 设备名变化意味着声音换了一个物理端点（例如蓝牙耳机从 A2DP 切到 HFP），必须重建；
+/// 但同一个端点的采样率在两个档之间来回跳时，现有流往往仍然健康——只看名字能避免
+/// 「每次蓝牙切档就把播放器推倒重来」的抖动。采样率真的变了却导致流停摆时，看门狗
+/// 的心跳检测会兜住。
+pub fn device_name_changed(
+    previous: Option<&DeviceSignature>,
+    current: Option<&DeviceSignature>,
+) -> bool {
+    match (previous, current) {
+        (Some(a), Some(b)) => a.name != b.name,
+        _ => previous != current,
+    }
+}
+
 /// 把交错立体声 `staging`（`frames*2`）映射到设备的 `channels` 路交错 `data`（`frames*channels`）。
 ///
 /// 单声道设备取左右声道均值；其它设备把 L/R 写入前两路，其余通道清零。纯函数，无分配。
@@ -437,9 +453,11 @@ pub fn stream_stalled(alive: bool, beats_before: u64, beats_now: u64) -> bool {
 
 /// 停摆判定的基础阈值：连续这么多个轮询周期（控制侧每周期约 1 秒）没有心跳才算停摆。
 ///
-/// 取 2 而不是 1，是给「刚建好流、还没跑第一块」留一格余量：建流与第一次回调之间
-/// 隔着 CoreAudio 的启动，一次轮询太容易正好落在缝里。
-pub const STALL_POLLS: u32 = 2;
+/// 取 3 而不是 2：建流与第一次回调之间隔着驱动启动，蓝牙 / 聚合设备切档时尤其慢
+/// （实测能到 2 秒以上）。阈值太灵敏会把一条正在启动的健康流推倒重建，而每次重建都
+/// 要重新装载插件、丢掉音频单元——用户感觉就是「点播放/暂停特别卡」。取 3 秒后，真的
+/// 停摆也只需要多等一秒。
+pub const STALL_POLLS: u32 = 3;
 
 /// 第 `backoff` 次「重建完又立刻停摆」时，判定阈值该是多少个轮询周期。
 ///
@@ -458,10 +476,20 @@ pub fn stall_polls_required(backoff: u32) -> u32 {
 ///
 /// 调度表以固定采样率定点，必须在构建之前知道设备采样率，因此需要一个不打开流的
 /// 探测入口。
+///
+/// **这里必须和 [`AudioHost::start_on`] 挑到同一个档位**：设备默认档不一定落在它自己
+/// 报告的 F32 区间里（蓝牙耳机 / 聚合设备切档时很常见）。只取
+/// `default_output_config()` 会让调度表按默认档建、建流时却按最近的 F32 档开，
+/// 随后以 `SampleRateMismatch` 永远失败——界面就一直停在「离线试听」，而浏览器
+/// 走默认档还能正常出声。所以这里先走同一套 `choose_output_format`。
 pub fn output_sample_rate(name: Option<&str>) -> Option<u32> {
     let device = find_output_device(name)?;
     let supported = device.default_output_config().ok()?;
-    Some(supported.sample_rate())
+    let preferred = supported.sample_rate();
+    match choose_output_format(&supported_formats(&device), preferred) {
+        Some(range) => Some(range.nearest_rate(preferred)),
+        None => Some(preferred),
+    }
 }
 
 /// 默认输出设备的采样率（Hz）；无法查询时返回 `None`。
@@ -1212,6 +1240,27 @@ mod tests {
         assert!(!device_changed(Some(&a), Some(&a2)));
         assert!(device_changed(Some(&a), Some(&b)));
         assert!(device_changed(Some(&a), Some(&a44)));
+    }
+
+    /// 只看名字：同一端点换采样率不触发重建（蓝牙切档时最常见的那种抖动）。
+    #[test]
+    fn device_name_changed_ignores_sample_rate_only_changes() {
+        let a48 = DeviceSignature {
+            name: "Bose QC45".into(),
+            sample_rate: 48_000,
+        };
+        let a16 = DeviceSignature {
+            name: "Bose QC45".into(),
+            sample_rate: 16_000,
+        };
+        let hfp = DeviceSignature {
+            name: "Bose QC45 Hands-Free".into(),
+            sample_rate: 16_000,
+        };
+        assert!(!device_name_changed(Some(&a48), Some(&a16)));
+        assert!(device_name_changed(Some(&a48), Some(&hfp)));
+        assert!(device_name_changed(None, Some(&a48)));
+        assert!(device_name_changed(Some(&a48), None));
     }
 
     /// 心跳计数只增不减，控制侧靠「前后两次相同」判断停摆。

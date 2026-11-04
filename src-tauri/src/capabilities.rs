@@ -34,12 +34,30 @@ struct FeatureSpec {
 const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         key: "compose",
-        title: "AI 写歌（YuE2）",
+        title: "AI 写歌（YuE2 / ACE-Step）",
         model_feature: Some("compose"),
         runtime_group: Some("audiocpp"),
         dsp_fallback: false,
         fallback: "改用「自己写 MIDI + 自主配器 / 捏音色」：set_tempo → add_track → add_notes → \
                    find_instrument / describe_plugin / set_params 选音色与调参数 → set_effect* 加效果。",
+    },
+    FeatureSpec {
+        key: "score",
+        title: "录音转谱（SheetSage2 · 翻唱）",
+        model_feature: Some("cover"),
+        runtime_group: Some("audiocpp"),
+        dsp_fallback: false,
+        fallback: "改用 transcribe_audio（Basic Pitch）拿到音符，再用 add_notes 手工铺成旋律；\
+                   或者跳过翻唱，直接 compose_song 从头写。",
+    },
+    FeatureSpec {
+        key: "lyrics",
+        title: "抓歌词（ASR · 翻唱）",
+        model_feature: Some("lyrics"),
+        runtime_group: Some("audiocpp"),
+        dsp_fallback: false,
+        fallback: "改用 transcribe_score（SheetSage2）拿到旋律，词自己写；或直接照原歌词手打——\
+                   翻唱本来要求词与旋律逐行对得上。",
     },
     FeatureSpec {
         key: "sing",

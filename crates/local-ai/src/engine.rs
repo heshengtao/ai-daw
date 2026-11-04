@@ -675,11 +675,49 @@ pub fn installed(pack: &EnginePack) -> bool {
     pack.missing().is_empty()
 }
 
+/// SheetSage2 的模型规格（**编译期内嵌**）。
+///
+/// 发布包里其实带着这份 `model_specs/sheetsage2.json`，但老安装只解出了 `yue2.json`，
+/// 而且我们不想把「装好没装好」的判定绑在它身上（少一个文件就整包算没装，太重）。
+/// 所以转谱前**按需写进去**：既修好老安装，也让新装的行为与发布包无关。
+pub const SHEETSAGE2_SPEC: &str = include_str!("model_specs/sheetsage2.json");
+
+/// 确保后端目录里有 SheetSage2 的规格文件（缺了才写）。
+pub fn ensure_sheetsage2_spec(pack: &EnginePack) -> Result<PathBuf, String> {
+    let dir = dir_of(pack).join("model_specs");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建 model_specs 失败：{e}"))?;
+    let path = dir.join("sheetsage2.json");
+    if !path.is_file() {
+        std::fs::write(&path, SHEETSAGE2_SPEC)
+            .map_err(|e| format!("写 sheetsage2.json 失败：{e}"))?;
+    }
+    Ok(path)
+}
+
+/// ASR 抓歌词用的两个模型族（`family` → 规格文件，**编译期内嵌**）。
+///
+/// 和 SheetSage2 同一个理由：老安装的 `model_specs/` 里没有它们，跑之前按需补齐。
+pub const ASR_SPECS: &[(&str, &str)] = &[
+    ("qwen3_asr", include_str!("model_specs/qwen3_asr.json")),
+    ("crisperwhisper", include_str!("model_specs/crisperwhisper.json")),
+];
+
+/// 确保后端目录里有这个 ASR 族的规格文件（**每次都刷新**：规格是我们自己维护的）。
+pub fn ensure_asr_spec(pack: &EnginePack, family: &str) -> Result<PathBuf, String> {
+    let Some((_, body)) = ASR_SPECS.iter().find(|(name, _)| *name == family) else {
+        return Err(format!("没有 {family} 的模型规格"));
+    };
+    let dir = dir_of(pack).join("model_specs");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建 model_specs 失败：{e}"))?;
+    let path = dir.join(format!("{family}.json"));
+    std::fs::write(&path, body).map_err(|e| format!("写 {family}.json 失败：{e}"))?;
+    Ok(path)
+}
+
 /// 有没有任意一份后端能跑。
 pub fn ready() -> bool {
     host_packs().iter().any(installed)
 }
-
 /// 已经装好的 GPU 后端，按优先级排好（CUDA 13 / Metal → CUDA 12 → Vulkan）。
 ///
 /// 只是「装了哪些」，选哪个由上层结合显卡决定（见 `src-tauri/src/yue.rs`）。

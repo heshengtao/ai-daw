@@ -23,6 +23,13 @@ import type {
   YueComposeArgs,
   YueEngineStatus,
   YueJobStatus,
+  YueLora,
+  ContinuableTrack,
+  LyricsArgs,
+  LyricsOutcome,
+  TranscribeArgs,
+  TranscribeOutcome,
+  MidiScore,
   VoiceEntry,
   VoiceSaveArgs,
   AnalysisReport,
@@ -42,9 +49,11 @@ import type {
   HistoryDepths,
   HistoryState,
   InputDeviceInfo,
+  MidiInputDeviceInfo,
   OutputDeviceInfo,
   CliState,
   CliStatus,
+  DataDirInfo,
   ForeignPlugin,
   ManagerInstallRequest,
   ManagerInstalled,
@@ -54,6 +63,7 @@ import type {
   ModelProgress,
   ModelSourcePreference,
   ModelStatus,
+  SourceProbe,
   ProxyMode,
   ProxyProbe,
   ProxyStatus,
@@ -180,9 +190,13 @@ let yueJob: YueJobStatus = {
   message: null,
   audio: null,
   score: null,
+  semantic: null,
+  record: null,
   seconds: null,
 };
 let yueTimer: number | null = null;
+/** 预览版的 LoRA 设置。 */
+let mockLora: YueLora = { ar_path: "", ar_scale: 1, nar_path: "", nar_scale: 1 };
 /** 浏览器预览的人声条目也存在「音色记忆」里（与真实后端一致：一个库，靠 voice 字段区分）。 */
 function readVoices(): VoiceEntry[] {
   return readSoundMemories()
@@ -229,11 +243,29 @@ function emitManager(p: ManagerProgress): void {
   window.dispatchEvent(new CustomEvent("ai-daw-mock-manager", { detail: p }));
 }
 
-/** 给单文件模型补齐派生字段（`files` / 计数），免得每条都手写一遍。 */
+/** 给单文件模型补齐派生字段（`files` / 计数 / 源清单），免得每条都手写一遍。 */
 function oneFile(
-  entry: Omit<ModelStatus, "files" | "total_files" | "installed_files">,
+  entry: Omit<
+    ModelStatus,
+    "files" | "total_files" | "installed_files" | "family" | "regions" | "sources"
+  > & {
+    /** 写歌模型才有家族（`yue2` / `ace_step`）；其它功能留空。 */
+    family?: string;
+  },
 ): ModelStatus {
+  // 预览里不逐个条目写源：可下载的一律给「HF + 魔搭」两条，用于把源行 / 徽标 / 测速画出来。
+  const regions = entry.downloadable ? (["intl", "cn"] as const) : [];
   return {
+    family: "",
+    regions: [...regions],
+    sources: regions.map((region) => ({
+      kind: region === "cn" ? "modelscope" : "hf",
+      region,
+      url:
+        region === "cn"
+          ? `https://modelscope.cn/models/audio-cpp/${entry.id}/resolve/master/${entry.filename}`
+          : `https://huggingface.co/audio-cpp/${entry.id}/resolve/main/${entry.filename}`,
+    })),
     ...entry,
     total_files: 1,
     installed_files: entry.installed ? 1 : 0,
@@ -369,6 +401,50 @@ let mockModels: ModelStatus[] = [
     path: null,
     downloadable: true,
   }),
+  // 写歌权重：预览里不真跑推理，但**家族与档位跟后端清单一致**——
+  // 「YuE2 有翻唱 / 续写，ACE-Step 只有描述 + 歌词」这类界面分叉才验证得了。
+  oneFile({
+    id: "yue2-q8-0",
+    name: "YuE2 3B · Q8_0（默认）",
+    feature: "compose",
+    family: "yue2",
+    license: "CC-BY-NC-4.0",
+    approx_bytes: 4264195616,
+    filename: "yue2-3b-q8_0.gguf",
+    bundled: false,
+    installed: true,
+    bytes: 4264195616,
+    path: "/mock/models/yue2/yue2-3b-q8_0.gguf",
+    downloadable: true,
+  }),
+  oneFile({
+    id: "ace-step-turbo-q8",
+    name: "ACE-Step 1.5 Turbo · Q8_0（默认 · 省空间）",
+    feature: "compose",
+    family: "ace_step",
+    license: "MIT",
+    approx_bytes: 6185468096,
+    filename: "ace-step-1.5-turbo-q8_0.gguf",
+    bundled: false,
+    installed: true,
+    bytes: 6185468096,
+    path: "/mock/models/ace-step/ace-step-1.5-turbo-q8_0.gguf",
+    downloadable: true,
+  }),
+  oneFile({
+    id: "ace-step-turbo-bf16",
+    name: "ACE-Step 1.5 Turbo · BF16（最接近原版权重）",
+    feature: "compose",
+    family: "ace_step",
+    license: "MIT",
+    approx_bytes: 10090406336,
+    filename: "ace-step-1.5-turbo-bf16.gguf",
+    bundled: false,
+    installed: false,
+    bytes: null,
+    path: null,
+    downloadable: true,
+  }),
 ];
 
 /** 模型下载预览定时器（一次只跑一个）。 */
@@ -465,6 +541,8 @@ function mockRuntimeCatalog(): RuntimeStatus[] {
       core: false,
       automatic: false,
       device: "",
+      recommended: false,
+      usable: true,
     },
     {
       id: "audiocpp-cpu",
@@ -480,6 +558,8 @@ function mockRuntimeCatalog(): RuntimeStatus[] {
       core: true,
       automatic: true,
       device: "cpu",
+      recommended: false,
+      usable: true,
     },
     {
       id: "audiocpp-vulkan",
@@ -495,6 +575,8 @@ function mockRuntimeCatalog(): RuntimeStatus[] {
       core: false,
       automatic: true,
       device: "cpu",
+      recommended: true,
+      usable: true,
     },
     {
       id: "audiocpp-cuda12",
@@ -510,6 +592,8 @@ function mockRuntimeCatalog(): RuntimeStatus[] {
       core: false,
       automatic: true,
       device: "cpu",
+      recommended: false,
+      usable: true,
     },
     {
       id: "audiocpp-cuda13",
@@ -525,6 +609,8 @@ function mockRuntimeCatalog(): RuntimeStatus[] {
       core: false,
       automatic: true,
       device: "cpu",
+      recommended: false,
+      usable: true,
     },
   ];
 }
@@ -664,6 +750,7 @@ const MOCK_PARAMS: Record<string, BackendParam[]> = {
     { id: "1", name: "Decay", min: 0, max: 1, default: 0.5, automatable: true },
   ],
 };
+
 /**
  * 插件管理器的假注册表（浏览器预览用）。
  *
@@ -1466,7 +1553,16 @@ export const mockApi = {
     let received = 0;
     mockModelTimer = window.setInterval(() => {
       received = Math.min(total, received + total * 0.08);
-      emitModel({ id, state: "downloading", received, total, message: null });
+      emitModel({
+        id,
+        state: "downloading",
+        received,
+        total,
+        message: null,
+        source: entry.sources[0]?.url ?? null,
+        source_kind: entry.sources[0]?.kind ?? null,
+        region: entry.sources[0]?.region ?? null,
+      });
       if (received >= total) {
         window.clearInterval(mockModelTimer!);
         mockModelTimer = null;
@@ -1487,7 +1583,16 @@ export const mockApi = {
               }
             : m,
         );
-        emitModel({ id, state: "done", received: total, total, message: null });
+        emitModel({
+          id,
+          state: "done",
+          received: total,
+          total,
+          message: null,
+          source: null,
+          source_kind: null,
+          region: null,
+        });
       }
     }, 140);
   },
@@ -1520,6 +1625,23 @@ export const mockApi = {
     const prefix = mockNetwork.model_mirrors[0] ?? "";
     if (!prefix) return url;
     return prefix.includes("{url}") ? prefix.replace("{url}", url) : `${prefix}${url}`;
+  },
+
+  /** 「测试源」：预览里不真的发请求，给两条固定延迟的假结果。 */
+  modelProbe: (id: string): SourceProbe[] => {
+    const entry = mockModels.find((m) => m.id === id);
+    const sources = entry?.sources.length
+      ? entry.sources
+      : [{ kind: "hf", region: "intl" as const, url: mockApi.modelResolveUrl(id) }];
+    return sources.map((source) => ({
+      kind: source.kind,
+      region: source.region,
+      url: source.url,
+      ok: true,
+      status: 206,
+      ms: source.region === "cn" ? 120 : 240,
+      error: null,
+    }));
   },
 
   /**
@@ -1566,13 +1688,14 @@ export const mockApi = {
     mockNetwork = { ...mockNetwork, yue_cuda_perf: enabled };
   },
 
-  yueEngineStart: (_model?: string | null): void => {
+  yueEngineStart: (model?: string | null): void => {
     yueEngine = {
       ...yueEngine,
       state: "ready",
       port: 18087,
       device: "vulkan",
-      model: "yue2-q8-0",
+      // 预览里把「当前加载的是哪一档权重」也跟上，界面上的引擎行才不会串档。
+      model: model?.trim() || "yue2-q8-0",
       message: null,
     };
     emitYueEngine();
@@ -1583,9 +1706,20 @@ export const mockApi = {
     emitYueEngine();
   },
 
-  yueCompose: (_args?: YueComposeArgs): void => {
+  yueCompose: (args?: YueComposeArgs): void => {
     if (yueTimer !== null) return;
-    yueJob = { state: "running", elapsed: 0, message: null, audio: null, score: null, seconds: null };
+    // 轨道名跟着权重家族走：ACE-Step 那份不写谱，YuE2 那份会顺带存谱与语义码。
+    const label = (args?.model ?? "").startsWith("ace-step") ? "ACE-Step 写歌" : "YuE2 写歌";
+    yueJob = {
+      state: "running",
+      elapsed: 0,
+      message: null,
+      audio: null,
+      score: null,
+      semantic: null,
+      record: null,
+      seconds: null,
+    };
     emitYueJob();
     yueTimer = window.setInterval(() => {
       yueJob = { ...yueJob, elapsed: yueJob.elapsed + 1 };
@@ -1595,13 +1729,79 @@ export const mockApi = {
         yueJob = {
           ...yueJob,
           state: "done",
-          message: "已生成「YuE2 写歌」：90 秒（预览模式没有真音频）",
+          message: `已生成「${label}」：90 秒（预览模式没有真音频）`,
           seconds: 90,
         };
       }
       emitYueJob();
     }, 1000);
   },
+
+  yueScore: (): string =>
+    "X:1\nT:\nM:2/4\nL:1/16\nQ:1/4=95\nV: Vocal clef=treble name=\"Vocal Melody\"\nV: Ins clef=treble name=\"Ins Melody\"\nK:C\n% intro\nV: Vocal\nz4\"C\"z4|\"C\"z8|\nV: Ins\nZ|z2c'2g2e2|f2ef2g3|\n",
+
+  yueRecord: (): string =>
+    JSON.stringify(
+      {
+        version: 1,
+        seed: 1234,
+        stop_after: "audio",
+        args: { style: "pop, female vocal", lyrics: "[Verse]\nla la", duration: 120 },
+      },
+      null,
+      2,
+    ),
+
+  /** 续写的语义码：mock 里假装每条轨道是这里生成的。 */
+  yueContinuable: (): ContinuableTrack[] => [
+    {
+      track: 1,
+      semantic: "C:/mock/yue2-1.semantic.json",
+      seconds: 42,
+      style: "pop, female vocal",
+      lyrics: "[Verse]\nla la",
+      model: "yue2-q8-0",
+    },
+  ],
+
+  yueLora: (): YueLora => mockLora,
+
+  yueSetLora: (lora: YueLora): void => {
+    mockLora = lora;
+  },
+
+  yueTranscribe: (_args?: TranscribeArgs): TranscribeOutcome => {
+    const seconds = 120;
+    return {
+      score: "D:\\mock\\transcribe-0.abc",
+      chars: 420,
+      abc: `X:1\nT:\nM:4/4\nL:1/8\nK:C\nV: Vocal\nC D E F G A B c|\nV: Ins\nC,2 G,2 C,2 G,2|\n`,
+      seconds,
+      elapsed: 18,
+    };
+  },
+
+  yueTranscribeCancel: (): void => {},
+
+  /** 抓歌词：mock 里给三段歌词，好验证「填进歌词框」这条链路。 */
+  yueLyrics: (_args?: LyricsArgs): LyricsOutcome => ({
+    text: "月亮代表我的心\n轻轻的一个吻\n已经打动我的心",
+    lines: ["月亮代表我的心", "轻轻的一个吻", "已经打动我的心"],
+    syllables: 7 + 6 + 8,
+    seconds: 120,
+    elapsed: 9,
+    model: "qwen3-asr-1.7b",
+    separated: true,
+  }),
+
+  yueLyricsCancel: (): void => {},
+
+  yueMidiAbc: (_track?: number, _clip?: number | null): MidiScore => ({
+    abc: `X:1\nT:mock\nM:4/4\nL:1/16\nQ:1/4=120\nK:C\nV: Vocal clef=treble name="Vocal Melody" snm="Vocal"\nV: Ins clef=treble name="Ins Melody" snm="Inst."\nV: Vocal\nC2D2E2F2G2A2B2c2|\nV: Ins\nZ1\n`,
+    lyrics: "月亮代表我的心",
+    bars: 1,
+    notes: 8,
+  }),
 
   yueComposeCancel: (): void => {
     if (yueTimer !== null) {
@@ -1917,6 +2117,22 @@ export const mockApi = {
     commit(() => {
       const t = track(trackId);
       if (t) t.clips.push({ id: nextClipId++, start: Math.max(0, start), length: Math.max(0.125, length), notes: [] });
+    }),
+
+  /** MIDI 录音落盘：片段 + 音符一次写入（浏览器预览里没有真实 MIDI 输入，但手弹键盘可触发）。 */
+  addMidiClip: (trackId: number, start: number, length: number, notes: Note[]): Project =>
+    commit(() => {
+      const t = track(trackId);
+      if (!t) return;
+      const clip: Clip = {
+        id: nextClipId++,
+        start: Math.max(0, start),
+        length: Math.max(0.125, length),
+        notes: [],
+      };
+      for (const note of notes) clip.notes.push({ ...note, id: nextNoteId(clip) });
+      t.clips.push(clip);
+      t.clips.sort((a, b) => a.start - b.start);
     }),
 
   removeClip: (trackId: number, clipId: number): Project =>
@@ -2896,6 +3112,11 @@ export const mockApi = {
   recordStart: (): void => undefined,
   recordStop: (): Project | null => null,
 
+  // ---- MIDI 输入（浏览器预览没有真实端口：给一条假设备，事件由虚拟键盘产生）----
+  listMidiInputs: (): MidiInputDeviceInfo[] => [{ name: "浏览器预览 MIDI" }],
+  setMidiInput: (): void => undefined,
+  midiInputDevice: (): string | null => null,
+
   // ---- 本地 AI（预览：模拟进度，不真正处理）----
 
   aiStatus: (): AiStatus => ({ ...aiState }),
@@ -3194,6 +3415,31 @@ export const mockApi = {
 
   // 浏览器预览里没有真实设备可探测：重试是空操作，状态照旧。
   retryAudio: (): Promise<void> => Promise.resolve(),
+
+  // 浏览器预览：数据目录是假的，迁移只把「当前」换成用户选的那条。
+  dataDirInfo: (): DataDirInfo => ({
+    current: "C:\\Users\\you\\AppData\\Roaming\\com.aidaw.app",
+    default: "C:\\Users\\you\\AppData\\Roaming\\com.aidaw.app",
+    cache: "C:\\Users\\you\\AppData\\Local\\com.aidaw.app",
+    source: "default",
+    size_bytes: 18 * 1024 * 1024 * 1024,
+    portable: false,
+    previous: null,
+    next: null,
+    restart_required: false,
+  }),
+  dataDirMigrate: (target: string): DataDirInfo => ({
+    current: "C:\\Users\\you\\AppData\\Roaming\\com.aidaw.app",
+    default: "C:\\Users\\you\\AppData\\Roaming\\com.aidaw.app",
+    cache: "C:\\Users\\you\\AppData\\Local\\com.aidaw.app",
+    source: "settings",
+    size_bytes: 18 * 1024 * 1024 * 1024,
+    portable: false,
+    previous: "C:\\Users\\you\\AppData\\Roaming\\com.aidaw.app",
+    next: target,
+    restart_required: true,
+  }),
+  dataDirCleanupPrevious: (): Promise<string | null> => Promise.resolve(null),
 
   onEngineEvent: (): (() => void) => {
     const t = window.setInterval(() => {

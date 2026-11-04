@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "family": "qwen3_asr",
+  "display_name": "Qwen3-ASR",
+  "description": "Qwen3-ASR: multilingual speech recognition (30 languages, 22 Chinese dialects) with robustness for noisy, long-form and singing audio.",
+  "category": "asr",
+  "status": "supported",
+  "tasks": [
+    "asr"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "auto",
+    "zh",
+    "en",
+    "yue",
+    "ja",
+    "ko",
+    "ru",
+    "es",
+    "fr",
+    "de",
+    "pt",
+    "it",
+    "ar",
+    "hi",
+    "vi",
+    "th",
+    "id",
+    "ms",
+    "tr",
+    "nl",
+    "pl"
+  ],
+  "capabilities": {
+    "asr": [
+      "vad_chunking"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "language",
+        "type": "string",
+        "description": "Recognition language code; omit or auto to detect automatically.",
+        "required": false,
+        "default": "auto"
+      },
+      {
+        "name": "audio_chunk_mode",
+        "type": "enum",
+        "description": "Offline audio chunking mode.",
+        "values": [
+          "auto",
+          "fixed",
+          "vad",
+          "none"
+        ],
+        "required": false,
+        "default": "auto"
+      },
+      {
+        "name": "audio_chunk_duration_sec",
+        "type": "float",
+        "description": "Maximum audio chunk duration in seconds.",
+        "required": false,
+        "default": 30
+      },
+      {
+        "name": "preserve_punctuation",
+        "type": "bool",
+        "description": "Keep the recogniser's punctuation in the text output.",
+        "required": false,
+        "default": true
+      }
+    ],
+    "session": [],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf",
+      "cuda",
+      "vulkan",
+      "cpu"
+    ]
+  },
+  "packages": [
+    {
+      "id": "qwen3_asr_1_7b_q8_0",
+      "display_name": "Qwen3-ASR 1.7B Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Qwen3-ASR-1.7B-GGUF",
+      "files": [
+        "qwen3-asr-1.7b-q8_0.gguf"
+      ]
+    },
+    {
+      "id": "qwen3_asr_0_6b_q8_0",
+      "display_name": "Qwen3-ASR 0.6B Q8_0 GGUF",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Qwen3-ASR-0.6B-GGUF",
+      "files": [
+        "qwen3-asr-0.6b-q8_0.gguf"
+      ]
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "qwen3_asr_1_7b_q8_0",
+    "tags": [
+      "ASR",
+      "GGUF"
+    ],
+    "docs": []
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {},
+      "optional_files": {},
+      "tensors": {
+        "weights": "weights:"
+      }
+    }
+  ]
+}

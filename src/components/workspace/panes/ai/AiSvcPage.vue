@@ -3,26 +3,30 @@
  * **音色替换**子页（侧栏内整页，从列表的卡片进来，左上角返回）。
  *
  * 一段人声 + 一条参考声线 → 同一条旋律、换一个音色。与歌声合成的差别只在输入：
- * 这里给的是**已经有唱词的人声**，不需要 MIDI 与歌词，但需要按音域差做整体移调。
- */
+ * 这里给的是**已经有唱词的人声**，不需要 MIDI 与歌词，但需要按音域差做整体移调。 */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ArrowLeftIcon } from "@heroicons/vue/24/outline";
+import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import Md3Select from "@/components/common/Md3Select.vue";
 import { onSvcEvent, svcCancel, svcRender, svcStatus } from "@/api/tauri";
 import type { SvcStatus } from "@/api/types";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
+import { useDownloadsStore } from "@/stores/downloads";
 import { useLayoutStore } from "@/stores/layout";
 import { useModelsStore } from "@/stores/models";
 import { useI18n } from "@/i18n";
 import { useTonePicker } from "@/composables/useTonePicker";
 import { useModelChoice } from "@/composables/useModelChoice";
+import { useModelDownloadPrompt } from "@/composables/useModelDownloadPrompt";
 
 const emit = defineEmits<{ (e: "back"): void }>();
 
 const project = useProjectStore();
 const selection = useSelectionStore();
 const layout = useLayoutStore();
+
+const downloads = useDownloadsStore();
 const models = useModelsStore();
 const i18n = useI18n();
 
@@ -119,10 +123,24 @@ const statusLine = computed(() => {
   return ready.value ? i18n.t("ai.voiceSwapNote") : i18n.t("ai.voiceSwapNeedsModel");
 });
 
-/** 「去下载」：打开下载管理器（模型都在那里）。 */
+/**
+ * 「去下载」：确认后跳到下载管理器**并立刻开始下载**。
+ *
+ * 以前这里只切页签 + 请求聚焦，什么也不下，用户到了管理器还得自己再点一次「下载」。 */
+const {
+  open: downloadOpen,
+  message: downloadMessage,
+  require: requireDownload,
+  confirm: confirmDownload,
+  background: backgroundDownload,
+  cancel: cancelDownload,
+} = useModelDownloadPrompt();
+
 function downloadModel(): void {
-  layout.openTab("manager");
-  models.requestFocus();
+  const current = model.value;
+  if (current && !requireDownload(current)) return;
+  downloads.jumpTo("model", current?.id ?? "*");
+  models.requestFocus(current?.id ?? "*");
 }
 
 async function render(): Promise<void> {
@@ -232,7 +250,7 @@ watch(
         />
       </label>
 
-      <!-- 参考：工程内轨道 / 人声音色库 -->
+      <!-- 参考：工程内轨道 / 人声音色 -->
       <label class="sub-field">
         <span class="sub-name">{{ i18n.t("ai.refSource") }}</span>
         <Md3Select
@@ -327,5 +345,17 @@ watch(
         <div class="sub-progress-fill" :class="{ indeterminate: barIndeterminate }" :style="barStyle" />
       </div>
     </section>
+
+    <!-- 缺权重：确认后跳到管理器并**直接开始下载**；也可以留在本页后台下 -->
+    <ConfirmDialog
+      v-model:open="downloadOpen"
+      :title="i18n.t('dialog.downloadModelTitle')"
+      :message="downloadMessage"
+      :confirm-label="i18n.t('dialog.downloadModelOk')"
+      :extra-label="i18n.t('setup.background')"
+      @confirm="confirmDownload"
+      @extra="backgroundDownload"
+      @cancel="cancelDownload"
+    />
   </div>
 </template>

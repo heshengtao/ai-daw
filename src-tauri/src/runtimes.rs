@@ -79,6 +79,10 @@ pub struct RuntimeStatus {
     pub automatic: bool,
     /// 引擎「自动模式」会用的设备（`cpu` / `vulkan` / `cuda12` / `cuda13`）；ORT 恒为空。
     pub device: String,
+    /// 是不是本机最优的那一份（引擎用；ORT 恒为 false）。与装没装无关。
+    pub recommended: bool,
+    /// 本机能不能真跑（引擎用；ORT 恒为 true）。AMD 机器上的 CUDA = false。
+    pub usable: bool,
 }
 
 struct Downloader {
@@ -96,12 +100,7 @@ fn downloader() -> &'static Downloader {
 
 /// 运行时根目录（应用配置目录的 `runtime/ort/`）。
 pub fn runtime_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| format!("拿不到应用配置目录：{e}"))?
-        .join("runtime")
-        .join("ort");
+    let dir = crate::paths::config_dir(app)?.join("runtime").join("ort");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
@@ -184,8 +183,7 @@ pub fn ai_runtime_catalog(app: AppHandle) -> Vec<RuntimeStatus> {
 
 /// 待删除 id 清单（`<配置目录>/runtime/ort/pending-remove.json`）。
 fn pending_file(app: &AppHandle) -> Option<PathBuf> {
-    app.path()
-        .app_config_dir()
+    crate::paths::config_dir(app)
         .ok()
         .map(|dir| dir.join("runtime").join("ort").join("pending-remove.json"))
 }
@@ -305,6 +303,8 @@ pub fn statuses(app: &AppHandle) -> Vec<RuntimeStatus> {
                 core: false,
                 automatic: false,
                 device: String::new(),
+                recommended: false,
+                usable: true,
             }
         })
         .collect();
@@ -326,6 +326,8 @@ pub fn statuses(app: &AppHandle) -> Vec<RuntimeStatus> {
                 core: s.core,
                 automatic: s.automatic,
                 device: s.device,
+                recommended: s.recommended,
+                usable: s.usable,
             }),
     );
     rows

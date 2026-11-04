@@ -16,11 +16,18 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { PlusIcon, XMarkIcon } from "@heroicons/vue/24/outline";
 import LaneTargetSelect from "@/components/workspace/LaneTargetSelect.vue";
+import LaneViewSwitch from "@/components/workspace/LaneViewSwitch.vue";
 import GridSelect from "@/components/common/GridSelect.vue";
 import AutomationCurve from "@/components/workspace/AutomationCurve.vue";
 import { capturePointer } from "@/utils/pointer";
 import { useI18n } from "@/i18n";
-import { NOTE_GRIDS, useLayoutStore, type NoteGrid } from "@/stores/layout";
+import {
+  EDIT_LANE_VIEWS,
+  NOTE_GRIDS,
+  useLayoutStore,
+  type LaneView,
+  type NoteGrid,
+} from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import type { AutomationPoint, Note } from "@/api/types";
 import type { AutomationTarget } from "@/utils/automation";
@@ -92,6 +99,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "update:targetKey", value: string): void;
+  /** 表头的视图切换器：控制器 / 乐谱 / MIDI 键盘。 */
+  (e: "update:view", value: LaneView): void;
   (e: "select", indices: number[]): void;
   (e: "apply", patch: Partial<Note>): void;
   (e: "delete", indices: number[]): void;
@@ -112,8 +121,8 @@ const scaleMin = computed(() => curveTarget.value?.min ?? spec.value.min);
 const scaleMax = computed(() => curveTarget.value?.max ?? spec.value.max);
 
 /**
- * 下拉选项已抽到 `LaneTargetSelect`：乐谱窗格与控制器泳道共用同一个「目标」下拉，
- * 否则用户选了「乐谱」以后就回不来了。
+ * 参数目标下拉已抽到 `LaneTargetSelect`：只放力度 / 压力 / 通道 / 自动化参数。
+ * 视图切换（控制器 / 乐谱 / 键盘）由表头左侧的 `LaneViewSwitch` 管，两者互不干扰。
  */
 
 /** 当前逐音符属性 / 曲线目标的显示名。 */
@@ -331,10 +340,13 @@ onUnmounted(() => {
 
 <template>
   <div class="lane-block">
-    <!-- 头部：一行读完「自动化 + 目标 + 网格」，右侧只留选中读数与两颗按钮 -->
+    <!-- 头部：视图切换在左，参数目标 / 网格 / 读数跟在后面 -->
     <div class="lane-head">
-      <!-- 目标选择：下拉（力度 + 该轨道收窄后的插件参数） -->
-      <span class="lane-title">{{ i18n.t("auto.title") }}</span>
+      <LaneViewSwitch
+        :model-value="'lane'"
+        :views="EDIT_LANE_VIEWS"
+        @update:model-value="emit('update:view', $event)"
+      />
       <div class="lane-chooser">
         <LaneTargetSelect
           :target-key="targetKey"
@@ -463,7 +475,7 @@ onUnmounted(() => {
   color: rgb(var(--md-on-surface-variant));
   white-space: nowrap;
 }
-/* 目标下拉的尺寸由 `LaneTargetSelect` 自己管（乐谱窗格也用它，两处必须一模一样） */
+/* 参数下拉的尺寸由 `LaneTargetSelect` 自己管 */
 .lane-chooser {
   flex: 0 0 auto;
   display: inline-flex;
@@ -579,4 +591,10 @@ onUnmounted(() => {
   background-color: rgb(var(--md-error) / 0.16);
 }
 /* 曲线目标的样式在 `AutomationCurve` 里（曲线画布整块搬过去了）。 */
+/* 窄窗口：视图切换 + 参数下拉已经占掉表头大部分；选中读数先让位，别把收起键挤出去。 */
+@media (max-width: 1180px) {
+  .readout {
+    display: none;
+  }
+}
 </style>

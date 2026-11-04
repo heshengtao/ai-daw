@@ -75,6 +75,10 @@ pub struct YueStatus {
     pub automatic: bool,
     /// 本机会自动用哪个后端：`cuda13` / `cuda12` / `vulkan` / `cpu`。
     pub device: String,
+    /// 是不是本机**最优**的那一份（与装没装无关，界面据此标「推荐」并默认选中）。
+    pub recommended: bool,
+    /// 本机能不能真跑这份构建（AMD 机器上的 CUDA = false）。
+    pub usable: bool,
     /// 这份后端自己的目录（给「显示位置」用）。
     pub dir: String,
 }
@@ -99,10 +103,7 @@ pub fn busy() -> bool {
 
 /// 引擎根目录（应用配置目录的 `runtime/audiocpp/`）。
 pub fn root(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| format!("拿不到应用配置目录：{e}"))?
+    let dir = crate::paths::config_dir(app)?
         .join("runtime")
         .join("audiocpp");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -250,18 +251,38 @@ fn preferred() -> Option<&'static EnginePack> {
 /// - Windows / Linux：N 卡优先 CUDA 13（驱动 ≥ 580）→ CUDA 12，其次 Vulkan，最后 CPU。
 ///   「装了但没有对应显卡 / 驱动不够」不算数（AMD 上装了 CUDA 也跑不起来）。
 pub fn auto_device() -> &'static str {
-    use ai_daw_local_ai::backend::detect;
-    let nvidia = detect::detect_cached().gpu == Some(detect::GpuVendor::Nvidia);
+    let best = best_device();
     let has = |device: &str| {
         engine::for_device(device)
             .map(engine::installed)
             .unwrap_or(false)
     };
+    // 最优的那份装了就用它；否则退到任意一份装好的（用户可能只下了 CPU 兜底）。
+    if has(best) {
+        return best;
+    }
+    for device in ["metal", "cuda13", "cuda12", "vulkan", "cpu"] {
+        if usable(device) && has(device) {
+            return device;
+        }
+    }
+    "cpu"
+}
+
+/// 本机**最优**的后端（**不看装没装**）。
+///
+/// 和 [`auto_device`] 的区别就是这一条：安装向导要在「一份都没装」的机器上
+/// 默认选中显卡能跑的那一份，而不是永远落在 CPU 上（那会让 N 卡用户以为软件
+/// 不支持显卡）。
+pub fn best_device() -> &'static str {
+    use ai_daw_local_ai::backend::detect;
+    let nvidia = detect::detect_cached().gpu == Some(detect::GpuVendor::Nvidia);
+    let has = |device: &str| engine::for_device(device).is_some();
     if std::env::consts::OS == "macos" {
         return if has("metal") { "metal" } else { "cpu" };
     }
     if nvidia {
-        if has("cuda13") && cuda13_driver_ok() {
+        if cuda13_driver_ok() && has("cuda13") {
             "cuda13"
         } else if has("cuda12") {
             "cuda12"
@@ -328,6 +349,7 @@ pub fn ai_yue_catalog(app: AppHandle) -> Vec<YueStatus> {
 pub fn statuses(app: &AppHandle) -> Vec<YueStatus> {
     let _ = root(app);
     let chosen = effective_device();
+    let best = best_device();
     let picked = preferred().map(|p| p.id);
     engine::packs(std::env::consts::OS, std::env::consts::ARCH)
         .iter()
@@ -343,6 +365,8 @@ pub fn statuses(app: &AppHandle) -> Vec<YueStatus> {
             selected: picked == Some(pack.id) || (picked.is_none() && pack.device == chosen),
             automatic: picked.is_none(),
             device: chosen.to_string(),
+            recommended: pack.device == best,
+            usable: usable(pack.device),
             dir: engine::dir_of(pack).to_string_lossy().into_owned(),
         })
         .collect()
@@ -406,7 +430,10 @@ pub fn ai_yue_import(app: AppHandle, id: String, dir: String) -> Result<(), Stri
     Ok(())
 }
 
-fn verify_archive(path: &Path, meta: &ai_daw_local_ai::engine::EngineArchive) -> Result<(), String> {
+fn verify_archive(
+    path: &Path,
+    meta: &ai_daw_local_ai::engine::EngineArchive,
+) -> Result<(), String> {
     let size = fs::metadata(path)
         .map_err(|e| format!("读 {} 失败：{e}", path.display()))?
         .len();
@@ -648,7 +675,11 @@ fn probe_latency(agent: &ureq::Agent, url: &str) -> Option<Duration> {
 }
 
 /// 候选地址：区域偏好排序 + 用户镜像 + 代理前缀（与 `runtimes.rs` 同一套）。
-fn candidates(archive: &EngineArchive, network: &StoreNetwork, region: Option<&str>) -> Vec<String> {
+fn candidates(
+    archive: &EngineArchive,
+    network: &StoreNetwork,
+    region: Option<&str>,
+) -> Vec<String> {
     let mut ordered: Vec<&EngineSource> = archive.sources.iter().collect();
     if let Some(pref) = region {
         ordered.sort_by_key(|s| if s.region == pref { 0 } else { 1 });
@@ -688,8 +719,8 @@ fn extract(
     part: &'static ai_daw_local_ai::engine::EnginePart,
     dir: &Path,
 ) -> Result<(), String> {
-    let meta = engine::archive(part.archive)
-        .ok_or_else(|| format!("清单里没有归档 {}", part.archive))?;
+    let meta =
+        engine::archive(part.archive).ok_or_else(|| format!("清单里没有归档 {}", part.archive))?;
     match meta.format {
         engine::EngineFormat::Zip => extract_zip(archive, part, dir),
         engine::EngineFormat::TarGz => extract_tar_gz(archive, part, dir),
@@ -736,17 +767,12 @@ fn extract_tar_gz(
     let mut remaining: Vec<&'static ai_daw_local_ai::engine::EngineFile> =
         part.files.iter().collect();
 
-    for entry in tar
-        .entries()
-        .map_err(|e| format!("读取 tar 失败：{e}"))?
-    {
+    for entry in tar.entries().map_err(|e| format!("读取 tar 失败：{e}"))? {
         let mut entry = entry.map_err(|e| format!("读取 tar 条目失败：{e}"))?;
         if !entry.header().entry_type().is_file() {
             continue;
         }
-        let path = entry
-            .path()
-            .map_err(|e| format!("tar 条目路径坏掉：{e}"))?;
+        let path = entry.path().map_err(|e| format!("tar 条目路径坏掉：{e}"))?;
         let name = path.to_string_lossy().trim_start_matches("./").to_string();
         let Some(pos) = remaining
             .iter()

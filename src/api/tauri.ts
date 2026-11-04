@@ -24,6 +24,13 @@ import type {
   YueComposeArgs,
   YueEngineStatus,
   YueJobStatus,
+  YueLora,
+  ContinuableTrack,
+  LyricsArgs,
+  LyricsOutcome,
+  TranscribeArgs,
+  TranscribeOutcome,
+  MidiScore,
   VoiceEntry,
   VoiceSaveArgs,
   AnalysisReport,
@@ -36,6 +43,8 @@ import type {
   RuntimeProgress,
   CatalogPlugin,
   CliStatus,
+  DataDirInfo,
+  DataDirProgress,
   ClipPlacement,
   ClipRef,
   FitMode,
@@ -48,6 +57,8 @@ import type {
   ExportProgress,
   ImportProgress,
   InputDeviceInfo,
+  MidiInputDeviceInfo,
+  MidiInputEvent,
   OutputDeviceInfo,
   ManagerInstallRequest,
   ManagerInstalled,
@@ -60,6 +71,7 @@ import type {
   ModelProgress,
   ModelSourcePreference,
   ModelStatus,
+  SourceProbe,
   Note,
   NoteEdit,
   NotePatch,
@@ -101,14 +113,15 @@ export const EVENT_AI = "engine://ai";
 export const EVENT_SINGING = "engine://singing";
 /** 音色替换状态广播通道名，与后端 `svc::EVENT_SVC` 保持一致。 */
 export const EVENT_SVC = "engine://svc";
+/** MIDI 输入事件广播通道名，与后端 `midi_input::EVENT_MIDI` 保持一致。 */
+export const EVENT_MIDI = "engine://midi";
 
 /** 插件管理器进度广播通道名，与后端 `manager::EVENT_MANAGER` 保持一致。 */
 export const EVENT_MANAGER = "engine://manager";
 /** 模型下载进度广播通道名，与后端 `models::EVENT_MODEL` 保持一致。 */
 export const EVENT_MODEL = "engine://model";
 /** 音频导入解码进度广播通道名，与后端 `state::EVENT_IMPORT` 保持一致。 */
-export const EVENT_IMPORT = "engine://import";
-/** 音频导出（渲染 + 编码）进度广播通道名，与后端 `state::EVENT_EXPORT` 保持一致。 */
+export const EVENT_IMPORT = "engine://import";/** 音频导出（渲染 + 编码）进度广播通道名，与后端 `state::EVENT_EXPORT` 保持一致。 */
 export const EVENT_EXPORT = "engine://export";
 /** 写歌智能体事件广播通道名，与后端 `agent::EVENT_AGENT` 保持一致。 */
 export const EVENT_AGENT = "engine://agent";
@@ -1166,6 +1179,45 @@ export function recordStop(): Promise<Project | null> {
 }
 
 // ---------------------------------------------------------------------------
+// MIDI 输入 / MIDI 录音
+// ---------------------------------------------------------------------------
+
+/** 本机可用的 MIDI 输入端口。 */
+export function listMidiInputs(): Promise<MidiInputDeviceInfo[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.listMidiInputs());
+  return invoke<MidiInputDeviceInfo[]>("list_midi_inputs");
+}
+
+/** 打开 / 替换 / 关闭 MIDI 输入（`null` = 关闭并释放端口）。 */
+export function setMidiInput(device: string | null): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setMidiInput());
+  return invoke<void>("set_midi_input", { device });
+}
+
+/** 当前打开的 MIDI 输入端口（热重载 / 二次打开界面时用来同步状态）。 */
+export function midiInputDevice(): Promise<string | null> {
+  if (mockEnabled()) return Promise.resolve(mockApi.midiInputDevice());
+  return invoke<string | null>("midi_input_device");
+}
+
+/** 订阅 MIDI 输入事件（返回取消订阅函数）。 */
+export function onMidiEvent(handler: (p: MidiInputEvent) => void): Promise<UnlistenFn> {
+  if (mockEnabled()) return Promise.resolve(() => {});
+  return listen<MidiInputEvent>(EVENT_MIDI, (event) => handler(event.payload));
+}
+
+/** 把一次 MIDI 录音落成「片段 + 全部音符」的一条原子编辑，返回新工程。 */
+export function addMidiClip(
+  track: number,
+  start: number,
+  length: number,
+  notes: Note[],
+): Promise<Project> {
+  if (mockEnabled()) return Promise.resolve(mockApi.addMidiClip(track, start, length, notes));
+  return invoke<Project>("add_midi_clip", { track, start, length, notes });
+}
+
+// ---------------------------------------------------------------------------
 // 本地 AI（音频转 MIDI / 降噪）
 // ---------------------------------------------------------------------------
 
@@ -1375,6 +1427,73 @@ export function yueImport(id: string, dir: string): Promise<void> {
 export function yueImportAbc(path: string): Promise<string> {
   if (mockEnabled()) return Promise.resolve(mockApi.yueImportAbc(path));
   return invoke<string>("ai_yue_import_abc", { path });
+}
+
+/** 读回生成时落盘的 ABC 谱文本（「载入刚生成的谱」再改）。 */
+export function yueScore(path: string): Promise<string> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueScore());
+  return invoke<string>("ai_yue_score", { path });
+}
+
+/** 读一份生成记录 `.json`（界面把参数填回表单 = 重放）。 */
+export function yueRecord(path: string): Promise<string> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueRecord());
+  return invoke<string>("ai_yue_record", { path });
+}
+
+/** 当前的 LoRA 设置。 */
+export function yueLora(): Promise<YueLora> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueLora());
+  return invoke<YueLora>("ai_yue_lora");
+}
+
+/** 写 LoRA 设置（下次启动引擎生效）。 */
+export function yueSetLora(lora: YueLora): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueSetLora(lora));
+  return invoke<void>("ai_yue_set_lora", { lora });
+}
+
+/** 录音转谱（SheetSage2）：分钟级，会先停写歌引擎腾显存。 */
+export function yueTranscribe(args: TranscribeArgs): Promise<TranscribeOutcome> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueTranscribe(args));
+  return invoke<TranscribeOutcome>("ai_yue_transcribe", { args });
+}
+
+/** 取消正在跑的转谱（一次性引擎进程直接杀掉）。 */
+export function yueTranscribeCancel(): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueTranscribeCancel());
+  return invoke<void>("ai_yue_transcribe_cancel");
+}
+
+/** 抓歌词：参考音频（轨道 / 文件）→ 文本（翻唱的「获取歌词」，默认先分离人声）。 */
+export function yueLyrics(args: LyricsArgs): Promise<LyricsOutcome> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueLyrics(args));
+  return invoke<LyricsOutcome>("ai_yue_lyrics", { args });
+}
+
+/** 取消正在跑的抓歌词（一次性引擎进程直接杀掉）。 */
+export function yueLyricsCancel(): Promise<void> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueLyricsCancel());
+  return invoke<void>("ai_yue_lyrics_cancel");
+}
+
+/** 把工程里的 MIDI 片段写成 ABC 谱（翻唱的 MIDI 参考：零推理，顺带带回歌词）。 */
+export function yueMidiAbc(
+  track: number,
+  clip: number | null = null,
+): Promise<MidiScore> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueMidiAbc(track, clip));
+  return invoke<MidiScore>("ai_yue_midi_abc", { track, clip });
+}
+
+/**
+ * 能续写的轨道（本机有语义码的那些）：续写下拉只列它们。
+ *
+ * 续写只吃语义码（不是音频），而语义码只在本机生成时落盘，所以外部导入的音频不在列表里。
+ */
+export function yueContinuable(): Promise<ContinuableTrack[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueContinuable());
+  return invoke<ContinuableTrack[]>("ai_yue_continuable");
 }
 
 /** 拉起引擎（首次要加载几 GB 权重，分钟级；状态走 `onYueEngineEvent`）。换权重会重新加载。 */
@@ -1975,6 +2094,26 @@ export function modelResolveUrl(id: string): Promise<string> {
   return invoke<string>("model_resolve_url", { id });
 }
 
+/**
+ * 逐源探测「这个模型能从哪下、各自多快」。
+ *
+ * 每源只发一个 `Range: bytes=0-0`，不会真的拉权重；慢/不可达的源会带 `error` 回来。
+ */
+export function modelProbe(id: string): Promise<SourceProbe[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.modelProbe(id));
+  return invoke<SourceProbe[]>("model_probe", { id });
+}
+
+/**
+ * 数据目录所在磁盘的剩余字节（下载前预检用）。
+ *
+ * 后端读不到时返回 `null`——界面当作「不知道」放行，不拿一个猜出来的数字拦用户。
+ */
+export function diskFreeBytes(): Promise<number | null> {
+  if (mockEnabled()) return Promise.resolve(64 * 1024 * 1024 * 1024);
+  return invoke<number | null>("disk_free_bytes");
+}
+
 /** 订阅模型下载进度。 */
 export function onModelEvent(handler: (p: ModelProgress) => void): Promise<UnlistenFn> {
   if (mockEnabled()) {
@@ -2085,4 +2224,37 @@ export function onRuntimeEvent(
 export function appReady(): Promise<void> {
   if (mockEnabled()) return Promise.resolve();
   return invoke<void>("app_ready");
+}
+
+// ---------------------------------------------------------------------------
+// 数据目录：查看 / 一键迁移 / 清理旧目录（进度走 `app://data-dir`）
+// ---------------------------------------------------------------------------
+
+/** 数据目录迁移进度的事件名（与后端 `paths::EVENT_PROGRESS` 一致）。 */
+export const EVENT_DATA_DIR = "app://data-dir";
+
+/** 当前数据目录概况（路径 / 来源 / 占用）。 */
+export function dataDirInfo(): Promise<DataDirInfo> {
+  if (mockEnabled()) return Promise.resolve(mockApi.dataDirInfo());
+  return invoke<DataDirInfo>("data_dir_info");
+}
+
+/** 把当前数据目录整体复制到 `target`，返回写指针后的新概况（重启后生效）。 */
+export function dataDirMigrate(target: string): Promise<DataDirInfo> {
+  if (mockEnabled()) return Promise.resolve(mockApi.dataDirMigrate(target));
+  return invoke<DataDirInfo>("data_dir_migrate", { target });
+}
+
+/** 清理上一次迁移留下的旧目录；返回被清掉的路径（没有则 `null`）。 */
+export function dataDirCleanupPrevious(): Promise<string | null> {
+  if (mockEnabled()) return Promise.resolve(mockApi.dataDirCleanupPrevious());
+  return invoke<string | null>("data_dir_cleanup_previous");
+}
+
+/** 订阅数据目录迁移进度（迁移期间挂载，返回取消订阅函数）。 */
+export function onDataDirProgress(
+  handler: (p: DataDirProgress) => void,
+): Promise<UnlistenFn> {
+  if (mockEnabled()) return Promise.resolve(() => {});
+  return listen<DataDirProgress>(EVENT_DATA_DIR, (e) => handler(e.payload));
 }

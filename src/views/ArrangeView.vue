@@ -17,18 +17,20 @@
  * - 双击片段 → 进入它的钢琴卷帘；
  * - Delete/Backspace → 删除所选片段；Ctrl/Cmd + 滚轮 → 缩放。
  */
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore, type ClipSel } from "@/stores/selection";
 import { useClipboardStore } from "@/stores/clipboard";
 import { useTransportStore } from "@/stores/transport";
-import { useLayoutStore } from "@/stores/layout";
+import { useLayoutStore, type LaneView } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
 import ClipWaveform from "@/components/common/ClipWaveform.vue";
 import { clipBounds } from "@/api/tauri";
 import AutomationLane from "@/components/workspace/AutomationLane.vue";
+import MidiKeyboardPane from "@/components/workspace/MidiKeyboardPane.vue";
+import LaneLoading from "@/components/workspace/LaneLoading.vue";
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import ContextMenu from "@/components/common/ContextMenu.vue";
 import type { ContextMenuItem } from "@/components/common/contextMenu";
@@ -40,6 +42,16 @@ import { isMacOS } from "@/utils/platform";
 import { useI18n } from "@/i18n";
 import type { Clip, ClipPlacement, Note, Track } from "@/api/types";
 
+/**
+ * 乐谱窗格按需加载：alphaTab 的包一兆多，编排视图首屏不该为它买单——只有用户真的
+ * 把下窗口切到「乐谱」时才下载。加载期间用等高占位，避免编排网格高度跳一下。
+ */
+const ScorePane = defineAsyncComponent({
+  loader: () => import("@/components/workspace/ScorePane.vue"),
+  loadingComponent: LaneLoading,
+  delay: 0,
+});
+
 const store = useProjectStore();
 const i18n = useI18n();
 const selection = useSelectionStore();
@@ -48,6 +60,13 @@ const transport = useTransportStore();
 const layout = useLayoutStore();
 const timeline = useTimelineStore();
 const router = useRouter();
+
+/** 下窗口视图切换：只接受编排视图能用的三格（视图组件的 `views` 已经限制了，这里再收窄类型）。 */
+function setArrangeView(view: LaneView): void {
+  if (view === "automation" || view === "score" || view === "keyboard") {
+    layout.arrangeLaneView = view;
+  }
+}
 
 /** 与 TrackHeaderList 约定的行高（px）。 */
 const LANE_H = 64;
@@ -1011,11 +1030,11 @@ function onWheel(e: WheelEvent): void {
 }
 
 /**
- * 实测底部自动化块的高度（分隔线 + 表头 + 曲线画布），写给左侧音轨栏。
+ * 实测下窗口的高度（分隔线 + 表头 + 窗格本体），写给左侧音轨栏。
  *
  * 音轨栏的列表必须和编排的**可滚动区域**一样高，两边滚到底部时行才不会错位。
- * 自动化块的高度不是常数：表头固定 30px，但曲线画布随 `laneHeight` 变，没有可选目标时
- * 还会整个不渲染，所以用 `ResizeObserver` 量，而不是拿常量估。
+ * 下窗口的高度不是常数：表头固定 30px，但本体随 `laneHeight` 变，没有可选目标 / 没选
+ * 轨道时还会只剩占位文字，所以用 `ResizeObserver` 量，而不是拿常量估。
  */
 function watchAutoBlock(): void {
   autoObserver?.disconnect();
@@ -1228,10 +1247,25 @@ onUnmounted(() => {
       />
     </div>
 
-    <!-- 自动化曲线编辑器：编排视图底部，与网格共用同一条时间轴（原点 = 同一份留白常量） -->
+    <!-- 下窗口：自动化 / 选中轨道的乐谱 / 虚拟 MIDI 键盘，三选一（共用同一份高度与分隔线） -->
     <div v-if="layout.showAutomation" ref="autoBlockEl" class="auto-block">
       <PanelResizer side="bottom" @resize="layout.resizeLane($event)" />
-      <AutomationLane :height="layout.laneHeight" :inset-px="TIMELINE_INSET_PX" />
+      <ScorePane
+        v-if="layout.arrangeLaneView === 'score'"
+        context="arrange"
+        @update:view="setArrangeView"
+      />
+      <MidiKeyboardPane
+        v-else-if="layout.arrangeLaneView === 'keyboard'"
+        context="arrange"
+        @update:view="setArrangeView"
+      />
+      <AutomationLane
+        v-else
+        :height="layout.laneHeight"
+        :inset-px="TIMELINE_INSET_PX"
+        @update:view="setArrangeView"
+      />
     </div>
 
     <!-- 右键菜单：复制 / 剪切 / 粘贴 / 删除 -->

@@ -20,16 +20,19 @@ withDefaults(
     confirmLabel: string;
     /** 取消按钮文案；不给就用「取消」。 */
     cancelLabel?: string;
+    /** 第三个次按钮（例如「在后台下载」）；不给就不渲染。 */
+    extraLabel?: string;
     /** 确认按钮用危险色（删除类操作用）。 */
     danger?: boolean;
   }>(),
-  { cancelLabel: undefined, danger: false },
+  { cancelLabel: undefined, extraLabel: undefined, danger: false },
 );
 
 const emit = defineEmits<{
   (e: "update:open", value: boolean): void;
   (e: "confirm"): void;
   (e: "cancel"): void;
+  (e: "extra"): void;
 }>();
 
 const i18n = useI18n();
@@ -41,6 +44,12 @@ function cancel(): void {
 
 function confirm(): void {
   emit("confirm");
+  emit("update:open", false);
+}
+
+/** 第三个次按钮（「在后台下载」）：与取消一样只是关框，动作由调用方决定。 */
+function extra(): void {
+  emit("extra");
   emit("update:open", false);
 }
 
@@ -78,6 +87,7 @@ function onKey(e: KeyboardEvent): void {
 
           <footer class="foot">
             <button class="btn-text" @click="cancel">{{ cancelLabel ?? i18n.t("common.cancel") }}</button>
+            <button v-if="extraLabel" class="btn-text" @click="extra">{{ extraLabel }}</button>
             <button class="btn-filled" :class="{ danger }" @click="confirm">{{ confirmLabel }}</button>
           </footer>
         </div>

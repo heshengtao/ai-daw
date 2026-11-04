@@ -455,11 +455,7 @@ fn to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
 
 /// 输出 WAV 路径（应用数据目录 `local-ai/`，与其它 AI 产物放一起）。
 fn output_path(app: &tauri::AppHandle, kind: &str) -> Result<String, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("拿不到应用数据目录：{e}"))?
-        .join("local-ai");
+    let dir = crate::paths::data_dir(app)?.join("local-ai");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

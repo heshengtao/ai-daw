@@ -2,24 +2,26 @@
 /**
  * **歌声合成**子页（侧栏内整页，从列表的卡片进来，左上角返回）。
  *
- * 输入是「MIDI 音符 + 歌词 + 一条参考声线」，输出是一条新音频轨。歌词逐音填在钢琴卷帘的
+ * 输入是「MIDI 音符 + 歌词 + 一条参考声线」，输出是一条新音频轨。歌词逐音填在钢琴卷帘里；
  * 歌词模式下，这里只放入口——再把一个整串歌词框抄一遍只会让人不知道哪份生效。
  *
- * 参考声线两路：工程内的音频轨，或人声音色库（见 `useTonePicker`）。
- */
+ * 参考声线两路：工程内的音频轨，或人声音色库（见 `useTonePicker`）。 */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeftIcon } from "@heroicons/vue/24/outline";
+import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import Md3Select from "@/components/common/Md3Select.vue";
 import { onSingingEvent, singingCancel, singingRender, singingStatus } from "@/api/tauri";
 import type { SingingStatus } from "@/api/types";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
+import { useDownloadsStore } from "@/stores/downloads";
 import { useLayoutStore } from "@/stores/layout";
 import { useModelsStore } from "@/stores/models";
 import { useI18n } from "@/i18n";
 import { useTonePicker } from "@/composables/useTonePicker";
 import { useModelChoice } from "@/composables/useModelChoice";
+import { useModelDownloadPrompt } from "@/composables/useModelDownloadPrompt";
 
 const emit = defineEmits<{ (e: "back"): void }>();
 
@@ -27,6 +29,8 @@ const router = useRouter();
 const project = useProjectStore();
 const selection = useSelectionStore();
 const layout = useLayoutStore();
+
+const downloads = useDownloadsStore();
 const models = useModelsStore();
 const i18n = useI18n();
 
@@ -114,10 +118,26 @@ const statusLine = computed(() => {
   return ready.value ? i18n.t("ai.singingNote") : i18n.t("ai.singingNeedsModel");
 });
 
-/** 「去下载」：打开下载管理器（模型都在那里）。 */
+/**
+ * 「去下载」：确认后跳到下载管理器**并立刻开始下载**。
+ *
+ * 以前这里只 `openTab("manager")` + 请求聚焦，什么也不下；用户到了管理器还要自己
+ * 找到那一行再点一次「下载」，很容易以为按钮坏了。 */
+const {
+  open: downloadOpen,
+  message: downloadMessage,
+  require: requireDownload,
+  confirm: confirmDownload,
+  background: backgroundDownload,
+  cancel: cancelDownload,
+} = useModelDownloadPrompt();
+
 function downloadModel(): void {
-  layout.openTab("manager");
-  models.requestFocus();
+  const current = model.value;
+  // 没装 → 弹确认框（`require` 返回 false），确认后跳转并下载。
+  if (current && !requireDownload(current)) return;
+  downloads.jumpTo("model", current?.id ?? "*");
+  models.requestFocus(current?.id ?? "*");
 }
 
 /** 跳到钢琴卷帘的歌词模式，并把当前 MIDI 片段选中。 */
@@ -333,5 +353,17 @@ watch(
         <div class="sub-progress-fill" :class="{ indeterminate: barIndeterminate }" :style="barStyle" />
       </div>
     </section>
+
+    <!-- 缺权重：确认后跳到管理器并**直接开始下载**（不再只是切个页签）；也可留在后台 -->
+    <ConfirmDialog
+      v-model:open="downloadOpen"
+      :title="i18n.t('dialog.downloadModelTitle')"
+      :message="downloadMessage"
+      :confirm-label="i18n.t('dialog.downloadModelOk')"
+      :extra-label="i18n.t('setup.background')"
+      @confirm="confirmDownload"
+      @extra="backgroundDownload"
+      @cancel="cancelDownload"
+    />
   </div>
 </template>

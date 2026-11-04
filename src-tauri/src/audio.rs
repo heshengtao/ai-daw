@@ -18,8 +18,9 @@ use ai_daw_engine::event::Event;
 use ai_daw_engine::model::{Project, TrackId};
 use ai_daw_engine::player::ReusableInstances;
 use ai_daw_engine::realtime::{
-    device_changed, output_sample_rate, output_signature, stall_polls_required, stream_stalled,
-    AudioHost, DeviceSignature, RealtimeOptions, SharedStatus, SharedTransport,
+    device_changed, device_name_changed, output_sample_rate, output_signature,
+    stall_polls_required, stream_stalled, AudioHost, DeviceSignature, RealtimeOptions,
+    SharedStatus, SharedTransport,
 };
 use ai_daw_engine::registry::PluginSlot;
 use ai_daw_engine::schedule::ScheduledEvents;
@@ -550,6 +551,22 @@ fn take_instances(host: &mut Option<AudioHost>, available: &AtomicBool) -> Reusa
     }
 }
 
+/// 与 [`take_instances`] 相同，但流已经报错时直接跳过。
+///
+/// `take_instances` 在回调不跑时会**等满 500 ms**。看门狗每秒重建一次的场景里，这
+/// 500 ms 叠在控制路径上，播放/暂停命令全排在它后面——用户感觉就是「点了没反应」。
+/// 流已死时本来也交不出实例，跳过它并不损失什么。
+fn take_usable_instances(
+    host: &mut Option<AudioHost>,
+    available: &AtomicBool,
+    status: &SharedStatus,
+) -> ReusableInstances {
+    if status.dead() {
+        return ReusableInstances::default();
+    }
+    take_instances(host, available)
+}
+
 /// 用当前插件目录构建并启动一次宿主。
 ///
 /// `carried` 是上一个宿主交出来的插件实例：新播放器会复用 plugin id 仍匹配的那些，
@@ -621,14 +638,26 @@ fn start_host(
     match built {
         Ok(host) => {
             available.store(true, Ordering::Relaxed);
-            *error.lock().unwrap() = None;
+            let recovered = error.lock().unwrap().take().is_some();
+            if recovered {
+                crate::logging::info(format!(
+                    "[audio] 实时输出已恢复（{rate} Hz）：接下来播放不再走离线渲染"
+                ));
+            }
             Some(host)
         }
         Err(e) => {
+            let reason = e.to_string();
             // 清空缓存的采样率：设备可能已切换，下次装载重新探测。
             sample_rate.store(0, Ordering::Relaxed);
             available.store(false, Ordering::Relaxed);
-            *error.lock().unwrap() = Some(e.to_string());
+            let previous = error.lock().unwrap().replace(reason.clone());
+            // 失败会每秒重试一次，只在原因变化时记一行，别把日志刷爆。
+            if previous.as_deref() != Some(reason.as_str()) {
+                crate::logging::info(format!(
+                    "[audio] 实时输出不可用（{rate} Hz）：{reason}；界面将回退到离线试听"
+                ));
+            }
             None
         }
     }
@@ -734,6 +763,8 @@ fn run_audio_thread(
     let mut pending_signature: Option<DeviceSignature> = None;
     // 队列满只在第一次丢命令时提示一次（停摆期间会连续发生，不能刷屏）。
     let mut drop_warned = false;
+    // 上一次记录的重建原因：设备一直不存在时每秒都会重建，同一原因只记一行。
+    let mut last_rebuild_why: Option<&'static str> = None;
 
     // 所有发送端都析构后 `recv_timeout` 返回 `Disconnected`，线程随之退出（并释放宿主）。
     loop {
@@ -767,7 +798,7 @@ fn run_audio_thread(
                 let frame = shared.position_frames();
                 // 先把活着的插件实例取出来（重建后复用——插件状态与已打开的界面窗口因此
                 // 跨重建保留），再释放旧宿主。
-                let carried = take_instances(&mut host, &available);
+                let carried = take_usable_instances(&mut host, &available, &status);
                 drop(host.take());
                 host = rebuild(
                     &current,
@@ -806,7 +837,7 @@ fn run_audio_thread(
                 let frame = shared.position_frames();
                 // 先把活着的插件实例取出来，让重建后的播放器复用——插件状态与已打开的
                 // 界面窗口因此跨重建保留（改效果链 / 移动片段不再重置乐器、不再关窗）。
-                let carried = take_instances(&mut host, &available);
+                let carried = take_usable_instances(&mut host, &available, &status);
                 drop(host.take());
                 host = rebuild(
                     &current,
@@ -839,7 +870,7 @@ fn run_audio_thread(
                 let was_playing = shared.is_playing();
                 let frame = shared.position_frames();
                 // 先把活着的插件实例取出来，让重建后的播放器复用。
-                let carried = take_instances(&mut host, &available);
+                let carried = take_usable_instances(&mut host, &available, &status);
                 drop(host.take());
                 // 设备可能换了：清采样率缓存后重新探测。
                 host = rebuild(
@@ -874,7 +905,7 @@ fn run_audio_thread(
                 output_device = device;
                 let was_playing = shared.is_playing();
                 let frame = shared.position_frames();
-                let carried = take_instances(&mut host, &available);
+                let carried = take_usable_instances(&mut host, &available, &status);
                 drop(host.take());
                 // 换了设备：采样率缓存必须失效，按新设备重新解析。
                 host = rebuild(
@@ -982,15 +1013,45 @@ fn run_audio_thread(
                     pending_signature = None;
                     false
                 };
-                let needs = host.is_none() || status.dead() || stalled_dead || changed;
+                // **只有设备名真的换了才重建**：蓝牙耳机在同一端点的 44.1/48 kHz 之间
+                // 来回跳时，现有流通常仍然健康；每次跳档都重建会让播放/暂停一直排在
+                // 重建后面（用户感觉「点什么都很卡」）。采样率变化要是真把流弄停了，
+                // 下面的心跳看门狗会接住。
+                let renamed = device_name_changed(signature.as_ref(), now.as_ref());
+                let needs = host.is_none() || status.dead() || stalled_dead || (changed && renamed);
                 if !needs {
+                    // 只是采样率变了、流还活着：更新记录，别让 `changed` 每轮都成立。
+                    if changed {
+                        signature = now;
+                        pending_signature = None;
+                    }
                     continue;
+                }
+                let why = if host.is_none() {
+                    "没有宿主"
+                } else if status.dead() {
+                    "输出流报错"
+                } else if stalled_dead {
+                    "回调停摆"
+                } else {
+                    "输出设备切换"
+                };
+                if last_rebuild_why != Some(why) {
+                    last_rebuild_why = Some(why);
+                    crate::logging::info(format!(
+                        "[audio] 重建宿主：{why}（连续停摆轮次 {stalled_polls}，退避 {stall_backoff}）"
+                    ));
                 }
                 let was_playing = shared.is_playing();
                 let frame = shared.position_frames();
                 // 先把活着的插件实例取出来，让重建后的播放器复用——插件状态与已打开的
                 // 界面窗口因此跨重建保留（改效果链 / 移动片段不再重置乐器、不再关窗）。
-                let carried = take_instances(&mut host, &available);
+                // 停摆的流交不出实例，别为此白等 500 ms（控制命令还排在后面）。
+                let carried = if stalled_dead {
+                    ReusableInstances::default()
+                } else {
+                    take_usable_instances(&mut host, &available, &status)
+                };
                 drop(host.take());
                 host = rebuild(
                     &current,
