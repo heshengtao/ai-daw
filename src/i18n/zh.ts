@@ -1630,6 +1630,7 @@ const zh: Record<string, string> = {
 
   // ---- 编排 / 编辑 / 混音 ----
   "arrange.clipAdded": "已新建片段",
+  "arrange.firstClipHint": "第一块片段画好了 · 双击进去写音符，拖右边缘改长度",
   "arrange.clipSplit": "已切分片段",
   "arrange.clipRemoved": "已删除片段",
   "arrange.clipsRemoved": "已删除 {count} 个片段",

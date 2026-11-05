@@ -842,15 +842,26 @@ async function splitClipAtPlayhead(track: Track | null, clip: Clip | null): Prom
   }
 }
 
+/**
+ * 工程里一块片段都没有 = 马上要画的是**第一块**。
+ *
+ * 用它把「已新建片段」那条提示换成一句教学：刚画完的这一刻，用户才真的想知道
+ * 「下一步能干嘛」。提前讲记不住，晚一点又没机会。
+ */
+function isFirstClip(): boolean {
+  return (store.project?.tracks ?? []).every((track) => track.clips.length === 0);
+}
+
 async function createMidiClipAt(track: Track | null, beat: number): Promise<void> {
   if (!track) return;
+  const first = isFirstClip();
   try {
     const length = Math.max(MIN_CREATE_BEATS, selection.lastClipLength);
     await store.addClip(track.id, beat, length);
     const target = store.project?.tracks.find((t) => t.id === track.id);
     const created = target?.clips[target.clips.length - 1];
     if (created) selection.selectClip(track.id, created.id);
-    layout.notify(i18n.t("arrange.clipAdded"));
+    layout.notify(first ? i18n.t("arrange.firstClipHint") : i18n.t("arrange.clipAdded"));
   } catch (err) {
     layout.notify(i18n.t("error.addClip", { error: String(err) }));
   }
@@ -1291,6 +1302,7 @@ async function onPointerUp(): Promise<void> {
     const clicked = Math.abs(create.to - create.from) < MIN_CREATE_BEATS;
     const start = clicked ? create.from : Math.min(create.from, create.to);
     const length = clicked ? selection.lastClipLength : Math.abs(create.to - create.from);
+    const first = isFirstClip();
     try {
       await store.addClip(create.trackId, start, length);
       const t = store.project?.tracks.find((x) => x.id === create.trackId);
@@ -1299,7 +1311,7 @@ async function onPointerUp(): Promise<void> {
         selection.selectClip(create.trackId, created.id);
         selection.rememberClipLength(created.length);
       }
-      layout.notify(i18n.t("arrange.clipAdded"));
+      layout.notify(first ? i18n.t("arrange.firstClipHint") : i18n.t("arrange.clipAdded"));
     } catch (err) {
       layout.notify(i18n.t("error.addClip", { error: String(err) }));
     }

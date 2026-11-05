@@ -1632,6 +1632,7 @@ const en: Record<string, string> = {
 
   // ---- Arrange / edit / mix ----
   "arrange.clipAdded": "Clip created",
+  "arrange.firstClipHint": "First clip down — double-click to write notes, drag the right edge to resize",
   "arrange.clipSplit": "Clip split",
   "arrange.clipRemoved": "Clip deleted",
   "arrange.clipsRemoved": "Deleted {count} clips",
