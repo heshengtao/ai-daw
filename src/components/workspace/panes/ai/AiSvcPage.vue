@@ -12,6 +12,7 @@ import { onSvcEvent, svcCancel, svcRender, svcStatus } from "@/api/tauri";
 import type { SvcStatus } from "@/api/types";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
+import type { AiIntent } from "@/stores/aiIntent";
 import { useDownloadsStore } from "@/stores/downloads";
 import { useLayoutStore } from "@/stores/layout";
 import { useModelsStore } from "@/stores/models";
@@ -20,6 +21,7 @@ import { useTonePicker } from "@/composables/useTonePicker";
 import { useModelChoice } from "@/composables/useModelChoice";
 import { useModelDownloadPrompt } from "@/composables/useModelDownloadPrompt";
 
+const props = defineProps<{ intent?: AiIntent | null }>();
 const emit = defineEmits<{ (e: "back"): void }>();
 
 const project = useProjectStore();
@@ -61,6 +63,8 @@ const {
 
 /** 目标：要换音色的那条人声。 */
 const targetId = ref<string | null>(null);
+/** 右键菜单指定的音频片段；为空 = 轨道上第一个音频片段。 */
+const targetClipId = ref<string | null>(null);
 const target = computed(
   () => audioTracks.value.find((t) => String(t.id) === targetId.value) ?? audioTracks.value[0] ?? null,
 );
@@ -143,6 +147,24 @@ function downloadModel(): void {
   models.requestFocus(current?.id ?? "*");
 }
 
+/** 右键指定的片段只在这条轨道上有效；否则交给后端选第一个音频片段。 */
+function clipArgOf(track: { clips: { id: number; audio?: unknown }[] }): number | null {
+  if (targetClipId.value === null) return null;
+  const wanted = Number(targetClipId.value);
+  return track.clips.some((c) => c.audio && c.id === wanted) ? wanted : null;
+}
+
+/** 把右键菜单的意图落到表单上：换目标轨道 + 选中片段。 */
+function applyIntent(request: AiIntent | null | undefined): void {
+  if (!request || request.page !== "svc") return;
+  const track = audioTracks.value.find((t) => t.id === request.trackId);
+  if (!track) return;
+  targetId.value = String(track.id);
+  const wanted = request.clipId ?? null;
+  targetClipId.value =
+    wanted !== null && track.clips.some((c) => c.audio && c.id === wanted) ? String(wanted) : null;
+}
+
 async function render(): Promise<void> {
   const t = target.value;
   if (!t || busy.value) return;
@@ -157,6 +179,7 @@ async function render(): Promise<void> {
   try {
     await svcRender({
       track: t.id,
+      clip: clipArgOf(t),
       reference_voice: toneVoiceId.value,
       reference_track: toneTrackId.value,
       model: model.value?.id ?? null,
@@ -195,9 +218,17 @@ onMounted(async () => {
     source.value = "track";
     tone.value = `track:${(preferred ?? fallback)!.id}`;
   }
+  // 右键菜单送来的「这条音频 / 这一块」优先于默认选中。
+  applyIntent(props.intent);
   svc.value = await svcStatus().catch(() => svc.value);
   stopStatus = await onSvcEvent((s) => (svc.value = s));
 });
+
+// 页面已经打开时又从右键菜单进来（换了一条轨道 / 一块音频）：重新套用上下文。
+watch(
+  () => props.intent,
+  (request) => applyIntent(request),
+);
 
 onUnmounted(() => {
   stopStatus?.();

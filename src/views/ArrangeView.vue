@@ -13,18 +13,48 @@
  * - 左键点击 → 选中；**单击片段会顺手打开右侧检查器**（方便立刻换音色）；Ctrl/Cmd+点击 → 加选；
  * - **Shift/Alt + 左键拖动 → 框选**（顶栏的鼠标模式也能切换默认左键行为）；
  * - **分隔模式（顶栏 / 快捷键 3）**：左键点击片段 → 在该拍切成两段（razor）；
- * - **右键点击片段 / 空白 → 复制 / 剪切 / 粘贴 / 删除菜单**；
+ * - **右键点击片段 / 空白 → AI 优先的分类菜单**：音频块走翻唱 / 音频处理，MIDI 块走歌声合成 /
+ *   旋律翻唱，空白处走「凭空写歌」；编辑与调音台收在二级菜单里；
  * - 双击片段 → 进入它的钢琴卷帘；
  * - Delete/Backspace → 删除所选片段；Ctrl/Cmd + 滚轮 → 缩放。
  */
-import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, ref, watch, type Component } from "vue";
 import { useRouter } from "vue-router";
+import {
+  AdjustmentsHorizontalIcon,
+  AdjustmentsVerticalIcon,
+  ArrowPathIcon,
+  ArrowsPointingInIcon,
+  ArrowsRightLeftIcon,
+  ArrowUpTrayIcon,
+  BoltIcon,
+  ChartBarIcon,
+  ChatBubbleLeftRightIcon,
+  ClipboardDocumentIcon,
+  ClockIcon,
+  DocumentDuplicateIcon,
+  DocumentTextIcon,
+  EllipsisHorizontalIcon,
+  MicrophoneIcon,
+  MusicalNoteIcon,
+  PlusIcon,
+  PuzzlePieceIcon,
+  QueueListIcon,
+  ScissorsIcon,
+  SparklesIcon,
+  SpeakerWaveIcon,
+  SpeakerXMarkIcon,
+  TrashIcon,
+  UserIcon,
+} from "@heroicons/vue/24/outline";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore, type ClipSel } from "@/stores/selection";
 import { useClipboardStore } from "@/stores/clipboard";
 import { useTransportStore } from "@/stores/transport";
 import { useLayoutStore, type LaneView } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
+import { usePluginsStore } from "@/stores/plugins";
+import { useAiIntentStore } from "@/stores/aiIntent";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
 import ClipWaveform from "@/components/common/ClipWaveform.vue";
 import { clipBounds } from "@/api/tauri";
@@ -39,6 +69,8 @@ import { laneScrollTop } from "@/composables/useLaneScroll";
 import { capturePointer } from "@/utils/pointer";
 import { shouldDeferToBrowser } from "@/utils/editable";
 import { isMacOS } from "@/utils/platform";
+import { useAiQuickActions } from "@/composables/useAiQuickActions";
+import { pickAudioToOpen } from "@/api/dialogs";
 import { useI18n } from "@/i18n";
 import type { Clip, ClipPlacement, Note, Track } from "@/api/types";
 
@@ -59,6 +91,9 @@ const clipboard = useClipboardStore();
 const transport = useTransportStore();
 const layout = useLayoutStore();
 const timeline = useTimelineStore();
+const plugins = usePluginsStore();
+const aiIntent = useAiIntentStore();
+const quickAi = useAiQuickActions();
 const router = useRouter();
 
 /** 下窗口视图切换：只接受编排视图能用的三格（视图组件的 `views` 已经限制了，这里再收窄类型）。 */
@@ -152,8 +187,20 @@ function laneIndexAt(clientY: number): number {
 
 type DragMode = "create" | "move" | "resize" | "marquee" | "erase";
 
-/** 右键菜单的快捷键提示前缀（与 App 的全局快捷键一致）。 */
-const modKey = isMacOS() ? "⌘" : "Ctrl+";
+/** 右键菜单的快捷键键帽前缀（与 App 的全局快捷键一致；键帽会自己加 `+`）。 */
+const modKey = isMacOS() ? "⌘" : "Ctrl";
+
+/** 内置效果器的行图标（按插件 id 取；外部插件退回拼图图标）。 */
+const FX_ICONS: Record<string, Component> = {
+  "builtin.delay": ClockIcon,
+  "builtin.reverb": SpeakerWaveIcon,
+  "builtin.chorus": ArrowsRightLeftIcon,
+  "builtin.drive": BoltIcon,
+  "builtin.eq": AdjustmentsHorizontalIcon,
+  "builtin.compressor": ChartBarIcon,
+  "builtin.limiter": ArrowsPointingInIcon,
+};
+
 /** 当前右键菜单：位置 + 菜单项 + 选中后的动作。 */
 const ctxMenu = ref<{
   x: number;
@@ -561,31 +608,567 @@ function onLanePointerDown(e: PointerEvent, track: Track): void {
   mode.value = "create";
 }
 
-/** 右键空白处：只给「粘贴」（在指针所在的轨道 / 拍位落块）。 */
-function onLaneContextMenu(e: MouseEvent): void {
-  e.preventDefault();
-  if ((e.target as HTMLElement).closest(".clip")) return;
-  const trackId = tracks.value[laneIndexAt(e.clientY)]?.id ?? selection.trackId;
-  const beat = Math.max(0, timeline.snapBeats(beatAt(e.clientX)));
-  const hasClip = clipboard.payload?.kind === "clip";
-  ctxMenu.value = {
-    x: e.clientX,
-    y: e.clientY,
-    items: [
-      {
-        id: "paste",
-        label: i18n.t("common.paste"),
-        shortcut: `${modKey}V`,
-        disabled: !hasClip,
-      },
+// ---------------------------------------------------------------------------
+// 右键菜单：AI 优先，按「点到了什么」分菜单
+// ---------------------------------------------------------------------------
+
+/**
+ * 菜单构造器：每个可点项登记自己的动作，点选时按 id 找回来。
+ *
+ * 一级菜单只描述结构（`divided` / `children`），二级菜单只在需要时展开；
+ * 这样「AI / 编辑 / 调音台」几组不会把一级列表撑成一堵墙。
+ */
+function menuBuilder() {
+  const actions: Record<string, () => void> = {};
+  const item = (
+    id: string,
+    label: string,
+    run: () => void,
+    extra: Partial<ContextMenuItem> = {},
+  ): ContextMenuItem => {
+    actions[id] = run;
+    return { id, label, ...extra };
+  };
+  return { actions, item };
+}
+
+type MenuItemFactory = (
+  id: string,
+  label: string,
+  run: () => void,
+  extra?: Partial<ContextMenuItem>,
+) => ContextMenuItem;
+
+/** 把「菜单项 + id → 动作」收成 `ContextMenu` 要的形状。 */
+function menuResult(
+  items: ContextMenuItem[],
+  actions: Record<string, () => void>,
+): { items: ContextMenuItem[]; run: (id: string) => void } {
+  return { items, run: (id: string) => actions[id]?.() };
+}
+
+/** 一条轨道上的第一段有音符的 MIDI 片段。 */
+function firstNoteClip(track: Track): Clip | undefined {
+  return track.clips.find((c) => !c.audio && c.notes.length > 0);
+}
+
+/** 优先用指针所在的轨道；它不合适时退回工程里第一条合适的轨道。 */
+function midiTarget(preferred: Track | null): { track: Track; clip: Clip } | null {
+  const ordered = preferred
+    ? [preferred, ...tracks.value.filter((t) => t.id !== preferred.id)]
+    : tracks.value;
+  for (const track of ordered) {
+    const clip = firstNoteClip(track);
+    if (clip) return { track, clip };
+  }
+  return null;
+}
+
+/** 优先用指针所在的轨道；没有音频就退回工程里第一条有音频的轨道。 */
+function audioTarget(preferred: Track | null): { track: Track; clip: Clip } | null {
+  const ordered = preferred
+    ? [preferred, ...tracks.value.filter((t) => t.id !== preferred.id)]
+    : tracks.value;
+  for (const track of ordered) {
+    const clip = track.clips.find((c) => c.audio);
+    if (clip) return { track, clip };
+  }
+  return null;
+}
+
+/** 翻唱 / 写歌：把「从哪来」交给 AI 意图总线，子页挂载时自己取。 */
+function openYue(mode: "create" | "cover", track?: Track | null, clip?: Clip | null): void {
+  if (track) selection.selectTrack(track.id);
+  if (track && clip) selection.selectClip(track.id, clip.id);
+  aiIntent.open({
+    page: "yue",
+    mode,
+    source: mode === "cover" ? (clip && !clip.audio ? "midi" : "track") : undefined,
+    trackId: track?.id ?? null,
+    clipId: clip?.id ?? null,
+  });
+}
+
+function openSinging(track: Track, clip?: Clip | null): void {
+  selection.selectTrack(track.id);
+  if (clip) selection.selectClip(track.id, clip.id);
+  aiIntent.open({ page: "singing", trackId: track.id, clipId: clip?.id ?? null });
+}
+
+function openSvc(track: Track, clip?: Clip | null): void {
+  selection.selectTrack(track.id);
+  if (clip) selection.selectClip(track.id, clip.id);
+  aiIntent.open({ page: "svc", trackId: track.id, clipId: clip?.id ?? null });
+}
+
+function openInspector(track: Track | null, clip?: Clip | null): void {
+  if (track && clip) selection.selectClip(track.id, clip.id);
+  else if (track) selection.selectTrack(track.id);
+  layout.openTab("inspector");
+}
+
+function openMixer(track: Track | null): void {
+  if (track) selection.selectTrack(track.id);
+  layout.openTab("mixer");
+}
+
+// ---- 轨道 / 混音快捷操作 ----
+
+async function toggleTrackMute(track: Track | null): Promise<void> {
+  if (!track) return;
+  try {
+    await store.setMute(track.id, !track.mixer.mute);
+  } catch (err) {
+    layout.notify(i18n.t("error.toggleMute", { error: String(err) }));
+  }
+}
+
+async function toggleTrackSolo(track: Track | null): Promise<void> {
+  if (!track) return;
+  try {
+    await store.setSolo(track.id, !track.mixer.solo);
+  } catch (err) {
+    layout.notify(i18n.t("error.toggleSolo", { error: String(err) }));
+  }
+}
+
+async function centerTrackPan(track: Track | null): Promise<void> {
+  if (!track) return;
+  try {
+    await store.setPan(track.id, 0);
+  } catch (err) {
+    layout.notify(i18n.t("error.setPan", { error: String(err) }));
+  }
+}
+
+async function addTrackEffect(track: Track | null, pluginId: string): Promise<void> {
+  if (!track) return;
+  try {
+    await store.addEffect(track.id, pluginId);
+    layout.notify(i18n.t("menu.fxAdded", { name: plugins.name(pluginId) }));
+  } catch (err) {
+    layout.notify(i18n.t("error.addEffect", { error: String(err) }));
+  }
+}
+
+/** 「调音台」二级菜单：静音 / 独奏 / 声像 / 打开面板。 */
+function buildMixItem(
+  item: MenuItemFactory,
+  track: Track | null,
+  extra: Partial<ContextMenuItem> = {},
+): ContextMenuItem {
+  return {
+    id: "mix",
+    label: i18n.t("menu.mixer"),
+    icon: AdjustmentsVerticalIcon,
+    ...extra,
+    children: [
+      item(
+        "mix.mute",
+        track?.mixer.mute ? i18n.t("menu.unmuteTrack") : i18n.t("menu.muteTrack"),
+        () => void toggleTrackMute(track),
+        {
+          icon: track?.mixer.mute ? SpeakerWaveIcon : SpeakerXMarkIcon,
+          checked: track?.mixer.mute ?? false,
+          disabled: !track,
+        },
+      ),
+      item(
+        "mix.solo",
+        track?.mixer.solo ? i18n.t("menu.unsoloTrack") : i18n.t("menu.soloTrack"),
+        () => void toggleTrackSolo(track),
+        { icon: UserIcon, checked: track?.mixer.solo ?? false, disabled: !track },
+      ),
+      item("mix.center", i18n.t("menu.panCenter"), () => void centerTrackPan(track), {
+        icon: ArrowsRightLeftIcon,
+        disabled: !track || track.mixer.pan === 0,
+      }),
+      item("mix.open", i18n.t("menu.openMixer"), () => openMixer(track), {
+        icon: AdjustmentsVerticalIcon,
+        divided: true,
+      }),
     ],
-    run: (id) => {
-      if (id === "paste") void pasteClipAt(trackId, beat);
-    },
   };
 }
 
-/** 右键片段：复制 / 剪切 / 粘贴 / 删除（点已选中的片段时删除整组）。 */
+/**
+ * 「添加效果器」二级菜单：只列内置效果（外部插件数量不可控，去检查器里挑）。
+ *
+ * 与「调音台」平级而不是套在它里面：三级菜单在窗口右半边会翻到左边、盖住一级菜单，
+ * 平级展开更稳，也少一次悬停。
+ */
+function buildFxItem(
+  item: MenuItemFactory,
+  track: Track | null,
+  extra: Partial<ContextMenuItem> = {},
+): ContextMenuItem {
+  const builtinFx = plugins.effects.filter((fx) => fx.builtin);
+  return {
+    id: "fx",
+    label: i18n.t("menu.addEffect"),
+    icon: AdjustmentsHorizontalIcon,
+    ...extra,
+    disabled: !track || builtinFx.length === 0,
+    children: builtinFx.map((fx) =>
+      item(`fx:${fx.id}`, fx.name, () => void addTrackEffect(track, fx.id), {
+        icon: FX_ICONS[fx.id] ?? PuzzlePieceIcon,
+        disabled: !track,
+      }),
+    ),
+  };
+}
+
+// ---- 片段 / 空白菜单 ----
+
+/** 播放头是否落在片段内部（切分只用这一种情形）。 */
+function playheadInside(clip: Clip): boolean {
+  const beat = transport.positionBeats;
+  return beat > clip.start + MIN_CREATE_BEATS && beat < clip.start + clip.length - MIN_CREATE_BEATS;
+}
+
+async function splitClipAtPlayhead(track: Track | null, clip: Clip | null): Promise<void> {
+  if (!track || !clip || !playheadInside(clip)) return;
+  try {
+    await store.splitClip(track.id, clip.id, transport.positionBeats);
+    layout.notify(i18n.t("arrange.clipSplit"));
+  } catch (err) {
+    layout.notify(i18n.t("error.splitClip", { error: String(err) }));
+  }
+}
+
+async function createMidiClipAt(track: Track | null, beat: number): Promise<void> {
+  if (!track) return;
+  try {
+    const length = Math.max(MIN_CREATE_BEATS, selection.lastClipLength);
+    await store.addClip(track.id, beat, length);
+    const target = store.project?.tracks.find((t) => t.id === track.id);
+    const created = target?.clips[target.clips.length - 1];
+    if (created) selection.selectClip(track.id, created.id);
+    layout.notify(i18n.t("arrange.clipAdded"));
+  } catch (err) {
+    layout.notify(i18n.t("error.addClip", { error: String(err) }));
+  }
+}
+
+async function importAudioAt(track: Track | null, beat: number): Promise<void> {
+  if (!track) return;
+  try {
+    const path = await pickAudioToOpen();
+    if (!path) return;
+    await store.importAudio(path, track.id, beat);
+    layout.notify(i18n.t("menu.audioImported"));
+  } catch (err) {
+    layout.notify(i18n.t("error.importAudio", { error: String(err) }));
+  }
+}
+
+async function addTrackAtEnd(): Promise<void> {
+  const next = (store.project?.tracks.length ?? 0) + 1;
+  try {
+    await store.addTrack(i18n.t("tracks.newName", { n: next }));
+  } catch (err) {
+    layout.notify(String(err));
+  }
+}
+
+/** 多选时把数量带进文案（例如「删除（3）」）。 */
+function withCount(label: string, count: number): string {
+  return count > 1 ? i18n.t("menu.withCount", { label, count }) : label;
+}
+
+/**
+ * 「更多编辑」二级菜单：切分与视图跳转。
+ *
+ * 复制 / 剪切 / 粘贴 / 删除是高频操作，全部留在**一级菜单**，不塞进这里。
+ */
+function buildMoreEditItem(
+  item: MenuItemFactory,
+  track: Track,
+  clip: Clip,
+  midi: boolean,
+): ContextMenuItem {
+  return {
+    id: "more-edit",
+    label: i18n.t("menu.moreEdit"),
+    icon: EllipsisHorizontalIcon,
+    divided: true,
+    children: [
+      item("split", i18n.t("menu.splitAtPlayhead"), () => void splitClipAtPlayhead(track, clip), {
+        icon: ScissorsIcon,
+        disabled: !playheadInside(clip),
+      }),
+      ...(midi
+        ? [
+            item(
+              "piano",
+              i18n.t("menu.openPianoRoll"),
+              () => {
+                selection.selectClip(track.id, clip.id);
+                void router.push("/edit");
+              },
+              { icon: MusicalNoteIcon },
+            ),
+            item(
+              "lyrics",
+              i18n.t("menu.editLyrics"),
+              () => {
+                selection.selectClip(track.id, clip.id);
+                layout.setTool("lyric");
+                void router.push("/edit");
+              },
+              { icon: DocumentTextIcon },
+            ),
+          ]
+        : []),
+      item("inspector", i18n.t("menu.openInspector"), () => openInspector(track, clip), {
+        icon: AdjustmentsHorizontalIcon,
+      }),
+    ],
+  };
+}
+
+/**
+ * 一级「AI」目录：所有 AI 功能（含打开 AI 面板）都收进这一个子菜单。
+ *
+ * 根菜单只占一行，避免一堆 AI 动作把右键菜单撑开；目录本身可点开，不是不可点的分组标题。
+ */
+function buildAiItem(
+  children: ContextMenuItem[],
+  extra: Partial<ContextMenuItem> = {},
+): ContextMenuItem {
+  return {
+    id: "ai",
+    label: i18n.t("menu.ai"),
+    icon: SparklesIcon,
+    ai: true,
+    ...extra,
+    children,
+  };
+}
+
+function buildLaneMenu(track: Track | null, beat: number) {
+  const { actions, item } = menuBuilder();
+  const midi = midiTarget(track);
+  const audio = audioTarget(track);
+  const hasTracks = tracks.value.length > 0;
+  const hasClipboard = clipboard.payload?.kind === "clip";
+  const items: ContextMenuItem[] = [
+    buildAiItem([
+      item("ai.write", i18n.t("menu.aiWrite"), () => openYue("create", track), {
+        icon: SparklesIcon,
+        ai: true,
+      }),
+      item("ai.agent", i18n.t("menu.aiAgent"), () => layout.openTab("agent"), {
+        icon: ChatBubbleLeftRightIcon,
+        ai: true,
+      }),
+      item(
+        "ai.singing",
+        i18n.t("menu.aiSinging"),
+        () => midi && openSinging(midi.track, midi.clip),
+        { icon: MicrophoneIcon, ai: true, disabled: !midi },
+      ),
+      item(
+        "ai.swap",
+        i18n.t("menu.aiVoiceSwap"),
+        () => audio && openSvc(audio.track, audio.clip),
+        { icon: ArrowsRightLeftIcon, ai: true, disabled: !audio },
+      ),
+      item("ai.master", i18n.t("menu.aiMaster"), () => void quickAi.run("master", 0), {
+        icon: ChartBarIcon,
+        ai: true,
+        divided: true,
+        disabled: !hasTracks,
+      }),
+      item("open.ai", i18n.t("menu.openAiPanel"), () => layout.openTab("ai"), {
+        icon: SparklesIcon,
+        ai: true,
+        divided: true,
+      }),
+    ]),
+    item("paste", i18n.t("common.paste"), () => void pasteClipAt(track?.id ?? null, beat), {
+      icon: ClipboardDocumentIcon,
+      keys: [modKey, "V"],
+      divided: true,
+      disabled: !hasClipboard,
+    }),
+    item("new.midi", i18n.t("menu.newClip"), () => void createMidiClipAt(track, beat), {
+      icon: PlusIcon,
+      disabled: !track,
+    }),
+    item("import.audio", i18n.t("menu.importAudio"), () => void importAudioAt(track, beat), {
+      icon: ArrowUpTrayIcon,
+      disabled: !track,
+    }),
+    item("new.track", i18n.t("menu.newTrack"), () => void addTrackAtEnd(), {
+      icon: QueueListIcon,
+    }),
+    buildMixItem(item, track, { divided: true }),
+    buildFxItem(item, track),
+  ];
+  return menuResult(items, actions);
+}
+
+function buildAudioClipMenu(
+  track: Track,
+  clip: Clip,
+  targets: { track: number; clip: number }[],
+  beat: number,
+) {
+  const { actions, item } = menuBuilder();
+  const single = targets.length === 1;
+  const hasClipboard = clipboard.payload?.kind === "clip";
+  const items: ContextMenuItem[] = [
+    buildAiItem([
+      item("ai.cover", i18n.t("menu.aiCover"), () => openYue("cover", track, clip), {
+        icon: ArrowPathIcon,
+        ai: true,
+      }),
+      item("ai.swap", i18n.t("menu.aiVoiceSwap"), () => openSvc(track, clip), {
+        icon: ArrowsRightLeftIcon,
+        ai: true,
+      }),
+      item(
+        "ai.toMidi",
+        i18n.t("menu.aiToMidi"),
+        () => void quickAi.run("to_midi", track.id, clip.id),
+        { icon: DocumentTextIcon, ai: true, divided: true },
+      ),
+      item(
+        "ai.enhance",
+        i18n.t("menu.aiEnhance"),
+        () => void quickAi.run("enhance", track.id, clip.id),
+        { icon: SpeakerWaveIcon, ai: true },
+      ),
+      item(
+        "ai.separate",
+        i18n.t("menu.aiSeparate"),
+        () => void quickAi.run("separate", track.id, clip.id),
+        { icon: QueueListIcon, ai: true },
+      ),
+      item(
+        "ai.tempo",
+        i18n.t("menu.aiTempo"),
+        () => void quickAi.run("detect_tempo", track.id, clip.id),
+        { icon: ClockIcon, ai: true },
+      ),
+      item(
+        "ai.enhanceDsp",
+        i18n.t("menu.aiEnhanceDsp"),
+        () => void quickAi.run("enhance_dsp", track.id, clip.id),
+        { icon: SpeakerWaveIcon, ai: true },
+      ),
+      item("open.ai", i18n.t("menu.openAiPanel"), () => layout.openTab("ai"), {
+        icon: SparklesIcon,
+        ai: true,
+        divided: true,
+      }),
+    ]),
+    item("copy", withCount(i18n.t("common.copy"), targets.length), () => clipboard.copyClip(clip), {
+      icon: DocumentDuplicateIcon,
+      keys: [modKey, "C"],
+      divided: true,
+      disabled: !single,
+    }),
+    item(
+      "cut",
+      withCount(i18n.t("common.cut"), targets.length),
+      () => {
+        clipboard.copyClip(clip);
+        void deleteClips(targets);
+      },
+      { icon: ScissorsIcon, keys: [modKey, "X"], disabled: !single },
+    ),
+    item("paste", i18n.t("common.paste"), () => void pasteClipAt(track.id, beat), {
+      icon: ClipboardDocumentIcon,
+      keys: [modKey, "V"],
+      disabled: !hasClipboard,
+    }),
+    item(
+      "delete",
+      withCount(i18n.t("common.delete"), targets.length),
+      () => void deleteClips(targets),
+      { icon: TrashIcon, keys: ["Del"], danger: true },
+    ),
+    buildMoreEditItem(item, track, clip, false),
+    buildMixItem(item, track, { divided: true }),
+    buildFxItem(item, track),
+  ];
+  return menuResult(items, actions);
+}
+
+function buildMidiClipMenu(
+  track: Track,
+  clip: Clip,
+  targets: { track: number; clip: number }[],
+  beat: number,
+) {
+  const { actions, item } = menuBuilder();
+  // 歌声合成 / 旋律翻唱都要有音符可唱：空 MIDI 块只留编辑与删除。
+  const hasNotes = clip.notes.length > 0;
+  const single = targets.length === 1;
+  const hasClipboard = clipboard.payload?.kind === "clip";
+  const items: ContextMenuItem[] = [
+    buildAiItem([
+      item("ai.singing", i18n.t("menu.aiSinging"), () => openSinging(track, clip), {
+        icon: MicrophoneIcon,
+        ai: true,
+        disabled: !hasNotes,
+      }),
+      item("ai.coverMidi", i18n.t("menu.aiCoverMidi"), () => openYue("cover", track, clip), {
+        icon: ArrowPathIcon,
+        ai: true,
+        disabled: !hasNotes,
+      }),
+      item("open.ai", i18n.t("menu.openAiPanel"), () => layout.openTab("ai"), {
+        icon: SparklesIcon,
+        ai: true,
+        divided: true,
+      }),
+    ]),
+    item("copy", withCount(i18n.t("common.copy"), targets.length), () => clipboard.copyClip(clip), {
+      icon: DocumentDuplicateIcon,
+      keys: [modKey, "C"],
+      divided: true,
+      disabled: !single,
+    }),
+    item(
+      "cut",
+      withCount(i18n.t("common.cut"), targets.length),
+      () => {
+        clipboard.copyClip(clip);
+        void deleteClips(targets);
+      },
+      { icon: ScissorsIcon, keys: [modKey, "X"], disabled: !single },
+    ),
+    item("paste", i18n.t("common.paste"), () => void pasteClipAt(track.id, beat), {
+      icon: ClipboardDocumentIcon,
+      keys: [modKey, "V"],
+      disabled: !hasClipboard,
+    }),
+    item(
+      "delete",
+      withCount(i18n.t("common.delete"), targets.length),
+      () => void deleteClips(targets),
+      { icon: TrashIcon, keys: ["Del"], danger: true },
+    ),
+    buildMoreEditItem(item, track, clip, true),
+    buildMixItem(item, track, { divided: true }),
+    buildFxItem(item, track),
+  ];
+  return menuResult(items, actions);
+}
+
+/** 右键空白处：AI 生成优先，其次才是落片段 / 粘贴 / 调音台。 */
+function onLaneContextMenu(e: MouseEvent): void {
+  e.preventDefault();
+  if ((e.target as HTMLElement).closest(".clip")) return;
+  const track = tracks.value[laneIndexAt(e.clientY)] ?? selection.track ?? null;
+  const beat = Math.max(0, timeline.snapBeats(beatAt(e.clientX)));
+  ctxMenu.value = { x: e.clientX, y: e.clientY, ...buildLaneMenu(track, beat) };
+}
+
+/** 右键片段：音频块走翻唱 / 音频处理，MIDI 块走歌声合成 / 旋律翻唱。 */
 function onClipContextMenu(e: MouseEvent, track: Track, clip: Clip): void {
   e.preventDefault();
   e.stopPropagation();
@@ -594,49 +1177,11 @@ function onClipContextMenu(e: MouseEvent, track: Track, clip: Clip): void {
   const targets = wasSelected
     ? selection.clipRefs.map((r) => ({ track: r.track, clip: r.clip }))
     : [{ track: track.id, clip: clip.id }];
-  const single = targets.length === 1;
   const beat = Math.max(0, timeline.snapBeats(beatAt(e.clientX)));
-  const hasClip = clipboard.payload?.kind === "clip";
-  ctxMenu.value = {
-    x: e.clientX,
-    y: e.clientY,
-    items: [
-      {
-        id: "copy",
-        label: i18n.t("common.copy"),
-        shortcut: `${modKey}C`,
-        disabled: !single,
-      },
-      {
-        id: "cut",
-        label: i18n.t("common.cut"),
-        shortcut: `${modKey}X`,
-        disabled: !single,
-      },
-      {
-        id: "paste",
-        label: i18n.t("common.paste"),
-        shortcut: `${modKey}V`,
-        disabled: !hasClip,
-        divided: true,
-      },
-      {
-        id: "delete",
-        label: i18n.t("common.delete"),
-        shortcut: "Del",
-        danger: true,
-        divided: true,
-      },
-    ],
-    run: (id) => {
-      if (id === "copy") clipboard.copyClip(clip);
-      else if (id === "cut") {
-        clipboard.copyClip(clip);
-        void deleteClips(targets);
-      } else if (id === "paste") void pasteClipAt(track.id, beat);
-      else if (id === "delete") void deleteClips(targets);
-    },
-  };
+  const menu = clip.audio
+    ? buildAudioClipMenu(track, clip, targets, beat)
+    : buildMidiClipMenu(track, clip, targets, beat);
+  ctxMenu.value = { x: e.clientX, y: e.clientY, ...menu };
 }
 
 // ---------------------------------------------------------------------------
@@ -1268,7 +1813,7 @@ onUnmounted(() => {
       />
     </div>
 
-    <!-- 右键菜单：复制 / 剪切 / 粘贴 / 删除 -->
+    <!-- 右键菜单：AI 优先，按音频块 / MIDI 块 / 空白处分组 -->
     <ContextMenu
       :open="ctxMenu !== null"
       :x="ctxMenu?.x ?? 0"

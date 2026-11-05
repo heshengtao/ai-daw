@@ -15,6 +15,7 @@ import { onSingingEvent, singingCancel, singingRender, singingStatus } from "@/a
 import type { SingingStatus } from "@/api/types";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
+import type { AiIntent } from "@/stores/aiIntent";
 import { useDownloadsStore } from "@/stores/downloads";
 import { useLayoutStore } from "@/stores/layout";
 import { useModelsStore } from "@/stores/models";
@@ -23,6 +24,7 @@ import { useTonePicker } from "@/composables/useTonePicker";
 import { useModelChoice } from "@/composables/useModelChoice";
 import { useModelDownloadPrompt } from "@/composables/useModelDownloadPrompt";
 
+const props = defineProps<{ intent?: AiIntent | null }>();
 const emit = defineEmits<{ (e: "back"): void }>();
 
 const router = useRouter();
@@ -71,6 +73,8 @@ const {
 
 /** 目标 MIDI 轨道（`Md3Select` 是字符串模型）。 */
 const singTrackId = ref<string | null>(null);
+/** 右键菜单指定的 MIDI 片段；为空 = 轨道上第一个带音符的片段。 */
+const singClipId = ref<string | null>(null);
 const singTrack = computed(
   () => midiTracks.value.find((t) => String(t.id) === singTrackId.value) ?? midiTracks.value[0] ?? null,
 );
@@ -144,11 +148,34 @@ function downloadModel(): void {
 function openLyricsEditor(): void {
   const t = singTrack.value;
   if (!t) return;
-  const clip = t.clips.find((c) => !c.audio && (c.notes?.length ?? 0) > 0);
+  const wanted = singClipId.value;
+  const clip =
+    (wanted !== null
+      ? t.clips.find((c) => !c.audio && String(c.id) === wanted)
+      : undefined) ??
+    t.clips.find((c) => !c.audio && (c.notes?.length ?? 0) > 0);
   selection.selectTrack(t.id);
   if (clip) selection.selectClip(t.id, clip.id);
   layout.setTool("lyric");
   void router.push("/edit");
+}
+
+/** 右键菜单指定的片段只在这条轨道上有效；其余情况交给后端选第一个带音符的片段。 */
+function clipArgOf(track: { clips: { id: number; audio?: unknown }[] }): number | null {
+  if (singClipId.value === null) return null;
+  const wanted = Number(singClipId.value);
+  return track.clips.some((c) => !c.audio && c.id === wanted) ? wanted : null;
+}
+
+/** 把右键菜单的意图落到表单上：换轨道 + 选中片段。 */
+function applyIntent(request: AiIntent | null | undefined): void {
+  if (!request || request.page !== "singing") return;
+  const track = midiTracks.value.find((t) => t.id === request.trackId);
+  if (!track) return;
+  singTrackId.value = String(track.id);
+  const wanted = request.clipId ?? null;
+  singClipId.value =
+    wanted !== null && track.clips.some((c) => !c.audio && c.id === wanted) ? String(wanted) : null;
 }
 
 async function render(): Promise<void> {
@@ -165,6 +192,7 @@ async function render(): Promise<void> {
   try {
     await singingRender({
       track: t.id,
+      clip: clipArgOf(t),
       reference_voice: toneVoiceId.value,
       reference_track: toneTrackId.value,
       model: model.value?.id ?? null,
@@ -201,9 +229,17 @@ onMounted(async () => {
     source.value = "track";
     tone.value = `track:${selectedRef.id}`;
   }
+  // 右键菜单送来的「这条 MIDI / 这个片段」优先于默认选中。
+  applyIntent(props.intent);
   singing.value = await singingStatus().catch(() => singing.value);
   stopStatus = await onSingingEvent((s) => (singing.value = s));
 });
+
+// 页面已经打开时又从右键菜单进来（换了一条轨道 / 一个片段）：重新套用上下文。
+watch(
+  () => props.intent,
+  (request) => applyIntent(request),
+);
 
 onUnmounted(() => {
   stopStatus?.();

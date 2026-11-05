@@ -48,10 +48,12 @@ import { useModelsStore } from "@/stores/models";
 import { useProjectStore } from "@/stores/project";
 import { useRuntimesStore } from "@/stores/runtimes";
 import { useSelectionStore } from "@/stores/selection";
+import type { AiIntent } from "@/stores/aiIntent";
 import { useYueStore } from "@/stores/yue";
 import { humanSize } from "@/utils/models";
 import type { SetupPlan } from "@/types/setup";
 
+const props = defineProps<{ intent?: AiIntent | null }>();
 const emit = defineEmits<{ (e: "back"): void }>();
 
 const yue = useYueStore();
@@ -278,6 +280,14 @@ watch(
   },
   { immediate: true },
 );
+
+// 权重清单通常在页面打开后才加载完：选中的若是 ACE-Step，刚套上的「翻唱」意图会失效，
+// 这时明确提醒一次，别让用户以为按钮没反应。
+watch(isYue2, (yue2, before) => {
+  if (before === true && !yue2 && props.intent?.mode === "cover") {
+    layout.notify(i18n.t("menu.coverNeedsYue2"));
+  }
+});
 
 /**
  * 步数跟着家族走：YuE2 常用 32 步，ACE-Step 的 Turbo 档只要 8 步（再多也不会更细）。
@@ -569,6 +579,13 @@ const coverSourceOptions = computed(() => [
 
 /** 参考轨道（字符串 id，和 Md3Select 一致）。 */
 const coverTrackId = ref<string | null>(null);
+/**
+ * 右键菜单指定的参考**片段**；为空 = 用这条轨道上的第一个音频片段。
+ *
+ * 转谱 / 抓歌词的接口都支持 `clip`，所以从音频块右键进来时只听这一块，不会被同轨道的
+ * 其他音频带偏。
+ */
+const coverClipId = ref<string | null>(null);
 const coverTrackOptions = computed(() =>
   audioTracks.value.map((t) => ({ id: String(t.id), label: t.name })),
 );
@@ -713,12 +730,20 @@ async function applyMidiScore(): Promise<boolean> {
   }
 }
 
+/** 音频参考的接口参数：右键指定的片段只在这条轨道上有效，否则退回「第一个音频片段」。 */
+function audioReferenceArgs(): { track: number; clip: number | null } {
+  const track = Number(coverTrackId.value);
+  const row = audioTracks.value.find((t) => t.id === track);
+  const wanted = coverClipId.value !== null ? Number(coverClipId.value) : null;
+  const clip =
+    wanted !== null && row?.clips.some((c) => c.id === wanted && c.audio) ? wanted : null;
+  return { track, clip };
+}
+
 async function transcribeCover(): Promise<boolean> {
   if (!coverCanRun.value) return false;
   const args =
-    coverSource.value === "track"
-      ? { track: Number(coverTrackId.value) }
-      : { audio: coverFile.value.trim() };
+    coverSource.value === "track" ? audioReferenceArgs() : { audio: coverFile.value.trim() };
   const outcome = await yue.transcribe(args);
   if (!outcome) {
     if (yue.transcribeError) layout.notify(yue.transcribeError);
@@ -813,9 +838,7 @@ async function getLyrics(): Promise<void> {
     return;
   }
   const args =
-    coverSource.value === "track"
-      ? { track: Number(coverTrackId.value) }
-      : { audio: coverFile.value.trim() };
+    coverSource.value === "track" ? audioReferenceArgs() : { audio: coverFile.value.trim() };
   const outcome = await yue.lyrics({ ...args, model: lyricsModelId.value });
   if (!outcome) {
     if (yue.lyricError) layout.notify(yue.lyricError);
@@ -1087,6 +1110,43 @@ function onSetupCancel(): void {
 
 let stopYue: (() => void) | null = null;
 
+/**
+ * 把右键菜单的意图落到表单上（挂载时 + 意图变化时）。
+ *
+ * 只预选「从哪块音频 / 哪段旋律来的」，用户进来后仍可改参考来源、轨道与片段；所以这里
+ * 不锁任何控件。
+ */
+function applyIntent(request: AiIntent | null | undefined): void {
+  if (!request || request.page !== "yue") return;
+  // 翻唱是 YuE2 专有的：选了 ACE-Step 时不能假装切过去，直接说清楚。
+  if (request.mode === "cover" && !isYue2.value) {
+    layout.notify(i18n.t("menu.coverNeedsYue2"));
+    return;
+  }
+  if (request.mode) mode.value = request.mode;
+  const trackId = request.trackId ?? null;
+  const clipId = request.clipId ?? null;
+
+  // MIDI 参考：翻唱按这段旋律重唱（零推理写谱，选中即触发）。
+  if (request.mode === "cover" && request.source === "midi") {
+    coverSource.value = "midi";
+    const track = midiTracks.value.find((t) => t.id === trackId);
+    if (!track) return;
+    coverMidiTrackId.value = String(track.id);
+    const picked = clipId !== null && track.clips.some((c) => !c.audio && c.id === clipId);
+    coverMidiClipId.value = picked ? String(clipId) : (coverMidiClipOptions.value[0]?.id ?? null);
+    return;
+  }
+
+  // 音频参考：轨道上的**这一块**音频（没有就退回第一个音频片段）。
+  const track = audioTracks.value.find((t) => t.id === trackId);
+  if (!track) return;
+  coverSource.value = "track";
+  coverTrackId.value = String(track.id);
+  coverClipId.value =
+    clipId !== null && track.clips.some((c) => c.audio && c.id === clipId) ? String(clipId) : null;
+}
+
 onMounted(async () => {
   stopYue = yue.watch();
   void models.load();
@@ -1096,11 +1156,19 @@ onMounted(async () => {
   const preferred = audioTracks.value.find((t) => t.id === selection.trackId);
   const fallback = audioTracks.value[0];
   coverTrackId.value = String((preferred ?? fallback)?.id ?? "") || null;
+  // 右键菜单送来的上下文（哪一块音频 / 哪段 MIDI）优先于「当前选中」。
+  applyIntent(props.intent);
   // 引擎清单要等：一份都没有时要立刻弹安装向导。
   await Promise.all([yue.load(), runtimes.load()]);
   // 续写下拉只列「本机有语义码」的轨道——进来先扫一遍。
   await refreshContinuable();
 });
+
+// 页面已经打开时又从右键菜单进来（换了一块音频 / 一段旋律）：意图变了就重新套用。
+watch(
+  () => props.intent,
+  (request) => applyIntent(request),
+);
 
 // 翻唱要 SheetSage2；缺就等用户真去点主按钮时再问——切个模式就弹框太吵。
 // 切到「工程内 MIDI」：自动选第一条有 MIDI 的轨道 + 第一个片段，并立刻写谱。

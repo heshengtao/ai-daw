@@ -63,6 +63,7 @@ import { useModelsStore } from "@/stores/models";
 import { useRuntimesStore } from "@/stores/runtimes";
 import { useModelChoice } from "@/composables/useModelChoice";
 import { useModelDownloadPrompt } from "@/composables/useModelDownloadPrompt";
+import { useAiIntentStore } from "@/stores/aiIntent";
 import { useYueStore } from "@/stores/yue";
 import { useI18n } from "@/i18n";
 import { copyText } from "@/utils/clipboard";
@@ -82,6 +83,7 @@ const selection = useSelectionStore();
 const layout = useLayoutStore();
 const modelsStore = useModelsStore();
 const downloads = useDownloadsStore();
+const aiIntent = useAiIntentStore();
 const i18n = useI18n();
 
 /**
@@ -93,6 +95,25 @@ const i18n = useI18n();
 const aiPage = ref<null | "yue" | "singing" | "svc">(null);
 /** 子页里自己会弹完成通知，列表这边让路（两边都在挂载状态）。 */
 const inAiPage = computed(() => aiPage.value !== null);
+
+/**
+ * 右键菜单送来的意图：直接落到对应子页，并把上下文交给它（`intent` 属性）。
+ *
+ * 用 `immediate` 是因为「菜单 → 打开 AI 标签」会**新建**本面板，意图在挂载前就写好了。
+ */
+watch(
+  () => aiIntent.request,
+  (request) => {
+    if (request) aiPage.value = request.page;
+  },
+  { immediate: true },
+);
+
+/** 从子页返回列表：顺手清掉意图，下次从卡片进来按默认上下文。 */
+function onAiBack(): void {
+  aiPage.value = null;
+  aiIntent.clear();
+}
 
 // ---- 顶部标签：全部 / 生成 / 转换（「全部」里用分隔标题分组）----
 const aiTab = ref<"all" | "generate" | "convert">("all");
@@ -242,6 +263,8 @@ const yueFeatureReady = computed(
 
 /** 「开始」：引擎没装先进页（页里强制选引擎）；模型没下就弹下载确认。 */
 function startYue(): void {
+  // 从卡片进来是「没有上下文」的正常入口：先清掉右键菜单留下的意图。
+  aiIntent.clear();
   // 安装包默认不带引擎：先让写歌页的安装向导处理，别先去下几 GB 权重。
   if (!engineInstalled.value) {
     aiPage.value = "yue";
@@ -445,6 +468,7 @@ const singBusy = computed(() => singing.value.running);
 
 /** 点「开始」：模型没下就先问下载；没有清单条目也先进页（页里能直接去下载）。 */
 function startSinging(): void {
+  aiIntent.clear();
   const model = singModel.value;
   if (model && !requireModel(model)) return;
   aiPage.value = "singing";
@@ -471,6 +495,7 @@ const svcBusy = computed(() => svc.value.running);
 
 /** 点「开始」：同歌声合成，进音色替换页。 */
 function startSvc(): void {
+  aiIntent.clear();
   const model = svcModel.value;
   if (model && !requireModel(model)) return;
   aiPage.value = "svc";
@@ -598,6 +623,8 @@ onUnmounted(() => {
   stopSingingEvent?.();
   stopSvcEvent?.();
   stopYueEvent?.();
+  // 标签被关掉 / 切走：右键菜单的意图只对这一次打开有效，别带到下次。
+  aiIntent.clear();
 });
 
 // 合成跑完时把摘要 / 错误作为通知弹一次。
@@ -641,10 +668,10 @@ watch(
          「在后台下载」之后用户仍留在本页，靠的就是这一条。 -->
     <DownloadStrip />
 
-    <!-- 三个子页占满侧栏（从卡片进来，左上角返回到列表） -->
-    <AiYuePage v-if="aiPage === 'yue'" @back="aiPage = null" />
-    <AiSingingPage v-else-if="aiPage === 'singing'" @back="aiPage = null" />
-    <AiSvcPage v-else-if="aiPage === 'svc'" @back="aiPage = null" />
+    <!-- 三个子页占满侧栏（从卡片进来，左上角返回到列表）；右键菜单的上下文从 intent 带进来 -->
+    <AiYuePage v-if="aiPage === 'yue'" :intent="aiIntent.request" @back="onAiBack" />
+    <AiSingingPage v-else-if="aiPage === 'singing'" :intent="aiIntent.request" @back="onAiBack" />
+    <AiSvcPage v-else-if="aiPage === 'svc'" :intent="aiIntent.request" @back="onAiBack" />
 
     <template v-else>
     <!-- 顶部标签：全部 / 生成 / 转换（全部里用分隔标题分组） -->

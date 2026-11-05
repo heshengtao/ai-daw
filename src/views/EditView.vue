@@ -20,6 +20,12 @@
  * - Ctrl/Cmd + 滚轮 → 缩放（锚点在指针下，两个视图同步）。
  */
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import {
+  ClipboardDocumentIcon,
+  DocumentDuplicateIcon,
+  ScissorsIcon,
+  TrashIcon,
+} from "@heroicons/vue/24/outline";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
 import { useClipboardStore } from "@/stores/clipboard";
@@ -213,7 +219,8 @@ const rollGridStyle = computed(() => {
 type DragMode = "create" | "move" | "resize" | "marquee" | "erase";
 
 /** 右键菜单的快捷键提示前缀（与 App 的全局快捷键一致）。 */
-const modKey = isMacOS() ? "⌘" : "Ctrl+";
+/** 右键菜单的快捷键键帽前缀（与 App 的全局快捷键一致；键帽会自己加 `+`）。 */
+const modKey = isMacOS() ? "⌘" : "Ctrl";
 /** 当前右键菜单：位置 + 菜单项 + 选中后的动作。 */
 const ctxMenu = ref<{
   x: number;
@@ -615,7 +622,8 @@ function onRollContextMenu(e: MouseEvent): void {
       {
         id: "paste",
         label: i18n.t("common.paste"),
-        shortcut: `${modKey}V`,
+        icon: ClipboardDocumentIcon,
+        keys: [modKey, "V"],
         disabled: !hasNote,
       },
     ],
@@ -645,26 +653,33 @@ function onNoteContextMenu(e: MouseEvent, index: number): void {
       {
         id: "copy",
         label: i18n.t("common.copy"),
-        shortcut: `${modKey}C`,
+        icon: DocumentDuplicateIcon,
+        keys: [modKey, "C"],
         disabled: !single,
       },
       {
         id: "cut",
         label: i18n.t("common.cut"),
-        shortcut: `${modKey}X`,
+        icon: ScissorsIcon,
+        keys: [modKey, "X"],
         disabled: !single,
       },
       {
         id: "paste",
         label: i18n.t("common.paste"),
-        shortcut: `${modKey}V`,
+        icon: ClipboardDocumentIcon,
+        keys: [modKey, "V"],
         disabled: !hasNote,
         divided: true,
       },
       {
         id: "delete",
-        label: i18n.t("common.delete"),
-        shortcut: "Del",
+        label:
+          indices.length > 1
+            ? i18n.t("menu.withCount", { label: i18n.t("common.delete"), count: indices.length })
+            : i18n.t("common.delete"),
+        icon: TrashIcon,
+        keys: ["Del"],
         danger: true,
         divided: true,
       },

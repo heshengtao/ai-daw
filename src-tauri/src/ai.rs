@@ -166,7 +166,8 @@ pub fn ai_cancel(state: tauri::State<'_, AppState>) {
 
 /// 开始一个本地任务。
 ///
-/// `to_midi` / `enhance` / `enhance_dsp` / `separate` / `detect_tempo` 作用于 `track` 上的**第一个音频片段**；
+/// `to_midi` / `enhance` / `enhance_dsp` / `separate` / `detect_tempo` 作用于 `track` 上的音频片段；
+/// `clip` 指定用哪一块，省略 = 第一个音频片段。
 /// `master` 作用于**整个工程的离线混音**（不看 `track`，`master` 参数只在它身上有意义）。
 /// `model` 只在 `separate` 上有意义：选择用哪个分离模型（缺省 = 4 分轨的 HTDemucs）。
 #[tauri::command]
@@ -177,6 +178,7 @@ pub fn ai_start(
     track: u64,
     master: Option<MasterArgs>,
     model: Option<String>,
+    clip: Option<u64>,
 ) -> Result<(), String> {
     if !matches!(
         kind.as_str(),
@@ -213,7 +215,7 @@ pub fn ai_start(
     }
 
     // 先把要用的输入取出来（锁只在此刻短暂持有）。找不到轨道/音频片段就报错。
-    let input = track_input(&state, track)?;
+    let input = track_input(&state, track, clip)?;
 
     let thread_app = app.clone();
     let thread_runtime = runtime.clone();
@@ -256,8 +258,14 @@ pub(crate) struct TrackInput {
     pub track_index: usize,
 }
 
-/// 取一条轨道上的第一个音频片段（`track` 不存在或没有音频片段都会报错）。
-pub(crate) fn track_input(state: &AppState, track: u64) -> Result<TrackInput, String> {
+/// 取一条轨道上的音频片段（`track` 不存在或没有音频片段都会报错）。
+///
+/// `clip` 指定具体片段；省略时取第一个音频片段（AI 面板 / MCP 的老行为）。
+pub(crate) fn track_input(
+    state: &AppState,
+    track: u64,
+    clip: Option<u64>,
+) -> Result<TrackInput, String> {
     let engine = state.engine.lock().unwrap();
     let project = engine.project();
     let index = project
@@ -269,8 +277,14 @@ pub(crate) fn track_input(state: &AppState, track: u64) -> Result<TrackInput, St
     let clip = t
         .clips
         .iter()
-        .find(|c| c.audio.is_some())
-        .ok_or("这条轨道没有音频片段（先录音或导入音频）")?;
+        .find(|c| c.audio.is_some() && clip.map_or(true, |id| c.id == ClipId(id)))
+        .ok_or_else(|| {
+            if clip.is_some() {
+                "这块片段不是音频片段（或已不存在）".to_string()
+            } else {
+                "这条轨道没有音频片段（先录音或导入音频）".to_string()
+            }
+        })?;
     Ok(TrackInput {
         track: t.id,
         clip: clip.id,
@@ -623,7 +637,7 @@ pub(crate) fn separate_track(
     model: Option<String>,
 ) -> Result<usize, String> {
     let state = app.state::<AppState>();
-    let input = track_input(&state, track)?;
+    let input = track_input(&state, track, None)?;
     let audio = state.assets.load(&input.source.path)?;
     let channels = audio.channels;
     let sample_rate = audio.sample_rate;
@@ -727,7 +741,7 @@ fn apply_tempo_detection(
 /// 同步跑一遍节拍检测（供 MCP 工具用；无进度回调，整体阻塞在调用线程）。
 pub(crate) fn detect_tempo_track(app: &tauri::AppHandle, track: u64) -> Result<String, String> {
     let state = app.state::<AppState>();
-    let input = track_input(&state, track)?;
+    let input = track_input(&state, track, None)?;
     let audio = state.assets.load(&input.source.path)?;
     let channels = audio.channels;
     let sample_rate = audio.sample_rate;
@@ -741,7 +755,7 @@ pub(crate) fn detect_tempo_track(app: &tauri::AppHandle, track: u64) -> Result<S
 /// 同步跑一遍音频转 MIDI（供 MCP 工具用；无进度回调，整体阻塞在调用线程）。
 pub(crate) fn transcribe_track(app: &tauri::AppHandle, track: u64) -> Result<String, String> {
     let state = app.state::<AppState>();
-    let input = track_input(&state, track)?;
+    let input = track_input(&state, track, None)?;
     let audio = state.assets.load(&input.source.path)?;
     let channels = audio.channels;
     let sample_rate = audio.sample_rate;
@@ -768,7 +782,7 @@ pub(crate) fn enhance_track(
     dsp: bool,
 ) -> Result<String, String> {
     let state = app.state::<AppState>();
-    let input = track_input(&state, track)?;
+    let input = track_input(&state, track, None)?;
     let audio = state.assets.load(&input.source.path)?;
     let channels = audio.channels;
     let sample_rate = audio.sample_rate;

@@ -1233,14 +1233,16 @@ export function aiModels(): Promise<AiModels> {
   return invoke<AiModels>("ai_models");
 }
 
-/** 开始一个本地 AI 任务：`kind` 为 `"to_midi"` / `"enhance"`，作用于 `track` 的音频片段。
+/** 开始一个本地 AI 任务：`kind` 为 `"to_midi"` / `"enhance"` 等，作用于 `track` 的音频片段。
  *
- * `kind === "master"` 时作用于**整个工程的离线混音**，`master` 参数才有效（`track` 被忽略）。 */
+ * `kind === "master"` 时作用于**整个工程的离线混音**，`master` 参数才有效（`track` 被忽略）。
+ * `clip` 指定这块轨道上的哪一个音频片段；省略 = 第一个音频片段（老行为）。 */
 export function aiStart(
   kind: string,
   track: number,
   master?: MasterArgs,
   model?: string,
+  clip?: number,
 ): Promise<void> {
   if (mockEnabled()) return Promise.resolve(mockApi.aiStart(kind));
   return invoke<void>("ai_start", {
@@ -1248,6 +1250,7 @@ export function aiStart(
     track,
     master: master ?? null,
     model: model ?? null,
+    clip: clip ?? null,
   });
 }
 
