@@ -110,11 +110,15 @@ function find(dir, relative) {
 
 async function main() {
   const p = plan();
+  // 目录必须先建出来，**哪怕当前平台没有要下载的文件**：`tauri.conf.json` 的
+  // `bundle.resources` 里写死了 `resources/ort`，Tauri 的构建脚本遇到不存在的资源路径会
+  // 直接报 `resource path ... doesn't exist`。macOS arm64 走的就是这条路（ORT 静态链接），
+  // 不建目录的话 `pnpm tauri dev` 连编译都过不去。
+  mkdirSync(OUT, { recursive: true });
   if (!p) {
-    console.log(`[ort] 跳过：${process.platform}/${process.arch} 没有随包运行时`);
+    console.log(`[ort] 跳过：${process.platform}/${process.arch} 没有随包运行时（目录已就绪）`);
     return;
   }
-  mkdirSync(OUT, { recursive: true });
   if (!FORCE && p.files.every((name) => existsSync(join(OUT, name)))) {
     const mb = p.files.reduce((sum, n) => sum + statSync(join(OUT, n)).size, 0) / 1048576;
     console.log(`[ort] 已就绪（${mb.toFixed(1)} MB）：${p.files.join(", ")}`);
