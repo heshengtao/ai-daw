@@ -179,6 +179,17 @@ const mcpSaving = ref(false);
 /** 上一次应用的失败原因，供界面提示。 */
 const mcpError = ref("");
 
+/** 配置端口没绑上、退回了临时端口时的一句话说明；正常监听时为 null。 */
+const mcpFallbackNote = computed(() => {
+  const status = mcp.value;
+  if (!status?.fallback) return null;
+  const key =
+    status.portConflict === "denied"
+      ? "settings.mcp.portConflictDenied"
+      : "settings.mcp.portConflictBusy";
+  return i18n.t(key, { port: status.port, bound: status.boundPort ?? status.port });
+});
+
 async function loadMcp(): Promise<void> {
   try {
     mcp.value = await mcpStatus();
@@ -1517,6 +1528,12 @@ onUnmounted(() => {
                 <span class="row-value">
                   {{ mcp?.running ? i18n.t("settings.mcp.running") : i18n.t("settings.mcp.stopped") }}
                 </span>
+              </div>
+              <div v-if="mcpFallbackNote" class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.mcp.portConflict") }}</span>
+                  <span class="row-sub warn">{{ mcpFallbackNote }}</span>
+                </div>
               </div>
             </div>
           </div>

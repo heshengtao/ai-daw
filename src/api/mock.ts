@@ -150,6 +150,9 @@ function mockMcpStatus(): McpStatus {
     ...mcpConfig,
     running: mcpConfig.enabled,
     url: mcpConfig.enabled ? `http://127.0.0.1:${port}/mcp` : null,
+    boundPort: mcpConfig.enabled ? port : null,
+    fallback: false,
+    portConflict: null,
   };
 }
 

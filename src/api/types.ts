@@ -821,6 +821,12 @@ export interface McpStatus extends McpConfig {
   running: boolean;
   /** 正在监听时的接入地址（形如 `http://127.0.0.1:8787/mcp`），否则为 `null`。 */
   url: string | null;
+  /** 实际监听的端口；配置端口被占用退回了临时端口时，它会和 `port` 不同。 */
+  boundPort?: number | null;
+  /** 本次运行退回了系统临时端口。 */
+  fallback?: boolean;
+  /** 退回临时端口的原因。 */
+  portConflict?: "busy" | "denied" | null;
 }
 
 /** `aidaw` 命令的安装状态（与后端 `cli::CliState` 一一对应）。 */
