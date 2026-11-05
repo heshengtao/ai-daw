@@ -343,7 +343,7 @@ function onRetryAudio(): void {
 </script>
 
 <template>
-  <footer class="bottom-bar">
+  <footer class="bottom-bar" data-tour="transport">
     <!--
       左翼：编辑历史 → 录音输入 → 输出 → 工程读数 → 传输左簇。
       `flex-end` 让它**贴住播放键**，富余空间全部留给窗口左缘。
@@ -761,6 +761,7 @@ function onRetryAudio(): void {
   flex: 0 0 auto;
 }
 .play-btn {
+  position: relative;
   width: 44px;
   height: 44px;
   flex: 0 0 auto;
@@ -788,6 +789,30 @@ function onRetryAudio(): void {
 .play-btn.playing {
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
+}
+/* 播放中：一圈缓慢扩散的光晕，把「正在走」这件事从数字之外也说出来。 */
+.play-btn.playing::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid rgb(var(--md-primary) / 0.5);
+  animation: play-halo 2.2s var(--md-ease-standard-decel) infinite;
+  pointer-events: none;
+}
+@keyframes play-halo {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  70% {
+    transform: scale(1.45);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.45);
+    opacity: 0;
+  }
 }
 .play-btn:focus-visible {
   outline: 2px solid rgb(var(--md-primary));

@@ -23,6 +23,7 @@ import { useRouter } from "vue-router";
 import {
   AdjustmentsHorizontalIcon,
   AdjustmentsVerticalIcon,
+  ArrowDownTrayIcon,
   ArrowPathIcon,
   ArrowsPointingInIcon,
   ArrowsRightLeftIcon,
@@ -37,6 +38,7 @@ import {
   EllipsisHorizontalIcon,
   MicrophoneIcon,
   MusicalNoteIcon,
+  PaintBrushIcon,
   PlusIcon,
   PuzzlePieceIcon,
   QueueListIcon,
@@ -46,6 +48,7 @@ import {
   SpeakerXMarkIcon,
   TrashIcon,
   UserIcon,
+  XMarkIcon,
 } from "@heroicons/vue/24/outline";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore, type ClipSel } from "@/stores/selection";
@@ -55,6 +58,7 @@ import { useLayoutStore, type LaneView } from "@/stores/layout";
 import { useTimelineStore } from "@/stores/timeline";
 import { usePluginsStore } from "@/stores/plugins";
 import { useAiIntentStore } from "@/stores/aiIntent";
+import { useOnboardingStore } from "@/stores/onboarding";
 import TimelineRuler from "@/components/workspace/TimelineRuler.vue";
 import ClipWaveform from "@/components/common/ClipWaveform.vue";
 import { clipBounds } from "@/api/tauri";
@@ -63,6 +67,7 @@ import MidiKeyboardPane from "@/components/workspace/MidiKeyboardPane.vue";
 import LaneLoading from "@/components/workspace/LaneLoading.vue";
 import PanelResizer from "@/components/workspace/PanelResizer.vue";
 import ContextMenu from "@/components/common/ContextMenu.vue";
+import EmptyCanvas from "@/components/onboarding/EmptyCanvas.vue";
 import type { ContextMenuItem } from "@/components/common/contextMenu";
 import { trackHue } from "@/utils/trackColor";
 import { laneScrollTop } from "@/composables/useLaneScroll";
@@ -93,6 +98,7 @@ const layout = useLayoutStore();
 const timeline = useTimelineStore();
 const plugins = usePluginsStore();
 const aiIntent = useAiIntentStore();
+const onboarding = useOnboardingStore();
 const quickAi = useAiQuickActions();
 const router = useRouter();
 
@@ -1603,6 +1609,39 @@ function watchAutoBlock(): void {
 
 watch(() => layout.showAutomation, watchAutoBlock);
 
+/**
+ * 「从这里开始」浮卡：轨道都在、但一块片段都没有时出现。
+ *
+ * 它不是模态框——只占中间一块，四周网格照样能点能画；画出第一块片段它就自己消失。
+ * 手动关掉会记进 localStorage，之后不再打扰（想再看可以走「帮助 → 快速上手」）。
+ */
+const coachOpen = computed(
+  () =>
+    !onboarding.coachDismissed &&
+    tracks.value.length > 0 &&
+    tracks.value.every((track) => track.clips.length === 0),
+);
+
+function dismissCoach(): void {
+  onboarding.dismissCoach();
+}
+
+/** 「直接画」：切到绘制模式，并把下一步的手势说清楚（只高亮网格，用户仍然不知道要拖）。 */
+function coachDraw(): void {
+  layout.setTool("draw");
+  layout.notify(i18n.t("arrange.coachDrawHint"));
+}
+
+/** 导入音频：落在第一条轨道的播放头处（与右键菜单里的那个动作同一条路径）。 */
+function coachImport(): void {
+  void importAudioAt(tracks.value[0] ?? null, timeline.snapBeats(transport.positionBeats));
+}
+
+/** AI 写歌：打开右侧的写歌智能体面板。 */
+function coachAi(): void {
+  layout.openTab("agent");
+}
+
 onMounted(() => {
   window.addEventListener("pointerup", onPointerUp);
   window.addEventListener("pointercancel", onPointerUp);
@@ -1667,6 +1706,7 @@ onUnmounted(() => {
       <div
         ref="lanesEl"
         class="lanes"
+        data-tour="timeline"
         :class="{ 'eraser-mode': layout.tool === 'eraser' }"
         :style="timeline.widthStyle"
         @contextmenu="onLaneContextMenu"
@@ -1792,6 +1832,37 @@ onUnmounted(() => {
       />
     </div>
 
+    <!-- 空工程：中间一张「从这里开始」的浮卡。
+         容器不吃指针事件，只有卡片本身可点——底下的网格照样能画。
+         `bottom` 让开底部窗格（自动化 / 乐谱），卡片始终落在网格那一块的正中。 -->
+    <transition name="coach">
+      <div v-if="coachOpen" class="coach-layer" :style="{ bottom: `${layout.arrangeBottomInset}px` }">
+        <div class="coach">
+          <button class="coach-close" :aria-label="i18n.t('arrange.coachDismiss')" @click="dismissCoach">
+            <XMarkIcon class="w-[15px] h-[15px]" />
+          </button>
+          <EmptyCanvas class="coach-art" />
+          <h2 class="coach-title">{{ i18n.t("arrange.coachTitle") }}</h2>
+          <p class="coach-sub">{{ i18n.t("arrange.coachSub") }}</p>
+          <div class="coach-actions">
+            <button class="coach-btn primary" @click="coachDraw">
+              <PaintBrushIcon class="coach-icon" />
+              {{ i18n.t("arrange.coachDraw") }}
+            </button>
+            <button class="coach-btn" @click="coachImport">
+              <ArrowDownTrayIcon class="coach-icon" />
+              {{ i18n.t("arrange.coachImport") }}
+            </button>
+            <button class="coach-btn" @click="coachAi">
+              <SparklesIcon class="coach-icon" />
+              {{ i18n.t("arrange.coachAi") }}
+            </button>
+          </div>
+          <button class="coach-dismiss" @click="dismissCoach">{{ i18n.t("arrange.coachDismiss") }}</button>
+        </div>
+      </div>
+    </transition>
+
     <!-- 下窗口：自动化 / 选中轨道的乐谱 / 虚拟 MIDI 键盘，三选一（共用同一份高度与分隔线） -->
     <div v-if="layout.showAutomation" ref="autoBlockEl" class="auto-block">
       <PanelResizer side="bottom" @resize="layout.resizeLane($event)" />
@@ -1828,6 +1899,7 @@ onUnmounted(() => {
 <style scoped>
 /* 编排视图的纵向容器：上面是可滚动的网格，下面是（可选的）自动化曲线编辑器。 */
 .arrange-root {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -2027,5 +2099,176 @@ onUnmounted(() => {
 .marquee.danger {
   border-color: rgb(var(--md-error));
   background-color: rgb(var(--md-error) / 0.16);
+}
+
+/* ---- 空工程的「从这里开始」浮卡 ---- */
+.coach-layer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  /* 只让卡片本身吃指针：四周的网格照常能画、能框选 */
+  pointer-events: none;
+}
+.coach {
+  position: relative;
+  width: min(430px, 100%);
+  padding: 18px 22px 14px;
+  border-radius: 26px;
+  text-align: center;
+  background-color: rgb(var(--md-surface-container-high) / 0.95);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgb(var(--md-outline-variant) / 0.5);
+  box-shadow:
+    var(--md-elevation-3),
+    0 24px 60px -26px rgb(var(--md-scrim) / 0.55);
+  pointer-events: auto;
+}
+.coach-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--md-on-surface-variant));
+  cursor: pointer;
+  transition: background-color var(--md-duration-short-2) var(--md-ease-standard);
+}
+.coach-close:hover {
+  background-color: rgb(var(--md-on-surface-variant) / var(--md-state-hover-alpha));
+  color: rgb(var(--md-on-surface));
+}
+.coach-close:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 1px;
+}
+.coach-art {
+  width: 208px;
+  margin: 0 auto 2px;
+}
+.coach-title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.1px;
+  color: rgb(var(--md-on-surface));
+}
+.coach-sub {
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: rgb(var(--md-on-surface-variant));
+}
+.coach-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.coach-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+  border-radius: 999px;
+  background-color: rgb(var(--md-surface-container-highest));
+  color: rgb(var(--md-on-surface));
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    transform var(--md-duration-short-2) var(--md-ease-standard),
+    background-color var(--md-duration-short-2) var(--md-ease-standard),
+    border-color var(--md-duration-short-2) var(--md-ease-standard);
+}
+.coach-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgb(var(--md-primary) / 0.55);
+}
+.coach-btn:active {
+  transform: scale(0.98);
+}
+.coach-btn:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 2px;
+}
+.coach-btn.primary {
+  border-color: transparent;
+  background-color: rgb(var(--md-primary));
+  color: rgb(var(--md-on-primary));
+  box-shadow: 0 2px 10px -2px rgb(var(--md-primary) / 0.5);
+}
+.coach-btn.primary:hover {
+  filter: brightness(1.06);
+}
+.coach-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+.coach-dismiss {
+  margin-top: 10px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: rgb(var(--md-on-surface-muted));
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: color var(--md-duration-short-2) var(--md-ease-standard);
+}
+.coach-dismiss:hover {
+  color: rgb(var(--md-on-surface));
+  text-decoration: underline;
+}
+.coach-dismiss:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 1px;
+}
+
+.coach-enter-active {
+  transition: opacity var(--md-duration-medium-1) var(--md-ease-standard);
+}
+.coach-enter-active .coach {
+  transition: transform var(--md-duration-medium-2) var(--md-ease-emphasized-decel);
+}
+.coach-leave-active {
+  transition: opacity var(--md-duration-short-2) var(--md-ease-standard-accel);
+}
+.coach-enter-from,
+.coach-leave-to {
+  opacity: 0;
+}
+.coach-enter-from .coach {
+  transform: translateY(8px) scale(0.98);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coach-btn,
+  .coach-enter-active,
+  .coach-leave-active,
+  .coach-enter-active .coach {
+    transition-duration: 1ms;
+  }
+  .coach-btn:hover {
+    transform: none;
+  }
 }
 </style>

@@ -11,6 +11,7 @@ import { PlusIcon, TrashIcon } from "@heroicons/vue/24/outline";
 import Logo from "@/components/common/Logo.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
 import PanelIcon from "@/components/common/PanelIcon.vue";
+import EmptyCanvas from "@/components/onboarding/EmptyCanvas.vue";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
 import { useSelectionStore } from "@/stores/selection";
@@ -118,7 +119,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="track-panel" @wheel="onPanelWheel">
+  <div class="track-panel" data-tour="tracks" @wheel="onPanelWheel">
     <!-- 品牌区：与顶栏同高；macOS 下折叠按钮紧随红绿灯之后 -->
     <div class="brand" :class="{ 'pad-mac': isMac }">
       <Tooltip :text="i18n.t('tracks.hide')" align="end">
@@ -149,7 +150,7 @@ onMounted(() => {
           dimmed: track.mixer.mute,
           'agent-touched': agentTracks?.includes(track.id),
         }"
-        :style="{ '--track-hue': String(trackHue(ti)) }"
+        :style="{ '--track-hue': String(trackHue(ti)), '--i': ti }"
         @click="selection.selectTrack(track.id)"
       >
         <span class="grip" />
@@ -194,8 +195,14 @@ onMounted(() => {
           </Tooltip>
         </div>
       </li>
-      <li v-if="(store.project?.tracks.length ?? 0) === 0" class="heads-empty text-body-sm">
-        {{ i18n.t("tracks.empty") }}
+      <li v-if="(store.project?.tracks.length ?? 0) === 0" class="heads-empty">
+        <EmptyCanvas class="heads-empty-art" />
+        <p class="heads-empty-title">{{ i18n.t("tracks.emptyTitle") }}</p>
+        <p class="heads-empty-sub">{{ i18n.t("tracks.empty") }}</p>
+        <button class="m3-btn filled heads-empty-btn" @click="addTrack">
+          <PlusIcon class="w-4 h-4" />
+          {{ i18n.t("tracks.add") }}
+        </button>
       </li>
     </ul>
 
@@ -303,6 +310,20 @@ onMounted(() => {
   padding: 0 8px 0 16px;
   cursor: pointer;
   border-bottom: 1px solid var(--grid-line-row);
+  /* 逐行淡入：切换工程 / 重开面板时，列表像「落下来」而不是瞬间出现。
+     幅度与位移都很小，密集列表里不会晃眼。 */
+  animation: row-in var(--md-duration-medium-2) var(--md-ease-emphasized-decel) both;
+  animation-delay: calc(min(var(--i, 0), 12) * 26ms);
+}
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 .track-row::before {
   content: "";
@@ -435,7 +456,39 @@ onMounted(() => {
   opacity: 0.5;
 }
 .heads-empty {
-  padding: 20px 16px;
-  color: rgb(var(--md-on-surface-muted));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 26px 16px 20px;
+  text-align: center;
+}
+.heads-empty-art {
+  width: 140px;
+  margin-bottom: 6px;
+  opacity: 0.85;
+}
+.heads-empty-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--md-on-surface));
+}
+.heads-empty-sub {
+  margin: 0 0 12px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: rgb(var(--md-on-surface-variant));
+}
+.heads-empty-btn {
+  height: 34px;
+  padding: 0 16px;
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .track-row {
+    animation: none;
+  }
 }
 </style>

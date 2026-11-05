@@ -17,6 +17,8 @@ import ExportDialog, { type ExportChoice } from "@/components/common/ExportDialo
 import ImportDialog, { type ImportKind } from "@/components/common/ImportDialog.vue";
 import ParameterBrowser from "@/components/common/ParameterBrowser.vue";
 import UpdateDoneToast from "@/components/common/UpdateDoneToast.vue";
+import WelcomeDialog from "@/components/onboarding/WelcomeDialog.vue";
+import GuidedTour from "@/components/onboarding/GuidedTour.vue";
 import { useProjectSync } from "@/composables/useProjectSync";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
@@ -29,6 +31,7 @@ import { useSelectionStore } from "@/stores/selection";
 import { useParamBrowserStore } from "@/stores/paramBrowser";
 import { useImportingStore, useExportingStore } from "@/stores/importing";
 import { useTimelineStore } from "@/stores/timeline";
+import { useOnboardingStore } from "@/stores/onboarding";
 import { useI18n } from "@/i18n";
 import { exportAudio, exportMidi, exportScore, importProject, onPluginsEvent, readImportFile, type ExportFormat } from "@/api/tauri";
 import type { ProjectHistoryEntry } from "@/api/types";
@@ -61,6 +64,7 @@ const importing = useImportingStore();
 /** 导出**任务**的进度 store（名字让开同文件里的 `exporting` 开关：那是「正在导出」的防重入标志）。 */
 const exportJob = useExportingStore();
 const timeline = useTimelineStore();
+const onboarding = useOnboardingStore();
 const i18n = useI18n();
 const route = useRoute();
 
@@ -218,6 +222,16 @@ async function onRestoreHistory(entry: ProjectHistoryEntry): Promise<void> {
 /** 顶栏「导入」：先选来源（音频 / MIDI / 乐谱），再弹系统文件框。 */
 function openImport(): void {
   importOpen.value = true;
+}
+
+/**
+ * 欢迎页选了某个起点：`blank` 由欢迎页自己收尾（切工具 + 回编排），
+ * 其余三个要借用主窗口的对话框 / 面板，所以回到这里执行。
+ */
+function onWelcomeStart(action: "ai" | "blank" | "import" | "history"): void {
+  if (action === "ai") layout.openTab("agent");
+  else if (action === "import") importOpen.value = true;
+  else if (action === "history") historyOpen.value = true;
 }
 
 /** 文件名（去掉目录与扩展名）：导入后的工程名用它。 */
@@ -680,6 +694,8 @@ onMounted(async () => {
       if (project.dirty) void project.cacheSession();
     }, 10_000);
   }
+  // 首次启动的欢迎页：等界面真的画出来再弹（首帧就盖一层遮罩会显得应用「卡住了」）。
+  if (isPrimaryWindow) window.setTimeout(() => onboarding.maybeWelcome(), 450);
 });
 onUnmounted(() => {
   window.removeEventListener("keydown", onKey);
@@ -708,6 +724,7 @@ onUnmounted(() => {
     @new="onNew"
     @history="historyOpen = true"
     @save="onSave"
+    @save-as="openSaveDialog"
     @export="onExport"
     @rename="openRenameDialog"
     @shortcuts="shortcutsOpen = true"
@@ -727,7 +744,11 @@ onUnmounted(() => {
 
     <!-- 中：工作区 -->
     <div v-if="isSettings" class="workspace-main">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <transition name="view" mode="out-in">
+          <component :is="Component" :key="route.path" />
+        </transition>
+      </router-view>
     </div>
 
     <!-- 启动失败：必须让用户看见，并能重试（而不是停在"载入中"）。 -->
@@ -748,7 +769,11 @@ onUnmounted(() => {
     </div>
 
     <div v-else class="workspace-main">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <transition name="view" mode="out-in">
+          <component :is="Component" :key="route.path" />
+        </transition>
+      </router-view>
     </div>
 
     <!-- 右：标签页面板（全高） -->
@@ -788,6 +813,10 @@ onUnmounted(() => {
 
   <!-- 升级后首次打开：底部 toast 提示更新完成，可跳到 GitHub 发布页看更新日志 -->
   <UpdateDoneToast />
+
+  <!-- 首次启动的欢迎页与聚光灯引导：挂在根部，任何视图上都能浮起来 -->
+  <WelcomeDialog @start="onWelcomeStart" @tour="onboarding.startTour()" />
+  <GuidedTour />
 
   <!-- 参数页（挑参数给自动化用）：挂在根部，车道下拉与检查器两个入口共用 -->
   <ParameterBrowser v-if="paramBrowser.isOpen" />

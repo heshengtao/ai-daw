@@ -780,12 +780,25 @@ function openNoteEditor(tab: "strum" | "expr" | "midi" | "lyric"): void {
   flex-direction: column;
   gap: 6px;
 }
+/* 分组标题前一小截主色竖条：把「轨道 / 乐器 / 效果链」这些分区在一屏里分开，
+   不用加粗或加大字号（检查器本来就密）。 */
 .group-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 10.5px;
   letter-spacing: 0.8px;
   text-transform: uppercase;
   color: rgb(var(--md-on-surface-variant));
   padding-left: 4px;
+}
+.group-title::before {
+  content: "";
+  width: 3px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+  background-color: rgb(var(--md-primary) / 0.7);
 }
 .card {
   display: flex;
@@ -794,6 +807,8 @@ function openNoteEditor(tab: "strum" | "expr" | "midi" | "lyric"): void {
   padding: 6px;
   border-radius: 16px;
   background-color: var(--app-inset);
+  border: 1px solid rgb(var(--md-outline-variant) / 0.22);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.02);
 }
 .rows {
   margin: 0;
@@ -811,6 +826,10 @@ function openNoteEditor(tab: "strum" | "expr" | "midi" | "lyric"): void {
   padding: 0 10px;
   border-radius: 12px;
   font-size: 12px;
+  transition: background-color var(--md-duration-short-2) var(--md-ease-standard);
+}
+.row:hover {
+  background-color: rgb(var(--md-on-surface) / 0.035);
 }
 .row-label {
   color: rgb(var(--md-on-surface-variant));

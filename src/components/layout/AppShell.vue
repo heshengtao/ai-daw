@@ -23,6 +23,7 @@ const emit = defineEmits<{
   (e: "new"): void;
   (e: "history"): void;
   (e: "save"): void;
+  (e: "saveAs"): void;
   (e: "export"): void;
   (e: "rename"): void;
   (e: "shortcuts"): void;
@@ -49,6 +50,7 @@ const showWindowControls = isTauri() && (isWindows() || isLinux());
           @new="emit('new')"
           @history="emit('history')"
           @save="emit('save')"
+          @save-as="emit('saveAs')"
           @export="emit('export')"
           @rename="emit('rename')"
           @shortcuts="emit('shortcuts')"
@@ -124,6 +126,10 @@ const showWindowControls = isTauri() && (isWindows() || isLinux());
   min-width: 0;
   display: flex;
   overflow: hidden;
+  /* 底色 + 一层极淡的环境光（见 main.css 的 `--app-wash`）：
+     左上是强调色、右下是第三色，让网格后面不再是一块死板的纯色。 */
   background-color: var(--app-card);
+  background-image: var(--app-wash);
+  background-repeat: no-repeat;
 }
 </style>

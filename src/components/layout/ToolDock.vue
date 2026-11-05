@@ -62,6 +62,9 @@ const toolOptions: { id: Tool; icon: unknown; labelKey: string }[] = [
   { id: "split", icon: SplitIcon, labelKey: "topbar.toolSplit" },
   { id: "lyric", icon: LanguageIcon, labelKey: "topbar.toolLyric" },
 ];
+
+/** 当前工具在胶囊里的位置：滑块靠它平移，切换模式时是一段连续的动作。 */
+const toolIndex = computed(() => Math.max(0, toolOptions.findIndex((t) => t.id === layout.tool)));
 </script>
 
 <template>
@@ -72,17 +75,21 @@ const toolOptions: { id: Tool; icon: unknown; labelKey: string }[] = [
     :aria-label="i18n.t('topbar.toolGroup')"
     :style="{ bottom: dockBottom }"
   >
-    <Tooltip v-for="t in toolOptions" :key="t.id" :text="i18n.t(t.labelKey)" place="above">
-      <button
-        class="dock-btn"
-        :class="{ on: layout.tool === t.id }"
-        :aria-label="i18n.t(t.labelKey)"
-        :aria-pressed="layout.tool === t.id"
-        @click="layout.setTool(t.id)"
-      >
-        <component :is="t.icon" class="dock-icon" />
-      </button>
-    </Tooltip>
+    <div class="dock-tools" :style="{ '--idx': toolIndex }">
+      <!-- 选中态的滑块：跟着当前工具平移，比逐个按钮变色更容易看出「现在用哪个」 -->
+      <span class="dock-pill" aria-hidden="true" />
+      <Tooltip v-for="t in toolOptions" :key="t.id" :text="i18n.t(t.labelKey)" place="above">
+        <button
+          class="dock-btn"
+          :class="{ on: layout.tool === t.id }"
+          :aria-label="i18n.t(t.labelKey)"
+          :aria-pressed="layout.tool === t.id"
+          @click="layout.setTool(t.id)"
+        >
+          <component :is="t.icon" class="dock-icon" />
+        </button>
+      </Tooltip>
+    </div>
 
     <span class="dock-sep" />
 
@@ -118,7 +125,28 @@ const toolOptions: { id: Tool; icon: unknown; labelKey: string }[] = [
   box-shadow: var(--md-elevation-2);
   user-select: none;
 }
+.dock-tools {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+/* 滑块宽度 = 按钮宽度（34），步长 = 34 + gap（2） */
+.dock-pill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 34px;
+  border-radius: 999px;
+  background-color: rgb(var(--md-secondary-container));
+  transform: translateX(calc(var(--idx, 0) * 36px));
+  transition: transform var(--md-duration-medium-2) var(--md-spring-fast);
+  pointer-events: none;
+}
 .dock-btn {
+  position: relative;
+  z-index: 1;
   width: 34px;
   height: 34px;
   flex: 0 0 auto;
@@ -144,7 +172,7 @@ const toolOptions: { id: Tool; icon: unknown; labelKey: string }[] = [
   outline-offset: 1px;
 }
 .dock-btn.on {
-  background-color: rgb(var(--md-secondary-container));
+  background-color: transparent;
   color: rgb(var(--md-on-secondary-container));
 }
 .dock-icon {
@@ -160,7 +188,8 @@ const toolOptions: { id: Tool; icon: unknown; labelKey: string }[] = [
   background-color: rgb(var(--md-outline-variant) / 0.55);
 }
 @media (prefers-reduced-motion: reduce) {
-  .dock-btn {
+  .dock-btn,
+  .dock-pill {
     transition: none;
   }
   .dock-btn:active {
