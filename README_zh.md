@@ -113,7 +113,7 @@ AI DAW 支持 **VST3** 与 **CLAP** 插件（Windows / macOS / Linux），在 ma
 这些 AI 功能是为真实的作品准备的，不是演示品。把一段素材交给它，拿回来的是能接着编辑的东西：可以挪动的 MIDI 音符、更干净的人声、可以重新配比的分轨。全部跑在你自己的硬件上——默认 CPU，可选 CoreML（macOS）与 DirectML（Windows）加速。
 
 - **节拍检测** —— Beat This!（ISMIR 2024）一次推理得出全局 BPM 与拍号
-- **音频转 MIDI** —— Basic Pitch 把录下的演奏变成可编辑的音符
+- **音频转 MIDI** —— Basic Pitch 把录下的演奏变成可编辑的音符；也可以在「AI → 音频转 MIDI → 模型」里换成 **MuScriptor**（走 audio.cpp 引擎）：多乐器转录，按乐器自动分轨。393 MB–5.1 GB 按需下载（CC BY-NC 4.0，非商用许可）
 - **人声降噪 / 去混响** —— LocalVQE 处理人声素材
 - **音源分离** —— HTDemucs v4 拆成 4 / 6 条分轨，方便重新配比
 - **歌声合成** —— 一段 MIDI 旋律 + 歌词 + 一条参考声线，变出一条能继续编辑的歌声轨（SoulX-Singer，zero-shot 音色克隆）。歌词可以逐音写在钢琴卷帘里（`-` 连音），参考声线能存进**人声音色库**跨工程复用——换音色就是换一条参考
@@ -199,6 +199,8 @@ pnpm build:aidaw      # 构建 aidaw CLI（见 tools/build-aidaw.sh）
 
 两个小模型随包：**Basic Pitch**（音频转 MIDI）与 **LocalVQE**（人声降噪），装好即可用。较大的模型——**Beat This!**（节拍检测）与 **HTDemucs**（音源分离，4 / 6 分轨）——首次使用时由应用内的模型管理器按需下载，存放在源码树之外。
 
+模型权重从不进入仓库或安装包，各自沿用发布方的许可：见 [MODELS.md](MODELS.md)。其中包含可选的 CC BY-NC 4.0（非商用）模型——写歌用的 **YuE2** 与录音转谱用的 **SheetSage2**。
+
 ### 支持哪些插件格式？
 
 Windows / macOS / Linux 上支持 VST3 与 CLAP；macOS 上另外支持 **Audio Units（AU / AUv3）**。
@@ -209,7 +211,16 @@ Windows / macOS / Linux 上支持 VST3 与 CLAP；macOS 上另外支持 **Audio 
 
 ## 许可
 
-Apache-2.0，见 [LICENSE](LICENSE)。
+**代码**是 Apache-2.0，见 [LICENSE](LICENSE)。
+
+模型**权重**是另一层：它们从不进入本仓库或安装包，各自沿用发布方的许可，由应用在
+需要时按需下载（下载时逐个校验 `sha256`）。完整的模型 / 来源 / 许可对照表见
+**[MODELS.md](MODELS.md)**。
+
+其中少数可选模型是 **CC BY-NC 4.0（非商用）**——写歌用的 YuE2 与录音转谱用的
+SheetSage2。它们都是「用户点了才下载」的可选档：除非你从发布方拿到了商业授权，否则
+不要把这些权重用于商业用途。生成的音频 / MIDI 归你所有，但受上游条款约束，且你需对
+输入音频持有相应权利。
 
 ## 第三方许可
 

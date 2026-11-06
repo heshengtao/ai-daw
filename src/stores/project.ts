@@ -39,6 +39,13 @@ export const useProjectStore = defineStore("project", () => {
   const dirty = ref(false);
   /** 当前工程对应的文件路径；尚未保存过时为 null。 */
   const currentPath = ref<string | null>(null);
+  /**
+   * 启动时后端是否从会话缓存还原了上次的工程。
+   *
+   * 欢迎页据此把「打开上次工程」而不是「打开空白工程」作为推荐项；它描述的是
+   * 「这次启动来自哪里」，新建 / 打开工程不会改写它。
+   */
+  const restoredSession = ref(false);
 
   /** 按当前语言生成默认分轨名（顺序与引擎模板一致）。 */
   function starterTrackNames(): string[] {
@@ -92,6 +99,7 @@ export const useProjectStore = defineStore("project", () => {
     try {
       project.value = await api.getProject();
       await refreshDepths();
+      restoredSession.value = await api.sessionRestored().catch(() => false);
     } catch (err) {
       loadError.value = String(err);
     } finally {
@@ -646,6 +654,7 @@ export const useProjectStore = defineStore("project", () => {
     redoDepth,
     dirty,
     currentPath,
+    restoredSession,
     reload,
     addTrack,
     removeTrack,

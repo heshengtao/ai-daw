@@ -957,6 +957,26 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
+
+          <div class="group">
+            <div class="group-title">{{ i18n.t("settings.startup") }}</div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.welcome.label") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.welcome.hint") }}</span>
+                </div>
+                <button
+                  class="m3-switch"
+                  :class="{ on: settings.welcomeOnStart }"
+                  role="switch"
+                  :aria-checked="settings.welcomeOnStart"
+                  :aria-label="i18n.t('settings.welcome.label')"
+                  @click="settings.welcomeOnStart = !settings.welcomeOnStart"
+                />
+              </div>
+            </div>
+          </div>
         </template>
 
         <!-- 存储：数据目录（模型 / 运行时 / 插件 / AI 产物） -->

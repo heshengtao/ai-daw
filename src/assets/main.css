@@ -117,21 +117,27 @@
     --md-state-focus-alpha: 0.12;
     --md-state-press-alpha: 0.12;
 
-    /* Expressive motion — springs (MD3 Expressive) */
-    --md-spring-fast: 340ms cubic-bezier(0.34, 1.56, 0.64, 1);
-    --md-spring-default: 520ms cubic-bezier(0.34, 1.42, 0.5, 1);
-    --md-spring-slow: 720ms cubic-bezier(0.22, 1.28, 0.36, 1);
+    /* Expressive motion — 弹簧**只给缓动曲线，不带时长**。
+       MD3 Expressive 的写法是 `240ms cubic-bezier(...)` 这种「时长 + 曲线」打包值，
+       但一旦有人再补一个时长（`transform 180ms var(--md-spring-fast)`），CSS 把第二个
+       时间值当成 **transition-delay** —— 元素先一动不动、过 240ms 才开始动。
+       菜单「点开不放大、过一会才弹一下」就是这么来的。时长一律由 --md-duration-* 给。 */
+    --md-ease-spring-fast: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --md-ease-spring-default: cubic-bezier(0.34, 1.42, 0.5, 1);
+    --md-ease-spring-slow: cubic-bezier(0.22, 1.28, 0.36, 1);
     --md-ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
     --md-ease-emphasized-decel: cubic-bezier(0.05, 0.7, 0.1, 1);
     --md-ease-emphasized-accel: cubic-bezier(0.3, 0, 0.8, 0.15);
 
     /* MD3 motion 时序 token：时长与缓动分开写，组件只引用、不再自造一份。
-       短 = 状态层 / hover；中 = 面板、页签；长 = 整页或整块内容的入场。 */
-    --md-duration-short-1: 100ms;
-    --md-duration-short-2: 160ms;
-    --md-duration-medium-1: 240ms;
-    --md-duration-medium-2: 320ms;
-    --md-duration-long-1: 460ms;
+       短 = 状态层 / hover；中 = 面板、页签；长 = 整页或整块内容的入场。
+       **桌面端（键鼠、60–165 Hz）要的是「跟手」**：240/320/460 这套是触摸端的节奏，
+       点一下要等它走完才觉得「响应了」。这里整体收紧到 90/130/180/240/320。 */
+    --md-duration-short-1: 90ms;
+    --md-duration-short-2: 130ms;
+    --md-duration-medium-1: 180ms;
+    --md-duration-medium-2: 240ms;
+    --md-duration-long-1: 320ms;
     --md-ease-standard: cubic-bezier(0.2, 0, 0, 1);
     --md-ease-standard-decel: cubic-bezier(0, 0, 0, 1);
     --md-ease-standard-accel: cubic-bezier(0.3, 0, 1, 1);
@@ -405,7 +411,15 @@
            overflow-hidden select-none cursor-pointer;
     box-shadow: var(--md-elevation-1);
     letter-spacing: 0.1px;
-    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+    /* 不用 `transition: all`：它会把 width / height / font-size 这些「一次性重排」
+       也拉进过渡，状态一变就多花一帧；这里只列真正会动的属性。 */
+    transition:
+      transform var(--md-duration-short-2) var(--md-ease-standard),
+      box-shadow var(--md-duration-short-2) var(--md-ease-standard),
+      background-color var(--md-duration-short-2) var(--md-ease-standard),
+      background-image var(--md-duration-short-2) var(--md-ease-standard),
+      border-color var(--md-duration-short-2) var(--md-ease-standard),
+      color var(--md-duration-short-2) var(--md-ease-standard);
   }
 
   .btn-filled:active {
@@ -430,7 +444,15 @@
            disabled:opacity-40 disabled:pointer-events-none disabled:transform-none
            overflow-hidden select-none cursor-pointer;
     letter-spacing: 0.1px;
-    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+    /* 不用 `transition: all`：它会把 width / height / font-size 这些「一次性重排」
+       也拉进过渡，状态一变就多花一帧；这里只列真正会动的属性。 */
+    transition:
+      transform var(--md-duration-short-2) var(--md-ease-standard),
+      box-shadow var(--md-duration-short-2) var(--md-ease-standard),
+      background-color var(--md-duration-short-2) var(--md-ease-standard),
+      background-image var(--md-duration-short-2) var(--md-ease-standard),
+      border-color var(--md-duration-short-2) var(--md-ease-standard),
+      color var(--md-duration-short-2) var(--md-ease-standard);
   }
 
   .btn-tonal:active {
@@ -455,7 +477,15 @@
            disabled:opacity-40 disabled:pointer-events-none disabled:transform-none
            overflow-hidden select-none cursor-pointer;
     letter-spacing: 0.1px;
-    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+    /* 不用 `transition: all`：它会把 width / height / font-size 这些「一次性重排」
+       也拉进过渡，状态一变就多花一帧；这里只列真正会动的属性。 */
+    transition:
+      transform var(--md-duration-short-2) var(--md-ease-standard),
+      box-shadow var(--md-duration-short-2) var(--md-ease-standard),
+      background-color var(--md-duration-short-2) var(--md-ease-standard),
+      background-image var(--md-duration-short-2) var(--md-ease-standard),
+      border-color var(--md-duration-short-2) var(--md-ease-standard),
+      color var(--md-duration-short-2) var(--md-ease-standard);
   }
 
   .btn-outlined:active {
@@ -474,7 +504,15 @@
            disabled:opacity-40 disabled:pointer-events-none disabled:transform-none
            overflow-hidden select-none cursor-pointer;
     letter-spacing: 0.1px;
-    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+    /* 不用 `transition: all`：它会把 width / height / font-size 这些「一次性重排」
+       也拉进过渡，状态一变就多花一帧；这里只列真正会动的属性。 */
+    transition:
+      transform var(--md-duration-short-2) var(--md-ease-standard),
+      box-shadow var(--md-duration-short-2) var(--md-ease-standard),
+      background-color var(--md-duration-short-2) var(--md-ease-standard),
+      background-image var(--md-duration-short-2) var(--md-ease-standard),
+      border-color var(--md-duration-short-2) var(--md-ease-standard),
+      color var(--md-duration-short-2) var(--md-ease-standard);
   }
 
   .btn-text:active {
@@ -488,7 +526,15 @@
     @apply relative inline-flex items-center justify-center w-10 h-10
            text-[rgb(var(--md-on-surface-variant))] rounded-full
            overflow-hidden cursor-pointer select-none;
-    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+    /* 不用 `transition: all`：它会把 width / height / font-size 这些「一次性重排」
+       也拉进过渡，状态一变就多花一帧；这里只列真正会动的属性。 */
+    transition:
+      transform var(--md-duration-short-2) var(--md-ease-standard),
+      box-shadow var(--md-duration-short-2) var(--md-ease-standard),
+      background-color var(--md-duration-short-2) var(--md-ease-standard),
+      background-image var(--md-duration-short-2) var(--md-ease-standard),
+      border-color var(--md-duration-short-2) var(--md-ease-standard),
+      color var(--md-duration-short-2) var(--md-ease-standard);
   }
 
   .btn-icon:active {
@@ -829,9 +875,11 @@
            text-sm font-medium cursor-pointer select-none border-0 bg-transparent;
     color: rgb(var(--md-on-surface-variant));
     white-space: nowrap;
+    /* 颜色不该「弹」：弹簧曲线用在颜色上既看不出过冲、又把反馈拖到 240ms。
+       状态色统一走标准减速的短时长。 */
     transition:
-      color var(--md-spring-fast),
-      background-color var(--md-spring-fast);
+      color var(--md-duration-short-2) var(--md-ease-standard),
+      background-color var(--md-duration-short-2) var(--md-ease-standard);
   }
 
   .m3-seg-btn:hover {
@@ -1201,132 +1249,6 @@
     background-color: rgb(var(--md-secondary-container));
     color: rgb(var(--md-on-secondary-container));
   }
-
-  /* ---- 动效原语 ----
-     只放**跨组件复用**的那几条；组件自己的一次性动画仍写在各自 `<style>` 里。
-     所有动画都走 opacity/transform（不触发布局），并且都尊重 prefers-reduced-motion。 */
-
-  @keyframes m3-rise {
-    from {
-      opacity: 0;
-      transform: translateY(10px);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
-  }
-
-  @keyframes m3-fade {
-    from {
-      opacity: 0;
-    }
-    to {
-      opacity: 1;
-    }
-  }
-
-  @keyframes m3-pop {
-    0% {
-      opacity: 0;
-      transform: scale(0.94);
-    }
-    60% {
-      opacity: 1;
-      transform: scale(1.01);
-    }
-    100% {
-      opacity: 1;
-      transform: scale(1);
-    }
-  }
-
-  /* 块级内容入场：标题、空态卡片、欢迎面板都用它，节奏统一。 */
-  .anim-rise {
-    animation: m3-rise var(--md-duration-medium-2) var(--md-ease-emphasized-decel) both;
-  }
-
-  .anim-fade {
-    animation: m3-fade var(--md-duration-medium-1) var(--md-ease-standard) both;
-  }
-
-  .anim-pop {
-    animation: m3-pop var(--md-duration-medium-2) var(--md-spring-fast) both;
-  }
-
-  /* 列表逐项入场：子元素写 `style="--i: 3"`，延迟按序叠加。
-     上限 10 项——再多的行一起进场会拖慢首屏，也晃眼。 */
-  .anim-stagger > * {
-    animation: m3-rise var(--md-duration-medium-2) var(--md-ease-emphasized-decel) both;
-    animation-delay: calc(min(var(--i, 0), 10) * 32ms);
-  }
-
-  /* 悬停微抬升：卡片、起步入口这类「可以点」的东西用它，
-     表格行、检查器里的行**不要**用（密集区域会跳）。 */
-  .hover-lift {
-    transition:
-      transform var(--md-duration-medium-1) var(--md-ease-standard-decel),
-      box-shadow var(--md-duration-medium-1) var(--md-ease-standard),
-      border-color var(--md-duration-medium-1) var(--md-ease-standard);
-  }
-
-  .hover-lift:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--md-elevation-2);
-  }
-
-  .hover-lift:active {
-    transform: translateY(0) scale(0.99);
-  }
-
-  /* ---- 共享过渡：路由切换 / 面板内容切换 ----
-     写在全局层里，是因为过渡类挂在**子组件根节点**上，
-     组件自己的 scoped 样式未必能命中（见各组件模板里的 `<transition name>`）。 */
-
-  .view-enter-active {
-    transition:
-      opacity var(--md-duration-medium-1) var(--md-ease-standard-decel),
-      transform var(--md-duration-medium-1) var(--md-ease-emphasized-decel);
-  }
-
-  .view-leave-active {
-    transition:
-      opacity var(--md-duration-short-2) var(--md-ease-standard-accel),
-      transform var(--md-duration-short-2) var(--md-ease-standard-accel);
-  }
-
-  .view-enter-from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.995);
-  }
-
-  .view-leave-to {
-    opacity: 0;
-    transform: translateY(-4px) scale(0.998);
-  }
-
-  /* 右侧面板换标签：只淡入 + 轻微上浮，不做横向滑动（面板本身没有位移）。 */
-  .pane-enter-active {
-    transition:
-      opacity var(--md-duration-medium-1) var(--md-ease-standard-decel),
-      transform var(--md-duration-medium-1) var(--md-ease-emphasized-decel);
-  }
-
-  .pane-leave-active {
-    transition:
-      opacity var(--md-duration-short-2) var(--md-ease-standard-accel),
-      transform var(--md-duration-short-2) var(--md-ease-standard-accel);
-  }
-
-  .pane-enter-from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-
-  .pane-leave-to {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
 }
 
 /* ===== Utility ===== */
@@ -1334,6 +1256,134 @@
   .elevation-1 { box-shadow: var(--md-elevation-1); }
   .elevation-2 { box-shadow: var(--md-elevation-2); }
   .elevation-3 { box-shadow: var(--md-elevation-3); }
+}
+
+/* ===== 动效原语 =====
+   只放**跨组件复用**的那几条；组件自己的一次性动画仍写在各自 `<style>` 里。
+   所有动画都走 opacity/transform（不触发布局），并且都尊重 prefers-reduced-motion。
+
+   **这些规则必须留在 `@layer` 外面。** Tailwind v3 的 JIT 会按 content 扫描结果
+   把 `@layer components` 里「没人用」的类裁掉；而 `.view-enter-active` 这类过渡类是
+   Vue 在运行时才挂上去的，模板里搜不到——整段动效会被静默删掉，路由切换与面板换页
+   就退化成硬切（之前就是如此）。放到层外，Tailwind 不再碰它。 */
+
+@keyframes m3-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes m3-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes m3-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 块级内容入场：标题、空态卡片、欢迎面板都用它，节奏统一。 */
+.anim-rise {
+  animation: m3-rise var(--md-duration-medium-2) var(--md-ease-emphasized-decel) both;
+}
+
+.anim-fade {
+  animation: m3-fade var(--md-duration-medium-1) var(--md-ease-standard) both;
+}
+
+.anim-pop {
+  animation: m3-pop var(--md-duration-medium-2) var(--md-ease-spring-fast) both;
+}
+
+/* 列表逐项入场：子元素写 `style="--i: 3"`，延迟按序叠加。
+   延迟压在 8 项 × 16ms 以内：再长就成了「等它一个个出来」，和卡顿没区别。 */
+.anim-stagger > * {
+  animation: m3-rise var(--md-duration-medium-1) var(--md-ease-emphasized-decel) both;
+  animation-delay: calc(min(var(--i, 0), 8) * 16ms);
+}
+
+/* 悬停微抬升：卡片、起步入口这类「可以点」的东西用它，
+   表格行、检查器里的行**不要**用（密集区域会跳）。 */
+.hover-lift {
+  transition:
+    transform var(--md-duration-medium-1) var(--md-ease-standard-decel),
+    box-shadow var(--md-duration-medium-1) var(--md-ease-standard),
+    border-color var(--md-duration-medium-1) var(--md-ease-standard);
+}
+
+.hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--md-elevation-2);
+}
+
+.hover-lift:active {
+  transform: translateY(0) scale(0.99);
+}
+
+/* ---- 共享过渡：路由切换 / 面板内容切换 ----
+   过渡类挂在**子组件根节点**上，组件自己的 scoped 样式命中不了，所以写在全局。
+
+   只动 opacity + 一个很小的位移：
+   - 不加 scale：文字在非整数缩放下要重新栅格化，整段过渡反而更贵、也更糊；
+   - 退场不过渡、入场 130ms：`mode="out-in"` 是串行的，退场花多少时间就往后推多少，
+     所以切换的总时长由**入场**决定（约 130ms，点击到新页齐活 ≈ 150ms 内）；
+   - `will-change` 只挂在 `-active` 上：过渡结束类就没了，不会留下常驻的合成层。 */
+
+.view-enter-active {
+  transition:
+    opacity var(--md-duration-short-2) var(--md-ease-standard-decel),
+    transform var(--md-duration-short-2) var(--md-ease-emphasized-decel);
+  will-change: opacity, transform;
+}
+
+.view-leave-active {
+  /* 退场**不做**过渡：`mode="out-in"` 是串行的，留一段淡出等于把「点完到看见新页」
+     又往后推一段。旧页一帧内让开、新页淡入，手感最接近「即时切换」。
+     （`transition: none` 会让 Vue 立刻判定结束，不会白等那 90ms。） */
+  transition: none;
+}
+
+.view-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+/* 右侧面板换标签：只淡入 + 轻微上浮，不做横向滑动（面板本身没有位移）。 */
+.pane-enter-active {
+  transition:
+    opacity var(--md-duration-short-2) var(--md-ease-standard-decel),
+    transform var(--md-duration-short-2) var(--md-ease-emphasized-decel);
+  will-change: opacity, transform;
+}
+
+.pane-leave-active {
+  /* 与路由切换同理：面板换标签不要让用户等旧内容退干净。 */
+  transition: none;
+}
+
+.pane-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
 }
 
 /* ===== Responsive ===== */

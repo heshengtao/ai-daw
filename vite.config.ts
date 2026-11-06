@@ -33,7 +33,14 @@ export default defineConfig({
     strictPort: true,
     host: host || false,
     hmr: host ? { protocol: "ws", host, port: HMR_PORT } : undefined,
-    watch: { ignored: ["**/src-tauri/**"] },
+    // 只盯前端真正会改的东西：`src-tauri/`（Rust，另有 cargo watch）之外，
+    // 还要排除 Rust 的 `target/`、构建产物 `dist/` 与临时目录 `.tmp/`。
+    // 后三个是本机最容易膨胀的目录（实测 target 2.6 万文件、.tmp 4.8 万文件）：
+    // dev 服务器启动时 chokidar 要递归扫一遍，几十万个 fs 事件把 Node 的事件循环
+    // 卡住十几秒——表现就是「窗口出来了，页面一片黑，几十秒后才亮」。
+    watch: {
+      ignored: ["**/src-tauri/**", "**/target/**", "**/dist/**", "**/.tmp/**"],
+    },
   },
   envPrefix: ["VITE_", "TAURI_"],
 });

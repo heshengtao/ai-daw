@@ -138,7 +138,7 @@ impl EnginePack {
 // 归档
 // ---------------------------------------------------------------------------
 
-/// 六份归档：每个后端一份（CUDA 另加一份运行时）。
+/// 全部归档：每个后端一份（CUDA 另加一份运行时；macOS 两种架构各一份）。
 ///
 /// 哈希全部取自 GitHub release 的 `digest`（发布页 `sha256:` 那一列），已在本地实测
 /// 整包一致（2026-10-31）。源是**国内外双源**：国际走 GitHub Releases，国内走魔搭
@@ -320,6 +320,56 @@ pub const ARCHIVES: &[EngineArchive] = &[
             },
         ],
     },
+    // Intel Mac：官方有 x64 的 Metal 包，只是以前没接进清单。
+    EngineArchive {
+        file: "audio-v0.9.3-bin-macos-x64-metal.tar.gz",
+        bytes: 36_812_821,
+        sha256: "81238e3957bbf840d15094c34262fa93609caa0233c3dccc1e0f64fb47f5e51b",
+        format: EngineFormat::TarGz,
+        sources: &[
+            EngineSource {
+                region: "intl",
+                url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-macos-x64-metal.tar.gz",
+            },
+            EngineSource {
+                region: "cn",
+                url: "https://modelscope.cn/models/ailm32442/audiocpp-assets/resolve/master/audio-v0.9.3-bin-macos-x64-metal.tar.gz",
+            },
+        ],
+    },
+    // ROCm 是上游的 test 构建：包内自带 HIP 运行库（Windows 侧是 amdhip64_7 / amd_comgr）。
+    EngineArchive {
+        file: "audio-v0.9.3-bin-windows-x64-rocm10.0.0-test.zip",
+        bytes: 281_830_660,
+        sha256: "ca07ba49b7e63d9fc37eb911b451fc3d97956f09441cb08cac3ad6b16f7627df",
+        format: EngineFormat::Zip,
+        sources: &[
+            EngineSource {
+                region: "intl",
+                url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-windows-x64-rocm10.0.0-test.zip",
+            },
+            EngineSource {
+                region: "cn",
+                url: "https://modelscope.cn/models/ailm32442/audiocpp-assets/resolve/master/audio-v0.9.3-bin-windows-x64-rocm10.0.0-test.zip",
+            },
+        ],
+    },
+    EngineArchive {
+        file: "audio-v0.9.3-bin-ubuntu-x64-rocm10.0.0-test.tar.gz",
+        bytes: 698_655_206,
+        sha256: "4d0688267b2b8c421238994031c720d52316cacc24150ea613ee6bb2e5b13dfc",
+        format: EngineFormat::TarGz,
+        sources: &[
+            EngineSource {
+                region: "intl",
+                url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-ubuntu-x64-rocm10.0.0-test.tar.gz",
+            },
+            EngineSource {
+                region: "cn",
+                url: "https://modelscope.cn/models/ailm32442/audiocpp-assets/resolve/master/audio-v0.9.3-bin-ubuntu-x64-rocm10.0.0-test.tar.gz",
+            },
+        ],
+    },
 ];
 
 /// 按文件名找归档。
@@ -480,7 +530,57 @@ const WINDOWS_CUDA13: EnginePack = EnginePack {
     parts: &[CUDA13_BIN, CUDA13_RUNTIME],
 };
 
-const WINDOWS: &[EnginePack] = &[WINDOWS_CPU, WINDOWS_VULKAN, WINDOWS_CUDA12, WINDOWS_CUDA13];
+const WINDOWS: &[EnginePack] = &[
+    WINDOWS_CPU,
+    WINDOWS_VULKAN,
+    WINDOWS_CUDA12,
+    WINDOWS_CUDA13,
+    WINDOWS_ROCM,
+];
+
+const WINDOWS_ROCM: EnginePack = EnginePack {
+    id: "audiocpp-rocm",
+    label: "audio.cpp 引擎 · ROCm（AMD）",
+    note: "通用音频引擎；AMD 显卡 + HIP 运行库（包内自带，约 0.3 GB）。上游标为 test 构建，遇到问题退回 Vulkan",
+    device: "rocm",
+    core: false,
+    parts: &[EnginePart {
+        archive: "audio-v0.9.3-bin-windows-x64-rocm10.0.0-test.zip",
+        files: &[
+            fi("audiocpp_server.exe", "audiocpp_server.exe"),
+            fi("model_specs/yue2.json", "model_specs/yue2.json"),
+            fi("ggml.dll", "ggml.dll"),
+            fi("ggml-base.dll", "ggml-base.dll"),
+            fi("ggml-hip.dll", "ggml-hip.dll"),
+            fi("ggml-cpu-x64.dll", "ggml-cpu-x64.dll"),
+            fi("ggml-cpu-sse42.dll", "ggml-cpu-sse42.dll"),
+            fi("ggml-cpu-sandybridge.dll", "ggml-cpu-sandybridge.dll"),
+            fi("ggml-cpu-haswell.dll", "ggml-cpu-haswell.dll"),
+            fi("ggml-cpu-skylakex.dll", "ggml-cpu-skylakex.dll"),
+            fi("ggml-cpu-cannonlake.dll", "ggml-cpu-cannonlake.dll"),
+            fi("ggml-cpu-icelake.dll", "ggml-cpu-icelake.dll"),
+            fi("ggml-cpu-cascadelake.dll", "ggml-cpu-cascadelake.dll"),
+            fi("ggml-cpu-alderlake.dll", "ggml-cpu-alderlake.dll"),
+            fi("ggml-cpu-cooperlake.dll", "ggml-cpu-cooperlake.dll"),
+            fi("ggml-cpu-ivybridge.dll", "ggml-cpu-ivybridge.dll"),
+            fi("ggml-cpu-piledriver.dll", "ggml-cpu-piledriver.dll"),
+            fi("ggml-cpu-sapphirerapids.dll", "ggml-cpu-sapphirerapids.dll"),
+            fi("ggml-cpu-zen4.dll", "ggml-cpu-zen4.dll"),
+            // ROCm 运行时：AMD 的 HIP / 代码对象管理器，官方把这个包做成自包含的。
+            fi("amdhip64_7.dll", "amdhip64_7.dll"),
+            fi("amd_comgr.dll", "amd_comgr.dll"),
+            fi("rocm_kpack.dll", "rocm_kpack.dll"),
+            fi("msvcp140.dll", "msvcp140.dll"),
+            fi("msvcp140_1.dll", "msvcp140_1.dll"),
+            fi("msvcp140_2.dll", "msvcp140_2.dll"),
+            fi("msvcp140_atomic_wait.dll", "msvcp140_atomic_wait.dll"),
+            fi("msvcp140_codecvt_ids.dll", "msvcp140_codecvt_ids.dll"),
+            fi("vcruntime140.dll", "vcruntime140.dll"),
+            fi("vcruntime140_1.dll", "vcruntime140_1.dll"),
+            fi("vcruntime140_threads.dll", "vcruntime140_threads.dll"),
+        ],
+    }],
+};
 
 const MACOS_ARM64_FILES: &[EngineFile] = &[
     fi("audiocpp_server", "audiocpp_server"),
@@ -606,16 +706,47 @@ const LINUX_CUDA12: EnginePack = EnginePack {
 
 const MACOS_ARM64: &[EnginePack] = &[MACOS_METAL];
 
-const LINUX: &[EnginePack] = &[LINUX_CPU, LINUX_VULKAN, LINUX_CUDA12];
+/// Intel Mac：官方同样发了 x64 的 Metal 包（包内结构与 arm64 一致）。
+const MACOS_X64_METAL: EnginePack = EnginePack {
+    id: "audiocpp-metal",
+    label: "audio.cpp 引擎 · Metal（Intel Mac）",
+    note: "Intel Mac（Metal）；写歌等音频模型，Mac 上的默认后端",
+    device: "metal",
+    core: true,
+    parts: &[EnginePart {
+        archive: "audio-v0.9.3-bin-macos-x64-metal.tar.gz",
+        files: MACOS_ARM64_FILES,
+    }],
+};
+
+const MACOS_X64: &[EnginePack] = &[MACOS_X64_METAL];
+
+const LINUX_ROCM: EnginePack = EnginePack {
+    id: "audiocpp-rocm",
+    label: "audio.cpp 引擎 · ROCm（AMD / Linux）",
+    note: "通用音频引擎；AMD 显卡 + ROCm 驱动（包内是静态链接的 HIP 构建，约 0.7 GB）。上游标为 test 构建",
+    device: "rocm",
+    core: false,
+    parts: &[EnginePart {
+        archive: "audio-v0.9.3-bin-ubuntu-x64-rocm10.0.0-test.tar.gz",
+        files: &[
+            fi("audiocpp_server", "audiocpp_server"),
+            fi("model_specs/yue2.json", "model_specs/yue2.json"),
+        ],
+    }],
+};
+
+const LINUX: &[EnginePack] = &[LINUX_CPU, LINUX_VULKAN, LINUX_CUDA12, LINUX_ROCM];
 
 /// 本机平台上的引擎后端。
 ///
-/// Windows x64：CPU / Vulkan / CUDA 12 / CUDA 13；
-/// macOS arm64：Metal；Linux x64：CPU / Vulkan / CUDA 12。
+/// Windows x64：CPU / Vulkan / CUDA 12 / CUDA 13 / ROCm；
+/// macOS（arm64 与 x64）：Metal；Linux x64：CPU / Vulkan / CUDA 12 / ROCm。
 pub fn packs(os: &str, arch: &str) -> &'static [EnginePack] {
     match (os, arch) {
         ("windows", "x86_64") => WINDOWS,
         ("macos", "aarch64") => MACOS_ARM64,
+        ("macos", "x86_64") => MACOS_X64,
         ("linux", "x86_64") => LINUX,
         _ => &[],
     }
@@ -776,7 +907,11 @@ mod tests {
     #[test]
     fn windows_packs_are_listed_and_unique() {
         let listed = packs("windows", "x86_64");
-        assert_eq!(listed.len(), 4);
+        assert_eq!(
+            listed.len(),
+            5,
+            "Windows 应有 CPU / Vulkan / CUDA12 / CUDA13 / ROCm"
+        );
         let mut ids = std::collections::HashSet::new();
         let mut devices = std::collections::HashSet::new();
         for pack in listed {
@@ -796,16 +931,29 @@ mod tests {
                 assert!(!file.dest.contains(".."), "不许目录穿越");
             }
         }
-        assert!(packs("macos", "aarch64").len() == 1, "macOS arm64 应有 Metal 包");
-        assert!(packs("macos", "x86_64").is_empty(), "Intel macOS 不提供引擎");
-        assert!(packs("linux", "x86_64").len() == 3, "Linux 应有 CPU / Vulkan / CUDA12");
+        assert!(
+            packs("macos", "aarch64").len() == 1,
+            "macOS arm64 应有 Metal 包"
+        );
+        assert!(
+            packs("macos", "x86_64").len() == 1,
+            "Intel macOS 也该有 Metal 包"
+        );
+        assert!(
+            packs("linux", "x86_64").len() == 4,
+            "Linux 应有 CPU / Vulkan / CUDA12 / ROCm"
+        );
         assert!(packs("linux", "aarch64").is_empty(), "Linux arm64 暂无引擎");
     }
 
     /// 每个后端都必须带上服务端程序与 YuE2 的模型规格——少了它们「装好了」也跑不起来。
     #[test]
     fn every_pack_can_actually_run_yue2() {
-        let all = WINDOWS.iter().chain(MACOS_ARM64).chain(LINUX.iter());
+        let all = WINDOWS
+            .iter()
+            .chain(MACOS_ARM64)
+            .chain(MACOS_X64)
+            .chain(LINUX.iter());
         for pack in all {
             let dests: Vec<&str> = pack.files().iter().map(|f| f.dest).collect();
             assert!(
@@ -874,6 +1022,7 @@ mod tests {
 
     #[test]
     fn gpu_packs_are_ordered_by_preference() {
+        // 列表里 CUDA 13 在前、CUDA 12 次之，其它 GPU 后端（Vulkan / ROCm）排在后面。
         let order: Vec<u8> = WINDOWS
             .iter()
             .filter(|p| !p.core)
@@ -883,7 +1032,9 @@ mod tests {
                 _ => 2,
             })
             .collect();
-        assert_eq!(order, [2, 1, 0]);
+        assert_eq!(order[..3], [2, 1, 0]);
+        assert!(order[3..].iter().all(|rank| *rank == 2));
+        assert!(WINDOWS.iter().any(|p| p.device == "rocm"));
     }
 
     #[test]

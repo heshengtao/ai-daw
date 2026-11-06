@@ -141,7 +141,7 @@ const toolIndex = computed(() => Math.max(0, toolOptions.findIndex((t) => t.id =
   border-radius: 999px;
   background-color: rgb(var(--md-secondary-container));
   transform: translateX(calc(var(--idx, 0) * 36px));
-  transition: transform var(--md-duration-medium-2) var(--md-spring-fast);
+  transition: transform var(--md-duration-medium-2) var(--md-ease-spring-fast);
   pointer-events: none;
 }
 .dock-btn {

@@ -378,6 +378,8 @@ pub fn ai_yue_engine_start(app: tauri::AppHandle, model: Option<String>) -> Resu
     if !engine::installed(pack) {
         return Err(format!("{} 没装完整，去下载管理器重装一次", pack.label));
     }
+    // 引擎目录来自 pack；`--backend` 来自设备（macOS 的 CPU 与 Metal 共用目录）。
+    let device = crate::yue::effective_device();
     update(|s| {
         s.state = "starting".into();
         s.message = Some("正在加载模型…".into());
@@ -390,7 +392,7 @@ pub fn ai_yue_engine_start(app: tauri::AppHandle, model: Option<String>) -> Resu
     std::thread::Builder::new()
         .name("ai-daw-yue-boot".into())
         .spawn(move || {
-            match boot(&thread_app, pack, wanted.as_deref()) {
+            match boot(&thread_app, pack, device, wanted.as_deref()) {
                 Ok(port) => {
                     update(|s| {
                         s.state = "ready".into();
@@ -454,12 +456,14 @@ pub fn shutdown_on_exit() {
 
 /// 一次生成用哪份权重，以及它属于哪个 audio.cpp **家族**。
 struct ModelChoice {
-    /// 权重 id（`yue2-q8-0` / `ace-step-turbo-q8` 这类）。
+    /// 权重 id（`yue2-q8-0` / `ace-step-turbo-q8` / `muscriptor-small` 这类）。
     id: String,
-    /// audio.cpp 家族：`yue2` / `ace_step`。引擎配置与请求体都按它分叉。
+    /// audio.cpp 家族：`yue2` / `ace_step` / `muscriptor`。引擎配置与请求体都按它分叉。
     family: &'static str,
+    /// 引擎里的任务名：写歌是 `gen`，MuScriptor 是 `midi`。
+    task: &'static str,
     /// 引擎配置里的 `path`：YuE2 是**目录**（模型 + VAE + sidecars 必须同目录），
-    /// ACE-Step 是**单个 `.gguf`**（DiT + 规划器 + 文本编码器 + VAE 都装在那一个文件里）。
+    /// ACE-Step / MuScriptor 是**单个 `.gguf`**。
     path: PathBuf,
     /// 模型专属的 `session_options`；只有 YuE2 需要指名 gguf 文件。
     session: serde_json::Value,
@@ -499,6 +503,7 @@ fn choice_of(entry: &'static catalog::ModelEntry) -> Option<ModelChoice> {
         return Some(ModelChoice {
             id: entry.id.to_string(),
             family,
+            task: "gen",
             path: dir.join(file),
             session: serde_json::json!({}),
         });
@@ -509,12 +514,52 @@ fn choice_of(entry: &'static catalog::ModelEntry) -> Option<ModelChoice> {
     Some(ModelChoice {
         id: entry.id.to_string(),
         family,
+        task: "gen",
         path: dir,
         session: serde_json::json!({
             "yue2.model_gguf": model_file,
             "yue2.vae_gguf": vae_file,
         }),
     })
+}
+
+/// 找一枚 MuScriptor 权重（单文件 GGUF，`task = midi`）；整组不到位返回 `None`。
+///
+/// 和 `choice_of` 分开：`compose_family` 只认写歌家族，而 MuScriptor 是 `to_midi` 的
+/// 非商用档，id 前缀固定 `muscriptor-`。
+fn midi_choice(entry: &'static catalog::ModelEntry) -> Option<ModelChoice> {
+    if entry.feature != "to_midi" || !entry.id.starts_with("muscriptor-") {
+        return None;
+    }
+    let dir = catalog::group_dir(entry)?;
+    let file = entry
+        .files
+        .iter()
+        .find(|file| file.filename.ends_with(".gguf"))?;
+    Some(ModelChoice {
+        id: entry.id.to_string(),
+        family: "muscriptor",
+        task: "midi",
+        path: dir.join(file.filename),
+        session: serde_json::json!({}),
+    })
+}
+
+/// 解析要用的 MuScriptor 档：显式指定优先，否则按 small → medium → large 挑第一个装好的。
+fn resolve_midi_model(wanted: Option<&str>) -> Result<ModelChoice, String> {
+    if let Some(id) = wanted.filter(|s| !s.trim().is_empty()) {
+        let entry = catalog::by_id(id)
+            .ok_or_else(|| format!("未知模型：{id}"))?;
+        return midi_choice(entry)
+            .ok_or_else(|| format!("「{}」还没下载完（下载管理器 → 模型）", entry.name));
+    }
+    const ORDER: [&str; 3] = ["muscriptor-small", "muscriptor-medium", "muscriptor-large"];
+    for id in ORDER {
+        if let Some(choice) = catalog::by_id(id).and_then(midi_choice) {
+            return Ok(choice);
+        }
+    }
+    Err("还没下载 MuScriptor 权重（下载管理器 → 模型 → MuScriptor）".into())
 }
 
 /// 找一个空闲端口（绑到 0 再放掉，唯一的竞争窗口在 bind 与 spawn 之间）。
@@ -549,11 +594,13 @@ pub(crate) fn work_agent() -> ureq::Agent {
     )
 }
 
-/// 服务器的 `--backend` 参数（CUDA 12 / 13 都是 `cuda`，靠目录里的 DLL 区分）。
+/// 服务器的 `--backend` 参数（CUDA 12 / 13 都是 `cuda`，靠目录里的 DLL 区分；
+/// ROCm 用 `hip`，`rocm` 在引擎里只是它的别名）。
 pub(crate) fn backend_arg(device: &str) -> &'static str {
     match device {
         "vulkan" => "vulkan",
         "metal" => "metal",
+        "rocm" => "hip",
         "cuda12" | "cuda13" => "cuda",
         _ => "cpu",
     }
@@ -572,7 +619,7 @@ pub(crate) fn thread_count() -> usize {
 /// 一次只挂**一个**模型（`max_loaded_models = 1`）：几 GB 的权重换一份就是整进程重来，
 /// 换家族（YuE2 ↔ ACE-Step）也一样——所以 `ensure_ready` 只比 `model` 字段就该重启。
 fn write_config(
-    pack: &'static engine::EnginePack,
+    device: &str,
     model: &ModelChoice,
     port: u16,
     cuda_perf: bool,
@@ -583,7 +630,7 @@ fn write_config(
         .as_object()
         .cloned()
         .unwrap_or_default();
-    let cuda = pack.device.starts_with("cuda");
+    let cuda = device.starts_with("cuda");
 
     if model.family == "yue2" {
         // CUDA 上 audio.cpp 官方给了 `cuda_perf` 预设（packed projections + KV 对齐 + 不释放
@@ -607,7 +654,7 @@ fn write_config(
                 serde_json::json!(scale.clamp(0.0, 2.0)),
             );
         }
-    } else if cuda && cuda_perf {
+    } else if model.family == "ace_step" && cuda && cuda_perf {
         // ACE-Step 的同名预设：CUDA 规划器加速 + 更大的 VAE 分块。只在 CUDA 上有效，
         // 所以 CPU / Vulkan 上不发（发了也只是被忽略，但别让配置看起来以为它在起作用）。
         session.insert("ace_step.perf_mode".into(), serde_json::json!("cuda_perf"));
@@ -617,7 +664,7 @@ fn write_config(
         // 引擎内部 id 与家族同名：`/v1/tasks/run` 的 `model` 字段要跟它逐字对上。
         "id": model.family,
         "family": model.family,
-        "task": "gen",
+        "task": model.task,
         "mode": "offline",
         "path": model.path.to_string_lossy(),
         "session_options": session,
@@ -630,7 +677,7 @@ fn write_config(
     let config = serde_json::json!({
         "host": "127.0.0.1",
         "port": port,
-        "backend": backend_arg(pack.device),
+        "backend": backend_arg(device),
         "device": 0,
         "threads": thread_count(),
         "lazy_load": false,
@@ -649,9 +696,19 @@ fn write_config(
 fn boot(
     app: &tauri::AppHandle,
     pack: &'static engine::EnginePack,
+    device: &'static str,
     wanted: Option<&str>,
 ) -> Result<u16, String> {
-    let choice = resolve_model(wanted)?;
+    boot_choice(app, pack, device, resolve_model(wanted)?)
+}
+
+/// 用**已经解析好的**权重拉起引擎：写歌与 MuScriptor 转录共用这一条（只有 `task` 不同）。
+fn boot_choice(
+    app: &tauri::AppHandle,
+    pack: &'static engine::EnginePack,
+    device: &'static str,
+    choice: ModelChoice,
+) -> Result<u16, String> {
     let port = free_port()?;
     let cuda_perf = app
         .state::<crate::manager::StoreRuntime>()
@@ -661,7 +718,7 @@ fn boot(
         .state::<crate::manager::StoreRuntime>()
         .network()
         .yue_lora;
-    let config = write_config(pack, &choice, port, cuda_perf, &lora)?;
+    let config = write_config(device, &choice, port, cuda_perf, &lora)?;
     let dir = engine::dir_of(pack);
 
     let log_path = engine::dir().join("server.log");
@@ -674,7 +731,7 @@ fn boot(
         .arg("--config")
         .arg(&config)
         .arg("--backend")
-        .arg(backend_arg(pack.device))
+        .arg(backend_arg(device))
         .arg("--no-ui")
         .arg("--log")
         .arg("--log-file")
@@ -690,14 +747,14 @@ fn boot(
     }
 
     update(|s| {
-        s.device = pack.device.to_string();
+        s.device = device.to_string();
         s.model = choice.id.clone();
     });
     emit_engine(app);
     eprintln!(
         "[yue] 启动引擎：{}（{} · {}）端口 {port}",
         engine::executable(pack).display(),
-        pack.device,
+        device,
         choice.id
     );
 
@@ -715,7 +772,12 @@ fn boot(
             let mut guard = engine_state().child.lock().unwrap();
             if let Some(child) = guard.as_mut() {
                 if let Ok(Some(code)) = child.try_wait() {
-                    return Err(format!("引擎启动后立刻退出（{code}）"));
+                    let tail = log_tail(6);
+                    return Err(if tail.is_empty() {
+                        format!("引擎启动后立刻退出（{code}）")
+                    } else {
+                        format!("引擎启动后立刻退出（{code}）：\n{tail}")
+                    });
                 }
             }
         }
@@ -1274,6 +1336,123 @@ fn ensure_ready(app: &tauri::AppHandle, model: Option<String>) -> Result<u16, St
     }
 }
 
+/// MuScriptor 版「引擎就绪」：比对的是**转录权重 id**，不是写歌模型。
+fn ensure_midi_ready(app: &tauri::AppHandle, model: Option<&str>) -> Result<u16, String> {
+    let wanted = model.filter(|m| !m.trim().is_empty());
+    let current = status();
+    let same_model =
+        current.state == "ready" && wanted.is_none_or(|model| current.model == model);
+    if same_model {
+        return current.port.ok_or_else(|| "引擎没有端口".to_string());
+    }
+    start_midi(app.clone(), wanted.map(str::to_string))?;
+    let deadline = Instant::now() + Duration::from_secs(600);
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        if engine_state().cancel.load(Ordering::Relaxed) {
+            return Err("已取消：引擎已停止".into());
+        }
+        let state = status();
+        match state.state.as_str() {
+            "ready" => return state.port.ok_or_else(|| "引擎没有端口".to_string()),
+            "error" => {
+                return Err(state
+                    .message
+                    .or_else(|| state.log.lines().last().map(str::to_string))
+                    .unwrap_or_else(|| "引擎启动失败".into()));
+            }
+            _ if Instant::now() > deadline => return Err("引擎 10 分钟还没就绪".into()),
+            _ => {}
+        }
+    }
+}
+
+/// 拉起引擎并加载 MuScriptor（`--task midi`）：换档同样要整进程重来。
+fn start_midi(app: tauri::AppHandle, model: Option<String>) -> Result<(), String> {
+    let wanted = model.filter(|m| !m.trim().is_empty());
+    let choice = resolve_midi_model(wanted.as_deref())?;
+    let current = status();
+    if current.state == "ready" && current.model == choice.id {
+        return Ok(());
+    }
+    if current.state == "starting" {
+        return Ok(());
+    }
+    if current.state == "ready" {
+        shutdown();
+    }
+    let Some(pack) = crate::yue::effective_pack() else {
+        return Err("还没装 audio.cpp 引擎（下载管理器 → 运行时 → audio.cpp 引擎）".into());
+    };
+    if !engine::installed(pack) {
+        return Err(format!("{} 没装完整，去下载管理器重装一次", pack.label));
+    }
+    let device = crate::yue::effective_device();
+    update(|s| {
+        s.state = "starting".into();
+        s.message = Some("正在加载 MuScriptor…".into());
+        s.port = None;
+        s.log.clear();
+    });
+    emit_engine(&app);
+
+    let thread_app = app.clone();
+    std::thread::Builder::new()
+        .name("ai-daw-muscriptor-boot".into())
+        .spawn(move || {
+            match boot_choice(&thread_app, pack, device, choice) {
+                Ok(port) => {
+                    update(|s| {
+                        s.state = "ready".into();
+                        s.port = Some(port);
+                        s.message = None;
+                    });
+                }
+                Err(message) => {
+                    update(|s| {
+                        s.state = "error".into();
+                        s.message = Some(message);
+                        s.log = log_tail(24);
+                    });
+                }
+            }
+            emit_engine(&thread_app);
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 跑一次 MuScriptor 转录：喂 16 kHz 单声道 WAV，拿回 MIDI 文件的字节。
+///
+/// 引擎内部按 `--task midi --family muscriptor` 生成；请求/响应形状见 audio.cpp 的
+/// `app/server/api.md`（`request.audio_base64` 进，`artifacts` 里 `kind = "midi"` 出）。
+pub(crate) fn transcribe_midi_blocking(
+    app: &tauri::AppHandle,
+    model: Option<&str>,
+    wav: &[u8],
+) -> Result<Vec<u8>, String> {
+    let choice = resolve_midi_model(model)?;
+    let port = ensure_midi_ready(app, Some(&choice.id))?;
+    if engine_state().cancel.load(Ordering::Relaxed) {
+        return Err("已取消：引擎已停止".into());
+    }
+    let body = serde_json::json!({
+        "model": choice.family,
+        "request": {
+            "audio_base64": encode_base64(wav),
+            "options": {
+                // 贪心 + 固定上限：同一段素材应当得到同一份 MIDI。
+                "output_format": "midi",
+                "max_tokens": 2000,
+                "do_sample": false,
+            }
+        }
+    });
+    let run = submit(port, &body)?;
+    run.midi
+        .ok_or_else(|| "引擎没有返回 MIDI（artifacts 里没有 kind = midi）".to_string())
+}
+
 fn compose_blocking_inner(app: &tauri::AppHandle, mut args: ComposeArgs) -> Result<String, String> {
     if args.style.trim().is_empty() && args.lyrics.trim().is_empty() {
         return Err("风格和歌词至少给一样".into());
@@ -1347,6 +1526,8 @@ struct RunResult {
     audio: Option<Vec<u8>>,
     score: Option<String>,
     semantic: Option<String>,
+    /// MuScriptor 的 MIDI（`kind = "midi"` 的 artifact）。
+    midi: Option<Vec<u8>>,
     /// 谱被 `abc_max_tokens` 截断了（引擎在 meta 里标 `truncated: "true"`）。
     score_truncated: bool,
 }
@@ -1425,7 +1606,11 @@ fn parse_result(text: &str) -> Result<RunResult, String> {
         else {
             continue;
         };
-        if payload.starts_with(b"MThd") {
+        // 转录任务：MIDI artifact（`kind = "midi"`，或 payload 直接是 SMF）。
+        if kind == "midi" || payload.starts_with(b"MThd") {
+            if result.midi.is_none() {
+                result.midi = Some(payload);
+            }
             continue;
         }
         let Ok(payload) = String::from_utf8(payload) else {
@@ -1442,7 +1627,11 @@ fn parse_result(text: &str) -> Result<RunResult, String> {
         }
     }
 
-    if result.audio.is_none() && result.score.is_none() && result.semantic.is_none() {
+    if result.audio.is_none()
+        && result.score.is_none()
+        && result.semantic.is_none()
+        && result.midi.is_none()
+    {
         return Err(format!("引擎没有给音频、谱面或语义码（{}）", brief(text)));
     }
     Ok(result)
@@ -1463,6 +1652,12 @@ fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
     base64::engine::general_purpose::STANDARD
         .decode(payload.trim())
         .map_err(|e| e.to_string())
+}
+
+/// 把字节编码成 Base64（请求体里的内联音频用）。
+fn encode_base64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 /// 默认轨道名：按家族起名，用户一眼能看出这首是谁写的。
@@ -1855,6 +2050,31 @@ mod tests {
         assert!(run.semantic.is_none());
     }
 
+    /// 转录任务的响应**没有 audio / 谱面**，只有 `kind = "midi"` 的 artifact。
+    /// 以前「三者都没有」会被判成失败，MIDI 明明到手了却报「引擎没有给音频、谱面或语义码」。
+    #[test]
+    fn midi_only_result_is_not_an_error() {
+        use base64::Engine as _;
+        let engine = base64::engine::general_purpose::STANDARD;
+        let midi: &[u8] = b"MThd\x00\x00\x00\x06\x00\x00\x00\x01\x01\xe0MTrk";
+        let body = serde_json::json!({
+            "text": "[{\"type\":\"start\",\"pitch\":39}]",
+            "artifacts": [{
+                "id": "result",
+                "kind": "midi",
+                "payload": engine.encode(midi),
+                "meta": { "format": "midi", "extension": "mid", "mime": "audio/midi" }
+            }],
+            "timing": { "wall_ms": 900.0 }
+        });
+        let run = parse_result(&body.to_string()).expect("只有 MIDI 不应报错");
+        assert!(run
+            .midi
+            .as_deref()
+            .is_some_and(|bytes| bytes.starts_with(b"MThd")));
+        assert!(run.audio.is_none() && run.score.is_none() && run.semantic.is_none());
+    }
+
     /// `stop_after=abc` 的响应**没有 audio**，只有一份 ABC artifact。这是「只写谱」模式
     /// 能不能用的关键——以前这里把音频当必需项，会直接判「引擎没有给音频」。
     #[test]
@@ -2120,6 +2340,8 @@ mod tests {
         assert_eq!(backend_arg("metal"), "metal");
         assert_eq!(backend_arg("cuda12"), "cuda");
         assert_eq!(backend_arg("cuda13"), "cuda");
+        assert_eq!(backend_arg("rocm"), "hip");
+        assert_eq!(backend_arg("cpu"), "cpu");
     }
 
     #[test]

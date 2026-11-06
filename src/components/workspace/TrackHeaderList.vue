@@ -311,9 +311,12 @@ onMounted(() => {
   cursor: pointer;
   border-bottom: 1px solid var(--grid-line-row);
   /* 逐行淡入：切换工程 / 重开面板时，列表像「落下来」而不是瞬间出现。
-     幅度与位移都很小，密集列表里不会晃眼。 */
-  animation: row-in var(--md-duration-medium-2) var(--md-ease-emphasized-decel) both;
-  animation-delay: calc(min(var(--i, 0), 12) * 26ms);
+     幅度与位移都很小，密集列表里不会晃眼。
+
+     延迟必须压在 8 项 × 12ms（96ms）以内、时长取短：原来的 12 × 26ms + 320ms
+     意味着最后一行要 600ms 才补齐，每次回到编排都像「音轨还没加载完」。 */
+  animation: row-in var(--md-duration-short-2) var(--md-ease-emphasized-decel) both;
+  animation-delay: calc(min(var(--i, 0), 8) * 12ms);
 }
 @keyframes row-in {
   from {

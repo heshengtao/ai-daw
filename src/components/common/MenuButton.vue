@@ -259,9 +259,12 @@ onUnmounted(() => {
 }
 
 .menu-enter-active {
+  /* 弹簧给的是**缓动**，时长单独写。以前把 `--md-spring-fast`（里面自带 240ms）
+     跟在 `--md-duration-medium-1` 后面，CSS 把后一个时间值当成 delay：
+     面板淡入完了还要干等 240ms 才从小变大，就是「过一会才放大」。 */
   transition:
     opacity var(--md-duration-short-2) var(--md-ease-standard),
-    transform var(--md-duration-medium-1) var(--md-spring-fast);
+    transform var(--md-duration-medium-1) var(--md-ease-spring-fast);
 }
 .menu-leave-active {
   transition:

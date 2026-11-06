@@ -170,7 +170,7 @@ const ICONS: Record<PaneId, unknown> = {
   border-radius: 10px;
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
-  transition: transform var(--md-duration-medium-1) var(--md-spring-fast);
+  transition: transform var(--md-duration-medium-1) var(--md-ease-spring-fast);
 }
 .empty-item:hover .empty-icon-wrap {
   transform: scale(1.06);
@@ -204,7 +204,7 @@ const ICONS: Record<PaneId, unknown> = {
   transform: translateX(-3px);
   transition:
     opacity var(--md-duration-short-2) var(--md-ease-standard),
-    transform var(--md-duration-medium-1) var(--md-spring-fast);
+    transform var(--md-duration-medium-1) var(--md-ease-spring-fast);
 }
 .empty-item:hover .empty-arrow {
   opacity: 1;

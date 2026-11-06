@@ -169,7 +169,8 @@ pub fn ai_cancel(state: tauri::State<'_, AppState>) {
 /// `to_midi` / `enhance` / `enhance_dsp` / `separate` / `detect_tempo` 作用于 `track` 上的音频片段；
 /// `clip` 指定用哪一块，省略 = 第一个音频片段。
 /// `master` 作用于**整个工程的离线混音**（不看 `track`，`master` 参数只在它身上有意义）。
-/// `model` 只在 `separate` 上有意义：选择用哪个分离模型（缺省 = 4 分轨的 HTDemucs）。
+/// `model` 在 `separate` / `to_midi` 上有意义：`separate` 选分离档（缺省 = 4 分轨的
+/// HTDemucs），`to_midi` 选转录档（缺省 = Basic Pitch，可选 `muscriptor-*`，走 audio.cpp）。
 #[tauri::command]
 pub fn ai_start(
     app: tauri::AppHandle,
@@ -345,6 +346,7 @@ fn run_job(
             channels,
             sample_rate,
             frames,
+            model,
             &progress,
         );
     }
@@ -382,6 +384,7 @@ fn run_job(
 /// 音频 → MIDI 的共用实现（界面任务与 MCP 工具走同一条落地路径）。
 ///
 /// 结果插到**源轨道的下一行**（而不是最末尾）：转 MIDI 的直觉是「结果就贴在原轨下面」。
+/// 多乐器的 MuScriptor 按乐器分组，每组一条 MIDI 轨——一次事务提交，一次撤销整体回退。
 fn transcribe_input(
     app: &tauri::AppHandle,
     input: &TrackInput,
@@ -389,44 +392,190 @@ fn transcribe_input(
     channels: usize,
     sample_rate: f64,
     frames: usize,
+    model: Option<&str>,
     progress: ai_daw_local_ai::Progress<'_>,
 ) -> Result<String, String> {
-    let (detected, backend) = detect_notes(samples, channels, sample_rate, progress);
-    if detected.is_empty() {
-        return Ok("没有检测到音符（这段素材可能是静音或复音）".into());
+    let (groups, backend) = if let Some(id) = model.filter(|id| id.starts_with("muscriptor-")) {
+        // MuScriptor：走 audio.cpp 的 `midi` 任务（非商用权重，按需下载）。
+        // 引擎是「整段算完才回」，中间没有进度——至少让进度条从 0 动起来。
+        let _ = progress(0.05);
+        let wav = wav_from_samples(samples, channels, sample_rate, frames)?;
+        let midi = crate::yue_engine::transcribe_midi_blocking(app, Some(id), &wav)?;
+        let imported = crate::midi_import::parse_smf(&midi)?;
+        let _ = progress(0.95);
+        (group_instruments(imported), "MuScriptor（audio.cpp）")
+    } else {
+        let (detected, backend) = detect_notes(samples, channels, sample_rate, progress);
+        (
+            vec![NoteGroup {
+                label: String::new(),
+                notes: detected,
+            }],
+            backend,
+        )
+    };
+    let count: usize = groups.iter().map(|group| group.notes.len()).sum();
+    if count == 0 {
+        return Ok("没有检测到音符（这段素材可能是静音，或模型没听出内容）".into());
     }
     // 素材秒 → 片段内的拍：素材铺满片段跨度，因此按比例换算。
     let source_seconds = frames as f64 / sample_rate;
     let beats_per_second = input.clip_length / source_seconds;
-    let notes: Vec<Note> = detected
+    let commands: Vec<Command> = groups
         .iter()
-        .map(|n| Note {
-            id: 0,
-            channel: None,
-            pressure: None,
-            pitch: n.pitch,
-            start: n.start_sec * beats_per_second,
-            duration: (n.duration_sec * beats_per_second).max(Note::MIN_DURATION_BEATS),
-            velocity: n.velocity,
-            volume: Note::MAX_VOLUME,
-            offset: 0.0,
-            legato: false,
-            expr: ai_daw_engine::model::PitchExpression::NONE,
-            lyric: None,
+        .enumerate()
+        .map(|(index, group)| {
+            let notes: Vec<Note> = group
+                .notes
+                .iter()
+                .map(|n| Note {
+                    id: 0,
+                    channel: None,
+                    pressure: None,
+                    pitch: n.pitch,
+                    start: n.start_sec * beats_per_second,
+                    duration: (n.duration_sec * beats_per_second).max(Note::MIN_DURATION_BEATS),
+                    velocity: n.velocity,
+                    volume: Note::MAX_VOLUME,
+                    offset: 0.0,
+                    legato: false,
+                    expr: ai_daw_engine::model::PitchExpression::NONE,
+                    lyric: None,
+                })
+                .collect();
+            let name = if group.label.is_empty() {
+                format!("{} · MIDI", input.track_name)
+            } else {
+                format!("{} · {}", input.track_name, group.label)
+            };
+            Command::AddNoteTrack {
+                name,
+                start: input.clip_start,
+                length: input.clip_length,
+                notes,
+                at: Some(input.track_index + 1 + index),
+            }
         })
         .collect();
-    let count = notes.len();
-    commands_run(
-        app,
-        Command::AddNoteTrack {
-            name: format!("{} · MIDI", input.track_name),
-            start: input.clip_start,
-            length: input.clip_length,
-            notes,
-            at: Some(input.track_index + 1),
-        },
-    )?;
-    Ok(format!("已生成 {count} 个音符（{backend}）"))
+    // 一次事务：多乐器输出一次撤销就能整体回退（与音源分离同一套做法）。
+    let (_, events) = crate::commands::run_agent_all(app, commands);
+    let tracks = events
+        .iter()
+        .filter(|event| matches!(event, Event::TrackAdded { .. }))
+        .count();
+    Ok(if tracks > 1 {
+        format!("已生成 {count} 个音符 · {tracks} 条轨道（{backend}）")
+    } else {
+        format!("已生成 {count} 个音符（{backend}）")
+    })
+}
+
+/// 一组要落到**同一条 MIDI 轨**上的音符（MuScriptor 按乐器分组；Basic Pitch 只有一组）。
+struct NoteGroup {
+    /// 轨道名后缀（空 = 只叫「· MIDI」）。
+    label: String,
+    notes: Vec<ai_daw_local_ai::pitch::DetectedNote>,
+}
+
+/// 把 MuScriptor 的 MIDI 音符按乐器分组（保持首次出现的顺序），鼓单独一组。
+fn group_instruments(notes: Vec<crate::midi_import::ImportedNote>) -> Vec<NoteGroup> {
+    let mut groups: Vec<((u8, bool), NoteGroup)> = Vec::new();
+    for note in notes {
+        let key = (note.program, note.is_drum);
+        if !groups.iter().any(|(k, _)| *k == key) {
+            groups.push((
+                key,
+                NoteGroup {
+                    label: instrument_label(note.program),
+                    notes: Vec::new(),
+                },
+            ));
+        }
+        let Some(slot) = groups
+            .iter_mut()
+            .find(|(k, _)| *k == key)
+            .map(|(_, group)| group)
+        else {
+            continue;
+        };
+        slot.notes.push(ai_daw_local_ai::pitch::DetectedNote {
+            pitch: note.pitch,
+            start_sec: note.start_sec,
+            duration_sec: note.duration_sec,
+            velocity: note.velocity,
+        });
+    }
+    groups.into_iter().map(|(_, group)| group).collect()
+}
+
+/// GM program → 中文乐器名（鼓通道 program=128 单独一条）。
+fn instrument_label(program: u8) -> String {
+    let name = match program {
+        0 => "钢琴",
+        2 => "电钢琴",
+        8 => "音条打击乐",
+        16 => "风琴",
+        24 => "木吉他",
+        26 => "电吉他",
+        29 => "失真吉他",
+        32 => "原声贝斯",
+        33 => "电贝斯",
+        40 => "小提琴",
+        41 => "中提琴",
+        42 => "大提琴",
+        43 => "低音提琴",
+        46 => "竖琴",
+        47 => "定音鼓",
+        48 => "弦乐群",
+        50 => "合成弦乐",
+        52 => "人声",
+        55 => "管弦击奏",
+        56 => "小号",
+        57 => "长号",
+        58 => "大号",
+        60 => "圆号",
+        61 => "铜管组",
+        64 | 66 | 67 => "萨克斯",
+        68 => "双簧管",
+        69 => "英国管",
+        70 => "巴松",
+        71 => "单簧管",
+        72 => "长笛",
+        80 => "合成器主音",
+        88 => "合成器铺底",
+        100 | 101 => "吉他泛音",
+        128 => "鼓",
+        other => return format!("乐器 {other}"),
+    };
+    name.to_string()
+}
+
+/// 交错采样 → WAV 字节（audio.cpp 的 `request.audio_base64` 要的是完整 WAV）。
+///
+/// MuScriptor 是 **16 kHz 单声道**模型：先在这里下混 + 降采样，而不是把 48 kHz 立体声
+/// 原样塞进请求——请求体会小 6 倍（避开服务端的 body 上限），引擎里也少一次重采样。
+fn wav_from_samples(
+    samples: &[f32],
+    channels: usize,
+    sample_rate: f64,
+    frames: usize,
+) -> Result<Vec<u8>, String> {
+    let channels = channels.max(1);
+    let mono: Vec<f32> = if channels == 1 {
+        samples.to_vec()
+    } else {
+        let count = frames.min(samples.len() / channels);
+        (0..count)
+            .map(|i| {
+                let base = i * channels;
+                samples[base..base + channels].iter().sum::<f32>() / channels as f32
+            })
+            .collect()
+    };
+    let mono = ai_daw_local_ai::resample::resample(&mono, sample_rate, 16_000.0);
+    let mut buffer = ai_daw_engine::audio::AudioBuffer::silence(1, mono.len());
+    buffer.data_mut().copy_from_slice(&mono);
+    Ok(ai_daw_engine::wav::wav_bytes(&buffer, 16_000))
 }
 
 /// 降噪的共用实现（界面任务与 MCP 工具走同一条落地路径）。
@@ -753,7 +902,11 @@ pub(crate) fn detect_tempo_track(app: &tauri::AppHandle, track: u64) -> Result<S
 }
 
 /// 同步跑一遍音频转 MIDI（供 MCP 工具用；无进度回调，整体阻塞在调用线程）。
-pub(crate) fn transcribe_track(app: &tauri::AppHandle, track: u64) -> Result<String, String> {
+pub(crate) fn transcribe_track(
+    app: &tauri::AppHandle,
+    track: u64,
+    model: Option<&str>,
+) -> Result<String, String> {
     let state = app.state::<AppState>();
     let input = track_input(&state, track, None)?;
     let audio = state.assets.load(&input.source.path)?;
@@ -771,6 +924,7 @@ pub(crate) fn transcribe_track(app: &tauri::AppHandle, track: u64) -> Result<Str
         channels,
         sample_rate,
         frames,
+        model,
         &|_| true,
     )
 }

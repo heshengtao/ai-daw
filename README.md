@@ -113,7 +113,7 @@ AI DAW hosts **VST3** and **CLAP** plugins everywhere, plus **Audio Units (AU / 
 The AI features are built for real sessions, not demos. Point them at a track and they hand back something you can keep editing: MIDI notes you can move, a vocal take with less room noise, stems you can rebalance. Everything runs on your own hardware — CPU by default, with optional CoreML (macOS) and DirectML (Windows) acceleration.
 
 - **Tempo detection** — Beat This! (ISMIR 2024) infers a global BPM and time signature in one pass
-- **Audio-to-MIDI** — Basic Pitch turns a recorded performance into editable notes
+- **Audio-to-MIDI** — Basic Pitch turns a recorded performance into editable notes; switch the model to **MuScriptor** (via the audio.cpp engine) for multi-instrument transcription, which lands one MIDI track per instrument. 393 MB–5.1 GB, downloaded on demand (CC BY-NC 4.0 — non-commercial)
 - **Voice cleanup** — LocalVQE reduces noise and reverb on vocal takes
 - **Stem separation** — HTDemucs v4 splits a track into 4 or 6 stems, ready to remix
 - **Singing voice** — a MIDI melody, lyrics and a reference voice become an editable vocal take (SoulX-Singer zero-shot timbre cloning). Lyrics can be edited per note in the piano roll (`-` slurs), and reference voices live in a **voice library** shared across projects — changing the timbre is just picking another one
@@ -200,6 +200,8 @@ No. AI models run on CPU by default. macOS can use CoreML and Windows can use Di
 
 Two small ones do: **Basic Pitch** (audio-to-MIDI) and **LocalVQE** (voice cleanup), so those work the moment you install. The larger models — **Beat This!** (tempo detection) and **HTDemucs** (stem separation, 4- or 6-stem) — download on demand from the in-app model manager the first time you use them, and are stored outside the source tree.
 
+No model weights are ever part of the repository or the installers, and each model keeps its publisher's license: see [MODELS.md](MODELS.md). That includes the optional CC BY-NC 4.0 (non-commercial) models — **YuE2** for song generation and **SheetSage2** for cover scores.
+
 ### Which plugin formats are supported?
 
 VST3 and CLAP on Windows, macOS and Linux; **Audio Units (AU / AUv3)** as well on macOS.
@@ -210,7 +212,18 @@ Yes. The Skill and the `aidaw` CLI talk to a running AI DAW over MCP, so start t
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+The application **code** is Apache-2.0 — see [LICENSE](LICENSE).
+
+Model **weights** are a separate layer: they are never part of this repository or of the
+installers, they keep the license their publisher gave them, and the app downloads them
+on demand (and verifies each downloaded file's `sha256`). See **[MODELS.md](MODELS.md)** for the full
+table of models, sources and licenses.
+
+Some optional models are **CC BY-NC 4.0 (non-commercial)** — YuE2 for song generation and
+SheetSage2 for cover scores. They are opt-in downloads: do not use those weights for
+commercial work unless you hold a commercial license from their publishers. Generated
+audio/MIDI belongs to you, under the upstream terms and subject to the rights you hold in
+the input audio.
 
 ## Third-Party Licenses
 

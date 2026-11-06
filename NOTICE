@@ -142,8 +142,31 @@ Georgi Gerganov and contributors) and the Microsoft Visual C++ runtime DLLs
 (redistributable under Microsoft's terms).
 
 YuE2 model weights (`yue2-q8-0`, `yue2-q4-0`, `yue2-bf16`) are **not**
-distributed with this project either: they are licensed CC BY-NC 4.0
-(non-commercial) by their authors and are downloaded on demand through
-Manager → Models from Hugging Face or ModelScope. Do not redistribute them
-with commercial builds.
+distributed with this project either. They are released by Multimodal Art
+Projection (M·A·P) and the HKUST collaborators under the Creative Commons
+Attribution-NonCommercial 4.0 International license (CC BY-NC 4.0,
+https://creativecommons.org/licenses/by-nc/4.0/); the upstream inference code
+is Apache-2.0, so only the weights are non-commercial. The weights are
+downloaded on demand through Manager → Models from the `audio-cpp/Yue2-3B-GGUF`
+repository on Hugging Face or ModelScope. Attribution to M·A·P and the HKUST
+collaborators is required for derived works; the weights may not be sublicensed,
+resold or offered as a paid hosted service. Generated audio follows the upstream
+terms (creators may commercialize the tracks they generate). Do not redistribute
+these weights with commercial builds.
+
+SheetSage2 weights (`sheetsage2-orig`) are likewise **not** distributed with this
+project. They are licensed CC BY-NC 4.0 (non-commercial) by the SheetSage2
+authors and are downloaded on demand through Manager → Models from the
+`audio-cpp/SheetSage2-GGUF` repository on Hugging Face or ModelScope.
+
+MuScriptor weights (`muscriptor-small`, `muscriptor-medium`, `muscriptor-large`)
+are **not** distributed with this project either. They are released by
+Mirelo × Kyutai under CC BY-NC 4.0 (non-commercial) and are run by the optional
+audio.cpp engine (`--task midi --family muscriptor`); the GGUF conversions are
+downloaded on demand through Manager → Models from the `audio-cpp/audio.cpp-gguf`
+repository on Hugging Face or ModelScope. The upstream MuScriptor repository is
+gated and asks that users hold the rights to the audio they transcribe.
+
+See MODELS.md for the full per-model license table (code, weights and generated
+outputs are three separate layers; only the code is Apache-2.0).
 --------------------------------------------------------------------------------

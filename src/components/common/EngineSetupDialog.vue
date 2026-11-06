@@ -46,8 +46,10 @@ const runtimes = useRuntimesStore();
 const downloads = useDownloadsStore();
 const yue = useYueStore();
 
-/** 平台支持的 audio.cpp 引擎包（ONNX Runtime / CUDA 组件不在这里）。 */
-const packs = computed(() => runtimes.items.filter((r) => r.group === "audiocpp"));
+/** 平台支持、且本机能跑的 audio.cpp 引擎包（ONNX Runtime / CUDA 组件不在这里）。 */
+const packs = computed(() =>
+  runtimes.items.filter((r) => r.group === "audiocpp" && r.usable),
+);
 
 const picked = ref("");
 /** 刚切完后端：问一句要不要现在重启引擎（加载几 GB 权重，不替用户做主）。 */

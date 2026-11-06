@@ -1347,6 +1347,8 @@ watch(
           :empty="i18n.t('yue.modelEmpty')"
           :disabled="yue.busy"
         />
+        <!-- 权重许可是「另一层」：下载前就把非商业限制与输出归属说清楚 -->
+        <p class="m3-hint license-hint">{{ i18n.t("yue.licenseHint") }}</p>
       </div>
     </section>
 

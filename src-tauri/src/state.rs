@@ -92,6 +92,8 @@ pub struct AppState {
     pub midi: crate::midi_input::MidiInputManager,
     /// 「工程已经装进音频宿主」的一次性开关：见 [`AppState::start_audio`]。
     audio_started: AtomicBool,
+    /// 启动时是否从会话缓存还原了上次的工程（欢迎页据此推荐「打开上次工程」）。
+    restored_session: AtomicBool,
     /// 本地 AI 任务（后台线程 + 进度 + 取消）。
     pub ai: AiRuntime,
     /// 歌声合成任务（独立的进度 / 取消；模型是另一组权重，不该和 AI 面板抢一个槽位）。
@@ -124,11 +126,14 @@ impl AppState {
         session: Option<crate::session::SessionFile>,
         catalog: Vec<CatalogPlugin>,
     ) -> Self {
+        let restored = session.is_some();
         let engine = match &session {
             Some(session) => Engine::restore(session.project.clone(), session.saved.clone()),
             None => Engine::new_project("untitled"),
         };
         let state = Self::from_engine(engine, catalog, false);
+        // 这次启动到底是不是「接着上次的工程」：欢迎页拿它决定推荐项。
+        state.restored_session.store(restored, Ordering::Relaxed);
         if let Some(session) = session {
             *state.session_path.lock().unwrap() = session.path;
             if !session.project_key.is_empty() {
@@ -190,6 +195,7 @@ impl AppState {
             recording: Mutex::new(None),
             midi: crate::midi_input::MidiInputManager::default(),
             audio_started: AtomicBool::new(start_audio),
+            restored_session: AtomicBool::new(false),
             ai: AiRuntime::new(),
             singing: crate::singing::SingingRuntime::new(),
             svc: crate::svc::SvcRuntime::new(),
@@ -214,6 +220,11 @@ impl AppState {
     /// 当前工程对应的文件路径。
     pub fn session_path(&self) -> Option<String> {
         self.session_path.lock().unwrap().clone()
+    }
+
+    /// 启动时是否从会话缓存还原了上次的工程。
+    pub fn restored_session(&self) -> bool {
+        self.restored_session.load(Ordering::Relaxed)
     }
 
     /// 当前工程的身份键（写历史时一起记下，供界面按工程归并版本）。

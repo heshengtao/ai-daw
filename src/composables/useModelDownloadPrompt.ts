@@ -3,7 +3,7 @@ import type { ModelStatus } from "@/api/types";
 import { useI18n } from "@/i18n";
 import { useDownloadsStore } from "@/stores/downloads";
 import { useLayoutStore } from "@/stores/layout";
-import { humanSize, missingBytes, modelName } from "@/utils/models";
+import { humanSize, isNonCommercial, missingBytes, modelName } from "@/utils/models";
 
 /**
  * 「缺权重 → 应用内 MD3 确认框 → 真正开始下载」这一套，所有 AI 功能共用。
@@ -39,15 +39,17 @@ export function useModelDownloadPrompt() {
   /** 确认框是否打开。 */
   const open = ref(false);
 
-  /** 确认框正文：名称 + 还差多少体积 + 「可以留在本页下」。 */
+  /** 确认框正文：名称 + 还差多少体积 + 「可以留在本页下」；非商业许可再补一句限制。 */
   const message = computed(() => {
     const model = pending.value;
-    return model
-      ? i18n.t("dialog.downloadModelMessage", {
-          name: modelName(model),
-          size: humanSize(missingBytes(model)),
-        })
-      : "";
+    if (!model) return "";
+    const base = i18n.t("dialog.downloadModelMessage", {
+      name: modelName(model),
+      size: humanSize(missingBytes(model)),
+    });
+    if (!isNonCommercial(model)) return base;
+    // CC BY-NC 的权重：下载前说清楚「仅限非商业」，别让用户以为整包都是 Apache-2.0。
+    return `${base} ${i18n.t("dialog.downloadModelNc", { license: model.license })}`;
   });
 
   /**

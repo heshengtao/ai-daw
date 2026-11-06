@@ -212,6 +212,12 @@ export function currentProjectPath(): Promise<string | null> {
   return invoke<string | null>("current_project_path");
 }
 
+/** 启动时是否从会话缓存还原了上次的工程（欢迎页据此推荐「打开上次工程」）。 */
+export function sessionRestored(): Promise<boolean> {
+  if (mockEnabled()) return Promise.resolve(mockApi.sessionRestored());
+  return invoke<boolean>("session_restored");
+}
+
 /** 把当前工程写入会话缓存（退出前 / 编辑过程中定期调用，供下次启动还原）。 */
 export function cacheSession(path: string | null): Promise<void> {
   if (mockEnabled()) return Promise.resolve(mockApi.cacheSession(path));

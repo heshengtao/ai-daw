@@ -221,8 +221,8 @@ onUnmounted(() => {
   color: rgb(var(--md-on-surface-variant));
   cursor: pointer;
   transition:
-    background-color var(--md-spring-fast),
-    color var(--md-spring-fast);
+    background-color var(--md-duration-medium-1) var(--md-ease-spring-fast),
+    color var(--md-duration-medium-1) var(--md-ease-spring-fast);
 }
 .ts-btn:hover,
 .ts-btn.open {
@@ -243,7 +243,7 @@ onUnmounted(() => {
   width: 13px;
   height: 13px;
   flex: 0 0 auto;
-  transition: transform var(--md-spring-fast);
+  transition: transform var(--md-duration-medium-1) var(--md-ease-spring-fast);
 }
 .ts-chevron.flip {
   transform: rotate(180deg);
@@ -283,9 +283,9 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
   cursor: pointer;
   transition:
-    background-color var(--md-spring-fast),
-    border-color var(--md-spring-fast),
-    transform var(--md-spring-fast);
+    background-color var(--md-duration-medium-1) var(--md-ease-spring-fast),
+    border-color var(--md-duration-medium-1) var(--md-ease-spring-fast),
+    transform var(--md-duration-medium-1) var(--md-ease-spring-fast);
 }
 .ts-preset:hover {
   background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
@@ -336,7 +336,7 @@ onUnmounted(() => {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: background-color var(--md-spring-fast), color var(--md-spring-fast);
+  transition: background-color var(--md-duration-medium-1) var(--md-ease-spring-fast), color var(--md-duration-medium-1) var(--md-ease-spring-fast);
 }
 .ts-den:hover {
   background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
@@ -349,7 +349,7 @@ onUnmounted(() => {
 
 /* 弹簧弹入 */
 .pop-enter-active {
-  transition: opacity var(--md-spring-fast), transform var(--md-spring-default);
+  transition: opacity var(--md-duration-medium-1) var(--md-ease-spring-fast), transform var(--md-duration-medium-2) var(--md-ease-spring-default);
 }
 .pop-leave-active {
   transition: opacity 140ms var(--md-ease-emphasized-accel), transform 140ms var(--md-ease-emphasized-accel);

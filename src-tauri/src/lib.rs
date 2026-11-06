@@ -18,6 +18,7 @@ mod logging;
 mod main_thread;
 mod manager;
 mod mcp;
+mod midi_import;
 mod midi_input;
 mod models;
 mod paths;
@@ -51,8 +52,13 @@ use ai_daw_host_vst3::EditorHandle;
 use crate::audio::{AudioEngine, TransportSnapshot};
 use crate::state::{AppState, EVENT_TRANSPORT};
 
-/// 传输位置的推送周期：约 30 Hz，足够让播放头看起来连续，又不会淹没前端。
-const TRANSPORT_TICK: Duration = Duration::from_millis(33);
+/// 传输位置的推送周期：跟屏幕刷新对齐（约 60 Hz）。
+///
+/// 原来是 33 ms（30 Hz），注释写着「看起来连续」——在 60 Hz 屏上并不成立：播放头每秒只走
+/// 30 步，放大后一步好几像素，滚起来能明显看出台阶。快照本身只是几个数字，一次
+/// `emit` 的开销远小于一帧，翻倍到 60 Hz 比「前端插值猜位置」简单，也不会漂。
+/// 暂停后位置不再变化，`last == snapshot` 会直接跳过，所以静止时没有任何额外推送。
+const TRANSPORT_TICK: Duration = Duration::from_millis(16);
 
 /// 插件窗口的轮询周期：把插件发起的窗口事件送进去，并清理被用户关掉的窗口。
 const EDITOR_TICK: Duration = Duration::from_millis(80);
@@ -600,6 +606,7 @@ pub fn run() {
             commands::rename_project,
             commands::localize_starter_tracks,
             commands::current_project_path,
+            commands::session_restored,
             commands::cache_session,
             commands::project_history,
             commands::delete_project_history,

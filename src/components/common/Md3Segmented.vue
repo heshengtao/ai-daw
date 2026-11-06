@@ -143,7 +143,7 @@ onUnmounted(() => {
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
-  transition: color var(--md-spring-fast, 0.2s ease);
+  transition: color var(--md-duration-short-2) var(--md-ease-spring-fast);
 }
 .md3-seg.sm .md3-seg-btn {
   height: 24px;

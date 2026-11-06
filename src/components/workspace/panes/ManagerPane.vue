@@ -35,7 +35,7 @@ import { useI18n } from "@/i18n";
 import { pickPluginToImport } from "@/api/dialogs";
 import { copyText } from "@/utils/clipboard";
 import { downloadHost, needsHostConfirmation } from "@/utils/hosts";
-import { humanSize, missingBytes, modelName } from "@/utils/models";
+import { humanSize, isNonCommercial, missingBytes, modelName } from "@/utils/models";
 import { restartApp } from "@/utils/restart";
 import type {
   ManagerFile,
@@ -336,9 +336,14 @@ const visibleModels = computed(() => {
   return models.catalog.filter((m) => !q || modelName(m).toLowerCase().includes(q));
 });
 
-/** 「可下载」的计数（插件 + 模型）。 */
-/** 需要下载的运行时（随包的不出现在这里）。 */
-const optionalRuntimes = computed(() => runtimes.items.filter((r) => !r.bundled));
+/** 需要下载的运行时（随包的不出现在这里）。
+ *
+ * 只列本机能跑的：NVIDIA 机器上的 ROCm / AMD 机器上的 CUDA 装了也跑不起来。
+ * 已安装的仍然保留——换了显卡之后用户还得能在这里删掉它。
+ */
+const optionalRuntimes = computed(() =>
+  runtimes.items.filter((r) => !r.bundled && (r.usable || r.installed)),
+);
 
 /** 运行时本体（不含 CUDA 组件）。 */
 const runtimeCores = computed(() =>
@@ -1096,6 +1101,10 @@ async function doRevealModel(id: string): Promise<void> {
             <span v-else-if="m.installed" class="badge installed">
               {{ i18n.t("manager.modelInstalled") }}
             </span>
+            <!-- 权重仅限非商业（CC BY-NC）：下载前就要看见，不能只写在仓库文档里 -->
+            <span v-if="isNonCommercial(m)" class="badge nc" :title="i18n.t('manager.modelNcHint')">
+              {{ i18n.t("manager.modelNc") }}
+            </span>
           </div>
           <p class="card-author">
             {{ humanSize(m.approx_bytes) }}<span v-if="m.license"> · {{ m.license }}</span>
@@ -1830,6 +1839,11 @@ async function doRevealModel(id: string): Promise<void> {
 .badge.installed {
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
+}
+/* 非商业许可（CC BY-NC）：与「已验证」同一层级的提醒，但颜色不同 */
+.badge.nc {
+  background-color: rgb(var(--md-tertiary) / 0.16);
+  color: rgb(var(--md-tertiary));
 }
 /* 第三方下载域名：用警示色，让人一眼看见「这不是 GitHub」 */
 .badge.host {

@@ -143,12 +143,11 @@ macro_rules! sheetsage2_file {
     };
 }
 
-/// ACE-Step 权重的一条文件。
+/// `audio-cpp/audio.cpp-gguf` 里的一条 GGUF（HF / 魔搭同路径、字节一致）。
 ///
-/// `$path` 是**仓库内路径**（`ACE-Step1.5-GGUF/turbo/...`），`$name` 是**落地文件名**
-/// ——两个 GGUF 拉平放进 `models/ace-step/`，换档时不用再建一层目录。
-/// 官方整理的那一份在 HF / 魔搭都叫 `audio-cpp/audio.cpp-gguf`，所以两条源只是域名不同。
-macro_rules! ace_step_file {
+/// `$path` 是**仓库内路径**，`$name` 是**落地文件名**——同一个模型族的权重拉平放进
+/// `models/<family>/`，换档时不用再建一层目录。
+macro_rules! audio_cpp_file {
     ($name:literal, $path:literal, $size:expr, $sha:literal) => {
         ModelFile {
             filename: $name,
@@ -176,6 +175,17 @@ macro_rules! ace_step_file {
     };
 }
 
+/// ACE-Step 权重的一条文件。
+///
+/// `$path` 是**仓库内路径**（`ACE-Step1.5-GGUF/turbo/...`），`$name` 是**落地文件名**
+/// ——两个 GGUF 拉平放进 `models/ace-step/`，换档时不用再建一层目录。
+/// 官方整理的那一份在 HF / 魔搭都叫 `audio-cpp/audio.cpp-gguf`，所以两条源只是域名不同。
+macro_rules! ace_step_file {
+    ($name:literal, $path:literal, $size:expr, $sha:literal) => {
+        audio_cpp_file!($name, $path, $size, $sha)
+    };
+}
+
 /// 清单。
 pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
         id: "basic-pitch",
@@ -194,6 +204,54 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 url: "https://huggingface.co/AEmotionStudio/basic-pitch-onnx-models/resolve/main/nmp.onnx",
             }],
         }],
+    },
+    // MuScriptor（多乐器音频 → MIDI）：audio.cpp 的 GGUF 转换，由 `audiocpp` 引擎以
+    // `--task midi --family muscriptor` 调用。权重是 **CC BY-NC 4.0（非商用）**，
+    // 不随包、按需下载——与 YuE2 同一套姿态。
+    //
+    // 仓库里的目录叫 `MuScriptor-Small-GGUF/`，但 **small / medium / large 三档都在里面**
+    // （别被目录名骗了，这正是不按目录名遍历、而是逐文件列出的原因）。
+    ModelEntry {
+        id: "muscriptor-small",
+        name: "MuScriptor Small（多乐器音频转 MIDI · 393 MB）",
+        feature: "to_midi",
+        license: "CC-BY-NC-4.0",
+        dir: Some("muscriptor"),
+        bundled: false,
+        files: &[audio_cpp_file!(
+            "muscriptor-small-f32.gguf",
+            "MuScriptor-Small-GGUF/muscriptor-small-f32.gguf",
+            411_908_672,
+            "4bff6f1c45b445e144c176434fbe27614ad6c4686e03f99ee11b17e15163fba2"
+        )],
+    },
+    ModelEntry {
+        id: "muscriptor-medium",
+        name: "MuScriptor Medium（多乐器音频转 MIDI · 1.1 GB）",
+        feature: "to_midi",
+        license: "CC-BY-NC-4.0",
+        dir: Some("muscriptor"),
+        bundled: false,
+        files: &[audio_cpp_file!(
+            "muscriptor-medium-f32.gguf",
+            "MuScriptor-Small-GGUF/muscriptor-medium-f32.gguf",
+            1_228_154_944,
+            "24302a7d9c6a78c1db2ca0d29c6e48c9fddbf35ff937f56358b0b125d2250ce9"
+        )],
+    },
+    ModelEntry {
+        id: "muscriptor-large",
+        name: "MuScriptor Large（多乐器音频转 MIDI · 5.1 GB）",
+        feature: "to_midi",
+        license: "CC-BY-NC-4.0",
+        dir: Some("muscriptor"),
+        bundled: false,
+        files: &[audio_cpp_file!(
+            "muscriptor-large-f32.gguf",
+            "MuScriptor-Small-GGUF/muscriptor-large-f32.gguf",
+            5_465_656_576,
+            "570e1048c5d9c01c6a8f698d5c0bfd9d4d5927a20bfbf2bb0c2b99f17bb9c971"
+        )],
     },
     ModelEntry {
         id: "localvqe",
@@ -1500,6 +1558,31 @@ mod tests {
         assert!(!entry.bundled, "大模型不随包");
         assert_eq!(entry.feature, "separate");
         assert!(!entry.files[0].sources.is_empty(), "应有可下载源");
+    }
+
+    /// 非商用（CC BY-NC）权重**绝不能随包**：这是发行策略，不是风格偏好——
+    /// 一旦有人把 YuE2 / SheetSage2 加进 `bundle.resources`，安装包就不能再当作
+    /// Apache-2.0 发行物分发。它们只能走「用户点了才下载」的路。
+    #[test]
+    fn noncommercial_weights_are_download_only() {
+        let mut seen = 0;
+        for entry in all() {
+            if !entry.license.starts_with("CC-BY-NC") {
+                continue;
+            }
+            seen += 1;
+            assert!(
+                !entry.bundled,
+                "{} 是非商用权重，不能随安装包分发",
+                entry.id
+            );
+            assert!(
+                entry.files.iter().all(|file| !file.sources.is_empty()),
+                "{} 必须留着可下载源（用户自选下载）",
+                entry.id
+            );
+        }
+        assert!(seen > 0, "清单里应仍有非商用档（YuE2 / SheetSage2）");
     }
 
     /// 清单里**只允许官方 / 大厂域名**：魔搭 / Hugging Face / GitHub，加上国内几家大厂镜像站。

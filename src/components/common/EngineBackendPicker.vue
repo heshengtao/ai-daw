@@ -50,8 +50,15 @@ const pendingBody = computed(() => {
     : i18n.t("engine.downloadBodyUnknown", { name });
 });
 
-/** 只列 audio.cpp 的引擎包（ONNX Runtime / CUDA 组件由上面那套控件管）。 */
-const options = computed(() => runtimes.items.filter((r) => r.group === "audiocpp"));
+/**
+ * 只列 audio.cpp 的引擎包（ONNX Runtime / CUDA 组件由上面那套控件管）。
+ *
+ * 只留本机能跑的：NVIDIA 机器上摆 ROCm、AMD 机器上摆 CUDA，点了也只会得到
+ * 「在本机不可用」。当前选中的那一项例外——万一换过显卡，得让它看得见、切得走。
+ */
+const options = computed(() =>
+  runtimes.items.filter((r) => r.group === "audiocpp" && (r.usable || r.selected)),
+);
 
 function deviceOf(item: RuntimeStatus): string {
   return item.id.startsWith("audiocpp-") ? item.id.slice("audiocpp-".length) : item.id;

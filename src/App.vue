@@ -19,6 +19,7 @@ import ParameterBrowser from "@/components/common/ParameterBrowser.vue";
 import UpdateDoneToast from "@/components/common/UpdateDoneToast.vue";
 import WelcomeDialog from "@/components/onboarding/WelcomeDialog.vue";
 import GuidedTour from "@/components/onboarding/GuidedTour.vue";
+import type { WelcomeStart } from "@/types/onboarding";
 import { useProjectSync } from "@/composables/useProjectSync";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
@@ -32,6 +33,7 @@ import { useParamBrowserStore } from "@/stores/paramBrowser";
 import { useImportingStore, useExportingStore } from "@/stores/importing";
 import { useTimelineStore } from "@/stores/timeline";
 import { useOnboardingStore } from "@/stores/onboarding";
+import { useSettingsStore } from "@/stores/settings";
 import { useI18n } from "@/i18n";
 import { exportAudio, exportMidi, exportScore, importProject, onPluginsEvent, readImportFile, type ExportFormat } from "@/api/tauri";
 import type { ProjectHistoryEntry } from "@/api/types";
@@ -65,6 +67,7 @@ const importing = useImportingStore();
 const exportJob = useExportingStore();
 const timeline = useTimelineStore();
 const onboarding = useOnboardingStore();
+const settings = useSettingsStore();
 const i18n = useI18n();
 const route = useRoute();
 
@@ -226,12 +229,17 @@ function openImport(): void {
 
 /**
  * 欢迎页选了某个起点：`blank` 由欢迎页自己收尾（切工具 + 回编排），
- * 其余三个要借用主窗口的对话框 / 面板，所以回到这里执行。
+ * 其余要借用主窗口的对话框 / 面板，所以回到这里执行；`resume` 不用做事——
+ * 上次工程在启动时已经由后端还原，关掉欢迎页就回到了它。
  */
-function onWelcomeStart(action: "ai" | "blank" | "import" | "history"): void {
+function onWelcomeStart(action: WelcomeStart): void {
+  if (action === "resume") return;
   if (action === "ai") layout.openTab("agent");
   else if (action === "import") importOpen.value = true;
   else if (action === "history") historyOpen.value = true;
+  else if (action === "open") void onImport();
+  // 真正开一张空工程；旧工程由后端在新建前收进历史，不会丢。
+  else if (action === "blank") void onNew();
 }
 
 /** 文件名（去掉目录与扩展名）：导入后的工程名用它。 */
@@ -694,8 +702,11 @@ onMounted(async () => {
       if (project.dirty) void project.cacheSession();
     }, 10_000);
   }
-  // 首次启动的欢迎页：等界面真的画出来再弹（首帧就盖一层遮罩会显得应用「卡住了」）。
-  if (isPrimaryWindow) window.setTimeout(() => onboarding.maybeWelcome(), 450);
+  // 欢迎页：每次启动都弹，除非在「设置 → 常规 → 启动」里关掉。
+  // 等界面真的画出来再弹（首帧就盖一层遮罩会显得应用「卡住了」）。
+  if (isPrimaryWindow && settings.welcomeOnStart) {
+    window.setTimeout(() => onboarding.openWelcome(), 450);
+  }
 });
 onUnmounted(() => {
   window.removeEventListener("keydown", onKey);
@@ -814,7 +825,7 @@ onUnmounted(() => {
   <!-- 升级后首次打开：底部 toast 提示更新完成，可跳到 GitHub 发布页看更新日志 -->
   <UpdateDoneToast />
 
-  <!-- 首次启动的欢迎页与聚光灯引导：挂在根部，任何视图上都能浮起来 -->
+  <!-- 启动时的欢迎页与聚光灯引导：挂在根部，任何视图上都能浮起来 -->
   <WelcomeDialog @start="onWelcomeStart" @tour="onboarding.startTour()" />
   <GuidedTour />
 

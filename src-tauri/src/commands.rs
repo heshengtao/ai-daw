@@ -2694,6 +2694,12 @@ pub fn current_project_path(state: State<'_, AppState>) -> Option<String> {
     state.session_path()
 }
 
+/// 启动时是否从会话缓存还原了上次的工程（欢迎页据此推荐「打开上次工程」）。
+#[tauri::command]
+pub fn session_restored(state: State<'_, AppState>) -> bool {
+    state.restored_session()
+}
+
 /// 把当前工作状态落进会话缓存（纯落盘，不改动内存里的工程）。
 ///
 /// `cache_session` 命令与**退出兜底**共用这一条路径。后端在 `RunEvent::ExitRequested` 里也

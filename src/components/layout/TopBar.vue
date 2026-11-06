@@ -407,7 +407,7 @@ function onMouseDown(e: MouseEvent): void {
   border-radius: 999px;
   background-color: rgb(var(--md-primary));
   align-self: center;
-  animation: dirty-in var(--md-duration-medium-1) var(--md-spring-fast);
+  animation: dirty-in var(--md-duration-medium-1) var(--md-ease-spring-fast);
 }
 @keyframes dirty-in {
   from {
@@ -452,7 +452,7 @@ function onMouseDown(e: MouseEvent): void {
   box-shadow: var(--md-elevation-1);
   transform: translateX(calc(var(--idx, 0) * 100%));
   transition:
-    transform var(--md-duration-medium-2) var(--md-spring-fast),
+    transform var(--md-duration-medium-2) var(--md-ease-spring-fast),
     opacity var(--md-duration-short-2) var(--md-ease-standard);
 }
 .view-thumb.hidden {

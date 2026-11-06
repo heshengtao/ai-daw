@@ -37,6 +37,17 @@ export function missingFiles(model: ModelStatus): number {
   return model.files.filter((f) => !f.installed).length;
 }
 
+/**
+ * 这个模型的权重是否**仅限非商业**使用（CC BY-NC 系列）。
+ *
+ * 只用于**提示**：清单里的 `license` 是后端下发的 SPDX 串，真值仍在 `MODELS.md` 与
+ * 发布方的模型卡里。界面据此加一个「非商业」徽标、在下载确认框里补一句许可说明——
+ * 用户点下载之前就该知道这条限制。
+ */
+export function isNonCommercial(model: { license: string }): boolean {
+  return /^CC[- ]BY[- ]NC/i.test(model.license);
+}
+
 /** 人类可读体积（`1.5 GB` / `352.0 MB`）。 */
 export function humanSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "";

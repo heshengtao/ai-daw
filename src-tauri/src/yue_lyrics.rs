@@ -110,7 +110,7 @@ fn kill_child() {
 
 /// 一次性 ASR 引擎的配置（只有一个模型）。
 fn write_config(
-    pack: &engine::EnginePack,
+    device: &str,
     family: &str,
     model_dir: &PathBuf,
     port: u16,
@@ -118,7 +118,7 @@ fn write_config(
     let config = serde_json::json!({
         "host": "127.0.0.1",
         "port": port,
-        "backend": crate::yue_engine::backend_arg(pack.device),
+        "backend": crate::yue_engine::backend_arg(device),
         "device": 0,
         "threads": crate::yue_engine::thread_count(),
         "lazy_load": false,
@@ -158,7 +158,7 @@ fn run_engine(
 ) -> Result<String, String> {
     engine::ensure_asr_spec(pack, family)?;
     let port = crate::yue_engine::free_port()?;
-    let config = write_config(pack, family, model_dir, port)?;
+    let config = write_config(crate::yue::effective_device(), family, model_dir, port)?;
     let dir = engine::dir_of(pack);
 
     let log_path = engine::dir().join("lyrics.log");
@@ -171,7 +171,7 @@ fn run_engine(
         .arg("--config")
         .arg(&config)
         .arg("--backend")
-        .arg(crate::yue_engine::backend_arg(pack.device))
+        .arg(crate::yue_engine::backend_arg(crate::yue::effective_device()))
         .arg("--no-ui")
         .arg("--log")
         .arg("--log-file")

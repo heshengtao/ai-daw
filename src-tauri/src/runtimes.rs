@@ -273,7 +273,7 @@ fn group_of(id: RuntimeId) -> &'static str {
 /// 全部运行时的状态（按本机平台过滤）——ONNX Runtime 那几份，加上 audio.cpp 的引擎后端。
 ///
 /// 两者共用同一套界面（下载 / 重新安装 / 删除 / 显示位置），靠 `group` 区分；
-/// 引擎在 macOS / Linux 上暂时没有包，`yue::statuses` 自己返回空表。
+/// 引擎在 Windows / Linux x64 / macOS（arm64 与 Intel）都有包，其它架构 `yue::statuses` 返回空表。
 pub fn statuses(app: &AppHandle) -> Vec<RuntimeStatus> {
     let _ = runtime_root(app);
     let selected = ai_daw_local_ai::backend::runtime::chosen();

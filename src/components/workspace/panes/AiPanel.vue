@@ -396,6 +396,31 @@ function hasModel(kind: string): boolean {
 }
 const progressPct = computed(() => `${Math.round(ai.value.progress * 100)}%`);
 
+// ---- 音频转 MIDI：可选模型（随包的 Basic Pitch / audio.cpp 的 MuScriptor）----
+/**
+ * 转录模型：Basic Pitch（随包、单轨）或 MuScriptor（audio.cpp 引擎、多乐器分轨，
+ * CC BY-NC 4.0 非商用，按需下载）。选过哪一档跨会话记住。
+ */
+const {
+  current: midiModel,
+  id: midiModelId,
+  ready: midiReady,
+  downloading: midiDownloading,
+  selectOptions: midiModelOptions,
+} = useModelChoice("to_midi", () => modelsStore.catalog.filter((m) => m.feature === "to_midi"));
+
+/** 转录后端跟着**选中的模型**走：MuScriptor 在 audio.cpp 引擎里跑，Basic Pitch 是 ONNX。 */
+const midiBackend = computed<"onnx" | "audiocpp" | "dsp">(() => {
+  if (midiModel.value?.id.startsWith("muscriptor-")) return "audiocpp";
+  return models.value.basic_pitch ? "onnx" : "dsp";
+});
+
+/** 能不能跑：权重在位；MuScriptor 还要求 audio.cpp 引擎也装好。 */
+const midiFeatureReady = computed(() => {
+  if (!midiReady.value) return false;
+  return midiBackend.value !== "audiocpp" || engineInstalled.value;
+});
+
 // ---- 音源分离：可选模型（4 分轨 / 6 分轨）；缺权重时先问、再下载并跳到「管理器」----
 /** 分离模型（4 分轨 / 6 分轨）：选过哪一档跨会话记住。 */
 const {
@@ -423,6 +448,23 @@ async function runSeparation(): Promise<void> {
   if (!model || !requireModel(model)) return;
   try {
     await aiStart(KIND_SEPARATE, t.id, undefined, model.id);
+  } catch (err) {
+    layout.notify(String(err));
+  }
+}
+
+/** 点「开始」（音频转 MIDI）：选中的模型没下就先弹确认框，确认后下载并跳到「管理器」。 */
+async function runTranscribe(): Promise<void> {
+  const t = track.value;
+  const model = midiModel.value;
+  if (!t || !canRun.value) return;
+  if (!model) {
+    layout.notify(i18n.t("ai.modelListNotReady"));
+    return;
+  }
+  if (!requireModel(model)) return;
+  try {
+    await aiStart(KIND_MIDI, t.id, undefined, model.id);
   } catch (err) {
     layout.notify(String(err));
   }
@@ -559,7 +601,15 @@ watch(
 function noteFor(kind: string): string {
   if (!track.value) return i18n.t("ai.noTrack");
   if (!hasAudio.value) return i18n.t("ai.needsAudio");
-  if (kind === KIND_MIDI) return i18n.t("ai.midiNote");
+  if (kind === KIND_MIDI) {
+    if (!midiReady.value) return i18n.t("ai.midiNeedsModel");
+    if (midiBackend.value === "audiocpp" && !engineInstalled.value) {
+      return i18n.t("ai.midiNeedsEngine");
+    }
+    return midiBackend.value === "audiocpp"
+      ? i18n.t("ai.midiNoteMulti")
+      : i18n.t("ai.midiNote");
+  }
   if (kind === KIND_SEPARATE) {
     return separateModelReady.value ? i18n.t("ai.separateNote") : i18n.t("ai.separateNeedsModel");
   }
@@ -808,27 +858,59 @@ watch(
         {{ i18n.t("ai.tab.generate") }}
       </li>
 
-      <!-- 音频转 MIDI：只要一个按钮（处理中变成「停止」） -->
+      <!-- 音频转 MIDI：可选模型（Basic Pitch 随包 / MuScriptor 走 audio.cpp，按需下载） -->
       <li
         class="item"
         v-if="aiTab !== 'generate'"
         :style="{ order: 100 }"
-        :class="{ busy: busy(KIND_MIDI) }"
+        :class="{ busy: busy(KIND_MIDI) || midiDownloading }"
       >
         <div class="item-row">
           <div class="item-main">
             <span class="item-name">
               {{ i18n.t("ai.toMidi") }}
-              <AiBackendBadge :backend="backendOf(KIND_MIDI)" />
+              <AiBackendBadge :backend="midiBackend" :ready="midiFeatureReady" />
             </span>
-            <span class="item-note">{{ busy(KIND_MIDI) ? i18n.t("ai.busy") : noteFor(KIND_MIDI) }}</span>
+            <span class="item-note">
+              {{
+                midiDownloading
+                  ? i18n.t("ai.downloadingModel")
+                  : busy(KIND_MIDI)
+                    ? i18n.t("ai.busy")
+                    : noteFor(KIND_MIDI)
+              }}
+            </span>
           </div>
-          <button v-if="!busy(KIND_MIDI)" class="run-btn" :disabled="!canRun" @click="run(KIND_MIDI)">
-            {{ i18n.t("ai.run") }}
+          <button v-if="midiDownloading" class="run-btn" @click="cancelModelDownload">
+            {{ i18n.t("ai.stop") }}
           </button>
-          <button v-else class="run-btn" @click="stop">{{ i18n.t("ai.stop") }}</button>
+          <button v-else-if="busy(KIND_MIDI)" class="run-btn" @click="stop">
+            {{ i18n.t("ai.stop") }}
+          </button>
+          <button v-else class="run-btn" :disabled="!canRun" @click="runTranscribe">
+            {{ midiReady ? i18n.t("ai.run") : i18n.t("ai.downloadAndTranscribe") }}
+          </button>
         </div>
-        <div v-if="busy(KIND_MIDI)" class="progress">
+
+        <!-- 模型选择：Basic Pitch（随包）或 MuScriptor 三档（audio.cpp，非商用） -->
+        <div class="param-field">
+          <span class="param-name">{{ i18n.t("ai.toMidiModel") }}</span>
+          <Md3Select
+            v-model="midiModelId"
+            :options="midiModelOptions"
+            :label="i18n.t('ai.toMidiModel')"
+            :disabled="ai.running || midiDownloading"
+          />
+        </div>
+
+        <div v-if="midiDownloading" class="progress">
+          <div
+            class="progress-fill"
+            :class="{ indeterminate: modelsStore.progressPct === null }"
+            :style="modelsStore.progressPct === null ? undefined : { width: `${modelsStore.progressPct}%` }"
+          />
+        </div>
+        <div v-else-if="busy(KIND_MIDI)" class="progress">
           <div class="progress-fill" :style="{ width: progressPct }" />
         </div>
       </li>

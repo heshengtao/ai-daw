@@ -120,6 +120,17 @@ pub(crate) struct TrackArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct TranscribeArgs {
+    /// 轨道 id。
+    track: u64,
+    /// 转录模型：缺省 = `basic-pitch`（随包，单轨）；也可给 `muscriptor-small` /
+    /// `muscriptor-medium` / `muscriptor-large`（audio.cpp 引擎，多乐器分轨，
+    /// CC BY-NC 4.0 非商用，需先 download_model）。
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SeparateArgs {
     /// 轨道 id。
     track: u64,
@@ -5287,8 +5298,8 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         if !args.confirm {
             return Err(
                 "拒绝下载：download_model 会从互联网下载数百 MB 的模型权重。\
-                 请先向用户说明模型名称、体积与用途；用户在当前对话中明确同意后，\
-                 再以 confirm=true 重试。"
+                 请先向用户说明模型名称、体积、用途与**权重许可**（CC-BY-NC 系列仅限非商业）；\
+                 用户在当前对话中明确同意后，再以 confirm=true 重试。"
                     .into(),
             );
         }
@@ -5659,8 +5670,8 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         crate::singing::render_blocking(app, &request)
     }
 
-    pub(crate) fn transcribe_audio(app: &AppHandle, args: TrackArgs) -> Result<String, String> {
-        crate::ai::transcribe_track(app, args.track)
+    pub(crate) fn transcribe_audio(app: &AppHandle, args: TranscribeArgs) -> Result<String, String> {
+        crate::ai::transcribe_track(app, args.track, args.model.as_deref())
     }
 
     pub(crate) fn enhance_audio(app: &AppHandle, args: EnhanceArgs) -> Result<String, String> {
@@ -6400,8 +6411,8 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("list_synth_presets", "列出内置合成器的**出厂音色**（36 条，9 类）：id / 中文名 / 分类 / 一句话描述 / 完整参数补丁。捏音色时先看这里，用 preview_synth 试听，再用 set_params(track, params, reset=true) 落地。", ListSynthPresetsArgs),
             tool_def!("search_plugin_store", "搜索**可下载**的插件（插件管理器的注册表，不是本机已装目录）。与 find_instrument 同一套语义查询（中英文都行），返回 slug / 名称 / 作者 / 介绍 / 是否已装 / 可用格式 / 体积 / 匹配理由，并附一组**不下载也能用**的替代方案（alternatives）。**只读，不下载**——查到后先把选项和替代方案告诉用户，问要不要装；不要自行安装。", SearchPluginStoreArgs),
             tool_def!("install_plugin", "**高风险**：从注册表下载并解压安装一个插件（会真的联网下载可执行代码）。**只有用户在当前对话中明确同意后才能调用**，且必须传 `confirm=true`；否则调用会被拒绝。不确定 slug 时先用 search_plugin_store。", InstallPluginArgs),
-            tool_def!("list_models", "列出本地 AI 模型（音源分离 / 音频转 MIDI / 降噪 / 节拍检测）的 id、体积、是否随包、是否已安装、可下载源。装模型前先看这里。"),
-            tool_def!("download_model", "**高风险**：从互联网下载本地 AI 模型权重（可能数百 MB）。**只有用户明确同意后才能调用**，且必须传 `confirm=true`；否则会被拒绝。下载在后台进行，之后用 list_models 查 installed。", DownloadModelArgs),
+            tool_def!("list_models", "列出本地 AI 模型（音源分离 / 音频转 MIDI / 降噪 / 节拍检测）的 id、体积、是否随包、是否已安装、可下载源与**权重许可**（`license`；CC-BY-NC 系列仅限非商业）。装模型前先看这里。"),
+            tool_def!("download_model", "**高风险**：从互联网下载本地 AI 模型权重（可能数百 MB）。**只有用户明确同意后才能调用**，且必须传 `confirm=true`；否则会被拒绝。说明用途时要一并告诉用户**权重许可**：`license` 为 CC-BY-NC 的模型（YuE2、SheetSage2）只允许非商业使用。下载在后台进行，之后用 list_models 查 installed。", DownloadModelArgs),
             tool_def!("find_instrument", "按**语义名**找音色：`guqin-like` / `古琴` / `gamelan` / `shamisen` / `erhu` / `piano` / `strings` / `bass` / `drums` / `pad`… **本机安装的插件优先**（名字/标签/安装包文件名命中），没有安装才返回内置近似（例如古琴 → 尼龙吉他 + 混响）。查询会拆词并带上规则的中英别名（guqin ↔ 古琴、pipa ↔ 琵琶）。返回 pluginId、source（installed/builtin/approximation）、score、置信度、推荐理由、出厂音色参数与建议效果。", FindInstrumentArgs),
             tool_def!("transport_play", "开始播放。"),
             tool_def!("transport_pause", "暂停播放（保留当前位置）。"),
@@ -6493,7 +6504,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("update_voice", "人声音色库：改名字 / 描述 / 标签（不动音频）。", UpdateVoiceArgs),
             tool_def!("delete_voice", "人声音色库：删除一条（连音频一起删）。", VoiceIdArgs),
             tool_def!("sing_song", "歌声合成（SoulX-Singer ONNX）：把一条 MIDI 轨的旋律 + 一行歌词 + 一条参考声线渲染成**新音频轨**（插在源轨下面，一次撤销可整体去掉）。歌词可以逐音写在音符的 `lyric` 上（优先级更高），也可以用 `lyrics` 整串给（一字一音，`-` 连音，标点跳过，不够时沿用前一字）。参考音色用 `reference`（音频文件）或 `reference_track`（某轨的第一段音频）；换音色 = 换参考重渲染。需要已安装 SoulX-Singer 模型（管理器 → 模型）：fp16 约 1.44 GB、fp32 约 2.85 GB（保真更高）；`model` 选 `soulx-singer-fp16` / `soulx-singer-fp32`，省略用已装的默认档（fp16 优先）。渲染是离线的：10 秒歌声在 CPU 上约 2–4 分钟（16 步约一半）。", SingSongArgs),
-            tool_def!("transcribe_audio", "音频转 MIDI：对指定轨道的第一段音频做音高检测（有 Basic Pitch 模型就用，否则内置 DSP），把结果写成**源轨道下面的新 MIDI 轨**（一次撤销）。", TrackArgs),
+            tool_def!("transcribe_audio", "音频转 MIDI：对指定轨道的第一段音频做音高检测，把结果写成**源轨道下面的新 MIDI 轨**（一次撤销）。`model` 缺省 = Basic Pitch（随包，单轨）；给 `muscriptor-small/medium/large` = 多乐器模型（audio.cpp 引擎，按乐器分轨、鼓单独一条；CC BY-NC 4.0 仅限非商业，需先 download_model 并装 audio.cpp 引擎）。", TranscribeArgs),
             tool_def!("enhance_audio", "降噪：对指定轨道的第一段音频降噪，把结果写成**源轨道下面的新音频轨**（原轨不动，便于 A/B）。`mode=voice`（缺省，人声/去混响，优先 LocalVQE 模型）或 `mode=music`（乐器底噪，内置 DSP）。", EnhanceArgs),
             tool_def!("import_audio", "把本机的一个音频文件导入成音频片段（wav/flac/mp3/ogg/m4a）；返回新片段 id。", ImportAudioArgs),
             tool_def!("audio_waveform", "取某个音频文件的波形包络（每桶 min/max 两个值），用来确认素材内容。", WaveformArgs),
@@ -6868,7 +6879,7 @@ impl DawMcpServer {
     }
 
     #[tool(
-        description = "**高风险**：从互联网下载本地 AI 模型权重（可能数百 MB）。**只有用户明确同意后才能调用**，且必须传 `confirm=true`；否则会被拒绝。下载在后台进行，之后用 list_models 查 installed。",
+        description = "**高风险**：从互联网下载本地 AI 模型权重（可能数百 MB）。**只有用户明确同意后才能调用**，且必须传 `confirm=true`；否则会被拒绝。说明用途时要一并告诉用户**权重许可**：`license` 为 CC-BY-NC 的模型（YuE2、SheetSage2）只允许非商业使用。下载在后台进行，之后用 list_models 查 installed。",
         annotations(
             title = "下载模型（高风险）",
             destructive_hint = true,
@@ -7633,11 +7644,11 @@ impl DawMcpServer {
     }
 
     #[tool(
-        description = "音频转 MIDI：对指定轨道的第一段音频做音高检测（有 Basic Pitch 模型就用，否则内置 DSP），把结果写成**源轨道下面的新 MIDI 轨**（一次撤销）。"
+        description = "音频转 MIDI：对指定轨道的第一段音频做音高检测，把结果写成**源轨道下面的新 MIDI 轨**（一次撤销）。`model` 缺省 = Basic Pitch（随包，单轨）；给 `muscriptor-small/medium/large` = 多乐器模型（audio.cpp 引擎，按乐器分轨、鼓单独一条；CC BY-NC 4.0 仅限非商业，需先 download_model 并装 audio.cpp 引擎）。"
     )]
     async fn transcribe_audio(
         &self,
-        Parameters(args): Parameters<TrackArgs>,
+        Parameters(args): Parameters<TranscribeArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
         tauri::async_runtime::spawn_blocking(move || tools::transcribe_audio(&app, args))

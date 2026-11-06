@@ -948,7 +948,7 @@ function pickPad(option: PresetOption): void {
 /* 展开/收起：MD3 弹簧（设计稿 §4.2 的「弹簧动画」），从上方略缩略降地弹入 */
 .adv-enter-active,
 .adv-leave-active {
-  transition: opacity var(--md-spring-fast), transform var(--md-spring-fast);
+  transition: opacity var(--md-duration-medium-1) var(--md-ease-spring-fast), transform var(--md-duration-medium-1) var(--md-ease-spring-fast);
   transform-origin: top center;
 }
 .adv-enter-from,

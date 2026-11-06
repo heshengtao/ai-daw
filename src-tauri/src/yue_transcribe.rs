@@ -214,11 +214,11 @@ pub(crate) fn write_wav(
 // ---------------------------------------------------------------------------
 
 /// 一次性转谱引擎的配置（只有 SheetSage2 一个模型）。
-fn write_config(pack: &engine::EnginePack, model_dir: &Path, port: u16) -> Result<PathBuf, String> {
+fn write_config(device: &str, model_dir: &Path, port: u16) -> Result<PathBuf, String> {
     let config = serde_json::json!({
         "host": "127.0.0.1",
         "port": port,
-        "backend": crate::yue_engine::backend_arg(pack.device),
+        "backend": crate::yue_engine::backend_arg(device),
         "device": 0,
         "threads": crate::yue_engine::thread_count(),
         "lazy_load": false,
@@ -258,7 +258,7 @@ fn run_engine(
 ) -> Result<String, String> {
     engine::ensure_sheetsage2_spec(pack)?;
     let port = crate::yue_engine::free_port()?;
-    let config = write_config(pack, model_dir, port)?;
+    let config = write_config(crate::yue::effective_device(), model_dir, port)?;
     let dir = engine::dir_of(pack);
 
     let log_path = engine::dir().join("transcribe.log");
@@ -271,7 +271,7 @@ fn run_engine(
         .arg("--config")
         .arg(&config)
         .arg("--backend")
-        .arg(crate::yue_engine::backend_arg(pack.device))
+        .arg(crate::yue_engine::backend_arg(crate::yue::effective_device()))
         .arg("--no-ui")
         .arg("--log")
         .arg("--log-file")

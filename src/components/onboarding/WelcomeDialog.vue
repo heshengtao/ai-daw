@@ -1,18 +1,20 @@
 <script setup lang="ts">
 /**
- * 首次启动的欢迎页：给人一个**明确的起点**，而不是把一屏按钮丢过去。
+ * 启动时的欢迎页：给人一个**明确的起点**，而不是把一屏按钮丢过去。
  *
  * 结构上分两半：左边是插图与品牌（只负责「这是个什么工具」），
- * 右边是四个起步动作 + 一个「先看看界面」的引导入口。
- * 点任何一个起步动作都等于「看过了」，关掉后不再自动弹出；
- * 之后想再看，走顶栏「帮助 → 快速上手」。
+ * 右边是一组起步动作 + 一个「先看看界面」的引导入口。第一格永远是推荐项：
+ * 有上次的工程就推「打开上次工程」，否则推「打开空白工程」。
+ * **每次启动都会自动弹出**；不想看就在「设置 → 常规 → 启动」里关掉。
  */
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, type Component } from "vue";
 import { useRouter } from "vue-router";
 import {
+  ArrowDownTrayIcon,
+  ArrowPathIcon,
   ArrowRightIcon,
   ClockIcon,
-  FolderOpenIcon,
+  DocumentPlusIcon,
   SparklesIcon,
   SquaresPlusIcon,
   XMarkIcon,
@@ -23,10 +25,11 @@ import { useOnboardingStore } from "@/stores/onboarding";
 import { useLayoutStore } from "@/stores/layout";
 import { useProjectStore } from "@/stores/project";
 import { useI18n } from "@/i18n";
+import type { WelcomeStart } from "@/types/onboarding";
 
 const emit = defineEmits<{
   /** 用户选了某个起步动作（由 `App.vue` 执行，因为它才拿得到各种对话框）。 */
-  (e: "start", action: "ai" | "blank" | "import" | "history"): void;
+  (e: "start", action: WelcomeStart): void;
   (e: "tour"): void;
 }>();
 
@@ -40,47 +43,114 @@ const root = ref<HTMLElement | null>(null);
 
 const open = computed(() => onboarding.welcomeOpen);
 
+/** 未命名工程按当前语言显示，不把 `untitled` 直接抛给用户。 */
+const projectName = computed(() => {
+  const name = project.project?.name ?? "";
+  return !name || name === "untitled" ? i18n.t("settings.untitled") : name;
+});
+
 /** 工程里已经有东西了：标题换个说法，不再说「从零开始」。 */
-const hasContent = computed(() =>
-  (project.project?.tracks ?? []).some((track) => track.clips.length > 0),
+const hasContent = computed(() => {
+  const doc = project.project;
+  if (!doc) return false;
+  return (
+    doc.tracks.some((track) => track.clips.length > 0) ||
+    (doc.harmony?.length ?? 0) > 0 ||
+    (doc.sections?.length ?? 0) > 0
+  );
+});
+
+/**
+ * 这次启动有没有「上次的工程」。
+ *
+ * 后端在启动时会还原会话缓存；只有确实带着内容（片段 / 和弦 / 段落）、保存路径或未保存
+ * 改动时，才算「有上次的工程」。它同时决定标题用「欢迎回来」还是「先选一个起点」，以及
+ * 推荐项是「打开上次工程」还是「打开空白工程」。
+ */
+const hasLastProject = computed(
+  () =>
+    project.restoredSession &&
+    (hasContent.value || project.currentPath !== null || project.dirty),
 );
 
-const starters = computed(() => [
-  {
-    id: "ai" as const,
-    icon: SparklesIcon,
-    title: i18n.t("onboarding.startAi"),
-    sub: i18n.t("onboarding.startAiHint"),
-    featured: true,
-  },
-  {
-    id: "blank" as const,
-    icon: SquaresPlusIcon,
-    title: i18n.t("onboarding.startBlank"),
-    sub: i18n.t("onboarding.startBlankHint"),
+interface Starter {
+  id: WelcomeStart;
+  icon: Component;
+  title: string;
+  sub: string;
+  featured: boolean;
+}
+
+const starters = computed<Starter[]>(() => {
+  const last = hasLastProject.value;
+
+  // 有上次的工程就推荐接着写；没有就推荐从空网格开始。两者都放在第一格并标「推荐」。
+  const primary: Starter = last
+    ? {
+        id: "resume",
+        icon: ArrowPathIcon,
+        title: i18n.t("onboarding.startResume"),
+        sub: i18n.t("onboarding.startResumeHint", { name: projectName.value }),
+        featured: true,
+      }
+    : {
+        id: "blank",
+        icon: SquaresPlusIcon,
+        title: i18n.t("onboarding.startBlank"),
+        sub: i18n.t("onboarding.startBlankHint"),
+        featured: true,
+      };
+
+  const rest: Starter[] = [];
+  if (last) {
+    rest.push({
+      id: "blank",
+      icon: SquaresPlusIcon,
+      title: i18n.t("onboarding.startBlank"),
+      sub: i18n.t("onboarding.startBlankHint"),
+      featured: false,
+    });
+  }
+  rest.push(
+    {
+      id: "ai",
+      icon: SparklesIcon,
+      title: i18n.t("onboarding.startAi"),
+      sub: i18n.t("onboarding.startAiHint"),
+      featured: false,
+    },
+    {
+      id: "import",
+      icon: ArrowDownTrayIcon,
+      title: i18n.t("onboarding.startImport"),
+      sub: i18n.t("onboarding.startImportHint"),
+      featured: false,
+    },
+  );
+  if (!last) {
+    rest.push({
+      id: "history",
+      icon: ClockIcon,
+      title: i18n.t("onboarding.startHistory"),
+      sub: i18n.t("onboarding.startHistoryHint"),
+      featured: false,
+    });
+  }
+  rest.push({
+    id: "open",
+    icon: DocumentPlusIcon,
+    title: i18n.t("onboarding.startOpen"),
+    sub: i18n.t("onboarding.startOpenHint"),
     featured: false,
-  },
-  {
-    id: "import" as const,
-    icon: FolderOpenIcon,
-    title: i18n.t("onboarding.startImport"),
-    sub: i18n.t("onboarding.startImportHint"),
-    featured: false,
-  },
-  {
-    id: "history" as const,
-    icon: ClockIcon,
-    title: i18n.t("onboarding.startHistory"),
-    sub: i18n.t("onboarding.startHistoryHint"),
-    featured: false,
-  },
-]);
+  });
+  return [primary, ...rest];
+});
 
 function close(): void {
   onboarding.closeWelcome();
 }
 
-function start(action: "ai" | "blank" | "import" | "history"): void {
+function start(action: WelcomeStart): void {
   onboarding.closeWelcome();
   if (action === "blank") {
     // 空白起步 = 回到编排 + 切到「绘制」，光标就是笔。
@@ -154,12 +224,14 @@ onUnmounted(() => {
               <XMarkIcon class="w-[18px] h-[18px]" />
             </button>
 
-            <p class="eyebrow">{{ i18n.t("onboarding.eyebrow") }}</p>
+            <p class="eyebrow">
+              {{ hasLastProject ? i18n.t("onboarding.eyebrowBack") : i18n.t("onboarding.eyebrow") }}
+            </p>
             <h1 id="onboarding-title" class="title">
-              {{ hasContent ? i18n.t("onboarding.titleBack") : i18n.t("onboarding.title") }}
+              {{ hasLastProject ? i18n.t("onboarding.titleBack") : i18n.t("onboarding.title") }}
             </h1>
             <p class="subtitle">
-              {{ hasContent ? i18n.t("onboarding.subBack") : i18n.t("onboarding.subtitle") }}
+              {{ hasLastProject ? i18n.t("onboarding.subBack") : i18n.t("onboarding.subtitle") }}
             </p>
 
             <div class="starters">
@@ -343,7 +415,7 @@ onUnmounted(() => {
   text-align: left;
   cursor: pointer;
   animation: starter-in var(--md-duration-medium-2) var(--md-ease-emphasized-decel) both;
-  animation-delay: calc(var(--i) * 45ms + 80ms);
+  animation-delay: calc(var(--i) * 28ms + 60ms);
   transition:
     transform var(--md-duration-medium-1) var(--md-ease-standard-decel),
     border-color var(--md-duration-medium-1) var(--md-ease-standard),
@@ -362,16 +434,25 @@ onUnmounted(() => {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 2px;
 }
-/* 推荐项（AI 写歌）：底色调成主色容器，一眼看出「先点这个」。 */
+/* 推荐项（有上次工程 → 打开上次工程；否则 → 打开空白工程）：占满整行，一眼看出「先点这个」。 */
 .starter.featured {
+  grid-column: 1 / -1;
+  padding: 15px 14px;
   background-color: rgb(var(--md-primary-container));
   border-color: transparent;
   color: rgb(var(--md-on-primary-container));
 }
+.starter.featured .starter-title {
+  font-size: 14px;
+}
 .starter.featured .starter-sub {
+  font-size: 12px;
   color: rgb(var(--md-on-primary-container) / 0.75);
 }
 .starter.featured .starter-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
   background-color: rgb(var(--md-primary) / 0.16);
   color: rgb(var(--md-on-primary-container));
 }
@@ -385,7 +466,7 @@ onUnmounted(() => {
   border-radius: 12px;
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
-  transition: transform var(--md-duration-medium-1) var(--md-spring-fast);
+  transition: transform var(--md-duration-medium-1) var(--md-ease-spring-fast);
 }
 .starter:hover .starter-icon {
   transform: scale(1.06) rotate(-3deg);
@@ -428,7 +509,7 @@ onUnmounted(() => {
   transform: translateX(-4px);
   transition:
     opacity var(--md-duration-short-2) var(--md-ease-standard),
-    transform var(--md-duration-medium-1) var(--md-spring-fast);
+    transform var(--md-duration-medium-1) var(--md-ease-spring-fast);
 }
 .starter:hover .starter-arrow,
 .starter:focus-visible .starter-arrow {

@@ -2935,6 +2935,8 @@ export const mockApi = {
 
   currentProjectPath: (): string | null => sessionPath,
 
+  sessionRestored: (): boolean => sessionPath !== null,
+
   projectHistory: (): ProjectHistoryEntry[] => readHistory().map((record) => record.entry),
 
   restoreProjectHistory: (id: string): Project => {

@@ -311,6 +311,7 @@ fn model_requirement(model: &ModelStatus) -> Value {
         "kind": "model",
         "id": model.id,
         "name": model.name,
+        "license": model.license,
         "installed": model.installed,
         "bundled": model.bundled,
         "downloadable": model.downloadable,

@@ -1,6 +1,6 @@
 //! **audio.cpp 引擎的下载 / 安装 / 删除**——下载管理器「运行时」里的那一组「音频引擎」。
 //!
-//! 清单在 `ai_daw_local_ai::engine`（编译期内嵌：六份归档的地址 / 体积 / sha256，以及每份
+//! 清单在 `ai_daw_local_ai::engine`（编译期内嵌：每份归档的地址 / 体积 / sha256，以及每个
 //! 后端目录要落哪些文件），这里只做「落到磁盘」这件事：
 //!
 //! ```text
@@ -9,7 +9,9 @@
 //!   vulkan/   同上（Vulkan 后端静态编进 exe）
 //!   cuda12/   同上 + ggml*.dll + cudart64_12 / cublas* / cufft
 //!   cuda13/   同上（CUDA 13 那份）
-//!   preferred 用户挑的那一份（不写则按显卡自动挑）
+//!   rocm/     同上 + ggml-hip / amdhip64 / amd_comgr（Linux 那份是静态链接的单个可执行文件）
+//!   metal/    macOS（arm64 / Intel 各一份）；「强制 CPU」也复用这个目录
+//!   preferred 用户挑的设备名（不写则按显卡自动挑）
 //! ```
 //!
 //! 每个后端是一份**自包含的便携包**（audio.cpp 官方 release），所以下载就是「整包 → 解出
@@ -222,10 +224,15 @@ fn retire_legacy(dir: &Path) {
     }
 
     // 旧版 `preferred` 里存的是 `yue2-core` / `yue2-vulkan` 这类旧 id，留着只会让
-    // `preferred()` 解析失败（它本来也会忽略），顺手清掉。
+    // `preferred_device()` 解析失败（它本来也会忽略），顺手清掉。
     let preferred = dir.join("preferred");
     if let Ok(text) = fs::read_to_string(&preferred) {
-        if engine::pack(text.trim()).is_none() {
+        let text = text.trim();
+        let device = text
+            .strip_prefix("audiocpp-")
+            .or_else(|| text.strip_prefix("yue2-"))
+            .unwrap_or(text);
+        if device_key(device).and_then(target_for).is_none() {
             let _ = fs::remove_file(&preferred);
         }
     }
@@ -235,33 +242,90 @@ fn retire_legacy(dir: &Path) {
     }
 }
 
-fn parse_id(id: &str) -> Result<&'static EnginePack, String> {
-    engine::pack(id).ok_or_else(|| format!("未知引擎后端：{id}"))
+/// 一个可选后端：引擎目录 + 启动时传给 `--backend` 的设备名。
+///
+/// 两者通常一致；唯一的例外是 macOS 的 `cpu`——它没有独立安装包，和 metal 共用目录，
+/// 只在启动时用 `--backend cpu` 强制 CPU。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Target {
+    pub pack: &'static EnginePack,
+    pub device: &'static str,
 }
 
-/// 用户挑的那一份（没挑过 / 挑了但已删掉就是 `None`）。
-fn preferred() -> Option<&'static EnginePack> {
+/// macOS 的 CPU 后端复用 Metal 包（上游从来没发过 macOS 的 CPU-only 构建）。
+fn cpu_shares_metal() -> bool {
+    cfg!(target_os = "macos")
+}
+
+/// 设备名 → `'static` 字符串（枚举化，避免把文件里的任意文本当成设备传下去）。
+fn device_key(device: &str) -> Option<&'static str> {
+    match device {
+        "cpu" => Some("cpu"),
+        "vulkan" => Some("vulkan"),
+        "cuda12" => Some("cuda12"),
+        "cuda13" => Some("cuda13"),
+        "rocm" => Some("rocm"),
+        "metal" => Some("metal"),
+        _ => None,
+    }
+}
+
+fn target_for(device: &str) -> Option<Target> {
+    let device = device_key(device)?;
+    let pack = engine::for_device(build_device_for(device, cpu_shares_metal()))?;
+    Some(Target { pack, device })
+}
+
+/// 设备名落到哪份引擎构建。纯函数：macOS 的「CPU 借用 Metal」在 Windows 上也能测。
+fn build_device_for(device: &str, macos: bool) -> &str {
+    if macos && device == "cpu" {
+        "metal"
+    } else {
+        device
+    }
+}
+
+fn parse_id(id: &str) -> Result<Target, String> {
+    // 新 id 是 `audiocpp-<device>`；旧 id（`yue2-…`）也按同一规则剥前缀。
+    let device = id
+        .strip_prefix("audiocpp-")
+        .or_else(|| id.strip_prefix("yue2-"))
+        .unwrap_or(id);
+    target_for(device).ok_or_else(|| format!("未知引擎后端：{id}"))
+}
+
+/// 用户挑的设备名（`preferred` 文件；`None` = 自动）。
+///
+/// 文件里存的是**设备名**（`cpu` / `metal` / …）。旧版本存的是包 id（`audiocpp-cpu`、
+/// `yue2-vulkan`），读的时候剥掉前缀即可。
+fn preferred_device() -> Option<&'static str> {
     let text = fs::read_to_string(engine::dir().join("preferred")).ok()?;
-    engine::pack(text.trim())
+    let text = text.trim();
+    let device = text
+        .strip_prefix("audiocpp-")
+        .or_else(|| text.strip_prefix("yue2-"))
+        .unwrap_or(text);
+    let device = device_key(device)?;
+    target_for(device).map(|target| target.device)
 }
 
 /// 本机会用哪个后端。
 ///
-/// - macOS（Apple Silicon）：Metal（唯一的包）；
-/// - Windows / Linux：N 卡优先 CUDA 13（驱动 ≥ 580）→ CUDA 12，其次 Vulkan，最后 CPU。
-///   「装了但没有对应显卡 / 驱动不够」不算数（AMD 上装了 CUDA 也跑不起来）。
+/// - macOS：Metal（arm64 / Intel 都有官方包）；CPU 是 Metal 包上的一个「模式」，不算自动档。
+/// - Windows / Linux：N 卡优先 CUDA 13（驱动 ≥ 580）→ CUDA 12，A 卡优先 ROCm，
+///   其次 Vulkan，最后 CPU。「装了但没有对应显卡 / 驱动不够」不算数（AMD 上装了 CUDA 也跑不起来）。
 pub fn auto_device() -> &'static str {
     let best = best_device();
     let has = |device: &str| {
-        engine::for_device(device)
-            .map(engine::installed)
+        target_for(device)
+            .map(|target| engine::installed(target.pack))
             .unwrap_or(false)
     };
     // 最优的那份装了就用它；否则退到任意一份装好的（用户可能只下了 CPU 兜底）。
     if has(best) {
         return best;
     }
-    for device in ["metal", "cuda13", "cuda12", "vulkan", "cpu"] {
+    for device in ["metal", "cuda13", "cuda12", "rocm", "vulkan", "cpu"] {
         if usable(device) && has(device) {
             return device;
         }
@@ -276,12 +340,12 @@ pub fn auto_device() -> &'static str {
 /// 不支持显卡）。
 pub fn best_device() -> &'static str {
     use ai_daw_local_ai::backend::detect;
-    let nvidia = detect::detect_cached().gpu == Some(detect::GpuVendor::Nvidia);
-    let has = |device: &str| engine::for_device(device).is_some();
+    let gpu = detect::detect_cached().gpu;
+    let has = |device: &str| target_for(device).is_some();
     if std::env::consts::OS == "macos" {
         return if has("metal") { "metal" } else { "cpu" };
     }
-    if nvidia {
+    if gpu == Some(detect::GpuVendor::Nvidia) {
         if cuda13_driver_ok() && has("cuda13") {
             "cuda13"
         } else if has("cuda12") {
@@ -291,6 +355,9 @@ pub fn best_device() -> &'static str {
         } else {
             "cpu"
         }
+    } else if gpu == Some(detect::GpuVendor::Amd) && has("rocm") {
+        // A 卡优先 ROCm（比 Vulkan 快）；包没装齐也能先选它，装完即用。
+        "rocm"
     } else if has("vulkan") {
         "vulkan"
     } else {
@@ -315,22 +382,32 @@ fn cuda13_driver_ok() -> bool {
 
 /// 实际会用哪个：用户挑的（若装了且能用）优先，否则自动。
 pub(crate) fn effective_device() -> &'static str {
-    match preferred() {
-        Some(pack) if engine::installed(pack) && usable(pack.device) => pack.device,
-        _ => auto_device(),
+    match preferred_device() {
+        Some(device) => match target_for(device) {
+            Some(target) if engine::installed(target.pack) && usable(target.device) => {
+                target.device
+            }
+            _ => auto_device(),
+        },
+        None => auto_device(),
     }
 }
 
-/// 实际会用的那一份后端（给 `yue_engine` 拿目录用）。
+/// 实际会用的那一份后端（给 `yue_engine` 拿目录 / 可执行文件用）。
 pub(crate) fn effective_pack() -> Option<&'static EnginePack> {
-    engine::for_device(effective_device())
+    target_for(effective_device()).map(|target| target.pack)
 }
 
-/// 这份后端在本机能不能真跑（CUDA 需要 N 卡；CUDA 13 还要 580+ 驱动；Metal 要 macOS）。
+/// 这份后端在本机能不能真跑（CUDA 需要 N 卡；CUDA 13 还要 580+ 驱动；Metal 要 macOS；
+/// ROCm 要 A 卡）。
 fn usable(device: &str) -> bool {
     use ai_daw_local_ai::backend::detect;
     match device {
         "metal" => std::env::consts::OS == "macos",
+        "rocm" => {
+            matches!(std::env::consts::OS, "windows" | "linux")
+                && detect::detect_cached().gpu == Some(detect::GpuVendor::Amd)
+        }
         "cuda13" => cuda13_driver_ok(),
         d if d.starts_with("cuda") => {
             detect::detect_cached().gpu == Some(detect::GpuVendor::Nvidia)
@@ -350,8 +427,19 @@ pub fn statuses(app: &AppHandle) -> Vec<YueStatus> {
     let _ = root(app);
     let chosen = effective_device();
     let best = best_device();
-    let picked = preferred().map(|p| p.id);
-    engine::packs(std::env::consts::OS, std::env::consts::ARCH)
+    let picked = preferred_device();
+    let ready = engine::ready();
+    // 「一份都没装」时不要把 CPU 高亮成当前项：显示本机最优（N 卡 CUDA / Mac Metal），
+    // 否则第一次打开的人会以为这台机器只能用 CPU。
+    let display = if target_for(chosen)
+        .map(|target| engine::installed(target.pack))
+        .unwrap_or(false)
+    {
+        chosen
+    } else {
+        best
+    };
+    let mut rows: Vec<YueStatus> = engine::packs(std::env::consts::OS, std::env::consts::ARCH)
         .iter()
         .map(|pack| YueStatus {
             id: pack.id.to_string(),
@@ -361,21 +449,63 @@ pub fn statuses(app: &AppHandle) -> Vec<YueStatus> {
             disk_bytes: pack.disk_bytes(),
             installed: engine::installed(pack),
             core: pack.core,
-            ready: engine::ready(),
-            selected: picked == Some(pack.id) || (picked.is_none() && pack.device == chosen),
+            ready,
+            selected: picked == Some(pack.device) || (picked.is_none() && pack.device == display),
             automatic: picked.is_none(),
-            device: chosen.to_string(),
+            device: display.to_string(),
             recommended: pack.device == best,
             usable: usable(pack.device),
             dir: engine::dir_of(pack).to_string_lossy().into_owned(),
         })
-        .collect()
+        .collect();
+
+    // macOS 的 CPU 没有独立安装包：复用 Metal 包，启动时 `--backend cpu`。
+    // 单独列一项，用户才选得到「强制 CPU」（Metal 崩了 / 显存紧时的退路）；
+    // 放在**最前**：其它平台的清单也是 CPU 打头，macOS 不该例外。
+    if cpu_shares_metal() {
+        if let Some(target) = target_for("cpu") {
+            rows.insert(
+                0,
+                YueStatus {
+                    id: "audiocpp-cpu".into(),
+                    label: "audio.cpp 引擎 · CPU".into(),
+                    note: "强制 CPU 运行（复用已下载的 Metal 引擎，不额外下载；Metal 出问题或显存不够时用）"
+                        .into(),
+                    bytes: target.pack.bytes(),
+                    disk_bytes: target.pack.disk_bytes(),
+                    installed: engine::installed(target.pack),
+                    core: false,
+                    ready,
+                    selected: picked == Some("cpu") || (picked.is_none() && display == "cpu"),
+                    automatic: picked.is_none(),
+                    device: display.to_string(),
+                    recommended: false,
+                    usable: true,
+                    dir: engine::dir_of(target.pack).to_string_lossy().into_owned(),
+                },
+            );
+        }
+    }
+    rows
 }
 
 /// 开始下载并安装一个引擎后端（后台线程；进度走 `engine://yue`）。
 #[tauri::command]
 pub fn ai_yue_install(app: AppHandle, id: String) -> Result<(), String> {
-    let pack = parse_id(&id)?;
+    let target = parse_id(&id)?;
+    if engine::installed(target.pack) {
+        // 已经装好也要回一个 done：设置页的 `installAndWait` 在等这个事件，
+        // 不发的它就会一直挂着（macOS 的 CPU 项天然是「已安装」状态）。
+        emit(
+            &app,
+            &id,
+            "done",
+            target.pack.bytes(),
+            target.pack.bytes(),
+            None,
+        );
+        return Ok(());
+    }
     if downloader().running.swap(true, Ordering::SeqCst) {
         return Err("已有引擎正在下载".into());
     }
@@ -383,9 +513,11 @@ pub fn ai_yue_install(app: AppHandle, id: String) -> Result<(), String> {
     crate::yue_engine::stop_for_install(&app);
     downloader().cancel.store(false, Ordering::Relaxed);
     let thread_app = app.clone();
+    let pack = target.pack;
+    let report = id.clone();
     thread::Builder::new()
         .name("ai-daw-yue".into())
-        .spawn(move || run_install(&thread_app, pack))
+        .spawn(move || run_install(&thread_app, pack, &report))
         .map_err(|e| {
             downloader().running.store(false, Ordering::SeqCst);
             e.to_string()
@@ -399,7 +531,7 @@ pub fn ai_yue_install(app: AppHandle, id: String) -> Result<(), String> {
 /// 但仍逐包校验 sha256 / 体积，和下载路径一样严格。
 #[tauri::command]
 pub fn ai_yue_import(app: AppHandle, id: String, dir: String) -> Result<(), String> {
-    let pack = parse_id(&id)?;
+    let pack = parse_id(&id)?.pack;
     if downloader().running.load(Ordering::SeqCst) {
         return Err("已有引擎正在下载，先等它结束或取消".into());
     }
@@ -472,12 +604,18 @@ pub fn ai_yue_cancel() {
 /// 删除一个已下载的后端（只删清单列出的文件）。
 #[tauri::command]
 pub fn ai_yue_remove(app: AppHandle, id: String) -> Result<(), String> {
-    let pack = parse_id(&id)?;
+    let target = parse_id(&id)?;
+    if cpu_shares_metal() && target.device == "cpu" {
+        return Err("CPU 与 Metal 共用同一份引擎，不能单独删除（要删请删 Metal）".into());
+    }
+    let pack = target.pack;
     crate::yue_engine::stop_for_install(&app);
     engine::remove(pack)?;
     engine::prune_empty();
     // 删掉的正好是用户挑的那一份：把选择清掉，别让它继续指着一个不存在的包。
-    if preferred().map(|p| p.id) == Some(pack.id) {
+    // macOS 的 CPU 与 Metal 同目录，删 Metal 时把 cpu 偏好也一起清掉。
+    if matches!(preferred_device(), Some(device) if target_for(device).map(|t| t.pack.id) == Some(pack.id))
+    {
         let _ = fs::remove_file(engine::dir().join("preferred"));
     }
     Ok(())
@@ -486,7 +624,7 @@ pub fn ai_yue_remove(app: AppHandle, id: String) -> Result<(), String> {
 /// 在系统文件管理器里显示引擎目录。
 #[tauri::command]
 pub fn ai_yue_reveal(id: String) -> Result<(), String> {
-    let pack = parse_id(&id)?;
+    let pack = parse_id(&id)?.pack;
     let dir = engine::dir_of(pack);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     reveal(&dir)
@@ -498,17 +636,18 @@ pub fn ai_yue_select(id: Option<String>) -> Result<(), String> {
     let path = engine::dir().join("preferred");
     match id {
         Some(id) => {
-            let pack = parse_id(&id)?;
-            if !engine::installed(pack) {
-                return Err(format!("{} 还没下载", pack.label));
+            let target = parse_id(&id)?;
+            if !engine::installed(target.pack) {
+                return Err(format!("{} 还没下载", target.pack.label));
             }
-            if !usable(pack.device) {
+            if !usable(target.device) {
                 return Err(format!(
                     "{} 在本机不可用（需要对应的显卡 / 驱动）",
-                    pack.label
+                    target.pack.label
                 ));
             }
-            fs::write(&path, pack.id).map_err(|e| e.to_string())?;
+            // 存设备名而不是包 id：macOS 的 cpu 与 metal 共用同一个包。
+            fs::write(&path, target.device).map_err(|e| e.to_string())?;
         }
         None => {
             if path.exists() {
@@ -555,12 +694,25 @@ fn emit(
     );
 }
 
-fn run_install(app: &AppHandle, pack: &'static EnginePack) {
+/// 下载并安装，把进度同时发到「实际包 id」与「用户点的那个 id」上。
+///
+/// macOS 的 CPU 项借用 Metal 包：下载管理器按 `audiocpp-metal` 画进度，设置页那边的
+/// `installAndWait("audiocpp-cpu")` 只在收到同名 done 时才会结束——两条都得发。
+fn run_install(app: &AppHandle, pack: &'static EnginePack, report: &str) {
     let result = crate::job::guard(|| install_now(app, pack).map(|()| String::new()));
     downloader().running.store(false, Ordering::SeqCst);
-    match result {
-        Ok(_) => emit(app, pack.id, "done", pack.bytes(), pack.bytes(), None),
-        Err(message) => emit(app, pack.id, "error", 0, 0, Some(message)),
+    let (state, message) = match &result {
+        Ok(_) => ("done", None),
+        Err(message) => ("error", Some(message.clone())),
+    };
+    let (received, total) = if state == "done" {
+        (pack.bytes(), pack.bytes())
+    } else {
+        (0, 0)
+    };
+    emit(app, pack.id, state, received, total, message.clone());
+    if report != pack.id {
+        emit(app, report, state, received, total, message);
     }
 }
 
@@ -851,6 +1003,17 @@ mod tests {
         assert!(cn.iter().any(|url| url.contains("github.com")));
     }
 
+    /// macOS 的 CPU 没有独立包：它落在 Metal 构建上，靠 `--backend cpu` 强制 CPU。
+    #[test]
+    fn macos_cpu_borrows_the_metal_build() {
+        assert_eq!(build_device_for("cpu", true), "metal");
+        assert_eq!(build_device_for("cpu", false), "cpu");
+        assert_eq!(build_device_for("metal", true), "metal");
+        assert_eq!(build_device_for("rocm", true), "rocm");
+        assert_eq!(device_key("rocm"), Some("rocm"));
+        assert_eq!(device_key("bogus"), None);
+    }
+
     #[test]
     fn devices_match_pack_ids() {
         for (device, id) in [
@@ -858,6 +1021,7 @@ mod tests {
             ("vulkan", "audiocpp-vulkan"),
             ("cuda12", "audiocpp-cuda12"),
             ("cuda13", "audiocpp-cuda13"),
+            ("rocm", "audiocpp-rocm"),
         ] {
             assert_eq!(
                 engine::packs("windows", "x86_64")
@@ -871,14 +1035,22 @@ mod tests {
             .iter()
             .all(|pack| pack.device != "metal"));
 
-        assert_eq!(
-            engine::packs("macos", "aarch64")
-                .iter()
-                .find(|pack| pack.device == "metal")
-                .map(|pack| pack.id),
-            Some("audiocpp-metal")
-        );
-        for id in ["audiocpp-cpu", "audiocpp-vulkan", "audiocpp-cuda12"] {
+        for (arch, label) in [("aarch64", "Apple Silicon"), ("x86_64", "Intel Mac")] {
+            assert_eq!(
+                engine::packs("macos", arch)
+                    .iter()
+                    .find(|pack| pack.device == "metal")
+                    .map(|pack| pack.id),
+                Some("audiocpp-metal"),
+                "{label} 缺 Metal 包"
+            );
+        }
+        for id in [
+            "audiocpp-cpu",
+            "audiocpp-vulkan",
+            "audiocpp-cuda12",
+            "audiocpp-rocm",
+        ] {
             assert!(
                 engine::packs("linux", "x86_64")
                     .iter()
