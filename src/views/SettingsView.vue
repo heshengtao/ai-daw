@@ -48,7 +48,9 @@ import {
   managerSetNetwork,
   mcpStatus,
   onDataDirProgress,
+  pluginScanDirs,
   setMcpConfig,
+  setPluginScanDirs,
   uninstallCli,
 } from "@/api/tauri";
 import { pickDirectory } from "@/api/dialogs";
@@ -62,6 +64,7 @@ import type {
   DataDirSource,
   McpStatus,
   ModelSourcePreference,
+  PluginScanDir,
   ProxyMode,
 } from "@/api/types";
 
@@ -132,6 +135,73 @@ function back(): void {
 function openManager(): void {
   layout.openTab("manager");
   void router.push(lastWorkspace.value);
+}
+
+// ---- 插件扫描目录 ----
+/** 用户额外挂载的 VST3 / CLAP 扫描目录（系统标准目录不在这里，也不会被删掉）。 */
+const scanDirs = ref<PluginScanDir[]>([]);
+/** 正在保存目录列表；避免连点把两次保存交错。 */
+const scanDirsBusy = ref(false);
+/** 目录改了、但这一轮扫描还没跑完（扫描中再改目录时给出提示）。 */
+const scanDirsDirty = ref(false);
+/** 目录列表的修改序号：扫描期间又改过目录时，扫完要再补一轮。 */
+let scanDirsRevision = 0;
+
+async function loadScanDirs(): Promise<void> {
+  try {
+    scanDirs.value = await pluginScanDirs();
+  } catch {
+    // 预览 / 后端不可用：保持空列表，不阻塞设置页其它部分。
+    scanDirs.value = [];
+  }
+}
+
+/** 重扫插件，并在成功后清掉「目录有改动」提示。 */
+async function rescanAllPlugins(): Promise<void> {
+  if (plugins.loading) return;
+  const revision = scanDirsRevision;
+  try {
+    await plugins.rescan();
+  } catch (err) {
+    layout.notify(i18n.t("settings.plugins.scanDirsRescanFailed", { error: String(err) }));
+    return;
+  }
+  // 扫描期间目录又变了：这一轮读到的是旧列表，再跑一轮。
+  if (scanDirsRevision !== revision) {
+    void rescanAllPlugins();
+    return;
+  }
+  scanDirsDirty.value = false;
+}
+
+/** 保存整份目录列表（后端负责去重与绝对路径校验），空闲时顺手重扫。 */
+async function saveScanDirs(paths: string[]): Promise<void> {
+  scanDirsBusy.value = true;
+  try {
+    scanDirs.value = await setPluginScanDirs(paths);
+    scanDirsRevision += 1;
+    scanDirsDirty.value = true;
+    layout.notify(i18n.t("settings.plugins.scanDirsSaved"));
+    // 已经在扫描（手动重扫 / 上一轮目录变更）就先不插队：状态行会提示「重新扫描后生效」。
+    if (!plugins.loading) void rescanAllPlugins();
+  } catch (err) {
+    layout.notify(i18n.t("settings.plugins.scanDirsSaveFailed", { error: String(err) }));
+  } finally {
+    scanDirsBusy.value = false;
+  }
+}
+
+/** 选一个文件夹加进扫描列表；重复选择由后端去重。 */
+async function addScanDir(): Promise<void> {
+  if (scanDirsBusy.value) return;
+  const dir = await pickDirectory();
+  if (!dir) return;
+  await saveScanDirs([...scanDirs.value.map((d) => d.path), dir]);
+}
+
+async function removeScanDir(path: string): Promise<void> {
+  if (scanDirsBusy.value) return;
+  await saveScanDirs(scanDirs.value.filter((d) => d.path !== path).map((d) => d.path));
 }
 function onTheme(t: Theme): void {
   setTheme(t);
@@ -858,6 +928,7 @@ onMounted(() => {
   void loadStoreNetwork();
   void loadBackend();
   void loadDataDir();
+  void loadScanDirs();
   // 子组件（EngineBackendPicker）的 onMounted 比这里先跑；别重复拉同一张清单。
   if (runtimes.items.length === 0 && !runtimes.loading) void runtimes.load();
   void loadAgent();
@@ -1210,14 +1281,37 @@ onUnmounted(() => {
         <!-- 插件管理 -->
         <template v-else-if="active === 'plugins'">
           <div class="group">
-            <div class="group-title">{{ i18n.t("settings.plugins.installed") }}</div>
+            <div class="group-title">{{ i18n.t("settings.plugins.scanDirs") }}</div>
             <div class="card">
-              <div v-for="p in plugins.all" :key="p.id" class="row">
+              <div v-if="scanDirs.length === 0" class="row">
                 <div class="row-text">
-                  <span class="row-title">{{ p.name }}</span>
-                  <span class="row-sub">{{ p.note }}</span>
+                  <span class="row-title">{{ i18n.t("settings.plugins.scanDirsEmpty") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.plugins.scanDirsEmptyHint") }}</span>
                 </div>
-                <span class="row-value">{{ p.builtin ? p.category : i18n.t("settings.plugins.externalTag") }}</span>
+              </div>
+              <div v-for="dir in scanDirs" :key="dir.path" class="row">
+                <div class="row-text">
+                  <span class="scan-path">{{ dir.path }}</span>
+                  <span v-if="!dir.exists" class="row-sub warn">
+                    {{ i18n.t("settings.plugins.scanDirMissing") }}
+                  </span>
+                </div>
+                <button
+                  class="scan-btn danger"
+                  :disabled="scanDirsBusy"
+                  @click="removeScanDir(dir.path)"
+                >
+                  {{ i18n.t("settings.plugins.scanDirRemove") }}
+                </button>
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.plugins.scanDirsAdd") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.plugins.scanDirsAddHint") }}</span>
+                </div>
+                <button class="scan-btn" :disabled="scanDirsBusy" @click="addScanDir">
+                  {{ i18n.t("settings.plugins.scanDirsAddAction") }}
+                </button>
               </div>
             </div>
           </div>
@@ -1242,9 +1336,15 @@ onUnmounted(() => {
               <div class="row">
                 <div class="row-text">
                   <span class="row-title">{{ i18n.t("settings.plugins.status") }}</span>
-                  <span class="row-sub">{{ i18n.t("settings.plugins.statusHint") }}</span>
+                  <span class="row-sub" :class="{ warn: scanDirsDirty && !plugins.loading }">
+                    {{
+                      scanDirsDirty && !plugins.loading
+                        ? i18n.t("settings.plugins.scanDirsPending")
+                        : i18n.t("settings.plugins.statusHint")
+                    }}
+                  </span>
                 </div>
-                <button class="scan-btn" :disabled="plugins.loading" @click="plugins.rescan()">
+                <button class="scan-btn" :disabled="plugins.loading" @click="rescanAllPlugins">
                   {{ plugins.loading ? i18n.t("settings.plugins.scanning") : i18n.t("settings.plugins.rescan") }}
                 </button>
               </div>
@@ -2098,6 +2198,22 @@ onUnmounted(() => {
 .scan-btn:disabled {
   color: rgb(var(--md-on-surface-muted));
   cursor: default;
+}
+/* 扫描目录行：路径用等宽字体，长路径允许在任意位置换行。 */
+.scan-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgb(var(--md-on-surface));
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+/* 移除目录：唯一会「丢东西」的按钮，用错误色区分。 */
+.scan-btn.danger {
+  color: rgb(var(--md-error));
+}
+.scan-btn.danger:hover:not(:disabled) {
+  background-color: rgb(var(--md-error) / 0.08);
 }
 /* MCP 端口输入：与其它 md3-field 同形状，只是更窄并右对齐。 */
 .port-input {

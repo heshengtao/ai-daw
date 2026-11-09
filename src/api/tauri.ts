@@ -96,6 +96,7 @@ import type {
   ProxyStatus,
   Section,
   Send,
+  PluginScanDir,
   PluginScanStatus,
   SoundMemorySummary,
   StoreNetwork,
@@ -1640,6 +1641,18 @@ export function rescanPlugins(): Promise<CatalogPlugin[]> {
 export function pluginScanStatus(): Promise<PluginScanStatus> {
   if (mockEnabled()) return Promise.resolve({ skipped: [], error: null });
   return invoke<PluginScanStatus>("plugin_scan_status");
+}
+
+/** 用户额外挂载的插件扫描目录。 */
+export function pluginScanDirs(): Promise<PluginScanDir[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.pluginScanDirs());
+  return invoke<PluginScanDir[]>("plugin_scan_dirs");
+}
+
+/** 覆盖保存额外扫描目录（只接受绝对路径）；返回保存后的列表。 */
+export function setPluginScanDirs(dirs: string[]): Promise<PluginScanDir[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.setPluginScanDirs(dirs));
+  return invoke<PluginScanDir[]>("plugin_set_scan_dirs", { dirs });
 }
 
 /** 取某个插件的参数表（内置插件直接给，外部插件按目录加载）。 */

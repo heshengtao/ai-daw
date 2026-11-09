@@ -690,6 +690,13 @@ export interface PluginScanStatus {
   error: string | null;
 }
 
+/** 用户额外挂载的插件扫描目录（与后端 `plugin_dirs::ScanDirInfo` 一一对应）。 */
+export interface PluginScanDir {
+  path: string;
+  /** 目录当前是否存在；不存在的条目仍会保留，方便用户移除。 */
+  exists: boolean;
+}
+
 /** 插件自报的参数元信息（与 `plugin-api` 的 `ParamInfo` 同构）。 */
 export interface BackendParam {
   id: string;

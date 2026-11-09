@@ -88,6 +88,7 @@ import type {
   Preset,
   Project,
   ProjectHistoryEntry,
+  PluginScanDir,
   Section,
   Send,
   SoundMemory,
@@ -107,6 +108,9 @@ const mockSessions = new Map<string, AgentSession>();
 let mcpConfig: McpConfig = { enabled: true, port: 0 };
 /** 端口填 0（自动）时，预览里假装分配到的端口。 */
 const MCP_FALLBACK_PORT = 8787;
+
+/** 浏览器预览里的自定义插件扫描目录（只存在内存里）。 */
+let mockScanDirs: string[] = [];
 
 /** 浏览器预览里的假映射库：只用来演示导入流程。 */
 const MOCK_ARTICULATION_MAPS: ArticulationMapSummary[] = [
@@ -1405,6 +1409,13 @@ export const mockApi = {
   listPlugins: (): CatalogPlugin[] => [...MOCK_PLUGINS],
 
   rescanPlugins: (): CatalogPlugin[] => [...MOCK_PLUGINS],
+
+  pluginScanDirs: (): PluginScanDir[] => mockScanDirs.map((path) => ({ path, exists: true })),
+
+  setPluginScanDirs: (dirs: string[]): PluginScanDir[] => {
+    mockScanDirs = [...new Set(dirs)];
+    return mockScanDirs.map((path) => ({ path, exists: true }));
+  },
 
   pluginParams: (pluginId: string): BackendParam[] => MOCK_PARAMS[pluginId] ?? [],
 

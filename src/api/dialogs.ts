@@ -155,7 +155,7 @@ export async function pickLoraFile(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
-/** 选择一个目录（引擎归档离线安装用）；取消返回 null。 */
+/** 选择一个目录（引擎归档离线安装、插件扫描目录等）；取消返回 null。 */
 export async function pickDirectory(): Promise<string | null> {
   if (!isTauri()) return "mock://engine-archives";
   const selected = await openDialog({ multiple: false, directory: true });

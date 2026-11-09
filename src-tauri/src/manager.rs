@@ -411,7 +411,23 @@ fn save_catalog_cache(app: &AppHandle, plugins: &[CatalogPlugin]) {
 ///
 /// VST3 用探针子进程逐个探测：坏插件崩在子进程里，只会进「跳过名单」，不会带走应用。
 pub fn rescan_with_managed(app: &AppHandle) -> Vec<CatalogPlugin> {
-    let (vst3, clap, au) = managed_scan_dirs(app);
+    let (mut vst3, mut clap, au) = managed_scan_dirs(app);
+    // 用户在设置页里挂的额外目录：同一份目录同时交给 VST3 与 CLAP 扫描器，里面有什么收什么。
+    // 与托管目录重复时不重复扫（否则同一个插件会出两条目录条目）。
+    for dir in crate::plugin_dirs::load(app) {
+        if !vst3
+            .iter()
+            .any(|existing| crate::plugin_dirs::same_path(existing, &dir))
+        {
+            vst3.push(dir.clone());
+        }
+        if !clap
+            .iter()
+            .any(|existing| crate::plugin_dirs::same_path(existing, &dir))
+        {
+            clap.push(dir);
+        }
+    }
     let report = ai_daw_host_vst3::scan_report_with(&vst3, &clap, &au);
     let error = report.error;
     let skipped = report.skipped;

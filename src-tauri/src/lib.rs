@@ -23,6 +23,7 @@ mod midi_input;
 mod models;
 mod paths;
 mod pick;
+mod plugin_dirs;
 mod plugin_info;
 mod plugins;
 mod presets;
@@ -701,6 +702,8 @@ pub fn run() {
             commands::record_stop,
             commands::list_plugins,
             commands::plugin_scan_status,
+            plugin_dirs::plugin_scan_dirs,
+            plugin_dirs::plugin_set_scan_dirs,
             commands::rescan_plugins,
             commands::plugin_params,
             commands::add_effect,
