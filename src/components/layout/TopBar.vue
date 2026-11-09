@@ -261,6 +261,17 @@ function onMouseDown(e: MouseEvent): void {
           </button>
         </Tooltip>
 
+        <Tooltip :text="i18n.t('topbar.save')" align="end">
+          <button
+            class="bar-btn save-btn"
+            :class="{ 'is-dirty': dirty }"
+            :aria-label="i18n.t('topbar.saveLabel')"
+            @click="emit('save')"
+          >
+            <FloppyDiskIcon class="bar-icon" />
+          </button>
+        </Tooltip>
+
         <MenuButton
           v-model:open="fileOpen"
           :sections="fileSections"
@@ -583,6 +594,14 @@ function onMouseDown(e: MouseEvent): void {
 .bar-btn.on {
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
+}
+/* 保存：有未保存改动时染上强调色，与工程名旁的小圆点呼应 */
+.bar-btn.save-btn.is-dirty {
+  color: rgb(var(--md-primary));
+}
+.bar-btn.save-btn.is-dirty:hover {
+  background-color: rgb(var(--md-primary) / var(--md-state-hover-alpha));
+  color: rgb(var(--md-primary));
 }
 /* 禁用（当前视图暂时没有底部窗格）：变灰、不可点、悬停/按下都不亮 */
 .bar-btn:disabled,
