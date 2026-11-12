@@ -1403,8 +1403,11 @@ export interface ModelFileStatus {
 export interface ModelProgress {
   /** 模型 id。 */
   id: string;
-  /** 状态：`downloading` / `verifying` / `done` / `error`。 */
-  state: "downloading" | "verifying" | "done" | "error";
+  /** 状态：`downloading` / `verifying` / `done` / `error` / `needs-auth`。
+   *
+   * `needs-auth` = 目标模型在 Hugging Face 需要先同意许可（gated 仓库），
+   * 界面据此弹授权窗；see {@link ModelAuth}. */
+  state: "downloading" | "verifying" | "done" | "error" | "needs-auth";
   /** 已接收字节。 */
   received: number;
   /** 总字节（0 = 未知）。 */
@@ -1417,6 +1420,25 @@ export interface ModelProgress {
   source_kind: string | null;
   /** 该地址所在区域。 */
   region: ModelRegion | null;
+  /** `needs-auth` 时的授权详情。 */
+  auth?: ModelAuth | null;
+}
+
+/** 「这个模型要先去 Hugging Face 同意许可」的详情（与后端 `models::ModelAuth` 对应）。 */
+export interface ModelAuth {
+  /** 仓库全名，例如 `Lightricks/LTX-2.5`。 */
+  repo: string;
+  /** 仓库页：用户在这里点「同意并访问」。 */
+  page_url: string;
+  /** 创建 read token 的页面。 */
+  token_url: string;
+}
+
+/** Hugging Face token 的配置状态（后端不回传 token 本身）。 */
+export interface HfTokenStatus {
+  set: boolean;
+  /** 掩码提示，例如 `hf_…3f9a`。 */
+  hint: string;
 }
 
 /**
@@ -1654,6 +1676,8 @@ export interface StoreNetwork {
   model_mirrors: string[];
   /** 模型下载源的区域偏好；`auto` = 探测连通性后决定（默认）。 */
   model_source_preference: ModelSourcePreference;
+  /** Hugging Face read token；后端**不回传**真实值（永远空串），只用来占位。 */
+  hf_token?: string;
   /** **执行后端**偏好；`auto` = 按本机硬件推荐（默认）。 */
   backend_preference: BackendPreference;
   /** audio.cpp 引擎在 CUDA 上是否启用 `cuda_perf` 预设（默认开）。 */

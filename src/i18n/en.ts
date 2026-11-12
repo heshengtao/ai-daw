@@ -2297,6 +2297,23 @@ const en: Record<string, string> = {
   "yue.needPrompt": "Write a music prompt first (ACE-Step takes the style from it)",
   "yue.onlyYue2": "Cover, continuation, score and LoRA only apply to YuE2; ACE-Step renders the whole song from prompt + lyrics",
   "yue.stepsHintTurbo": "Turbo checkpoints cap this at 8 steps",
+
+  // ---- Hugging Face authorization (gated repos) ----
+  "models.auth.title": "Hugging Face authorization needed",
+  "models.auth.message": "{repo} is a gated repository. Accept the license on the web page, then paste a read token here and the download continues.",
+  "models.auth.stepAgree": ": click \"Agree and access repository\"",
+  "models.auth.stepToken": ": create a read token and copy it",
+  "models.auth.tokenLink": "Create a read token",
+  "models.auth.tokenLabel": "Hugging Face read token",
+  "models.auth.tokenPlaceholder": "hf_…",
+  "models.auth.hint": "The token stays in local settings and is only sent to huggingface.co. You can revoke it on HF at any time.",
+  "models.auth.retry": "Save and retry",
+  "models.auth.saving": "Retrying…",
+  "settings.store.hfToken": "Hugging Face token",
+  "settings.store.hfTokenHint": "Only for gated models that need a license acceptance; sent to huggingface.co only and stored locally.",
+  "settings.store.hfTokenPlaceholder": "hf_… (empty = anonymous download)",
+  "settings.store.hfTokenSet": "configured {hint}",
+  "settings.store.hfTokenClear": "Clear",
 };
 
 export default en;

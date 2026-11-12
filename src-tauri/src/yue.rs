@@ -36,7 +36,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use ai_daw_local_ai::engine::{self, EngineArchive, EnginePack, EngineSource};
 
 use crate::manager::{
-    download_candidates, download_verified, resolve_proxy, ModelSourcePreference, StoreNetwork,
+    download_candidates, download_verified_with_token, resolve_proxy, ModelSourcePreference,
+    StoreNetwork,
     StoreRuntime,
 };
 
@@ -761,12 +762,14 @@ fn install_now(app: &AppHandle, pack: &'static EnginePack) -> Result<(), String>
             archive.bytes / (1024 * 1024),
             candidates[0]
         );
-        download_verified(
+        // YuE2 的权重也在 Hugging Face 上：带上 read token，gated 仓库才下得动。
+        download_verified_with_token(
             &candidates,
             &path,
             archive.sha256,
             archive.bytes,
             proxy.as_ref(),
+            Some(&network.hf_token),
             Some(cancel),
             &mut progress,
         )?;

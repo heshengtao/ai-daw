@@ -9,7 +9,8 @@ import {
   modelReveal,
   onModelEvent,
 } from "@/api/tauri";
-import type { ModelProgress, ModelStatus, SourceProbe } from "@/api/types";
+import { modelSaveHfToken } from "@/api/tauri";
+import type { ModelAuth, ModelProgress, ModelStatus, SourceProbe } from "@/api/types";
 
 /**
  * 本地 AI 模型（Stage G）：列出清单、下载 / 取消 / 删除、测源。
@@ -22,6 +23,14 @@ import type { ModelProgress, ModelStatus, SourceProbe } from "@/api/types";
  * 已有下载时**抛错**而不是静默返回（以前直接 `return`，链式下载被无声吞掉，界面看起来
  * 就是「点了确认但什么都没发生」）。
  */
+/** 下载被 Hugging Face 的 gated 授权挡住时抛这个（不是「下载失败」，界面不弹红条）。 */
+export class NeedsAuthError extends Error {
+  constructor(readonly auth: ModelAuth) {
+    super(`${auth.repo} 需要先在 Hugging Face 同意许可`);
+    this.name = "NeedsAuthError";
+  }
+}
+
 export const useModelsStore = defineStore("models", () => {
   const catalog = ref<ModelStatus[]>([]);
   const loading = ref(false);
@@ -36,8 +45,12 @@ export const useModelsStore = defineStore("models", () => {
   /** 正在测源的模型 id。 */
   const probingId = ref<string | null>(null);
 
+  /** 等待用户授权的请求（非空时界面弹授权窗）。 */
+  const pendingAuth = ref<{ id: string; auth: ModelAuth; message: string } | null>(null);
   /** 当前这次下载的收尾函数（取消时主动结算，避免队列一直等）。 */
-  let settleCurrent: ((result: { ok: boolean; message?: string }) => void) | null = null;
+  let settleCurrent:
+    | ((result: { ok: boolean; message?: string; needsAuth?: boolean }) => void)
+    | null = null;
   /** 同一个 id 重复调用时共用这一次 Promise。 */
   let inflight: { id: string; promise: Promise<void> } | null = null;
 
@@ -96,10 +109,12 @@ export const useModelsStore = defineStore("models", () => {
     }
 
     const promise = (async () => {
-      let settle!: (result: { ok: boolean; message?: string }) => void;
-      const finished = new Promise<{ ok: boolean; message?: string }>((resolve) => {
-        settle = resolve;
-      });
+      let settle!: (result: { ok: boolean; message?: string; needsAuth?: boolean }) => void;
+      const finished = new Promise<{ ok: boolean; message?: string; needsAuth?: boolean }>(
+        (resolve) => {
+          settle = resolve;
+        },
+      );
       settleCurrent = settle;
 
       // 先订阅再发命令：下载线程可能在命令返回前就报完 `done`，反过来的顺序会丢事件。
@@ -107,7 +122,12 @@ export const useModelsStore = defineStore("models", () => {
         if (p.id !== id) return;
         if (p.state === "done") settle({ ok: true });
         else if (p.state === "error") settle({ ok: false, message: p.message ?? "下载失败" });
-        else progress.value = p;
+        else if (p.state === "needs-auth") {
+          // gated 仓库：不是失败，是「要先去网页同意 + 给个 token」。
+          if (p.auth) pendingAuth.value = { id, auth: p.auth, message: p.message ?? "" };
+          progress.value = null;
+          settle({ ok: false, message: p.message ?? "需要在 Hugging Face 授权", needsAuth: true });
+        } else progress.value = p;
       });
 
       busyId.value = id;
@@ -129,6 +149,12 @@ export const useModelsStore = defineStore("models", () => {
         const result = await finished;
         if (!result.ok) {
           const message = result.message ?? "下载失败";
+          if (result.needsAuth) {
+            // 交给授权弹窗，不写 models.error（否则管理器会同时弹一条红色失败提示）。
+            throw new NeedsAuthError(
+              pendingAuth.value?.auth ?? { repo: "", page_url: "", token_url: "" },
+            );
+          }
           if (!message.includes("取消")) error.value = message;
           throw new Error(message);
         }
@@ -149,6 +175,24 @@ export const useModelsStore = defineStore("models", () => {
 
     inflight = { id, promise };
     return promise;
+  }
+
+  /** 关掉授权弹窗（用户不理它）。 */
+  function dismissAuth(): void {
+    pendingAuth.value = null;
+  }
+
+  /**
+   * 保存 HF token 并**重试**刚才被挡下的那次下载。
+   *
+   * 授权弹窗拿到 token 后走这条路：写设置 → 清掉待办 → 重新调 `download()`。
+   */
+  async function authorizeAndRetry(token: string): Promise<void> {
+    await modelSaveHfToken(token);
+    const target = pendingAuth.value;
+    pendingAuth.value = null;
+    if (!target) return;
+    await download(target.id);
   }
 
   /** 取消当前下载（主动结算 Promise，队列不会一直等一个再也不会来的事件）。 */
@@ -217,6 +261,9 @@ export const useModelsStore = defineStore("models", () => {
   }
 
   return {
+    pendingAuth,
+    dismissAuth,
+    authorizeAndRetry,
     catalog,
     loading,
     error,

@@ -998,6 +998,14 @@ pub struct StoreNetwork {
     /// 模型下载源的**区域偏好**（自动探测 / 优先国外 / 优先国内）。见 [`ModelSourcePreference`]。
     #[serde(default)]
     pub model_source_preference: ModelSourcePreference,
+    /// Hugging Face 的 **read token**（`hf_…`）。留空 = 匿名下载。
+    ///
+    /// 只用于两件事：访问需要先「同意许可」的 gated 仓库（否则一律 403 `GatedRepo`），
+    /// 以及给自己账号的限流配额。**只发给 `huggingface.co` 官方域**——用户自填的镜像 /
+    /// 代理前缀拿不到它，凭据不外流。明文存在 `store.json`（与代理设置同处），
+    /// 不进日志、不进错误消息。
+    #[serde(default)]
+    pub hf_token: String,
     /// **执行后端**偏好（自动推荐 / 强制某一种）。见 [`BackendPreference`]。
     #[serde(default)]
     pub backend_preference: BackendPreference,
@@ -1229,18 +1237,45 @@ pub(crate) fn download_candidates(url: &str, prefix: &str) -> Vec<String> {
 
 /// 下载失败的两类原因——决定「重试同一个地址」还是「换个地址」。
 #[derive(Debug)]
-enum DownloadError {
+pub(crate) enum DownloadError {
     /// 传输层问题（连不上、被断开、5xx）：值得退避重试，也值得换源。
     Transient(String),
     /// 地址本身的问题（4xx、内容对不上）：同一地址重试没有意义，换源可以再试。
     Permanent(String),
+    /// **需要 Hugging Face 授权**：仓库是 gated 的，匿名访问拿到 403 `GatedRepo`。
+    ///
+    /// 单独成一类是因为它既不该盲重试、也不该当成普通失败：界面要弹「去 HF 同意许可 +
+    /// 粘贴 token」的窗，拿到 token 后重试就能过。`repo` / `page_url` 由服务器返回的
+    /// `X-Error-Message` 与请求地址推出，供界面直接打开。
+    Gated { repo: String, page_url: String },
 }
 
 impl DownloadError {
     fn message(self) -> String {
         match self {
             DownloadError::Transient(m) | DownloadError::Permanent(m) => m,
+            DownloadError::Gated { repo, .. } => {
+                format!("{repo} 需要先在 Hugging Face 同意许可（并填写 read token）")
+            }
         }
+    }
+}
+
+impl std::fmt::Display for DownloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DownloadError::Transient(m) | DownloadError::Permanent(m) => f.write_str(m),
+            DownloadError::Gated { repo, page_url } => {
+                write!(f, "{repo} 需要 Hugging Face 授权（先去 {page_url} 同意许可）")
+            }
+        }
+    }
+}
+
+/// 让 `?` 在老调用点（返回 `Result<_, String>`）上继续可用：授权信息在那里用不上。
+impl From<DownloadError> for String {
+    fn from(err: DownloadError) -> Self {
+        err.to_string()
     }
 }
 
@@ -1595,12 +1630,41 @@ pub(crate) fn download_verified(
     proxy: Option<&ureq::Proxy>,
     cancel: Option<&AtomicBool>,
     progress: DownloadProgress<'_>,
-) -> Result<(), String> {
-    let mut last = String::new();
+) -> Result<(), DownloadError> {
+    download_verified_with_token(
+        candidates,
+        dest,
+        expected_sha256,
+        expected_size,
+        proxy,
+        None,
+        cancel,
+        progress,
+    )
+}
+
+/// 同 [`download_verified`]，但可以带上 Hugging Face 的 read token。
+///
+/// token **只喂给 `huggingface.co` 官方域**（见 [`hf_request_host`]）：镜像 / 前缀是用户
+/// 自己填的第三方地址，不该看到凭据。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn download_verified_with_token(
+    candidates: &[String],
+    dest: &Path,
+    expected_sha256: &str,
+    expected_size: u64,
+    proxy: Option<&ureq::Proxy>,
+    hf_token: Option<&str>,
+    cancel: Option<&AtomicBool>,
+    progress: DownloadProgress<'_>,
+) -> Result<(), DownloadError> {
+    let mut last = "没有可用的下载地址".to_string();
+    let mut gated = None;
     for (index, url) in candidates.iter().enumerate() {
+        let token = hf_token.filter(|t| !t.is_empty() && hf_request_host(url));
         for attempt in 1..=DOWNLOAD_ATTEMPTS {
             if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
-                return Err("已取消".into());
+                return Err(DownloadError::Permanent("已取消".into()));
             }
             match download_from(
                 url,
@@ -1608,11 +1672,19 @@ pub(crate) fn download_verified(
                 expected_sha256,
                 expected_size,
                 proxy,
+                token,
                 cancel,
                 &mut *progress,
             ) {
                 Ok(()) => return Ok(()),
                 Err(err) => {
+                    // gated 不是「这个地址坏了」，换源也可能好（例如魔搭那份），
+                    // 所以记下来、继续试下一个源，全部失败后再把授权信息抛给界面。
+                    if let DownloadError::Gated { .. } = err {
+                        gated = Some(err);
+                        last = format!("{url} → 需要 Hugging Face 授权");
+                        break;
+                    }
                     let permanent = matches!(err, DownloadError::Permanent(_));
                     last = format!("{url} → {}", err.message());
                     // 地址本身有问题就不必重试同一地址了，但还可以换下一个源。
@@ -1629,7 +1701,69 @@ pub(crate) fn download_verified(
             eprintln!("[manager] 换下一个下载源（上一个失败：{last}）");
         }
     }
-    Err(last)
+    match gated {
+        Some(err) => Err(err),
+        None => Err(DownloadError::Permanent(last)),
+    }
+}
+
+/// 服务器是不是在说「这个仓库要授权」。
+///
+/// HF 对 gated 仓库回 `403` + `X-Error-Code: GatedRepo`（错误消息里还带仓库页地址）。
+/// 只认这个组合：普通 403（比如镜像站自己的鉴权）仍按永久失败处理。
+fn is_gated_response(status: u16, resp: &ureq::http::Response<ureq::Body>) -> bool {
+    if status != 403 {
+        return false;
+    }
+    gated_signal(status, resp.headers().get("x-error-code").and_then(|v| v.to_str().ok()))
+}
+
+/// `403` + `X-Error-Code: GatedRepo` 才是「要授权」；普通 403 仍然算永久失败。
+fn gated_signal(status: u16, error_code: Option<&str>) -> bool {
+    // 直连 HF（以及大多数 CDN 路径）回 **401**；镜像或「已带 token 但不在授权名单」回 403。
+    // 实测：`curl https://huggingface.co/Lightricks/LTX-2.5/resolve/...` → 401 + GatedRepo。
+    matches!(status, 401 | 403)
+        && error_code.is_some_and(|code| code.eq_ignore_ascii_case("GatedRepo"))
+}
+
+/// 该不该给这个地址附上 HF token：**只认官方域**，镜像 / 代理前缀一律不附。
+fn hf_authorization(url: &str, token: Option<&str>) -> Option<String> {
+    let token = token.filter(|t| !t.trim().is_empty())?;
+    if !hf_request_host(url) {
+        return None;
+    }
+    Some(format!("Bearer {}", token.trim()))
+}
+
+/// 这个地址是不是 `huggingface.co` 官方域（决定要不要附 token）。
+///
+/// 用户自填的镜像 / 代理前缀一律不算：凭据只交给官方。
+pub(crate) fn hf_request_host(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let host = rest.split('/').next().unwrap_or("");
+    let host = host.split(':').next().unwrap_or("");
+    host.eq_ignore_ascii_case("huggingface.co") || host.eq_ignore_ascii_case("www.huggingface.co")
+}
+
+/// 从 HF 的下载地址里取出 `namespace/repo`（gated 提示要打开对应仓库页）。
+fn hf_repo_of(url: &str) -> Option<String> {
+    let rest = url.split("://").nth(1)?;
+    let (host, path) = rest.split_once('/')?;
+    if !host.eq_ignore_ascii_case("huggingface.co") && !host.eq_ignore_ascii_case("www.huggingface.co")
+    {
+        return None;
+    }
+    let path = path.strip_prefix("models/").unwrap_or(path);
+    let mut parts = path.split('/');
+    let ns = parts.next()?;
+    let repo = parts.next()?;
+    // `https://huggingface.co/<ns>/resolve/...` 这种缺少仓库名的地址要挡掉。
+    if ns.is_empty() || repo.is_empty() || repo == "resolve" {
+        return None;
+    }
+    Some(format!("{ns}/{repo}"))
 }
 
 /// 从**一个**地址下载到 `dest`，边下边算 sha256，并校验大小与哈希。
@@ -1642,6 +1776,7 @@ fn download_from(
     expected_sha256: &str,
     expected_size: u64,
     proxy: Option<&ureq::Proxy>,
+    hf_token: Option<&str>,
     cancel: Option<&AtomicBool>,
     progress: DownloadProgress<'_>,
 ) -> Result<(), DownloadError> {
@@ -1676,6 +1811,10 @@ fn download_from(
     }
 
     let mut request = download_agent(proxy).get(url);
+    // 凭据只交给 huggingface.co 官方域（调用方已按 host 过滤过，这里再兜一层）。
+    if let Some(header) = hf_authorization(url, hf_token) {
+        request = request.header("Authorization", header);
+    }
     if have > 0 {
         request = request.header("Range", format!("bytes={have}-"));
     }
@@ -1696,6 +1835,14 @@ fn download_from(
             "HTTP {}",
             status.as_u16()
         )));
+    } else if is_gated_response(status.as_u16(), &resp) {
+        // 403 + X-Error-Code: GatedRepo = 仓库要先去网页上同意许可。
+        // 这不是「地址坏了」：拿到 token 后同一个地址就能下。
+        let repo = hf_repo_of(url).unwrap_or_else(|| "huggingface 仓库".to_string());
+        return Err(DownloadError::Gated {
+            page_url: format!("https://huggingface.co/{repo}"),
+            repo,
+        });
     } else {
         return Err(DownloadError::Permanent(format!(
             "HTTP {}",
@@ -2443,7 +2590,44 @@ fn path_is_managed(path: &Path, dirs: &ManagedDirs, installed: &HashSet<PathBuf>
 /// 读取插件源的网络配置（镜像 / 下载代理）。
 #[tauri::command]
 pub fn plugin_manager_network(runtime: tauri::State<'_, StoreRuntime>) -> StoreNetwork {
-    runtime.network()
+    // 不把 token 回传给界面：设置页只需要知道「有没有配」，用
+    // [`model_hf_token_status`] 看掩码就够了。回传只会给凭据多一条外泄路径
+    // （错误提示、日志、崩溃报告都从这条数据流上走）。
+    let mut network = runtime.network();
+    network.hf_token = String::new();
+    network
+}
+
+/// Hugging Face token 的配置状态（设置页 / 下载弹窗用；**不回传 token 本身**）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HfTokenStatus {
+    /// 是否已配置。
+    pub set: bool,
+    /// 掩码提示，例如 `hf_…3f9a`；未配置时为空串。
+    pub hint: String,
+}
+
+#[tauri::command]
+pub fn model_hf_token_status(runtime: tauri::State<'_, StoreRuntime>) -> HfTokenStatus {
+    let token = runtime.network().hf_token;
+    if token.is_empty() {
+        return HfTokenStatus {
+            set: false,
+            hint: String::new(),
+        };
+    }
+    let tail: String = token
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    HfTokenStatus {
+        set: true,
+        hint: format!("hf_…{tail}"),
+    }
 }
 
 /// 写入插件源的网络配置（落 `store.json`）。空白项会被丢弃。
@@ -2481,9 +2665,30 @@ pub fn plugin_manager_set_network(
         yue_cuda_perf: runtime.network().yue_cuda_perf,
         // LoRA 由 `ai_yue_set_lora` 单独管，这里原样保留。
         yue_lora: runtime.network().yue_lora,
+        // HF token 由 `model_save_hf_token` 单独管（它不跟网络面板一起提交）：
+        // 老前端不带这个字段，直接保留原值。
+        hf_token: runtime.network().hf_token,
     };
     runtime.set(next.clone())?;
     Ok(next)
+}
+
+/// 保存 / 清除 Hugging Face token（`hf_…`）。
+///
+/// 单独成一个命令而不是塞进 `plugin_manager_set_network`：授权弹窗要在下载流程中间
+/// 立刻写入并重试，不该逼前端把整份网络配置回传一遍。传空串 = 清除。
+#[tauri::command]
+pub fn model_save_hf_token(
+    runtime: tauri::State<'_, StoreRuntime>,
+    token: String,
+) -> Result<(), String> {
+    let token = token.trim().to_string();
+    if !token.is_empty() && !token.starts_with("hf_") {
+        return Err("Hugging Face token 应以 hf_ 开头".into());
+    }
+    let mut next = runtime.network();
+    next.hf_token = token;
+    runtime.set(next)
 }
 
 /// 只做解析、**不联网**，用来在设置页显示「当前会走哪个代理」。
@@ -2576,6 +2781,87 @@ pub async fn plugin_manager_probe_proxy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 老配置文件里没有 `hf_token` 字段：必须照常加载，**不能**整份退回默认值
+    /// （`StoreNetwork::load` 在反序列化失败时会 `unwrap_or_default()`，那会悄悄清空
+    /// 用户的代理与镜像设置）。
+    #[test]
+    fn old_store_json_without_hf_token_still_loads() {
+        let old = r#"{
+            "registry_mirrors": ["https://mirror.example/"],
+            "download_prefix": "https://proxy.example/",
+            "proxy_mode": "manual",
+            "proxy_url": "socks5://127.0.0.1:7892",
+            "model_mirrors": ["https://model-mirror.example/"],
+            "model_source_preference": "domestic",
+            "backend_preference": "cpu"
+        }"#;
+        let net: StoreNetwork = serde_json::from_str(old).expect("旧配置应能反序列化");
+        assert!(net.hf_token.is_empty(), "缺字段时按匿名下载");
+        // 其它字段一个都不能丢。
+        assert_eq!(net.registry_mirrors, vec!["https://mirror.example/".to_string()]);
+        assert_eq!(net.download_prefix, "https://proxy.example/");
+        assert_eq!(net.proxy_url, "socks5://127.0.0.1:7892");
+        assert_eq!(net.model_mirrors, vec!["https://model-mirror.example/".to_string()]);
+    }
+
+    /// 只有 `huggingface.co` 官方域才配拿 token：镜像 / 前缀是用户自己填的第三方地址。
+    #[test]
+    fn hf_token_only_goes_to_the_official_host() {
+        assert_eq!(
+            hf_authorization(
+                "https://huggingface.co/Lightricks/LTX-2.5/resolve/abc/vae.ckpt",
+                Some("hf_secret")
+            )
+            .as_deref(),
+            Some("Bearer hf_secret")
+        );
+        for url in [
+            "https://hf-mirror.com/Lightricks/LTX-2.5/resolve/abc/vae.ckpt",
+            "https://mirror.example/https://huggingface.co/x/y/resolve/abc/z",
+            "https://modelscope.cn/models/x/y/resolve/abc/z",
+            "https://huggingface.co.evil.tld/x/y/resolve/abc/z",
+        ] {
+            assert_eq!(hf_authorization(url, Some("hf_secret")), None, "{url}");
+        }
+        // 没有 token 就没有 Authorization。
+        assert_eq!(
+            hf_authorization("https://huggingface.co/x/y", None),
+            None
+        );
+        assert_eq!(
+            hf_authorization("https://huggingface.co/x/y", Some("   ")),
+            None
+        );
+    }
+
+    /// gated 只认 `403 + X-Error-Code: GatedRepo`；别的 403 仍按永久失败处理。
+    #[test]
+    fn only_the_gated_error_code_asks_for_auth() {
+        assert!(gated_signal(401, Some("GatedRepo")));
+        assert!(gated_signal(403, Some("GatedRepo")));
+        assert!(gated_signal(403, Some("gatedrepo")));
+        assert!(!gated_signal(403, None));
+        assert!(!gated_signal(401, None));
+        assert!(!gated_signal(403, Some("RepoNotFound")));
+        assert!(!gated_signal(404, Some("GatedRepo")));
+    }
+
+    /// 授权提示要打开的是**仓库页**，不是文件地址。
+    #[test]
+    fn gated_repo_is_read_from_the_download_url() {
+        assert_eq!(
+            hf_repo_of("https://huggingface.co/Lightricks/LTX-2.5/resolve/49b093a3/vae/x.ckpt")
+                .as_deref(),
+            Some("Lightricks/LTX-2.5")
+        );
+        assert_eq!(
+            hf_repo_of("https://huggingface.co/models/org/repo/resolve/abc/file").as_deref(),
+            Some("org/repo")
+        );
+        assert_eq!(hf_repo_of("https://modelscope.cn/models/x/y/resolve/abc/z"), None);
+        assert_eq!(hf_repo_of("https://huggingface.co/onlyone/resolve/abc/z"), None);
+    }
 
     fn raw_file(url: &str, contains: &[&str], systems: &[&str], archs: &[&str]) -> RawFile {
         RawFile {

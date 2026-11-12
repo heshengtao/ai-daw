@@ -15,6 +15,7 @@ import ShortcutsDialog from "@/components/common/ShortcutsDialog.vue";
 import UnsavedChangesDialog from "@/components/common/UnsavedChangesDialog.vue";
 import ExportDialog, { type ExportChoice } from "@/components/common/ExportDialog.vue";
 import ImportDialog, { type ImportKind } from "@/components/common/ImportDialog.vue";
+import HfAuthDialog from "@/components/common/HfAuthDialog.vue";
 import ParameterBrowser from "@/components/common/ParameterBrowser.vue";
 import UpdateDoneToast from "@/components/common/UpdateDoneToast.vue";
 import WelcomeDialog from "@/components/onboarding/WelcomeDialog.vue";
@@ -821,6 +822,8 @@ onUnmounted(() => {
   <!-- 导出：选格式 / 采样率 / 比特率，再去系统保存对话框选路径（扩展名决定最终格式） -->
   <ExportDialog v-model:open="exportOpen" @confirm="onExportConfirm" />
   <ImportDialog v-model:open="importOpen" @confirm="onImportConfirm" />
+  <!-- gated 模型：任何入口（管理器 / 下载队列 / 向导）触发的下载都走这一个框 -->
+  <HfAuthDialog />
 
   <!-- 升级后首次打开：底部 toast 提示更新完成，可跳到 GitHub 发布页看更新日志 -->
   <UpdateDoneToast />

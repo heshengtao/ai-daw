@@ -787,6 +787,8 @@ pub fn run() {
             svc::svc_cancel,
             models::model_catalog,
             models::model_download,
+            manager::model_save_hf_token,
+            manager::model_hf_token_status,
             models::model_cancel,
             models::model_remove,
             models::model_reveal,

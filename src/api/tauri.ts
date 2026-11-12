@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { mockApi, mockEnabled } from "./mock";
 import type {
+  HfTokenStatus,
   AgentConfig,
   AgentEvent,
   AgentProbe,
@@ -2062,6 +2063,18 @@ export function managerSetNetwork(
     modelMirrors,
     modelSourcePreference,
   });
+}
+
+/** 保存 / 清除 Hugging Face read token（传空串 = 清除）。 */
+export function modelSaveHfToken(token: string): Promise<void> {
+  if (mockEnabled()) return Promise.resolve();
+  return invoke<void>("model_save_hf_token", { token });
+}
+
+/** 当前是否配了 HF token（只回状态与掩码，不回 token 本身）。 */
+export function modelHfTokenStatus(): Promise<HfTokenStatus> {
+  if (mockEnabled()) return Promise.resolve({ set: false, hint: "" });
+  return invoke<HfTokenStatus>("model_hf_token_status");
 }
 
 /** 当前配置会解析成什么代理（不联网，用于设置页显示）。 */

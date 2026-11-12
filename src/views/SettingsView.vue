@@ -46,6 +46,8 @@ import {
   managerProbeProxy,
   managerProxyStatus,
   managerSetNetwork,
+  modelHfTokenStatus,
+  modelSaveHfToken,
   mcpStatus,
   onDataDirProgress,
   pluginScanDirs,
@@ -399,6 +401,37 @@ const proxySource = ref("");
 const proxyProbe = ref("");
 const proxyTesting = ref(false);
 const storeSaving = ref(false);
+/** HF read token：输入框只在「要设置」时有值；已配置的状态用掩码显示。 */
+const hfTokenInput = ref("");
+const hfTokenHint = ref("");
+const hfTokenSaving = ref(false);
+const hfTokenError = ref("");
+
+/** 读「有没有配 HF token」——后端只回状态与掩码，不回 token 本身。 */
+async function refreshHfToken(): Promise<void> {
+  try {
+    const status = await modelHfTokenStatus();
+    hfTokenHint.value = status.hint;
+  } catch {
+    hfTokenHint.value = "";
+  }
+}
+
+/** 保存 / 清除 HF token（空输入 = 不动作；点「清除」走 `saveHfToken("")`）。 */
+async function saveHfToken(token: string): Promise<void> {
+  if (hfTokenSaving.value) return;
+  hfTokenSaving.value = true;
+  hfTokenError.value = "";
+  try {
+    await modelSaveHfToken(token);
+    hfTokenInput.value = "";
+    await refreshHfToken();
+  } catch (err) {
+    hfTokenError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    hfTokenSaving.value = false;
+  }
+}
 
 async function refreshProxyStatus(): Promise<void> {
   try {
@@ -926,6 +959,7 @@ onMounted(() => {
   void loadMcp();
   void loadCli();
   void loadStoreNetwork();
+  void refreshHfToken();
   void loadBackend();
   void loadDataDir();
   void loadScanDirs();
@@ -1471,6 +1505,39 @@ onUnmounted(() => {
                     @update:model-value="onSourcePick"
                   />
                 </div>
+              </div>
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.store.hfToken") }}</span>
+                <span class="row-sub">
+                  {{ i18n.t("settings.store.hfTokenHint") }}
+                  <template v-if="hfTokenHint">（{{ i18n.t("settings.store.hfTokenSet", { hint: hfTokenHint }) }}）</template>
+                </span>
+                <div class="token-row">
+                  <input
+                    v-model="hfTokenInput"
+                    class="net-input"
+                    type="password"
+                    autocomplete="off"
+                    spellcheck="false"
+                    :placeholder="i18n.t('settings.store.hfTokenPlaceholder')"
+                  />
+                  <button
+                    class="scan-btn"
+                    :disabled="hfTokenSaving || !hfTokenInput.trim()"
+                    @click="saveHfToken(hfTokenInput)"
+                  >
+                    {{ i18n.t("common.save") }}
+                  </button>
+                  <button
+                    v-if="hfTokenHint"
+                    class="scan-btn"
+                    :disabled="hfTokenSaving"
+                    @click="saveHfToken('')"
+                  >
+                    {{ i18n.t("settings.store.hfTokenClear") }}
+                  </button>
+                </div>
+                <span v-if="hfTokenError" class="row-sub row-error">{{ hfTokenError }}</span>
               </div>
               <div class="col-row">
                 <span class="row-title">{{ i18n.t("settings.store.models") }}</span>
@@ -2093,6 +2160,19 @@ onUnmounted(() => {
 .row-sub {
   font-size: 12px;
   color: rgb(var(--md-on-surface-variant));
+}
+/* HF token：输入框 + 保存 / 清除并排，窄窗口下输入框先缩。 */
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.token-row .net-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.row-sub.row-error {
+  color: rgb(var(--md-error));
 }
 /* 警告：后端看起来可用、但其实会回落 CPU（组件缺失 / provider 没注册成功）。 */
 .row-sub.warn {

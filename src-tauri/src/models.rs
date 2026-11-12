@@ -30,8 +30,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use ai_daw_local_ai::models::catalog::{self, ModelEntry, ModelFile, ModelSource};
 
 use crate::manager::{
-    download_candidates, download_verified, probe_agent, resolve_proxy, ModelSourcePreference,
-    StoreNetwork, StoreRuntime,
+    download_candidates, download_verified_with_token, probe_agent, resolve_proxy, DownloadError,
+    ModelSourcePreference, StoreNetwork, StoreRuntime,
 };
 
 /// 模型下载进度广播的前端事件名。
@@ -62,6 +62,22 @@ pub struct ModelProgress {
     pub source_kind: Option<String>,
     /// 该地址所在区域：`intl` / `cn`。
     pub region: Option<String>,
+    /// 需要 Hugging Face 授权时的提示（`state == "needs-auth"` 才有）。
+    ///
+    /// 界面据此弹「去同意许可 + 粘贴 token」的窗；拿到了 token 就重新调一次下载。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth: Option<ModelAuth>,
+}
+
+/// 「这个模型要先去 Hugging Face 同意许可」的详情。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelAuth {
+    /// 仓库全名，例如 `Lightricks/LTX-2.5`。
+    pub repo: String,
+    /// 仓库页（用户在这里点「同意并访问」）。
+    pub page_url: String,
+    /// 创建 read token 的页面。
+    pub token_url: String,
 }
 
 /// 下载运行时（一次只下一个）。
@@ -371,6 +387,7 @@ pub async fn model_resolve_url(app: AppHandle, id: String) -> Result<String, Str
         candidates_for(entry, file, &network, region)
             .into_iter()
             .next()
+            .map(|candidate| candidate.url)
             .ok_or_else(|| "这个模型没有可用的下载源".to_string())
     })
     .await
@@ -541,34 +558,56 @@ fn candidates_for(
     file: &ModelFile,
     network: &StoreNetwork,
     region: Option<&str>,
-) -> Vec<String> {
+) -> Vec<Candidate> {
     if entry.files.len() == 1 {
         if let Ok(list) = std::env::var("AIDAW_MODEL_SOURCES") {
-            let urls: Vec<String> = list
+            let urls: Vec<Candidate> = list
                 .split(',')
-                .map(|s| s.trim().to_string())
+                .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
+                .map(|s| Candidate {
+                    url: s.to_string(),
+                    sha256: file.sha256,
+                    size: file.approx_bytes,
+                })
                 .collect();
             if !urls.is_empty() {
                 return urls;
             }
         }
     }
-    let mut out: Vec<String> = Vec::new();
-    let mut push = |url: String| {
-        if !url.is_empty() && !out.iter().any(|existing| existing == &url) {
-            out.push(url);
+    let mut out: Vec<Candidate> = Vec::new();
+    let mut push = |url: String, source: &ModelSource| {
+        if url.is_empty() || out.iter().any(|existing| existing.url == url) {
+            return;
         }
+        out.push(Candidate {
+            url,
+            sha256: source.sha256_for(file),
+            size: source.size_for(file),
+        });
     };
     for source in ordered_sources(file, region) {
         for mirror in &network.model_mirrors {
-            push(apply_prefix(mirror, source.url));
+            push(apply_prefix(mirror, source.url), source);
         }
         for candidate in download_candidates(source.url, &network.download_prefix) {
-            push(candidate);
+            push(candidate, source);
         }
     }
     out
+}
+
+/// 一个候选下载地址，**连同该地址应当产出的字节**（sha256 / 体积）。
+///
+/// 校验值必须跟地址一起走：同一个文件的各源默认是同一份字节，但清单允许某个源用
+/// [`ModelSource::pinned`] 声明自己的字节（例如魔搭那版是另一套量化校准）。若把
+/// `file.sha256` 当成全体候选的期望值，这类源就永远校验不过。
+#[derive(Debug, Clone)]
+struct Candidate {
+    url: String,
+    sha256: &'static str,
+    size: u64,
 }
 
 /// 当前正在尝试的下载地址（给「正在从 X 下载」用）。
@@ -591,6 +630,21 @@ fn emit_model(
     message: Option<String>,
     source: Option<&SourceHint>,
 ) {
+    emit_model_auth(app, id, state, received, total, message, source, None);
+}
+
+/// 同 [`emit_model`]，额外带「需要 HF 授权」的详情。
+#[allow(clippy::too_many_arguments)]
+fn emit_model_auth(
+    app: &AppHandle,
+    id: &str,
+    state: &str,
+    received: u64,
+    total: u64,
+    message: Option<String>,
+    source: Option<&SourceHint>,
+    auth: Option<ModelAuth>,
+) {
     let _ = app.emit(
         EVENT_MODEL,
         ModelProgress {
@@ -602,6 +656,7 @@ fn emit_model(
             source: source.map(|s| s.url.clone()),
             source_kind: source.map(|s| s.kind.clone()),
             region: source.map(|s| s.region.clone()),
+            auth,
         },
     );
 }
@@ -665,13 +720,13 @@ fn run_download(app: &AppHandle, entry: &ModelEntry) {
         }
         eprintln!(
             "[model] 下载 {} / {}（源区域偏好 {:?}，首个源 {}）",
-            entry.name, file.filename, region, candidates[0]
+            entry.name, file.filename, region, candidates[0].url
         );
 
         // 首选源的类型 / 区域：镜像前缀会改写 URL，所以 kind 取自清单里的第一个源。
         let primary = ordered_sources(file, region).into_iter().next();
         hint = Some(SourceHint {
-            url: candidates[0].clone(),
+            url: candidates[0].url.clone(),
             kind: primary.map(|s| s.kind).unwrap_or("custom").to_string(),
             region: primary.map(|s| s.region).unwrap_or("intl").to_string(),
         });
@@ -691,15 +746,37 @@ fn run_download(app: &AppHandle, entry: &ModelEntry) {
         };
 
         let part_path = dir.join(format!("{}.part", file.filename));
-        let result = download_verified(
-            &candidates,
-            &part_path,
-            file.sha256,
-            file.approx_bytes,
-            resolved.proxy.as_ref(),
-            Some(cancel),
-            &mut progress,
-        );
+        // 按「期望字节」分组：换源回退只能在同一份字节内部进行。不同源声明了不同的
+        // sha256 / 体积时（[`ModelSource::pinned`]），它们是两组，各自校验各自的。
+        let mut groups: Vec<(&'static str, u64, Vec<String>)> = Vec::new();
+        for candidate in &candidates {
+            match groups.last_mut() {
+                Some(group) if group.0 == candidate.sha256 && group.1 == candidate.size => {
+                    group.2.push(candidate.url.clone());
+                }
+                _ => groups.push((candidate.sha256, candidate.size, vec![candidate.url.clone()])),
+            }
+        }
+        let mut result: Result<(), DownloadError> =
+            Err(DownloadError::Permanent("没有可用的下载源".into()));
+        for (sha256, size, urls) in &groups {
+            match download_verified_with_token(
+                urls,
+                &part_path,
+                sha256,
+                *size,
+                resolved.proxy.as_ref(),
+                Some(&network.hf_token),
+                Some(cancel),
+                &mut progress,
+            ) {
+                Ok(()) => {
+                    result = Ok(());
+                    break;
+                }
+                Err(e) => result = Err(e),
+            }
+        }
 
         match result {
             Ok(()) => {
@@ -726,10 +803,31 @@ fn run_download(app: &AppHandle, entry: &ModelEntry) {
                     }
                 }
             }
+            Err(DownloadError::Gated { repo, page_url }) => {
+                // 所有源都试过了，其中至少一个是 gated：不报「下载失败」，而是发一条
+                // `needs-auth`，界面弹「去同意许可 + 粘 token」，拿到后重试同一个条目。
+                let _ = fs::remove_file(&part_path);
+                emit_model_auth(
+                    app,
+                    entry.id,
+                    "needs-auth",
+                    done_bytes.min(group_total),
+                    group_total,
+                    Some(format!("{repo} 需要先在 Hugging Face 同意许可")),
+                    hint.as_ref(),
+                    Some(ModelAuth {
+                        repo,
+                        page_url,
+                        token_url: "https://huggingface.co/settings/tokens/new?tokenType=read"
+                            .to_string(),
+                    }),
+                );
+                return;
+            }
             Err(e) => {
                 // 半成品必须删掉，否则下一轮会被当成「断点」继续拼一个可能已经错的文件。
                 let _ = fs::remove_file(&part_path);
-                return finish(app, entry, Err(e));
+                return finish(app, entry, Err(e.to_string()));
             }
         }
     }
@@ -813,13 +911,18 @@ mod tests {
         let network = network_with(&["https://mirror.example/"], "");
         let candidates = candidates_for(entry, file_of(entry), &network, None);
         // 每个源都会先给一个套了镜像前缀的候选（第一条即第一个源）。
-        assert!(candidates[0].starts_with("https://mirror.example/http"));
-        // 官方源仍然在候选里兜底（魔搭 + HF 都在清单里）。
-        assert!(candidates.iter().any(|u| u
-            == "https://modelscope.cn/models/ailm32442/htdemucs-ort/resolve/master/htdemucs.ort"));
+        assert!(candidates[0].url.starts_with("https://mirror.example/http"));
+        // 官方源仍然在候选里兜底（魔搭 + HF 都在清单里，revision 已钉成 commit）。
+        for list in candidates.iter() {
+            assert!(!list.url.contains("/resolve/master/"), "revision 必须钉住：{}", list.url);
+            assert!(!list.url.contains("/resolve/main/"), "revision 必须钉住：{}", list.url);
+        }
         assert!(candidates
             .iter()
-            .any(|u| u == "https://huggingface.co/gentij/htdemucs-ort/resolve/main/htdemucs.ort"));
+            .any(|u| u.url.contains("modelscope.cn/models/ailm32442/htdemucs-ort/")));
+        assert!(candidates
+            .iter()
+            .any(|u| u.url.contains("huggingface.co/gentij/htdemucs-ort/")));
     }
 
     #[test]
@@ -827,7 +930,7 @@ mod tests {
         let entry = catalog::by_id("htdemucs-ort-v1").unwrap();
         let network = network_with(&["https://mirror.example/?u={url}"], "");
         let candidates = candidates_for(entry, file_of(entry), &network, None);
-        assert!(candidates[0].starts_with("https://mirror.example/?u=http"));
+        assert!(candidates[0].url.starts_with("https://mirror.example/?u=http"));
     }
 
     #[test]
@@ -836,8 +939,12 @@ mod tests {
         let network = network_with(&["https://mirror.example/"], "");
         let candidates = candidates_for(entry, file_of(entry), &network, None);
         let mut seen = std::collections::HashSet::new();
-        for url in &candidates {
-            assert!(seen.insert(url.clone()), "候选地址重复：{url}");
+        for candidate in &candidates {
+            assert!(
+                seen.insert(candidate.url.clone()),
+                "候选地址重复：{}",
+                candidate.url
+            );
         }
     }
 
@@ -850,21 +957,21 @@ mod tests {
 
         let cn_first = candidates_for(entry, file, &network, Some("cn"));
         assert!(
-            cn_first[0].contains("modelscope.cn"),
+            cn_first[0].url.contains("modelscope.cn"),
             "国内偏好应优先魔搭：{}",
-            cn_first[0]
+            cn_first[0].url
         );
 
         let intl_first = candidates_for(entry, file, &network, Some("intl"));
         assert!(
-            intl_first[0].contains("huggingface.co"),
+            intl_first[0].url.contains("huggingface.co"),
             "国外偏好应优先 HF：{}",
-            intl_first[0]
+            intl_first[0].url
         );
         // 换源兜底：两个方向都必须同时含国内外源，否则单边网络就下不动。
         for list in [cn_first, intl_first] {
-            assert!(list.iter().any(|u| u.contains("modelscope.cn")));
-            assert!(list.iter().any(|u| u.contains("huggingface.co")));
+            assert!(list.iter().any(|u| u.url.contains("modelscope.cn")));
+            assert!(list.iter().any(|u| u.url.contains("huggingface.co")));
         }
     }
 

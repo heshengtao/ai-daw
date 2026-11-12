@@ -2294,6 +2294,23 @@ const zh: Record<string, string> = {
   "yue.needPrompt": "先写一句音乐描述（ACE-Step 靠它决定风格）",
   "yue.onlyYue2": "翻唱、续写、谱面、LoRA 只对 YuE2 有效；ACE-Step 直接按「描述 + 歌词」出整首",
   "yue.stepsHintTurbo": "Turbo 档上限 8 步（再多也不会更细）",
+
+  // ---- Hugging Face 授权（gated 仓库） ----
+  "models.auth.title": "需要 Hugging Face 授权",
+  "models.auth.message": "{repo} 是需要同意许可才能下载的仓库。先去网页上同意，再把 read token 粘进来，就会接着下载。",
+  "models.auth.stepAgree": "：点「Agree and access repository」",
+  "models.auth.stepToken": "：新建一个 read 权限的 token 并复制",
+  "models.auth.tokenLink": "创建 read token",
+  "models.auth.tokenLabel": "Hugging Face read token",
+  "models.auth.tokenPlaceholder": "hf_…",
+  "models.auth.hint": "token 只保存在本机设置里，只发给 huggingface.co；随时可在 HF 上撤销。",
+  "models.auth.retry": "保存并重试",
+  "models.auth.saving": "重试中…",
+  "settings.store.hfToken": "Hugging Face token",
+  "settings.store.hfTokenHint": "只用于需要先同意许可的模型（gated 仓库）；只发给 huggingface.co，保存在本机。",
+  "settings.store.hfTokenPlaceholder": "hf_…（留空 = 匿名下载）",
+  "settings.store.hfTokenSet": "已配置 {hint}",
+  "settings.store.hfTokenClear": "清除",
 };
 
 export default zh;
