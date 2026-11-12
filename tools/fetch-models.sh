@@ -39,13 +39,13 @@ sha256_of() {
 
 echo "==> Basic Pitch (nmp.onnx)"
 "${CURL[@]}" -o "$DEST/basic-pitch-nmp.onnx" \
-  "https://huggingface.co/AEmotionStudio/basic-pitch-onnx-models/resolve/main/nmp.onnx"
+  "https://huggingface.co/AEmotionStudio/basic-pitch-onnx-models/resolve/327fd8ccd2f0bb84cbe56b4a0e9d318398ddf763/nmp.onnx"
 ls -l "$DEST/basic-pitch-nmp.onnx"
 
 echo "==> HTDemucs v4（音源分离，209 MB）"
 HTDEMUCS_SHA="09dc165512d8ef7480bcb2cacea9dda82d571f8dbf421d8c44a2ca5568bec729"
 "${CURL[@]}" -o "$DEST/htdemucs.ort" \
-  "https://huggingface.co/gentij/htdemucs-ort/resolve/main/htdemucs.ort"
+  "https://huggingface.co/gentij/htdemucs-ort/resolve/e658666494d741b77fdc0e95d223d541d3dc3a36/htdemucs.ort"
 # sha256 硬门禁：字节对不上就报错（与运行时下载器的立场一致）。
 got="$(sha256_of "$DEST/htdemucs.ort")"
 [[ "$got" == "$HTDEMUCS_SHA" ]] || {
@@ -102,7 +102,7 @@ for entry in "${SVS_FILES[@]}"; do
   fi
   echo "    $name"
   "${CURL[@]}" -o "$target.part" \
-    "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/$name"
+    "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/$name"
   got="$(sha256_of "$target.part")"
   [[ "$got" == "$want" ]] || {
     echo "    sha256 校验失败（$name）：期望 $want，实际 $got" >&2
@@ -118,7 +118,7 @@ python3 -c "import torch" 2>/dev/null || {
   echo "    跳过：需要 python3 + torch 才能从官方 .pt 导出 ONNX。"
   echo "    份量最大的那一步可以手动做："
   echo "      1) pip install torch onnx onnxruntime pyyaml"
-  echo "      2) curl -L -o /tmp/lvqe-v1.2-1.3M.pt https://huggingface.co/LocalAI-io/LocalVQE/resolve/main/localvqe-v1.2-1.3M.pt"
+  echo "      2) curl -L -o /tmp/lvqe-v1.2-1.3M.pt https://huggingface.co/LocalAI-io/LocalVQE/resolve/29ca38495cba9d6393a92a4dd890f28dd81f758d/localvqe-v1.2-1.3M.pt"
   echo "      3) git clone --depth 1 https://github.com/localai-org/LocalVQE /tmp/LocalVQE"
   echo "      4) python3 tools/export-localvqe-onnx.py \\"
   echo "             --checkpoint /tmp/lvqe-v1.2-1.3M.pt \\"
@@ -132,7 +132,7 @@ mkdir -p "$CACHE"
 CKPT="$CACHE/localvqe-v1.2-1.3M.pt"
 if [[ ! -f "$CKPT" ]]; then
   "${CURL[@]}" -o "$CKPT" \
-    "https://huggingface.co/LocalAI-io/LocalVQE/resolve/main/localvqe-v1.2-1.3M.pt"
+    "https://huggingface.co/LocalAI-io/LocalVQE/resolve/29ca38495cba9d6393a92a4dd890f28dd81f758d/localvqe-v1.2-1.3M.pt"
 fi
 if [[ ! -d "$CACHE/LocalVQE-main/pytorch" ]]; then
   "${CURL[@]}" -o "$CACHE/main.tgz" \

@@ -121,5 +121,23 @@ you such a right.
   it next to the size and the download source.
 - Every downloaded file is checked against the `sha256` pinned in the catalog, so a
   mirrored or proxied download cannot silently replace the bytes.
+- Every download URL is pinned to a **commit**, never to `master` / `main`. A mutable
+  branch would let an upstream re-upload turn our own hash check into a download failure
+  ("100% then sha256 mismatch"), with no fallback source to save it. Two tools keep that
+  honest:
+
+  | Command | What it does |
+  |---|---|
+  | `node tools/pin-models.mjs` | reports any URL that still follows a floating branch (fails) |
+  | `node tools/pin-models.mjs --write` | pins those URLs to the branch head commit |
+  | `node tools/pin-models.mjs --bump` | moves already-pinned URLs to the current head — a deliberate model upgrade, expect hashes to change |
+  | `node tools/check-models.mjs --deep` | fetches every pinned URL and compares the live `sha256` with the catalog (`--deep` also downloads small files that expose no hash header; `--strict` fails on anything unverified) |
+  | `node tools/check-models.mjs --proxy socks5h://127.0.0.1:7892` | same, through a proxy — Node's `fetch` ignores the OS proxy, so this is how you verify against the real HF instead of the mirror (`MODEL_PROXY=` works too) |
+
+  `pin-models.mjs` only fixes the *revision*; `check-models.mjs` is what proves the bytes
+  behind that revision are still the ones we validated. Run both after touching the
+  catalog. `HF_MIRROR=https://…` overrides the mirror used to reach Hugging Face (the
+  mirror is a transport only; revisions come from the repository itself).
 - If a license here and a publisher's model card ever disagree, the publisher's model card
   wins — please open an issue so we can correct this file.
+

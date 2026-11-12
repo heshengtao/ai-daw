@@ -14,7 +14,9 @@
 # 需要：`pip install -U huggingface_hub` 并 `hf auth login`（或设 HF_TOKEN）。
 # 上传完成后，在每个文件的 `sources` 最前面插一条：
 #     ModelSource { kind: "hf", region: "intl",
-#                   url: "https://huggingface.co/<HF_REPO>/resolve/main/<filename>" }
+#                   url: "https://huggingface.co/<HF_REPO>/resolve/<commit>/<filename>" }
+#   commit 不能写 main：浮动分支会让上游一 push 就换字节，清单里的 sha256 随即失配。
+#   上传完跑 `node tools/pin-models.mjs --write` 重新钉 HF 侧的 revision。
 # 下载器会按用户网络位置自动优先选源；两个源的字节必须完全一致，否则 sha256 校验不过。
 set -euo pipefail
 
@@ -38,11 +40,11 @@ if [[ "$TIER" == "fp32" ]]; then
   # 注意这一档的魔搭仓库名**没有** `-fp16` 后缀。
   DEST="${SVS_DIR:-$ROOT/models/soulx-singer-fp32}"
   HF_REPO="${HF_REPO:-ailm32442/SoulX-Singer-onnx-fp32}"
-  BASE="https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master"
+  BASE="https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575"
 else
   DEST="${SVS_DIR:-$ROOT/models/soulx-singer-fp16}"
   HF_REPO="${HF_REPO:-ailm32442/SoulX-Singer-onnx-fp16}"
-  BASE="https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master"
+  BASE="https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120"
 fi
 
 # 与 `crates/local-ai/src/models/catalog.rs` 里的 sha256 必须逐字一致（下载器按同一份校验）。

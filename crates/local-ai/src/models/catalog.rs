@@ -23,6 +23,11 @@
 use std::path::PathBuf;
 
 /// 一个下载源。
+///
+/// `url` 里的 revision **必须是 commit sha**，不能是 `master` / `main`：那是浮动分支，
+/// 上游一 push 字节就变了，而清单里的 `sha256` 是硬门禁，用户会卡在「下到 100% 再报
+/// 校验失败」。`tools/pin-models.mjs` 负责钉住与检查，`every_source_is_pinned_to_a_commit`
+/// 这条测试兜底。
 #[derive(Debug, Clone, Copy)]
 pub struct ModelSource {
     /// 源类型：`hf` / `modelscope` / `custom`。清单里**只放官方源**，不写第三方镜像。
@@ -32,14 +37,68 @@ pub struct ModelSource {
     /// 下载时按用户网络连通性把「偏好区域」的源排到前面，失败再回退另一区域（见
     /// `src-tauri/src/models.rs`）。
     pub region: &'static str,
-    /// 直链地址。
+    /// 直链地址（revision 已钉成 commit）。
     pub url: &'static str,
+    /// 该源特有的 sha256；`None` = 与文件级 `ModelFile::sha256` 是同一份字节。
+    ///
+    /// 多源默认要求**逐字节一致**（这样换源才能真正兜底）。只有确实做不到时才在这里
+    /// 单独声明——例如魔搭那版 int8 权重是另一套量化校准，尺寸相同但内容不同。
+    pub sha256: Option<&'static str>,
+    /// 该源特有的体积；`None` = 与文件级 `ModelFile::approx_bytes` 相同。
+    pub size: Option<u64>,
+}
+
+impl ModelSource {
+    /// 通用源：字节与文件级 `sha256` / `approx_bytes` 一致（绝大多数源都是这种）。
+    pub const fn new(kind: &'static str, region: &'static str, url: &'static str) -> Self {
+        Self {
+            kind,
+            region,
+            url,
+            sha256: None,
+            size: None,
+        }
+    }
+
+    /// 源特有字节：这个源的文件与其它源**不是同一份字节**（尺寸和哈希都单独给）。
+    pub const fn pinned(
+        kind: &'static str,
+        region: &'static str,
+        url: &'static str,
+        sha256: &'static str,
+        size: u64,
+    ) -> Self {
+        Self {
+            kind,
+            region,
+            url,
+            sha256: Some(sha256),
+            size: Some(size),
+        }
+    }
+
+    /// 这个源落地时要校验的 sha256。
+    pub const fn sha256_for(&self, file: &ModelFile) -> &'static str {
+        match self.sha256 {
+            Some(sha) => sha,
+            None => file.sha256,
+        }
+    }
+
+    /// 这个源落地时的体积。
+    pub const fn size_for(&self, file: &ModelFile) -> u64 {
+        match self.size {
+            Some(size) => size,
+            None => file.approx_bytes,
+        }
+    }
 }
 
 /// 组里的一个文件。
 ///
-/// `sha256` 挂在文件上（而不是每个源上）——同一个文件的各源**本来就是同一份字节**，
-/// 把它放在两处只会给「换源后哈希对不上」留口子。
+/// `sha256` 挂在文件上（而不是每个源上）——同一个文件的各源**默认就是同一份字节**，
+/// 把它放在两处只会给「换源后哈希对不上」留口子。真做不到一致的源用
+/// [`ModelSource::pinned`] 单独覆盖。
 #[derive(Debug, Clone, Copy)]
 pub struct ModelFile {
     /// 落地文件名（含 `.onnx.data` 这类外部权重）。
@@ -93,22 +152,14 @@ macro_rules! yue2_file {
             approx_bytes: $size,
             sha256: $sha,
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: concat!(
-                        "https://huggingface.co/audio-cpp/Yue2-3B-GGUF/resolve/main/",
+                ModelSource::new("hf", "intl", concat!(
+                        "https://huggingface.co/audio-cpp/Yue2-3B-GGUF/resolve/cca74d8980c00f30ab8d52248a367c01ad633ec2/",
                         $path
-                    ),
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: concat!(
-                        "https://modelscope.cn/models/audio-cpp/Yue2-3B-GGUF/resolve/master/",
+                    )),
+                ModelSource::new("modelscope", "cn", concat!(
+                        "https://modelscope.cn/models/audio-cpp/Yue2-3B-GGUF/resolve/a624668131bfacee775d1332d9ff1fa4603a10f6/",
                         $path
-                    ),
-                },
+                    )),
             ],
         }
     };
@@ -122,22 +173,14 @@ macro_rules! sheetsage2_file {
             approx_bytes: $size,
             sha256: $sha,
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: concat!(
-                        "https://huggingface.co/audio-cpp/SheetSage2-GGUF/resolve/main/",
+                ModelSource::new("hf", "intl", concat!(
+                        "https://huggingface.co/audio-cpp/SheetSage2-GGUF/resolve/4e88814450385334524e50df43724af583f74206/",
                         $path
-                    ),
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: concat!(
-                        "https://modelscope.cn/models/audio-cpp/SheetSage2-GGUF/resolve/master/",
+                    )),
+                ModelSource::new("modelscope", "cn", concat!(
+                        "https://modelscope.cn/models/audio-cpp/SheetSage2-GGUF/resolve/9d97587371e8a3d4269b339dac5304c068d036e2/",
                         $path
-                    ),
-                },
+                    )),
             ],
         }
     };
@@ -154,22 +197,14 @@ macro_rules! audio_cpp_file {
             approx_bytes: $size,
             sha256: $sha,
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: concat!(
-                        "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/",
+                ModelSource::new("hf", "intl", concat!(
+                        "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/73ce4162f6cce370dd533c6782b772135c1b2a8e/",
                         $path
-                    ),
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: concat!(
-                        "https://modelscope.cn/models/audio-cpp/audio.cpp-gguf/resolve/master/",
+                    )),
+                ModelSource::new("modelscope", "cn", concat!(
+                        "https://modelscope.cn/models/audio-cpp/audio.cpp-gguf/resolve/832872aa357b176f78451a388bfe6df91ec4909e/",
                         $path
-                    ),
-                },
+                    )),
             ],
         }
     };
@@ -198,11 +233,7 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             filename: "basic-pitch-nmp.onnx",
             approx_bytes: 230_444,
             sha256: "2c3c1d144bfa61ad236e92e169c13535c880469a12a047d4e73451f2c059a0ec",
-            sources: &[ModelSource {
-                kind: "hf",
-                region: "intl",
-                url: "https://huggingface.co/AEmotionStudio/basic-pitch-onnx-models/resolve/main/nmp.onnx",
-            }],
+            sources: &[ModelSource::new("hf", "intl", "https://huggingface.co/AEmotionStudio/basic-pitch-onnx-models/resolve/327fd8ccd2f0bb84cbe56b4a0e9d318398ddf763/nmp.onnx")],
         }],
     },
     // MuScriptor（多乐器音频 → MIDI）：audio.cpp 的 GGUF 转换，由 `audiocpp` 引擎以
@@ -267,11 +298,7 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 6_152_621,
             sha256: "268339d31dd427cbe5cf9107028185b7a473b5ae0cbc59f1ba39187767367060",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/localvqe-ns-onnx/resolve/main/localvqe-ns.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/localvqe-ns-onnx/resolve/2f9c5b8223b1cee798ac7ec27604e51b07fbe5e9/localvqe-ns.onnx"),
             ],
         }],
     },
@@ -289,16 +316,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             sha256: "09dc165512d8ef7480bcb2cacea9dda82d571f8dbf421d8c44a2ca5568bec729",
             sources: &[
                 // 国内优先走魔搭（自建镜像；字节与 HF 完全一致）。
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/ailm32442/htdemucs-ort/resolve/master/htdemucs.ort",
-                },
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/gentij/htdemucs-ort/resolve/main/htdemucs.ort",
-                },
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/htdemucs-ort/resolve/0f8ff7ea292cc8255438935a7bd4ec6499a84e56/htdemucs.ort"),
+                ModelSource::new("hf", "intl", "https://huggingface.co/gentij/htdemucs-ort/resolve/e658666494d741b77fdc0e95d223d541d3dc3a36/htdemucs.ort"),
             ],
         }],
     },
@@ -316,16 +335,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 258_159_781,
             sha256: "48f8e84945579f8ab340e083339e9221e03785dbe733a52c388200b6d3ca779a",
             sources: &[
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/ailm32442/htdemucs-ort/resolve/master/htdemucs_6s.onnx",
-                },
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/StemSplitio/htdemucs-6s-onnx/resolve/main/htdemucs_6s.onnx",
-                },
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/htdemucs-ort/resolve/0f8ff7ea292cc8255438935a7bd4ec6499a84e56/htdemucs_6s.onnx"),
+                ModelSource::new("hf", "intl", "https://huggingface.co/StemSplitio/htdemucs-6s-onnx/resolve/49df9b6989cf2150840ea65b0bef77a2e471b678/htdemucs_6s.onnx"),
             ],
         }],
     },
@@ -345,17 +356,9 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             sha256: "5f810debe53459b559127fb55bbad40035bb47cc567b20e501670f968c770f02",
             sources: &[
                 // 国内走魔搭自建镜像（与 GitHub Release 字节一致）。
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/ailm32442/beat_this.onnx/resolve/master/beat_this.onnx",
-                },
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/beat_this.onnx/resolve/f25db916c73b7ddc465a4a6c04da0acbf8abeb16/beat_this.onnx"),
                 // 上游把 FP32 权重单独放在 GitHub Releases 的 `model-large` 里（crate 本身不含权重）。
-                ModelSource {
-                    kind: "custom",
-                    region: "intl",
-                    url: "https://github.com/danigb/beat-this-rs/releases/download/model-large/beat_this.onnx",
-                },
+                ModelSource::new("custom", "intl", "https://github.com/danigb/beat-this-rs/releases/download/model-large/beat_this.onnx"),
             ],
         }],
     },
@@ -380,16 +383,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 3072460,
             sha256: "331415477a985a8962601a465c616806b5d32a33f5f93230e941a54656d352c6",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/note_text_encoder.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/note_text_encoder.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/note_text_encoder.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/note_text_encoder.onnx"),
             ],
         },
         ModelFile {
@@ -397,16 +392,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 6144000,
             sha256: "998889d7daff9cd50774abf23282d1acad01d2c753db3040b156d1a53b178e79",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/note_text_encoder.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/note_text_encoder.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/note_text_encoder.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/note_text_encoder.onnx.data"),
             ],
         },
         ModelFile {
@@ -414,16 +401,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 262601,
             sha256: "741b08a2767e9134cd40d4e5b4e073590c2f74cd6dca0c107c7a7715965a346a",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/note_pitch_encoder.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/note_pitch_encoder.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/note_pitch_encoder.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/note_pitch_encoder.onnx"),
             ],
         },
         ModelFile {
@@ -431,16 +410,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 524288,
             sha256: "20ddcaaea04315e5a46eb11d8cacb6dd6ecf6a9688ebc3af019ab7b27ee7b9c6",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/note_pitch_encoder.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/note_pitch_encoder.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/note_pitch_encoder.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/note_pitch_encoder.onnx.data"),
             ],
         },
         ModelFile {
@@ -448,16 +419,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 262601,
             sha256: "0aba568ee59c350175663bdc04a40be44fe36fc46ceb648f462d65638bbd85b4",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/note_type_encoder.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/note_type_encoder.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/note_type_encoder.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/note_type_encoder.onnx"),
             ],
         },
         ModelFile {
@@ -465,16 +428,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 524288,
             sha256: "becf918cd5e23b25783ae42480c13bfa04bf38b84a4075d7c4273befcb3af4a0",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/note_type_encoder.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/note_type_encoder.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/note_type_encoder.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/note_type_encoder.onnx.data"),
             ],
         },
         ModelFile {
@@ -482,16 +437,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 370121,
             sha256: "c7628a2af8b0347a28edbbb2d35bd8a12eb13aa1b138ae4ed267d0e08bb3a046",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/f0_encoder.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/f0_encoder.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/f0_encoder.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/f0_encoder.onnx"),
             ],
         },
         ModelFile {
@@ -499,16 +446,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 739328,
             sha256: "8c3f3c514b1bf78f723b8fa785ed2f7dd5cb994ca2c1349f22c54ea4909b0f4b",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/f0_encoder.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/f0_encoder.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/f0_encoder.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/f0_encoder.onnx.data"),
             ],
         },
         ModelFile {
@@ -516,16 +455,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 8601140,
             sha256: "d06b7274491a2346194654e17297e63823a10ccc2e21dd39540f4057ffe62abe",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/preflow.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/preflow.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/preflow.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/preflow.onnx"),
             ],
         },
         ModelFile {
@@ -533,16 +464,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 16973824,
             sha256: "ce2c424a3a22a22a1aff172767baacc3e6796df0eb83f979596d522d87d2422f",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/preflow.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/preflow.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/preflow.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/preflow.onnx.data"),
             ],
         },
         ModelFile {
@@ -550,16 +473,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 1051289,
             sha256: "3437e166b1dfd5094215565566fd146e71fa29ac2cf50653831a5e6da60deb88",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/cond_emb.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/cond_emb.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/cond_emb.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/cond_emb.onnx"),
             ],
         },
         ModelFile {
@@ -567,16 +482,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 2162688,
             sha256: "fbfa95df1617d8dc12c1544c788be65d5bb08b365a68041c69953b02ac066dbe",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/cond_emb.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/cond_emb.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/cond_emb.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/cond_emb.onnx.data"),
             ],
         },
         ModelFile {
@@ -584,16 +491,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 261055,
             sha256: "823a41e7b50506c28afc0d954823f27717fe47b50304012eec36daaa7d22685c",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/mel_transform.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/mel_transform.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/mel_transform.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/mel_transform.onnx"),
             ],
         },
         ModelFile {
@@ -601,16 +500,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 499712,
             sha256: "2d1e18edf37041270f999b15bbfd08c19cccca723a6111425ae9a8a228c87927",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/mel_transform.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/mel_transform.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/mel_transform.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/mel_transform.onnx.data"),
             ],
         },
         ModelFile {
@@ -618,16 +509,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 887377148,
             sha256: "1a2857f819562e75b73b291ea86ec3c1157d77f6e51abad1e934d2f318711629",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/diff_step_dml.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/diff_step_dml.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/diff_step_dml.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/diff_step_dml.onnx"),
             ],
         },
         ModelFile {
@@ -635,16 +518,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 519486458,
             sha256: "185a707f907554196f28848256ecfd1b72031c5335571e2dedcbb0a0de35db95",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/main/vocoder_dml.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/master/vocoder_dml.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp16/resolve/25c21269599018f5c8460f18f255a83c574ba692/vocoder_dml.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml-fp16/resolve/6f61a824bdb875ed458c2270c52ea0716fd3f120/vocoder_dml.onnx"),
             ],
         },
         ],
@@ -668,16 +543,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 433,
             sha256: "087db35205ce93dae9e2c65e0628511266ffbc21beb2c128d80793c150d66714",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/note_text_encoder.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_text_encoder.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/note_text_encoder.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/note_text_encoder.onnx"),
             ],
         },
         ModelFile {
@@ -685,16 +552,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 6144000,
             sha256: "998889d7daff9cd50774abf23282d1acad01d2c753db3040b156d1a53b178e79",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/note_text_encoder.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_text_encoder.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/note_text_encoder.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/note_text_encoder.onnx.data"),
             ],
         },
         ModelFile {
@@ -702,16 +561,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 433,
             sha256: "90f9ef1cd74e532e1cc89802888bedcf311bd835460b09e27c3eef1be9489bdb",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/note_pitch_encoder.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_pitch_encoder.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/note_pitch_encoder.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/note_pitch_encoder.onnx"),
             ],
         },
         ModelFile {
@@ -719,16 +570,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 524288,
             sha256: "20ddcaaea04315e5a46eb11d8cacb6dd6ecf6a9688ebc3af019ab7b27ee7b9c6",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/note_pitch_encoder.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_pitch_encoder.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/note_pitch_encoder.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/note_pitch_encoder.onnx.data"),
             ],
         },
         ModelFile {
@@ -736,16 +579,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 432,
             sha256: "869d4d50a0ff5566346e72cf4fb36c110a52e10ef7292c53aecd008c3f74d594",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/note_type_encoder.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_type_encoder.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/note_type_encoder.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/note_type_encoder.onnx"),
             ],
         },
         ModelFile {
@@ -753,16 +588,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 524288,
             sha256: "becf918cd5e23b25783ae42480c13bfa04bf38b84a4075d7c4273befcb3af4a0",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/note_type_encoder.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/note_type_encoder.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/note_type_encoder.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/note_type_encoder.onnx.data"),
             ],
         },
         ModelFile {
@@ -770,16 +597,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 425,
             sha256: "f63a5f8da66af2a50b6c3463f8e8a0b52022f6f14bbb79d7364149da2c576a0f",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/f0_encoder.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/f0_encoder.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/f0_encoder.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/f0_encoder.onnx"),
             ],
         },
         ModelFile {
@@ -787,16 +606,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 739328,
             sha256: "8c3f3c514b1bf78f723b8fa785ed2f7dd5cb994ca2c1349f22c54ea4909b0f4b",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/f0_encoder.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/f0_encoder.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/f0_encoder.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/f0_encoder.onnx.data"),
             ],
         },
         ModelFile {
@@ -804,16 +615,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 145261,
             sha256: "af0680d7356ba1131deb5a1801971934344f7ccd5394c875a612f8a66c8e1a60",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/preflow.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/preflow.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/preflow.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/preflow.onnx"),
             ],
         },
         ModelFile {
@@ -821,16 +624,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 16973824,
             sha256: "ce2c424a3a22a22a1aff172767baacc3e6796df0eb83f979596d522d87d2422f",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/preflow.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/preflow.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/preflow.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/preflow.onnx.data"),
             ],
         },
         ModelFile {
@@ -838,16 +633,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 689,
             sha256: "6825d68ea4d42bc83ca66dacf3a6440f5f2593af2a8ca40f956fdcde19559e54",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/cond_emb.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/cond_emb.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/cond_emb.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/cond_emb.onnx"),
             ],
         },
         ModelFile {
@@ -855,16 +642,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 2162688,
             sha256: "fbfa95df1617d8dc12c1544c788be65d5bb08b365a68041c69953b02ac066dbe",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/cond_emb.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/cond_emb.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/cond_emb.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/cond_emb.onnx.data"),
             ],
         },
         ModelFile {
@@ -872,16 +651,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 11263,
             sha256: "5652b9b8a46207413db3d2ff65139d78ab502d60fa7eb3a1a660ec8296d1d885",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/mel_transform.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/mel_transform.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/mel_transform.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/mel_transform.onnx"),
             ],
         },
         ModelFile {
@@ -889,16 +660,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 499712,
             sha256: "2d1e18edf37041270f999b15bbfd08c19cccca723a6111425ae9a8a228c87927",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/mel_transform.onnx.data",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/mel_transform.onnx.data",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/mel_transform.onnx.data"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/mel_transform.onnx.data"),
             ],
         },
         ModelFile {
@@ -906,16 +669,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 1772509288,
             sha256: "bc6e95474793a0eb7dbf8ea4c7cd3820593f6bd5d136f222ea58684b64b07c13",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/diff_step_dml.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/diff_step_dml.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/diff_step_dml.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/diff_step_dml.onnx"),
             ],
         },
         ModelFile {
@@ -923,16 +678,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 1053635812,
             sha256: "8df53cf50ff7f91208fe613f5f777690a2b9ddb9d17fa59bc6efa0fdbf1e8535",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/main/vocoder_dml.onnx",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/master/vocoder_dml.onnx",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-onnx-fp32/resolve/f6165ba314c649aa207f5280d8d72b6b7c5df73a/vocoder_dml.onnx"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/syxppp/SoulX-Singer-onnx-directml/resolve/01f69f5b34a0ea831e3e734587cb7386c0491575/vocoder_dml.onnx"),
             ],
         },
         ],
@@ -956,16 +703,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 85_087_790,
                 sha256: "3573860a14b10a9fbc5960472ade57d66512ba4434da298eb97099a9d500f78d",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/whisper.frontend.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/whisper.frontend.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp16_hq/whisper.frontend.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp16_hq/whisper.frontend.onnx"),
                 ],
             },
             ModelFile {
@@ -973,16 +712,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 15_256_211,
                 sha256: "94b336ea1278b3b0bc38f283c1aa3e664e4fdfb1f36b0524420a72c60e81d2c1",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/mel.transform.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/mel.transform.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp16_hq/mel.transform.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp16_hq/mel.transform.onnx"),
                 ],
             },
             ModelFile {
@@ -990,16 +721,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 742_014,
                 sha256: "b55a1d117d062dc6d31cf67b15627fc12dfdf593363966e68086d5ec1b2c146c",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/f0.encoder.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/f0.encoder.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp16_hq/f0.encoder.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp16_hq/f0.encoder.onnx"),
                 ],
             },
             ModelFile {
@@ -1007,16 +730,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 1_051_173,
                 sha256: "5cdc78d193988c3ad66d6897497e6f30b0b19876f1f44f2a2e64b6039db48302",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/cond.emb.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/cond.emb.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp16_hq/cond.emb.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp16_hq/cond.emb.onnx"),
                 ],
             },
             ModelFile {
@@ -1024,16 +739,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 1_770_819_432,
                 sha256: "8465a04327719c2965645aa3291a04aebffdf94f16fd61572feb6ebb6dbece2f",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/dit.step.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/dit.step.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp16_hq/dit.step.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp16_hq/dit.step.onnx"),
                 ],
             },
             ModelFile {
@@ -1041,16 +748,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 510_185_830,
                 sha256: "3496a8100e0726393e5512fb90ec37c9cecaab96052d5047cde0fbf692bd6a37",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/vocoder.backbone.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/vocoder.backbone.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp16_hq/vocoder.backbone.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp16_hq/vocoder.backbone.onnx"),
                 ],
             },
             ModelFile {
@@ -1058,16 +757,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 14_772_514,
                 sha256: "4647fef6f047d14bc198c5feb3a4a755384d6a5accb07f333add45e87a88a517",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp16_hq/vocoder.istft.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp16_hq/vocoder.istft.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp16_hq/vocoder.istft.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp16_hq/vocoder.istft.onnx"),
                 ],
             },
         ],
@@ -1087,16 +778,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 85_087_790,
                 sha256: "3573860a14b10a9fbc5960472ade57d66512ba4434da298eb97099a9d500f78d",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/whisper.frontend.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/whisper.frontend.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp32/whisper.frontend.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp32/whisper.frontend.onnx"),
                 ],
             },
             ModelFile {
@@ -1104,16 +787,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 15_256_211,
                 sha256: "94b336ea1278b3b0bc38f283c1aa3e664e4fdfb1f36b0524420a72c60e81d2c1",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/mel.transform.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/mel.transform.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp32/mel.transform.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp32/mel.transform.onnx"),
                 ],
             },
             ModelFile {
@@ -1121,16 +796,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 742_014,
                 sha256: "b55a1d117d062dc6d31cf67b15627fc12dfdf593363966e68086d5ec1b2c146c",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/f0.encoder.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/f0.encoder.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp32/f0.encoder.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp32/f0.encoder.onnx"),
                 ],
             },
             ModelFile {
@@ -1138,16 +805,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 2_101_542,
                 sha256: "d3e35a2942ef0203c1fa6f3792d142044487be161363a51d867dcab0273af20f",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/cond.emb.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/cond.emb.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp32/cond.emb.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp32/cond.emb.onnx"),
                 ],
             },
             ModelFile {
@@ -1155,16 +814,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 1_770_819_432,
                 sha256: "8465a04327719c2965645aa3291a04aebffdf94f16fd61572feb6ebb6dbece2f",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/dit.step.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/dit.step.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp32/dit.step.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp32/dit.step.onnx"),
                 ],
             },
             ModelFile {
@@ -1172,16 +823,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 1_020_270_742,
                 sha256: "b120e64dcefdc1c0e7457a1f1f96860ee39c6d9e8dcc136514f41fe5fb6e479f",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/vocoder.backbone.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/vocoder.backbone.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp32/vocoder.backbone.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp32/vocoder.backbone.onnx"),
                 ],
             },
             ModelFile {
@@ -1189,16 +832,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
                 approx_bytes: 14_772_514,
                 sha256: "4647fef6f047d14bc198c5feb3a4a755384d6a5accb07f333add45e87a88a517",
                 sources: &[
-                    ModelSource {
-                        kind: "hf",
-                        region: "intl",
-                        url: "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/main/onnx_fp32/vocoder.istft.onnx",
-                    },
-                    ModelSource {
-                        kind: "modelscope",
-                        region: "cn",
-                        url: "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/master/onnx_fp32/vocoder.istft.onnx",
-                    },
+                    ModelSource::new("hf", "intl", "https://huggingface.co/ailm32442/SoulX-Singer-SVC-ONNX/resolve/6db030a5e7c5e0962fae0005a517332aa0e3b25f/onnx_fp32/vocoder.istft.onnx"),
+                    ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/ailm32442/SoulX-Singer-SVC-ONNX/resolve/f667d9364fb9a56084ea849b40a8811ea582e53d/onnx_fp32/vocoder.istft.onnx"),
                 ],
             },
         ],
@@ -1340,16 +975,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 2_473_017_600,
             sha256: "3bc2462eca3a3a8f56abcd860d0943ffdc0546547dde55a9d08589607d6f3936",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/audio-cpp/audio.cpp-gguf/resolve/master/Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/73ce4162f6cce370dd533c6782b772135c1b2a8e/Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/audio-cpp/audio.cpp-gguf/resolve/832872aa357b176f78451a388bfe6df91ec4909e/Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf"),
             ],
         }],
     },
@@ -1365,16 +992,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 1_151_279_968,
             sha256: "5c53bbb9a6b2ade85c16c290c560658ca18b78a23c323378528f1f945683fcbe",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Qwen3-ASR-0.6B-GGUF/qwen3-asr-0.6b-q8_0.gguf",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/audio-cpp/audio.cpp-gguf/resolve/master/Qwen3-ASR-0.6B-GGUF/qwen3-asr-0.6b-q8_0.gguf",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/73ce4162f6cce370dd533c6782b772135c1b2a8e/Qwen3-ASR-0.6B-GGUF/qwen3-asr-0.6b-q8_0.gguf"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/audio-cpp/audio.cpp-gguf/resolve/832872aa357b176f78451a388bfe6df91ec4909e/Qwen3-ASR-0.6B-GGUF/qwen3-asr-0.6b-q8_0.gguf"),
             ],
         }],
     },
@@ -1390,16 +1009,8 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             approx_bytes: 1_716_306_528,
             sha256: "392e636876d6d5ae8716f0f98b78480b61bb8c199d63f20523e95308b3425c2e",
             sources: &[
-                ModelSource {
-                    kind: "hf",
-                    region: "intl",
-                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/CrisperWhisper2.0-GGUF/crisperwhisper-2-large-q8_0.gguf",
-                },
-                ModelSource {
-                    kind: "modelscope",
-                    region: "cn",
-                    url: "https://modelscope.cn/models/audio-cpp/audio.cpp-gguf/resolve/master/CrisperWhisper2.0-GGUF/crisperwhisper-2-large-q8_0.gguf",
-                },
+                ModelSource::new("hf", "intl", "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/73ce4162f6cce370dd533c6782b772135c1b2a8e/CrisperWhisper2.0-GGUF/crisperwhisper-2-large-q8_0.gguf"),
+                ModelSource::new("modelscope", "cn", "https://modelscope.cn/models/audio-cpp/audio.cpp-gguf/resolve/832872aa357b176f78451a388bfe6df91ec4909e/CrisperWhisper2.0-GGUF/crisperwhisper-2-large-q8_0.gguf"),
             ],
         }],
     },
@@ -1516,6 +1127,61 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **下载源的 revision 必须是 commit sha，不能是浮动分支**。
+    ///
+    /// `resolve/master/<file>` 的内容随上游每次 push 变化，而清单里的 sha256 是硬门禁：
+    /// 上游换一版权重，用户的下载就会卡在「100% 处报校验失败」，换源也救不了（两边一起变）。
+    /// 钉到 commit 之后，同样的 URL 永远返回同一份字节。
+    ///
+    /// 改清单后如果这条挂了，跑 `node tools/pin-models.mjs --write` 重新钉。
+    #[test]
+    fn every_source_is_pinned_to_a_commit() {
+        fn revision_of(url: &str) -> Option<&str> {
+            let (_, tail) = url.split_once("/resolve/")?;
+            tail.split('/').next()
+        }
+        let mut offenders = Vec::new();
+        for entry in all() {
+            for file in entry.files {
+                for source in file.sources {
+                    let Some(rev) = revision_of(source.url) else {
+                        continue; // 不是 resolve 链接（例如 GitHub Release 直链），不归这条管
+                    };
+                    let pinned =
+                        rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase());
+                    if !pinned {
+                        offenders.push(format!("{} / {} → {rev}", entry.id, file.filename));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "这些源还跟着浮动 revision（跑 tools/pin-models.mjs --write）：\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// 同一个文件的各源默认要求**逐字节一致**；真不一致的源要用 `pinned` 单独声明，
+    /// 且声明之后下载器校验的就是它自己的那份 sha256 / 体积。
+    #[test]
+    fn per_source_bytes_override_the_file_level_ones() {
+        const SOURCES: &[ModelSource] = &[ModelSource::new("hf", "intl", "https://hf/x")];
+        let file = ModelFile {
+            filename: "weights.onnx",
+            approx_bytes: 100,
+            sha256: "aa",
+            sources: SOURCES,
+        };
+        let generic = ModelSource::new("hf", "intl", "https://hf/x");
+        assert_eq!(generic.sha256_for(&file), "aa");
+        assert_eq!(generic.size_for(&file), 100);
+
+        let own = ModelSource::pinned("modelscope", "cn", "https://ms/x", "bb", 200);
+        assert_eq!(own.sha256_for(&file), "bb");
+        assert_eq!(own.size_for(&file), 200);
     }
 
     /// SoulX-Singer 的**两档都是国内外双源**：同一份字节，国内走魔搭、国际走 HF，

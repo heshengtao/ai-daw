@@ -10,7 +10,8 @@
 #
 # 上传后 sha256 不变，所以清单里补一条 modelscope 源就行：
 #   ModelSource { kind: "modelscope", region: "cn",
-#                 url: "https://modelscope.cn/models/<MS_REPO>/resolve/master/<文件名>" }
+#                 url: "https://modelscope.cn/models/<MS_REPO>/resolve/<commit>/<文件名>" }
+#   commit 不能写 master：钉完之后跑 `node tools/pin-models.mjs --write`。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
