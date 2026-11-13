@@ -123,6 +123,8 @@ pub struct AudioEngine {
     input_scope: Arc<ScopeBuffer>,
     /// 通道电平表（每轨 + 主输出）；重建播放器时沿用同一张。
     meter: Arc<ai_daw_engine::meter::MeterBank>,
+    /// 浏览器监听的 PCM 抽头（音频线程写、HTTP 侧读）。重建播放器时沿用同一个。
+    web_tap: Arc<ai_daw_engine::tap::AudioTap>,
 }
 
 impl AudioEngine {
@@ -156,6 +158,8 @@ impl AudioEngine {
         let scope = Arc::new(ScopeBuffer::new(SCOPE_CAPACITY));
         let input_scope = Arc::new(ScopeBuffer::new(SCOPE_CAPACITY));
         let meter = Arc::new(ai_daw_engine::meter::MeterBank::new());
+        // 约 2 秒的抽头：浏览器那边慢一拍也够用，写满就覆盖最旧的。
+        let web_tap = Arc::new(ai_daw_engine::tap::AudioTap::new(96_000, 48_000, 0));
 
         let engine = AudioEngine {
             tx,
@@ -167,6 +171,7 @@ impl AudioEngine {
             scope: Arc::clone(&scope),
             input_scope: Arc::clone(&input_scope),
             meter: Arc::clone(&meter),
+            web_tap: Arc::clone(&web_tap),
         };
         thread::Builder::new()
             .name("ai-daw-audio".into())
@@ -183,6 +188,7 @@ impl AudioEngine {
                     scope,
                     input_scope,
                     meter,
+                    web_tap,
                     assets,
                 )
             })
@@ -194,6 +200,11 @@ impl AudioEngine {
     /// 安装（或更新）插件目录；音频线程会重建注册表并重新装载当前工程。
     pub fn set_catalog(&self, catalog: Vec<CatalogPlugin>) {
         let _ = self.tx.send(AudioMessage::SetCatalog(catalog));
+    }
+
+    /// 浏览器监听的 PCM 抽头。
+    pub fn web_tap(&self) -> Arc<ai_daw_engine::tap::AudioTap> {
+        Arc::clone(&self.web_tap)
     }
 
     /// 装载工程：重建播放器，保留当前位置与播放状态。
@@ -586,6 +597,7 @@ fn start_host(
     status: &Arc<SharedStatus>,
     scope: &Arc<ScopeBuffer>,
     meter: &Arc<ai_daw_engine::meter::MeterBank>,
+    web_tap: &Arc<ai_daw_engine::tap::AudioTap>,
     carried: ReusableInstances,
 ) -> Option<AudioHost> {
     let started = std::time::Instant::now();
@@ -614,6 +626,7 @@ fn start_host(
         scope: Arc::clone(scope),
         status: Arc::clone(status),
         meter: Some(Arc::clone(meter)),
+        tap: Some(Arc::clone(&web_tap)),
     };
     let at = std::time::Instant::now();
     let built = AudioHost::start_on(
@@ -682,6 +695,7 @@ fn rebuild(
     error: &Mutex<Option<String>>,
     scope: &Arc<ScopeBuffer>,
     meter: &Arc<ai_daw_engine::meter::MeterBank>,
+    web_tap: &Arc<ai_daw_engine::tap::AudioTap>,
     reset_rate: bool,
     carried: ReusableInstances,
 ) -> Option<AudioHost> {
@@ -704,6 +718,7 @@ fn rebuild(
         status,
         scope,
         meter,
+        web_tap,
         carried,
     )
 }
@@ -738,6 +753,7 @@ fn run_audio_thread(
     scope: Arc<ScopeBuffer>,
     input_scope: Arc<ScopeBuffer>,
     meter: Arc<ai_daw_engine::meter::MeterBank>,
+    web_tap: Arc<ai_daw_engine::tap::AudioTap>,
     assets: Arc<AssetCache>,
 ) {
     /// 设备轮询间隔：够快能跟上插拔耳机，又不至于每秒多次查询 CoreAudio 太过分。
@@ -813,6 +829,7 @@ fn run_audio_thread(
                     &error,
                     &scope,
                     &meter,
+                    &web_tap,
                     false,
                     carried,
                 );
@@ -852,6 +869,7 @@ fn run_audio_thread(
                     &error,
                     &scope,
                     &meter,
+                    &web_tap,
                     // 工程变化不改采样率（采样率取决于设备），沿用缓存即可。
                     false,
                     carried,
@@ -886,6 +904,7 @@ fn run_audio_thread(
                     &error,
                     &scope,
                     &meter,
+                    &web_tap,
                     true,
                     carried,
                 );
@@ -921,6 +940,7 @@ fn run_audio_thread(
                     &error,
                     &scope,
                     &meter,
+                    &web_tap,
                     true,
                     carried,
                 );
@@ -1066,6 +1086,7 @@ fn run_audio_thread(
                     &error,
                     &scope,
                     &meter,
+                    &web_tap,
                     true,
                     carried,
                 );

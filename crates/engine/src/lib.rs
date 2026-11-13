@@ -25,6 +25,7 @@ pub mod schedule;
 pub mod scope;
 pub mod stretch;
 pub mod tempo;
+pub mod tap;
 pub mod transport;
 pub mod wav;
 

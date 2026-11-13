@@ -275,6 +275,16 @@ M1 已完成（2026-11-13）：
   镜像从 1.07 GB 降到 **201 MB**（实测，`ldd` 里已无 webkit / gtk）。无头构建里 `crate::tauri_api` 提供空壳类型（只求编译），
   桌面构建仍是真实 `tauri`，228 条测试与桌面壳构建均不受影响。
 
+M2 也已完成（同一轮）：
+
+- `crates/engine/src/tap.rs`：`AudioTap`（原子环形缓冲，音频线程无锁写入，容量约 2 秒）。
+- `AudioEngine` 把 tap 装进 `RealtimeOptions`，并在重建时沿用；`/audio` 用 WebSocket
+  按 ~10 ms 一块推 `[epoch][start_frame][frames][channels][f32…]`。
+- 传输状态 ticker 从桌面壳搬进 daemon：浏览器通过 SSE 也能收到 `engine://transport`。
+- 前端 `src/api/audio.ts`：`WebMonitor` 用 `AudioBufferSourceNode` 连续排播，带预滚
+  （80 ms）、断流重锚（250 ms）、epoch 切换重置、iOS `visibilitychange` 恢复。
+- 实测（无头进程 + Python WS 客户端）：播放 2 秒收到 96 256 帧、峰值 0.404、epoch 稳定。
+
 与设计的偏差（有意为之）：
 
 1. **Host 放在 `AppState` 里**，而不是只由 `Daemon` 持有。命令层有 239 条命令，

@@ -72,7 +72,8 @@ fn main() {
         scope: std::sync::Arc::new(ai_daw_engine::scope::ScopeBuffer::new(8192)),
         status: std::sync::Arc::new(SharedStatus::new()),
         meter: None,
-    };
+            tap: None,
+};
 
     let mut host = match AudioHost::start(schedule, &registry, options) {
         Ok(host) => host,

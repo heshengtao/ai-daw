@@ -53,7 +53,15 @@ pub fn bootstrap(host: Arc<dyn Host>, cfg: Config) -> Arc<Daemon> {
     // 用户的预设与音色记忆库是跨工程资产，按数据目录加载（拿不到就空着，不影响启动）。
     state.init_presets(Some(cfg.data_dir.join("presets.json")));
     state.init_sound_memories(Some(cfg.data_dir.join("sound-memories.json")));
-    Daemon::new(state, host, cfg)
+    // 无窗口进程也要出声：浏览器监听（/audio）与导出都依赖实时宿主。
+    // 容器里没有声卡时 `start_audio` 会自己降级为 idle，不会 panic；
+    // 想彻底跳过可以用 `AIDAW_NO_AUDIO=1`。
+    if std::env::var_os("AIDAW_NO_AUDIO").is_none() {
+        state.start_audio();
+    }
+    let daemon = Daemon::new(state, host, cfg);
+    spawn_transport_ticker(Arc::clone(&daemon));
+    daemon
 }
 
 /// 起 HTTP 服务。返回实际绑定的地址与可被 `select!` 的前台 future。
@@ -102,21 +110,24 @@ pub fn web_token(data_dir: &Path) -> String {
 }
 
 /// 生成一个新的 32 字节令牌（十六进制）。
+///
+/// 用系统 CSPRNG；拿不到时退回「时间 + pid 的哈希」——那是明显弱一档的兜底，
+/// 但至少不会让服务起不来。
 fn fresh_token() -> String {
-    use sha2::{Digest, Sha256};
-    let seed = format!(
-        "{}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0),
-        std::env::temp_dir().display()
-    );
-    Sha256::digest(seed.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    let mut bytes = [0u8; 32];
+    if getrandom::fill(&mut bytes).is_err() {
+        use sha2::{Digest, Sha256};
+        let seed = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        bytes.copy_from_slice(&Sha256::digest(seed.as_bytes()));
+    }
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -170,4 +181,26 @@ mod tests {
             .unwrap();
         assert!(body.contains("\"ok\""));
     }
+}
+
+/// 传输状态推送线程：状态变了才发（播放中约 60 Hz，暂停后完全静默）。
+///
+/// 放在 daemon 而不是桌面壳里，是为了让**浏览器客户端也能收到**：
+/// 事件先经 `Host`，Tauri 实现转给 webview，SSE 客户端则从总线拿到同一份。
+pub fn spawn_transport_ticker(daemon: Arc<Daemon>) {
+    std::thread::Builder::new()
+        .name("ai-daw-transport".into())
+        .spawn(move || {
+            let mut last = None;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                let snapshot = daemon.state().audio.snapshot();
+                if last.as_ref() == Some(&snapshot) {
+                    continue;
+                }
+                crate::host::emit(&**daemon.host(), crate::state::EVENT_TRANSPORT, &snapshot);
+                last = Some(snapshot);
+            }
+        })
+        .expect("failed to spawn transport thread");
 }

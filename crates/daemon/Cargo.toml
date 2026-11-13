@@ -46,7 +46,7 @@ rmcp = { version = "3", features = [
     "transport-streamable-http-server",
 ] }
 # Web 客户端：`/rpc`（POST）+ 静态资源 + `/health`。与 MCP 共用一条 axum 树。
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros"] }
 tokio-util = "0.7"
 schemars = "1"
@@ -61,6 +61,8 @@ futures-util = { version = "0.3", default-features = false }
 # 插件管理器：拉取开放注册表（HTTPS）、校验、解压归档。
 ureq = { version = "3", default-features = false, features = ["native-tls", "gzip", "socks-proxy"] }
 sha2 = "0.10"
+# 浏览器访问令牌用系统 CSPRNG 生成（已在依赖树里，不引入新包）。
+getrandom = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tar = "0.4"
 flate2 = "1"

@@ -396,14 +396,13 @@ pub fn run() {
             let state = app.state::<Arc<AppState>>();
             state.init_presets(preset_file(app.handle()));
             state.init_sound_memories(sound_memory_file(app.handle()));
-            let audio = state.audio.clone();
             drop(state);
             // 插件源的网络配置（镜像 / 下载代理）：要在预热线程之前装上。
             app.manage(ai_daw_daemon::manager::StoreRuntime::load(app.handle()));
             // 执行后端：CoreML 编译缓存目录 + 按 store.json 的偏好落地 + 校验并打印一行。
             // **必须在任何 ort 调用之前**（只决定「用哪个 EP」，不触发加载，所以放这儿安全）。
             ai_daw_daemon::backends::init_runtime(app.handle());
-            spawn_transport_ticker(app.handle().clone(), audio);
+            // 传输状态推送已搬进 daemon（浏览器客户端也要收），这里不再重复起线程。
             // 正常的装载由前端的 `app_ready`（挂载之后的第一帧）触发。
             // 页面万一根本没起来（dev server 没起、页面脚本报错），也不能永远不出窗口、
             // 永远没声音：留一个 6 秒的兜底，超时就直接显示窗口并装载。

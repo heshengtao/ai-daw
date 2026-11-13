@@ -9,6 +9,7 @@ pub mod rpc;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -37,6 +38,7 @@ pub fn router(state: Arc<ServerState>) -> Router {
     Router::new()
         .route("/rpc/{cmd}", post(rpc_handler))
         .route("/events", get(events_handler))
+        .route("/audio", get(audio_handler))
         .route("/health", get(health))
         .route("/commands", get(commands))
         // 其余路径交给前端产物（hash 路由，不需要 SPA 兜底规则，但仍兜一下更稳）。
@@ -132,6 +134,64 @@ async fn events_handler(
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()
+}
+
+/// 实时监听：把音频线程的混音抽头按 ~10 ms 一块推到浏览器。
+///
+/// 帧格式（小端）：
+/// `[epoch u32][start_frame u64][frames u16][channels u16][f32 × frames × channels]`
+///
+/// `epoch` 是流代数：播放器重建（任何编辑）都会换一版，客户端据此丢弃旧流并重新同步。
+/// `start_frame` 是这一块第一帧在时间轴上的绝对位置，客户端用「起点 + 已消费帧数」
+/// 推算播放头，不依赖服务器时间戳。
+async fn audio_handler(
+    State(state): State<Arc<ServerState>>,
+    Query(query): Query<TokenQuery>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if !authorized(&headers, &query, &state.token) {
+        return RpcError::Unauthorized.into_response();
+    }
+    let tap = state.daemon.state().audio.web_tap();
+    ws.on_upgrade(move |socket| stream_tap(socket, tap))
+}
+
+/// 一块 PCM 的线上编码。
+fn encode_block(epoch: u32, start_frame: u64, interleaved: &[f32]) -> Vec<u8> {
+    let frames = interleaved.len() / 2;
+    let mut out = Vec::with_capacity(16 + interleaved.len() * 4);
+    out.extend_from_slice(&epoch.to_le_bytes());
+    out.extend_from_slice(&start_frame.to_le_bytes());
+    out.extend_from_slice(&(frames as u16).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    for sample in interleaved {
+        out.extend_from_slice(&sample.to_le_bytes());
+    }
+    out
+}
+
+async fn stream_tap(mut socket: WebSocket, tap: Arc<ai_daw_engine::tap::AudioTap>) {
+    // 从「现在」开始，不补历史：监听要的是低延迟，不是完整的回放。
+    let mut cursor = tap.cursor();
+    let mut buffer: Vec<f32> = Vec::new();
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(10));
+    loop {
+        ticker.tick().await;
+        let start = cursor;
+        let frames = tap.read_since(&mut cursor, &mut buffer);
+        if frames == 0 {
+            // 暂停 / 停播时没有新数据；顺便探测一下客户端还在不在。
+            if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                break;
+            }
+            continue;
+        }
+        let packet = encode_block(tap.epoch(), start as u64, &buffer);
+        if socket.send(Message::Binary(packet.into())).await.is_err() {
+            break;
+        }
+    }
 }
 
 /// 前端产物：`dist/` 下的静态文件。
@@ -271,6 +331,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn block_encoding_has_expected_layout() {
+        let encoded = encode_block(7, 1024, &[0.5, -0.5, 0.25, -0.25]);
+        assert_eq!(&encoded[0..4], &7u32.to_le_bytes());
+        assert_eq!(&encoded[4..12], &1024u64.to_le_bytes());
+        assert_eq!(&encoded[12..14], &2u16.to_le_bytes(), "2 帧");
+        assert_eq!(&encoded[14..16], &2u16.to_le_bytes(), "2 声道");
+        let first = f32::from_le_bytes(encoded[16..20].try_into().unwrap());
+        assert!((first - 0.5).abs() < 1e-6);
     }
 
     #[tokio::test]

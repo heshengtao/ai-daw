@@ -120,6 +120,8 @@ docker compose up --build
 | `run_all` 走 Host 广播（无窗口也能编辑） | ✅ |
 | 无窗口启动 + `/rpc` + 鉴权 | ✅ 31 条命令（工程 / 轨道 / 片段 / 音符 / 混音 / 传输 / 历史） |
 | 无 Tauri 单测 | ✅ 228 条（含 `/rpc` 的鉴权、坏参数、未知命令、事件广播） |
-| 剩下 ~95 条命令的 `_impl` | ⬜ M3 |
-| `GET /events`（SSE）、`WS /audio`（PCM） | ⬜ M2 / M3 |
-| 静态资源托管（浏览器直接开） | ⬜ M3 |
+| 全部 71 条编辑命令（`Command` 通用兜底） | ✅ |
+| `GET /events`（SSE）、`WS /audio`（PCM） | ✅ |
+| 静态资源托管（浏览器直接开） | ✅ |
+| 令牌加固（系统 CSPRNG） | ✅ |
+| 浏览器端录音 / Web MIDI | ⬜ 需要 TLS（secure context） |

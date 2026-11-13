@@ -32,6 +32,8 @@ pub struct RealtimeOptions {
     pub status: Arc<SharedStatus>,
     /// 通道电平表；`None` = 新建一张（测试与离线渲染不关心表）。
     pub meter: Option<Arc<crate::meter::MeterBank>>,
+    /// 混音抽头：浏览器监听从这里取 PCM；`None` = 不抽。
+    pub tap: Option<Arc<crate::tap::AudioTap>>,
 }
 
 /// 实时宿主错误。
@@ -686,6 +688,7 @@ impl AudioHost {
         let loop_end_cb = Arc::clone(&shared.loop_end);
         // 波形缓冲：回调侧只写，界面侧只读（都用原子，不加锁）。
         let scope = Arc::clone(&options.scope);
+        let tap = options.tap.clone();
 
         let (tx, mut rx) = command_queue(options.command_capacity);
         // 回收槽：重建前宿主在这里放一个发送端，回调收到 `YieldInstances` 时把实例交出来。
@@ -746,6 +749,11 @@ impl AudioHost {
 
             // 给界面画波形：推入刚渲染好的这块（下混成单声道）。
             scope.push_interleaved(&staging[..need], frames);
+
+            // 给浏览器监听：推入同一块交错立体声（无锁，写满一圈就覆盖）。
+            if let Some(tap) = &tap {
+                tap.push_interleaved(&staging[..need]);
+            }
 
             // 宿主策略：播到播放边界。开循环 → 无缝回（范围起点 / 工程起点）继续；否则暂停。
             let boundary = player.playback_end_frame();
@@ -1092,7 +1100,8 @@ mod tests {
             scope: Arc::new(ScopeBuffer::new(crate::SCOPE_CAPACITY)),
             status: Arc::new(SharedStatus::new()),
             meter: None,
-        };
+                    tap: None,
+};
         match AudioHost::start(schedule(), &PluginRegistry::with_builtins(), options) {
             Ok(mut host) => {
                 assert!(host.play());
