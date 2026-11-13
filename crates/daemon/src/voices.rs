@@ -9,6 +9,8 @@
 //!
 //! 存储：`<配置目录>/sound-memories.json`（元数据）+ `sound-memory-audio/<id>.wav`。
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
@@ -283,7 +285,7 @@ fn to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
 
 /// 列出人声音色库（新存的在前）。
 #[tauri::command]
-pub fn voice_list(state: tauri::State<'_, AppState>) -> Vec<VoiceEntry> {
+pub fn voice_list(state: tauri::State<'_, Arc<AppState>>) -> Vec<VoiceEntry> {
     list(&state)
 }
 
@@ -298,7 +300,7 @@ pub async fn voice_save(
     args: VoiceSaveArgs,
 ) -> Result<VoiceEntry, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         save(&app, &state, args)
     })
     .await
@@ -308,7 +310,7 @@ pub async fn voice_save(
 /// 改名字 / 描述 / 标签。
 #[tauri::command]
 pub fn voice_update(
-    state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, Arc<AppState>>,
     id: String,
     name: Option<String>,
     description: Option<String>,
@@ -319,7 +321,7 @@ pub fn voice_update(
 
 /// 删除一条人声音色（连 WAV）。
 #[tauri::command]
-pub fn voice_delete(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+pub fn voice_delete(state: tauri::State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
     delete(&state, id)
 }
 

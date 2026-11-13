@@ -34,6 +34,7 @@ use ai_daw_local_ai::engine;
 use ai_daw_local_ai::models::catalog;
 
 use crate::state::AppState;
+use std::sync::Arc;
 
 /// 转谱用的模型 id（清单里那一条）。
 pub const MODEL_ID: &str = "sheetsage2-orig";
@@ -129,7 +130,7 @@ pub(crate) fn load_input(
     track: Option<u64>,
     clip: Option<u64>,
 ) -> Result<(Vec<f32>, usize, f64), String> {
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
 
     // 1) 直接给文件：整段用。
     if let Some(path) = audio.filter(|p| !p.trim().is_empty()) {

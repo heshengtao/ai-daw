@@ -24,6 +24,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use ai_daw_host_vst3::CatalogPlugin;
 
 use crate::state::{AppState, EVENT_PLUGINS};
+use std::sync::Arc;
 
 /// 注册表地址：**ai-daw 仓库里的快照**（打包时由 `tools/fetch-plugin-registry.mjs` 更新）。
 ///
@@ -32,7 +33,7 @@ use crate::state::{AppState, EVENT_PLUGINS};
 const REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/heshengtao/ai-daw/main/src-tauri/resources/plugin-registry.json";
 /// 随包快照：网络与本地缓存都不可用时的最后兜底（`include_str!` 保证一定有）。
-const BUNDLED_REGISTRY: &str = include_str!("../resources/plugin-registry.json");
+const BUNDLED_REGISTRY: &str = include_str!("../../../src-tauri/resources/plugin-registry.json");
 /// 注册表缓存有效期：6 小时。
 const REGISTRY_TTL: Duration = Duration::from_secs(6 * 3600);
 /// 拉取注册表 JSON 的整体超时。
@@ -452,7 +453,7 @@ pub fn rescan_with_managed(app: &AppHandle) -> Vec<CatalogPlugin> {
         save_catalog_cache(app, &catalog);
     }
 
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     state.set_scan_report(skipped, error);
     state.install_catalog(catalog.clone());
     let _ = app.emit(EVENT_PLUGINS, &catalog);
@@ -2561,7 +2562,7 @@ pub fn plugin_manager_foreign(app: AppHandle) -> Result<Vec<ForeignPlugin>, Stri
         .flat_map(|record| record.files)
         .map(PathBuf::from)
         .collect();
-    let catalog = app.state::<AppState>().catalog_snapshot();
+    let catalog = app.state::<Arc<AppState>>().catalog_snapshot();
     let mut out: Vec<ForeignPlugin> = catalog
         .into_iter()
         .filter(|p| !path_is_managed(&p.path, &dirs, &installed))

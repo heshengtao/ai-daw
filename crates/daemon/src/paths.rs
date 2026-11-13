@@ -115,6 +115,13 @@ pub fn init_from_args() {
     }
 }
 
+/// 无窗口进程：直接把数据目录钉死（与命令行 `--data-dir` 同一个覆盖通道）。
+///
+/// 必须在任何路径解析**之前**调用；之后 `data_dir()` 等一律返回这里给的目录。
+pub fn init_with_data_dir(dir: PathBuf) {
+    let _ = CLI_OVERRIDE.set(dir);
+}
+
 fn cli_override() -> Option<PathBuf> {
     CLI_OVERRIDE.get().cloned()
 }
@@ -903,4 +910,18 @@ mod tests {
         assert!(!text.contains("com.aidaw.app"));
         let _ = fs::remove_dir_all(&base);
     }
+}
+
+/// 会话缓存文件的位置：应用配置目录下的 `session.json`。
+///
+/// 它记录「上次退出时的工作状态」，供下次启动还原；拿不到配置目录时返回 `None`（不缓存）。
+pub fn session_file(app: &AppHandle) -> Option<PathBuf> {
+    config_dir(app).ok().map(|dir| dir.join("session.json"))
+}
+
+/// 历史工程目录：应用配置目录下的 `history/`。
+///
+/// 拿不到配置目录时返回 `None`（历史功能不可用，但不影响编辑）。
+pub fn history_dir(app: &AppHandle) -> Option<PathBuf> {
+    config_dir(app).ok().map(|dir| dir.join("history"))
 }

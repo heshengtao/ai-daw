@@ -606,75 +606,75 @@ pub(crate) struct HelpArgs {
 /// 目录结构 = 一个标准 Agent Skill：`skills/aidaw/SKILL.md`（入口，带 frontmatter）
 /// + `skills/aidaw/references/*.md`（能力域，按需加载）。
 pub(crate) const SKILL_DOCS: &[(&str, &str)] = &[
-    ("", include_str!("../../skills/aidaw/SKILL.md")),
+    ("", include_str!("../../../skills/aidaw/SKILL.md")),
     (
         "project",
-        include_str!("../../skills/aidaw/references/project.md"),
+        include_str!("../../../skills/aidaw/references/project.md"),
     ),
     (
         "track",
-        include_str!("../../skills/aidaw/references/track.md"),
+        include_str!("../../../skills/aidaw/references/track.md"),
     ),
     (
         "clip",
-        include_str!("../../skills/aidaw/references/clip.md"),
+        include_str!("../../../skills/aidaw/references/clip.md"),
     ),
     (
         "note",
-        include_str!("../../skills/aidaw/references/note.md"),
+        include_str!("../../../skills/aidaw/references/note.md"),
     ),
     (
         "composition",
-        include_str!("../../skills/aidaw/references/composition.md"),
+        include_str!("../../../skills/aidaw/references/composition.md"),
     ),
-    ("mix", include_str!("../../skills/aidaw/references/mix.md")),
+    ("mix", include_str!("../../../skills/aidaw/references/mix.md")),
     (
         "audio",
-        include_str!("../../skills/aidaw/references/audio.md"),
+        include_str!("../../../skills/aidaw/references/audio.md"),
     ),
     (
         "transport",
-        include_str!("../../skills/aidaw/references/transport.md"),
+        include_str!("../../../skills/aidaw/references/transport.md"),
     ),
     (
         "analysis",
-        include_str!("../../skills/aidaw/references/analysis.md"),
+        include_str!("../../../skills/aidaw/references/analysis.md"),
     ),
     (
         "plugin",
-        include_str!("../../skills/aidaw/references/plugin.md"),
+        include_str!("../../../skills/aidaw/references/plugin.md"),
     ),
     (
         "sound-design",
-        include_str!("../../skills/aidaw/references/sound-design.md"),
+        include_str!("../../../skills/aidaw/references/sound-design.md"),
     ),
     (
         "sound-memory",
-        include_str!("../../skills/aidaw/references/sound-memory.md"),
+        include_str!("../../../skills/aidaw/references/sound-memory.md"),
     ),
     (
         "theory",
-        include_str!("../../skills/aidaw/references/theory.md"),
+        include_str!("../../../skills/aidaw/references/theory.md"),
     ),
     (
         "rhythm",
-        include_str!("../../skills/aidaw/references/rhythm.md"),
+        include_str!("../../../skills/aidaw/references/rhythm.md"),
     ),
     (
         "genres",
-        include_str!("../../skills/aidaw/references/genres.md"),
+        include_str!("../../../skills/aidaw/references/genres.md"),
     ),
     (
         "workflow",
-        include_str!("../../skills/aidaw/references/workflow.md"),
+        include_str!("../../../skills/aidaw/references/workflow.md"),
     ),
     (
         "film",
-        include_str!("../../skills/aidaw/references/film.md"),
+        include_str!("../../../skills/aidaw/references/film.md"),
     ),
     (
         "expression",
-        include_str!("../../skills/aidaw/references/expression.md"),
+        include_str!("../../../skills/aidaw/references/expression.md"),
     ),
 ];
 
@@ -2359,7 +2359,7 @@ pub(crate) mod tools {
     }
 
     pub(crate) fn get_transport(app: &AppHandle) -> Result<String, String> {
-        json_s(&app.state::<AppState>().audio.snapshot())
+        json_s(&app.state::<Arc<AppState>>().audio.snapshot())
     }
 
     /// 按页读取一个片段的音符：大工程里核对每个音符时用它，避免整份工程快照撑爆上下文。
@@ -2407,7 +2407,7 @@ pub(crate) mod tools {
 
     /// 当前可用插件：内置 + 本机扫描到的外部插件（每次调用现取，重扫后立刻生效）。
     fn catalog_entries(app: &AppHandle) -> Vec<plugin_info::Entry> {
-        plugin_info::entries(&app.state::<AppState>().catalog_snapshot())
+        plugin_info::entries(&app.state::<Arc<AppState>>().catalog_snapshot())
     }
 
     /// `list_plugins` 的固定尾巴：把「怎么读这张表」说清楚，省得模型只看名字猜用途。
@@ -2562,7 +2562,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         let entries = catalog_entries(app);
         let entry = plugin_info::resolve(&entries, &args.plugin_id)?;
         let brief = plugin_info::brief(&entry);
-        let catalog = app.state::<AppState>().catalog_snapshot();
+        let catalog = app.state::<Arc<AppState>>().catalog_snapshot();
         let params = commands::plugin_params_with(&catalog, &entry.id);
 
         let mut out = serde_json::to_value(&brief).map_err(|e| format!("序列化失败：{e}"))?;
@@ -2670,7 +2670,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     /// 预设的 `params` 就是「这条音色怎么调」，模型可以原样喂给 `set_params` 复用；
     /// 只有确实要连效果链一起换时才用 `apply_preset`（它的 `effects` 是整体替换）。
     fn presets_for(app: &AppHandle, plugin_id: &str) -> serde_json::Value {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let store = state.presets.lock().unwrap();
         let all = store.all();
         let matched: Vec<&crate::presets::Preset> =
@@ -2754,7 +2754,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     // ---- 传输 ----
 
     pub(crate) fn transport_play(app: &AppHandle) -> Result<String, String> {
-        app.state::<AppState>()
+        app.state::<Arc<AppState>>()
             .audio
             .send(TransportCommand::Play)
             .map_err(|e| e.to_string())?;
@@ -2762,7 +2762,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     }
 
     pub(crate) fn transport_pause(app: &AppHandle) -> Result<String, String> {
-        app.state::<AppState>()
+        app.state::<Arc<AppState>>()
             .audio
             .send(TransportCommand::Pause)
             .map_err(|e| e.to_string())?;
@@ -2770,7 +2770,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     }
 
     pub(crate) fn transport_stop(app: &AppHandle) -> Result<String, String> {
-        app.state::<AppState>()
+        app.state::<Arc<AppState>>()
             .audio
             .send(TransportCommand::Stop)
             .map_err(|e| e.to_string())?;
@@ -2778,7 +2778,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     }
 
     pub(crate) fn transport_seek(app: &AppHandle, args: SeekArgs) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let sample_rate = {
             let rate = state.audio.snapshot().sample_rate;
             if rate == 0 {
@@ -2799,7 +2799,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         app: &AppHandle,
         args: ToggleNoTrackArgs,
     ) -> Result<String, String> {
-        app.state::<AppState>()
+        app.state::<Arc<AppState>>()
             .audio
             .send(TransportCommand::SetLoop(args.on))
             .map_err(|e| e.to_string())?;
@@ -3200,7 +3200,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             .as_ref()
             .map(|i| i.plugin_id.clone())
             .ok_or_else(|| format!("轨道 {} 没有挂乐器", args.track))?;
-        let catalog = app.state::<AppState>().catalog_snapshot();
+        let catalog = app.state::<Arc<AppState>>().catalog_snapshot();
         let specs = commands::plugin_params_with(&catalog, &plugin_id)?;
 
         let mut limits: HashMap<String, (f32, f32)> = HashMap::new();
@@ -4332,7 +4332,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     // ---- 统计与和声（只读） ----
 
     fn snapshot(app: &AppHandle) -> Project {
-        app.state::<AppState>()
+        app.state::<Arc<AppState>>()
             .engine
             .lock()
             .unwrap()
@@ -4775,7 +4775,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         _actor: &Actor,
         args: TrackOnlyArgs,
     ) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let catalog = state.catalog_snapshot();
         let project = state.engine.lock().unwrap().project().clone();
         let report = commands::midi_capabilities_with(&catalog, &project, args.track)?;
@@ -4957,25 +4957,25 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     // ---- 历史 ----
 
     pub(crate) fn undo(app: &AppHandle) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         json_s(&commands::undo_now(&state))
     }
 
     pub(crate) fn redo(app: &AppHandle) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         json_s(&commands::redo_now(&state))
     }
 
     // ---- 工程文件 ----
 
     pub(crate) fn get_project_path(app: &AppHandle) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let dirty = state.engine.lock().unwrap().is_dirty();
         json_s(&serde_json::json!({ "path": state.session_path(), "dirty": dirty }))
     }
 
     pub(crate) fn save_project(app: &AppHandle, args: SaveProjectArgs) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let path = args
             .path
             .or_else(|| state.session_path())
@@ -5031,7 +5031,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     }
 
     pub(crate) fn list_project_history(app: &AppHandle) -> Result<String, String> {
-        let entries = crate::history_dir(app)
+        let entries = crate::paths::history_dir(app)
             .map(|dir| crate::history::load_index(&dir))
             .unwrap_or_default();
         json_s(&entries)
@@ -5054,7 +5054,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
 
     pub(crate) fn analyze_project(app: &AppHandle, args: AnalyzeArgs) -> Result<String, String> {
         let sample_rate = check_sample_rate_s(args.sample_rate.unwrap_or(FALLBACK_SAMPLE_RATE))?;
-        let mut inputs = commands::render_inputs(&app.state::<AppState>());
+        let mut inputs = commands::render_inputs(&app.state::<Arc<AppState>>());
         let range = resolve_beat_range(&inputs.project, args.start_beat, args.end_beat)?;
         if let Some(tracks) = &args.tracks {
             mute_other_tracks(&mut inputs.project, tracks)?;
@@ -5099,7 +5099,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     pub(crate) fn export_wav(app: &AppHandle, args: ExportArgs) -> Result<String, String> {
         let sample_rate = check_sample_rate_s(args.sample_rate.unwrap_or(FALLBACK_SAMPLE_RATE))?;
         let path = args.path.clone();
-        let mut inputs = commands::render_inputs(&app.state::<AppState>());
+        let mut inputs = commands::render_inputs(&app.state::<Arc<AppState>>());
         let range = resolve_beat_range(&inputs.project, args.start_beat, args.end_beat)?;
         if let Some(tracks) = &args.tracks {
             mute_other_tracks(&mut inputs.project, tracks)?;
@@ -5142,7 +5142,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             .map_err(|error| format!("读取 film.json 失败：{error}"))?;
         let raw: serde_json::Value =
             serde_json::from_str(&text).map_err(|error| format!("film.json 解析失败：{error}"))?;
-        let catalog = app.state::<AppState>().catalog_snapshot();
+        let catalog = app.state::<Arc<AppState>>().catalog_snapshot();
         let options = cue_sheet::ImportOptions {
             clear: args.clear,
             name: args.name.clone(),
@@ -5203,7 +5203,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
                 ))
             }
         };
-        let catalog = app.state::<AppState>().catalog_snapshot();
+        let catalog = app.state::<Arc<AppState>>().catalog_snapshot();
         let matches = cue_sheet::suggestions(
             &args.query,
             kind,
@@ -5250,7 +5250,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         let matches = crate::manager::search_registry(app, query, args.kind.as_deref(), limit)?;
 
         // 不下载的替代方案：复用 `find_instrument` 的语义检索（本机已装优先 + 内置近似）。
-        let catalog = app.state::<AppState>().catalog_snapshot();
+        let catalog = app.state::<Arc<AppState>>().catalog_snapshot();
         let alternatives: Vec<_> = cue_sheet::suggestions(query, kind, 3, &catalog)
             .into_iter()
             .filter(|item| item.score >= 20)
@@ -5313,7 +5313,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     /// 逐轨导出 WAV + 响度清单，写入 `<dir>/stems.json`。
     pub(crate) fn export_stems(app: &AppHandle, args: ExportStemsArgs) -> Result<String, String> {
         let sample_rate = check_sample_rate_s(args.sample_rate.unwrap_or(FALLBACK_SAMPLE_RATE))?;
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let base = commands::render_inputs(&state);
         let project = base.project.clone();
         let transport = project.transport.clone();
@@ -5533,7 +5533,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
 
     /// 读取最近的操作记录（避免 agent 为了知道「刚才改了什么」重读全量工程）。
     pub(crate) fn what_changed(app: &AppHandle, args: WhatChangedArgs) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let engine = state.engine.lock().unwrap();
         let ops = engine.ops();
         let current = ops.last().map(|op| op.id);
@@ -5565,7 +5565,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             stereo_width: args.stereo_width.unwrap_or(ai_daw_mastering::DEFAULT_WIDTH),
         };
         let sample_rate = FALLBACK_SAMPLE_RATE;
-        let inputs = commands::render_inputs(&app.state::<AppState>());
+        let inputs = commands::render_inputs(&app.state::<Arc<AppState>>());
         let buffer = commands::render_offline(inputs, sample_rate, 0.5);
         let channels = buffer.channels();
         let (processed, report) =
@@ -5692,7 +5692,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         actor: &Actor,
         args: ImportAudioArgs,
     ) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let audio = state.assets.load(&args.path).map_err(|e| e.to_string())?;
         let seconds = audio.frames() as f64 / audio.sample_rate;
         if !(seconds.is_finite() && seconds > 0.0) {
@@ -5750,7 +5750,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         app: &AppHandle,
         args: InputDeviceArgs,
     ) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         match args.device {
             Some(name) => {
                 state.audio.arm_input(Some(name.clone()), false)?;
@@ -5769,7 +5769,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         if !args.start.is_finite() || args.start < 0.0 {
             return Err(format!("录音起始拍不合法：{}", args.start));
         }
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let exists = {
             let engine = state.engine.lock().unwrap();
             engine
@@ -5845,13 +5845,13 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     }
 
     pub(crate) fn list_presets(app: &AppHandle) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let presets = state.presets.lock().unwrap().all();
         json_s(&presets)
     }
 
     pub(crate) fn save_preset(app: &AppHandle, args: SavePresetArgs) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let preset =
             state
                 .presets
@@ -5862,7 +5862,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     }
 
     pub(crate) fn update_preset(app: &AppHandle, args: UpdatePresetArgs) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let preset = state
             .presets
             .lock()
@@ -5872,7 +5872,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     }
 
     pub(crate) fn delete_preset(app: &AppHandle, args: PresetIdArgs) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         state.presets.lock().unwrap().remove(&args.id)?;
         Ok(format!("预设 {} 已删除", args.id))
     }
@@ -5929,7 +5929,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         app: &AppHandle,
         args: ListSoundMemoriesArgs,
     ) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let all = state.sound_memories.lock().unwrap().summaries();
         let total = all.len();
         let memories = filter_sound_memories(all, &args);
@@ -5944,7 +5944,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         app: &AppHandle,
         args: SoundMemoryIdArgs,
     ) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let memory = state
             .sound_memories
             .lock()
@@ -5960,7 +5960,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         app: &AppHandle,
         args: SaveSoundMemoryArgs,
     ) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let snapshot = commands::sound_snapshot_for(&state, TrackId(args.track))?;
         let meta = MemoryMeta {
             name: args.name,
@@ -5983,7 +5983,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         app: &AppHandle,
         args: UpdateSoundMemoryArgs,
     ) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let memory = state.sound_memories.lock().unwrap().update_metadata(
             &args.id,
             args.name.as_deref(),
@@ -5999,7 +5999,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         app: &AppHandle,
         args: SoundMemoryIdArgs,
     ) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         state.sound_memories.lock().unwrap().remove(&args.id)?;
         commands::notify_sound_memories(app);
         Ok(format!("音色记忆 {} 已删除", args.id))
@@ -6010,7 +6010,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         actor: &Actor,
         args: ApplySoundMemoryArgs,
     ) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let memory = state
             .sound_memories
             .lock()
@@ -6063,13 +6063,13 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
 
     /// 当前 AI 任务状态（是否在跑、进度、消息）。
     pub(crate) fn get_ai_status(app: &AppHandle) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         json_s(&crate::ai::ai_status(state))
     }
 
     /// 取消当前 AI 任务（下一次进度回调时停下，已写入的内容不回滚）。
     pub(crate) fn cancel_ai_task(app: &AppHandle) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         crate::ai::ai_cancel(state);
         Ok("已请求取消：当前 AI 任务会在下一次进度回调时停下。已写进工程的部分不会自动回滚，必要时 undo。".into())
     }
@@ -6210,7 +6210,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     /// 不给 MIDI 参考时，翻唱要先 `transcribe_score`（音频，需 2.5 GB 权重、分钟级）；
     /// 旋律本来就在工程里的话，这条是**零推理**的，还顺带把逐音歌词带回来。
     pub(crate) fn midi_to_abc(app: &AppHandle, args: MidiToAbcArgs) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let project = {
             let engine = state.engine.lock().unwrap();
             engine.project().clone()
@@ -6221,7 +6221,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
 
     /// 把工程导出成标准 MIDI 文件（多轨、含速度图与拍号图）。
     pub(crate) fn export_midi(app: &AppHandle, args: ExportMidiArgs) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let project = state.engine.lock().unwrap().project().clone();
         let bytes = ai_daw_engine::midi::project_to_smf(&project, args.tracks.as_deref())?;
         let path = std::path::Path::new(&args.path);
@@ -6264,7 +6264,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         app: &AppHandle,
         args: PreviewMixArgs,
     ) -> Result<String, String> {
-        let mut inputs = commands::render_inputs(&app.state::<AppState>());
+        let mut inputs = commands::render_inputs(&app.state::<Arc<AppState>>());
         let range = resolve_beat_range(&inputs.project, args.start_beat, args.end_beat)?;
         if let Some(track) = args.track {
             mute_other_tracks(&mut inputs.project, &[track])?;
@@ -6323,7 +6323,7 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
 
     /// 实时电平快照（**旁路读取**，不清零——界面轮询自己会取走）。
     pub(crate) fn get_levels(app: &AppHandle) -> Result<String, String> {
-        let state = app.state::<AppState>();
+        let state = app.state::<Arc<AppState>>();
         let meter = state.audio.meter();
         let project = state.engine.lock().unwrap().project().clone();
         let master = meter.peek_master();

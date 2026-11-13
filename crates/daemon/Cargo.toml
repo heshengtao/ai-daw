@@ -1,0 +1,71 @@
+[package]
+name = "ai-daw-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AI DAW 的后端：工程模型、音频引擎、插件宿主、MCP 与 HTTP 服务"
+
+[lib]
+name = "ai_daw_daemon"
+path = "src/lib.rs"
+
+[dependencies]
+# 过渡期保留：命令层还要用 `#[tauri::command]` 宏与 `State` 类型。`aidawd`（无窗口
+# 二进制）运行时不初始化任何 Tauri App，只借用宏生成的那层薄壳。
+tauri = { version = "2", features = [] }
+# 运行日志的时间戳（已在依赖树里，不引入新包）。
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+ai-daw-engine = { path = "../engine", features = ["realtime"] }
+ai-daw-plugin-api = { path = "../plugin-api" }
+ai-daw-host-vst3 = { path = "../host-vst3" }
+ai-daw-analysis = { path = "../analysis" }
+ai-daw-asset = { path = "../asset" }
+# 本地 AI（音频转 MIDI / 降噪）：内置 DSP，不依赖外部模型。
+ai-daw-local-ai = { path = "../local-ai" }
+# 母带处理（响度归一 + 真峰值限幅 + 立体声宽度）：纯 DSP，不依赖模型。
+ai-daw-mastering = { path = "../mastering" }
+# 内嵌 MCP 服务器（Streamable HTTP，只监听回环）。
+rmcp = { version = "3", features = [
+    "server",
+    "macros",
+    "schemars",
+    "transport-streamable-http-server",
+] }
+# Web 客户端：`/rpc`（POST）+ 静态资源 + `/health`。与 MCP 共用一条 axum 树。
+axum = "0.8"
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros"] }
+tokio-util = "0.7"
+schemars = "1"
+
+# MIDI 输入（WinMM / CoreMIDI / ALSA）：虚拟键盘与硬件键盘的实时输入。MIT 许可。
+midir = "0.11"
+
+# 内置「写歌智能体」的 OpenAI 兼容 HTTP 客户端：Chat Completions 用 SSE 流式。
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "native-tls"] }
+futures-util = { version = "0.3", default-features = false }
+
+# 插件管理器：拉取开放注册表（HTTPS）、校验、解压归档。
+ureq = { version = "3", default-features = false, features = ["native-tls", "gzip", "socks-proxy"] }
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1"
+# Linux 的 CUDA 组件（NVIDIA redist）只发 `.tar.xz`。
+xz2 = "0.1"
+
+# 音色记忆库：插件二进制状态以 base64 存进 JSON，避免 Vec<u8> 变成数字数组。
+base64 = "0.22"
+
+# 无窗口入口的参数解析。
+clap = { version = "4", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

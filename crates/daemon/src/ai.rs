@@ -128,7 +128,7 @@ impl AiRuntime {
 
 /// 取当前任务状态。
 #[tauri::command]
-pub fn ai_status(state: tauri::State<'_, AppState>) -> AiStatus {
+pub fn ai_status(state: tauri::State<'_, Arc<AppState>>) -> AiStatus {
     state.ai.status()
 }
 
@@ -160,7 +160,7 @@ pub fn ai_models() -> AiModels {
 /// 取消当前任务（下一次进度回调时停下，已处理的部分保留/丢弃由任务自己决定）。
 
 #[tauri::command]
-pub fn ai_cancel(state: tauri::State<'_, AppState>) {
+pub fn ai_cancel(state: tauri::State<'_, Arc<AppState>>) {
     state.ai.cancel.store(true, Ordering::Relaxed);
 }
 
@@ -174,7 +174,7 @@ pub fn ai_cancel(state: tauri::State<'_, AppState>) {
 #[tauri::command]
 pub fn ai_start(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, Arc<AppState>>,
     kind: String,
     track: u64,
     master: Option<MasterArgs>,
@@ -319,7 +319,7 @@ fn run_job(
     input: &TrackInput,
     model: Option<&str>,
 ) -> Result<String, String> {
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     let audio = state.assets.load(&input.source.path)?;
     let channels = audio.channels;
     let sample_rate = audio.sample_rate;
@@ -594,7 +594,7 @@ fn enhance_input(
     progress: ai_daw_local_ai::Progress<'_>,
     cancelled: impl Fn() -> bool,
 ) -> Result<String, String> {
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     let (processed, backend) = enhance_audio(samples, channels, sample_rate, force_dsp, progress);
     // 取消发生在降噪过程中：还没写盘 / 建轨，直接收尾，别留下半成品轨道。
     if cancelled() {
@@ -738,7 +738,7 @@ fn place_stems(
 ) -> Result<usize, String> {
     let rate = sample_rate.round().max(1.0) as u32;
 
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     let mut commands: Vec<Command> = Vec::with_capacity(stems.stems.len());
     for (i, (name, part)) in stems.stems.iter().enumerate() {
         let file = ai_output_path(app, &format!("separate-{name}"))?;
@@ -785,7 +785,7 @@ pub(crate) fn separate_track(
     track: u64,
     model: Option<String>,
 ) -> Result<usize, String> {
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     let input = track_input(&state, track, None)?;
     let audio = state.assets.load(&input.source.path)?;
     let channels = audio.channels;
@@ -889,7 +889,7 @@ fn apply_tempo_detection(
 
 /// 同步跑一遍节拍检测（供 MCP 工具用；无进度回调，整体阻塞在调用线程）。
 pub(crate) fn detect_tempo_track(app: &tauri::AppHandle, track: u64) -> Result<String, String> {
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     let input = track_input(&state, track, None)?;
     let audio = state.assets.load(&input.source.path)?;
     let channels = audio.channels;
@@ -907,7 +907,7 @@ pub(crate) fn transcribe_track(
     track: u64,
     model: Option<&str>,
 ) -> Result<String, String> {
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     let input = track_input(&state, track, None)?;
     let audio = state.assets.load(&input.source.path)?;
     let channels = audio.channels;
@@ -935,7 +935,7 @@ pub(crate) fn enhance_track(
     track: u64,
     dsp: bool,
 ) -> Result<String, String> {
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     let input = track_input(&state, track, None)?;
     let audio = state.assets.load(&input.source.path)?;
     let channels = audio.channels;
@@ -985,7 +985,7 @@ fn run_master_job(
     runtime: &AiRuntime,
     options: &ai_daw_mastering::MasterOptions,
 ) -> Result<String, String> {
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
 
     step(runtime, app, 0.05);
     if runtime.cancel.load(Ordering::Relaxed) {
@@ -1026,7 +1026,7 @@ fn land_master_audio(
     channels: usize,
     report: &ai_daw_mastering::MasterReport,
 ) -> Result<String, String> {
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     let frames = processed.len() / channels;
     let seconds = frames as f64 / MASTER_SAMPLE_RATE as f64;
     let path = ai_output_path(app, "master")?;
@@ -1085,7 +1085,7 @@ pub(crate) fn master_to_track(
     app: &tauri::AppHandle,
     options: &ai_daw_mastering::MasterOptions,
 ) -> Result<String, String> {
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     let inputs = crate::commands::render_inputs(&state);
     let project = inputs.project.clone();
     let buffer = crate::commands::render_offline(inputs, MASTER_SAMPLE_RATE, MASTER_TAIL_SECONDS);

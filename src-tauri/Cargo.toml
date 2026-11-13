@@ -1,16 +1,16 @@
 [package]
 name = "ai-daw"
 version = "1.7.0"
-description = "A Tauri App"
+description = "AI DAW 桌面外壳：窗口、原生插件编辑器与自动更新"
 authors = ["you"]
 edition = "2021"
 license = "Apache-2.0"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+# See more keys and their definitions at https://doc.tauri.app/develop/
 
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary to
-# make the lib name unique and wouldn't conflict with the bin name.
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "ai_daw_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -22,8 +22,8 @@ default = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# 外壳只负责窗口、原生菜单/对话框与自动更新；业务全部在 `ai-daw-daemon` 里。
 tauri = { version = "2", features = [] }
-# 运行日志的时间戳（已在依赖树里，不引入新包）。
 chrono = "0.4"
 tauri-plugin-dialog = "2"
 # 自动更新：桌面端从 GitHub Releases 的 `latest.json` 取新版本，验签后安装；
@@ -32,61 +32,12 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
-ai-daw-engine = { path = "../crates/engine", features = ["realtime"] }
-ai-daw-plugin-api = { path = "../crates/plugin-api" }
+ai-daw-daemon = { path = "../crates/daemon" }
+# 外壳直接叫用到的两处宿主 crate 接口（日志宿、模型目录登记）。
 ai-daw-host-vst3 = { path = "../crates/host-vst3" }
-ai-daw-analysis = { path = "../crates/analysis" }
-ai-daw-asset = { path = "../crates/asset" }
-# 本地 AI（音频转 MIDI / 降噪）：内置 DSP，不依赖外部模型。
+ai-daw-engine = { path = "../crates/engine", features = ["realtime"] }
 ai-daw-local-ai = { path = "../crates/local-ai" }
-# 母带处理（响度归一 + 真峰值限幅 + 立体声宽度）：纯 DSP，不依赖模型。
-ai-daw-mastering = { path = "../crates/mastering" }
-# 内嵌 MCP 服务器（Streamable HTTP，只监听回环）。
-rmcp = { version = "3", features = [
-    "server",
-    "macros",
-    "schemars",
-    "transport-streamable-http-server",
-] }
-axum = "0.8"
-tokio = { version = "1", features = ["net"] }
-tokio-util = "0.7"
-schemars = "1"
 
-# MIDI 输入（WinMM / CoreMIDI / ALSA）：虚拟键盘与硬件键盘的实时输入。MIT 许可。
-midir = "0.11"
-
-# 内置「写歌智能体」的 OpenAI 兼容 HTTP 客户端：Chat Completions 用 SSE 流式，需要能逐块读、
-# 能干净取消的异步客户端；`ureq` 是同步的、取消别扭。`reqwest` 已在依赖树里（tauri 的传递依赖），
-# 加为直接依赖不引入新 crate 树。TLS 用 native-tls，与 `ureq` 的既定策略一致（不用 rustls）。
-reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "native-tls"] }
-futures-util = { version = "0.3", default-features = false }
-
-# 插件管理器：拉取开放注册表（HTTPS）、校验、解压归档。
-# `ureq` 已在依赖树里（`ort` 的传递依赖），这里启用 `native-tls` 复用系统 TLS，
-# 不引入 rustls 那棵树；`gzip` 让注册表（1.9 MB → 约 280 KB）传输快一个量级；
-# `socks-proxy` 让「手动代理」能填 `socks5://`（只跑 SOCKS 的隧道很常见）。
-# **注意**：`ureq` 的 TLS provider 默认是 Rustls，必须在代码里显式选 `NativeTls`（见 manager.rs）。
-ureq = { version = "3", default-features = false, features = ["native-tls", "gzip", "socks-proxy"] }
-sha2 = "0.10"
-zip = { version = "2", default-features = false, features = ["deflate"] }
-tar = "0.4"
-flate2 = "1"
-# Linux 的 CUDA 组件（NVIDIA redist）只发 `.tar.xz`：`tar` 认不了 xz，这里补一个流式解码器。
-# `xz2` 是 liblzma 的绑定（Windows 上随 build 自带源码），解压是流式的，不会把 1 GB 读进内存。
-xz2 = "0.1"
-
-# 音色记忆库：插件二进制状态以 base64 存进 JSON，避免 Vec<u8> 变成数字数组。
-base64 = "0.22"
-
-# Windows：把安装目录写进**用户** PATH（`HKCU\Environment`），让 `aidaw` 随处可敲。
-# 该 crate 已在锁文件里（tauri 构建链的传递依赖），加为直接依赖不引入新包。
-[target.'cfg(windows)'.dependencies]
-winreg = "0.56"
-
-
-# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
 lto = true

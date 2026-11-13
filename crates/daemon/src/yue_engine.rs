@@ -43,6 +43,7 @@ use ai_daw_local_ai::engine;
 use ai_daw_local_ai::models::catalog;
 
 use crate::state::AppState;
+use std::sync::Arc;
 
 /// 引擎状态广播的事件名。
 pub const EVENT_ENGINE: &str = "engine://yue-engine";
@@ -289,7 +290,7 @@ fn record_conditions(audio: &str) -> (Option<String>, Option<String>, Option<Str
 /// 最新那一段后面，而不是回到整条轨道的开头。
 #[tauri::command]
 pub fn ai_yue_continuable(app: tauri::AppHandle) -> Vec<ContinuableTrack> {
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     let tracks: Vec<(u64, String)> = {
         let engine = state.engine.lock().unwrap();
         engine
@@ -1699,7 +1700,7 @@ fn collect(
         semantic_path = Some(path.to_string_lossy().into_owned());
     }
 
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     let mode = args.stop_after();
     let truncated = run.score_truncated;
     let mut audio_path = None;

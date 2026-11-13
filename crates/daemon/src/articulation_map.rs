@@ -655,7 +655,7 @@ ArticulationGroups:
 
     #[test]
     fn catalog_lists_and_loads_snapshot() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/articulation-maps");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/resources/articulation-maps");
         let catalog = ArticulationMapCatalog::new(root);
         let everything = catalog.list(None, 2000);
         assert!(

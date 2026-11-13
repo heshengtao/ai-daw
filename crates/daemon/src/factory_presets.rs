@@ -26,7 +26,7 @@ pub(crate) struct FactoryPreset {
     pub params: BTreeMap<String, f32>,
 }
 
-const RAW: &str = include_str!("../../src/data/synth-factory-presets.json");
+const RAW: &str = include_str!("../../../src/data/synth-factory-presets.json");
 
 /// 全部出厂音色（JSON 顺序 = 界面分类顺序）。
 pub(crate) fn all() -> &'static [FactoryPreset] {

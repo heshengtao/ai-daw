@@ -100,6 +100,11 @@ pub struct AppState {
     pub singing: crate::singing::SingingRuntime,
     /// 音色替换任务（独立的进度 / 取消；与歌声合成是两组权重，各自有各自的模型档）。
     pub svc: crate::svc::SvcRuntime,
+    /// 宿主抽象：事件广播、数据目录、原生能力。桌面端与无窗口进程各注入一份。
+    ///
+    /// 放在状态里而不是命令参数里，是为了让**所有**命令实现都走同一条广播通道——
+    /// 否则「Tauri 里能收到的消息、HTTP 客户端收不到」这类分叉会一直存在。
+    host: Arc<dyn crate::host::Host>,
 }
 
 impl AppState {
@@ -109,7 +114,12 @@ impl AppState {
     /// 免得先装一遍默认模板、再装一遍会话工程。
     #[cfg(test)]
     pub fn new(name: &str) -> Self {
-        Self::from_engine(Engine::new_project(name), Vec::new(), true)
+        Self::from_engine(
+            Engine::new_project(name),
+            Vec::new(),
+            true,
+            Arc::new(crate::host::NoopHost),
+        )
     }
 
     /// 启动时的共享状态：把「最终要用的工程」和「上次扫描的插件目录」**一次**交给音频线程。
@@ -126,12 +136,25 @@ impl AppState {
         session: Option<crate::session::SessionFile>,
         catalog: Vec<CatalogPlugin>,
     ) -> Self {
+        Self::bootstrap_with_host(
+            session,
+            catalog,
+            Arc::new(crate::host::NoopHost),
+        )
+    }
+
+    /// 同 [`AppState::bootstrap`]，但由调用方注入宿主（桌面端 / 无窗口进程各一份）。
+    pub fn bootstrap_with_host(
+        session: Option<crate::session::SessionFile>,
+        catalog: Vec<CatalogPlugin>,
+        host: Arc<dyn crate::host::Host>,
+    ) -> Self {
         let restored = session.is_some();
         let engine = match &session {
             Some(session) => Engine::restore(session.project.clone(), session.saved.clone()),
             None => Engine::new_project("untitled"),
         };
-        let state = Self::from_engine(engine, catalog, false);
+        let state = Self::from_engine(engine, catalog, false, host);
         // 这次启动到底是不是「接着上次的工程」：欢迎页拿它决定推荐项。
         state.restored_session.store(restored, Ordering::Relaxed);
         if let Some(session) = session {
@@ -157,7 +180,12 @@ impl AppState {
     }
 
     /// 用给定工程（与插件目录）装配共享状态；`start_audio` 决定是否立刻装载。
-    fn from_engine(engine: Engine, catalog: Vec<CatalogPlugin>, start_audio: bool) -> Self {
+    fn from_engine(
+        engine: Engine,
+        catalog: Vec<CatalogPlugin>,
+        start_audio: bool,
+        host: Arc<dyn crate::host::Host>,
+    ) -> Self {
         let editor_handles: Arc<Mutex<HashMap<(u64, PluginSlot), EditorSlot>>> =
             Arc::new(Mutex::new(HashMap::new()));
         // 素材缓存要先于音频引擎建好：音频线程重建宿主时要靠它把音频片段接上真实 PCM。
@@ -199,7 +227,13 @@ impl AppState {
             ai: AiRuntime::new(),
             singing: crate::singing::SingingRuntime::new(),
             svc: crate::svc::SvcRuntime::new(),
+            host,
         }
+    }
+
+    /// 宿主实现（事件广播、数据目录、原生能力）。
+    pub fn host(&self) -> &Arc<dyn crate::host::Host> {
+        &self.host
     }
 
     /// 记下本次录音的目标。
