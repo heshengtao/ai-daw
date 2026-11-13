@@ -1217,11 +1217,9 @@ pub struct ClipBounds {
 /// **音频片段**用素材的实际首尾（左边缘往左拖最多露出素材第 0 帧，往右拖最多到素材最后一帧）。
 /// **MIDI 片段是用户自定义的，没有素材边界**——长度随便改，所以不做夹取。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn clip_bounds(
-    state: State<'_, Arc<AppState>>,
+pub fn clip_bounds_impl(state: &AppState,
     track: u64,
-    clip: u64,
-) -> Result<ClipBounds, String> {
+    clip: u64,) -> Result<ClipBounds, String> {
     let track_id = TrackId(track);
     let clip_id = ClipId(clip);
     let project = state.engine.lock().unwrap().project().clone();
@@ -1247,6 +1245,14 @@ pub fn clip_bounds(
         src.rate,
     );
     Ok(ClipBounds { min_start, max_end })
+}
+
+/// clip_bounds（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn clip_bounds(state: State<'_, Arc<AppState>>,
+    track: u64,
+    clip: u64,) -> Result<ClipBounds, String> {
+    clip_bounds_impl(&state, track, clip)
 }
 
 /// 新建工程：清空并铺上默认分轨模板。
@@ -1868,11 +1874,9 @@ pub fn merge_clips(
 
 /// 单条轨道（或其中某个片段）的音符统计。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn get_track_note_stats(
-    state: State<'_, Arc<AppState>>,
+pub fn get_track_note_stats_impl(state: &AppState,
     track: u64,
-    clip: Option<u64>,
-) -> Result<ai_daw_engine::report::NoteStats, String> {
+    clip: Option<u64>,) -> Result<ai_daw_engine::report::NoteStats, String> {
     let project = state.engine.lock().unwrap().project().clone();
     let found = project
         .track(TrackId(track))
@@ -1882,6 +1886,14 @@ pub fn get_track_note_stats(
         clip.map(ClipId),
         project.transport.bar_beats(),
     ))
+}
+
+/// get_track_note_stats（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn get_track_note_stats(state: State<'_, Arc<AppState>>,
+    track: u64,
+    clip: Option<u64>,) -> Result<ai_daw_engine::report::NoteStats, String> {
+    get_track_note_stats_impl(&state, track, clip)
 }
 
 /// 多条轨道之间的音区重叠与分工冲突。
@@ -2439,8 +2451,14 @@ pub(crate) fn redo_now(state: &AppState) -> HistoryState {
 
 /// 操作记录：本次编辑会话的全部操作（含人工与 AI），按时间从旧到新排列。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn ops_list(state: State<'_, Arc<AppState>>) -> Vec<OpRecord> {
+pub fn ops_list_impl(state: &AppState) -> Vec<OpRecord> {
     state.engine.lock().unwrap().ops()
+}
+
+/// ops_list（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ops_list(state: State<'_, Arc<AppState>>) -> Vec<OpRecord> {
+    ops_list_impl(&state)
 }
 
 /// 回撤到某条操作之前：该操作及其之后的改动都会被撤销（可再重做回来）。
@@ -2520,9 +2538,15 @@ pub fn transport_status(state: State<'_, Arc<AppState>>) -> TransportSnapshot {
 /// 底栏的「离线试听」指示离线时变成按钮，点击后走这条命令；探测结果仍由
 /// `engine://transport` 事件推送回来，界面无需自己刷新。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn retry_audio(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+pub fn retry_audio_impl(state: &AppState) -> Result<(), String> {
     state.audio.retry_audio();
     Ok(())
+}
+
+/// retry_audio（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn retry_audio(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    retry_audio_impl(&state)
 }
 
 /// 前端首帧已经上屏：显示主窗口，并在这之后再把工程装进音频宿主。
@@ -2556,8 +2580,14 @@ pub fn app_ready(window: crate::tauri_api::WebviewWindow) {
 
 /// 本机可用的音频输出设备。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_output_devices() -> Vec<ai_daw_engine::realtime::OutputDeviceInfo> {
+pub fn list_output_devices_impl() -> Vec<ai_daw_engine::realtime::OutputDeviceInfo> {
     ai_daw_engine::realtime::list_output_devices()
+}
+
+/// list_output_devices（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn list_output_devices() -> Vec<ai_daw_engine::realtime::OutputDeviceInfo> {
+    list_output_devices_impl()
 }
 
 /// 选择输出设备（`None` = 跟随系统默认设备）。音频线程会立刻重建流。
@@ -2616,8 +2646,14 @@ pub fn transport_seek(state: State<'_, Arc<AppState>>, frame: u64) -> Result<(),
 
 /// 开关循环播放：播到工程结尾无缝回到起点继续。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn transport_set_loop(state: State<'_, Arc<AppState>>, on: bool) -> Result<(), String> {
+pub fn transport_set_loop_impl(state: &AppState, on: bool) -> Result<(), String> {
     state.audio.send(TransportCommand::SetLoop(on))
+}
+
+/// transport_set_loop（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn transport_set_loop(state: State<'_, Arc<AppState>>, on: bool) -> Result<(), String> {
+    transport_set_loop_impl(&state, on)
 }
 
 /// 设定播放范围（帧）：开了循环时播到 `end` 无缝回到 `start`。
@@ -2625,20 +2661,32 @@ pub fn transport_set_loop(state: State<'_, Arc<AppState>>, on: bool) -> Result<(
 /// `end <= start` = 取消范围。范围本身不启动播放，也不改「是否循环」——那是
 /// `transport_set_loop` 的事。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn transport_set_loop_range(
-    state: State<'_, Arc<AppState>>,
+pub fn transport_set_loop_range_impl(state: &AppState,
     start: u64,
-    end: u64,
-) -> Result<(), String> {
+    end: u64,) -> Result<(), String> {
     state
         .audio
         .send(TransportCommand::SetLoopRange { start, end })
 }
 
+/// transport_set_loop_range（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn transport_set_loop_range(state: State<'_, Arc<AppState>>,
+    start: u64,
+    end: u64,) -> Result<(), String> {
+    transport_set_loop_range_impl(&state, start, end)
+}
+
 /// 开关节拍器：按工程速度 / 拍号在整数拍上打点（重音在小节头），只在播放时出声。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn transport_set_metronome(state: State<'_, Arc<AppState>>, on: bool) -> Result<(), String> {
+pub fn transport_set_metronome_impl(state: &AppState, on: bool) -> Result<(), String> {
     state.audio.send(TransportCommand::SetMetronome(on))
+}
+
+/// transport_set_metronome（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn transport_set_metronome(state: State<'_, Arc<AppState>>, on: bool) -> Result<(), String> {
+    transport_set_metronome_impl(&state, on)
 }
 
 // ---------------------------------------------------------------------------
@@ -3465,8 +3513,14 @@ pub async fn audio_waveform(
 
 /// 本机可用的音频输入设备。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_input_devices() -> Vec<ai_daw_engine::recorder::InputDeviceInfo> {
+pub fn list_input_devices_impl() -> Vec<ai_daw_engine::recorder::InputDeviceInfo> {
     ai_daw_engine::recorder::list_input_devices()
+}
+
+/// list_input_devices（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn list_input_devices() -> Vec<ai_daw_engine::recorder::InputDeviceInfo> {
+    list_input_devices_impl()
 }
 
 /// 选择输入设备（`None` = 关闭输入流）。选定后输入电平表即可工作。
@@ -3498,8 +3552,14 @@ pub fn input_level(state: State<'_, Arc<AppState>>, points: usize) -> Vec<f32> {
 
 /// 本机可用的 MIDI 输入端口。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_midi_inputs() -> Vec<crate::midi_input::MidiInputDeviceInfo> {
+pub fn list_midi_inputs_impl() -> Vec<crate::midi_input::MidiInputDeviceInfo> {
     crate::midi_input::list_devices()
+}
+
+/// list_midi_inputs（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn list_midi_inputs() -> Vec<crate::midi_input::MidiInputDeviceInfo> {
+    list_midi_inputs_impl()
 }
 
 /// 打开 / 替换 / 关闭 MIDI 输入（`None` = 关闭并释放端口）。
@@ -4730,8 +4790,14 @@ fn encode_query_value(value: &str) -> String {
 
 /// 取最近 `points` 个输出采样，供界面画实时波形。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn scope_data(state: State<'_, Arc<AppState>>, points: usize) -> Vec<f32> {
+pub fn scope_data_impl(state: &AppState, points: usize) -> Vec<f32> {
     state.audio.scope_snapshot(points)
+}
+
+/// scope_data（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn scope_data(state: State<'_, Arc<AppState>>, points: usize) -> Vec<f32> {
+    scope_data_impl(&state, points)
 }
 
 /// 试听一个音（合成器界面里的键盘）：不写工程、不进撤销历史、不等传输。
@@ -4825,10 +4891,14 @@ pub fn delete_preset(state: State<'_, Arc<AppState>>, id: String) -> Result<(), 
 
 /// 全部音色记忆的摘要（不含参数/状态，界面列表用）。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_sound_memories(
-    state: State<'_, Arc<AppState>>,
-) -> Vec<crate::sound_memories::SoundMemorySummary> {
+pub fn list_sound_memories_impl(state: &AppState,) -> Vec<crate::sound_memories::SoundMemorySummary> {
     state.sound_memories.lock().unwrap().summaries()
+}
+
+/// list_sound_memories（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn list_sound_memories(state: State<'_, Arc<AppState>>,) -> Vec<crate::sound_memories::SoundMemorySummary> {
+    list_sound_memories_impl(&state)
 }
 
 /// 把当前轨道的音色链存成一条记忆；传 `id` 表示覆盖该条记忆的内容。

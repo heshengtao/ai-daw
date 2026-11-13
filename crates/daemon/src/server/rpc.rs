@@ -188,6 +188,41 @@ struct TransposeArgs {
     semitones: i32,
 }
 
+
+#[derive(Deserialize)]
+struct LoopArgs {
+    on: bool,
+}
+
+#[derive(Deserialize)]
+struct LoopRangeArgs {
+    start: u64,
+    end: u64,
+}
+
+#[derive(Deserialize)]
+struct ClipRefArgs {
+    track: u64,
+    clip: u64,
+}
+
+#[derive(Deserialize)]
+struct TrackClipArgs {
+    track: u64,
+    #[serde(default)]
+    clip: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct PointsArgs {
+    #[serde(default = "default_points")]
+    points: usize,
+}
+
+fn default_points() -> usize {
+    512
+}
+
 #[derive(Deserialize)]
 struct SeekArgs {
     frame: u64,
@@ -371,6 +406,49 @@ pub fn dispatch(state: &AppState, cmd: &str, args: Value) -> Result<Value, RpcEr
                 .map(|_| Value::Null)
         }
 
+        "transport_set_loop" => {
+            let a: LoopArgs = parse(args)?;
+            crate::commands::transport_set_loop_impl(state, a.on)
+                .map_err(RpcError::Failed)
+                .map(|_| Value::Null)
+        }
+        "transport_set_metronome" => {
+            let a: LoopArgs = parse(args)?;
+            crate::commands::transport_set_metronome_impl(state, a.on)
+                .map_err(RpcError::Failed)
+                .map(|_| Value::Null)
+        }
+        "transport_set_loop_range" => {
+            let a: LoopRangeArgs = parse(args)?;
+            crate::commands::transport_set_loop_range_impl(state, a.start, a.end)
+                .map_err(RpcError::Failed)
+                .map(|_| Value::Null)
+        }
+        "clip_bounds" => {
+            let a: ClipRefArgs = parse(args)?;
+            crate::commands::clip_bounds_impl(state, a.track, a.clip)
+                .map_err(RpcError::Failed)
+                .and_then(json)
+        }
+        "ops_list" => json(crate::commands::ops_list_impl(state)),
+        "get_track_note_stats" => {
+            let a: TrackClipArgs = parse(args)?;
+            crate::commands::get_track_note_stats_impl(state, a.track, a.clip)
+                .map_err(RpcError::Failed)
+                .and_then(json)
+        }
+        "list_sound_memories" => json(crate::commands::list_sound_memories_impl(state)),
+        "list_output_devices" => json(crate::commands::list_output_devices_impl()),
+        "list_input_devices" => json(crate::commands::list_input_devices_impl()),
+        "list_midi_inputs" => json(crate::commands::list_midi_inputs_impl()),
+        "scope_data" => {
+            let a: PointsArgs = parse(args)?;
+            json(crate::commands::scope_data_impl(state, a.points))
+        }
+        "retry_audio" => crate::commands::retry_audio_impl(state)
+            .map_err(RpcError::Failed)
+            .map(|_| Value::Null),
+
         // ---- 通用兜底：命令名 → `Command` 变体 ----
         //
         // 编辑类命令有 ~70 条，逐条写参数结构体是纯样板。`Command` 已经能 serde 化
@@ -425,6 +503,17 @@ pub const COMMANDS: &[&str] = &[
     "transport_pause",
     "transport_stop",
     "transport_seek",
+    "transport_set_loop",
+    "transport_set_metronome",
+    "transport_set_loop_range",
+    "clip_bounds",
+    "ops_list",
+    "list_sound_memories",
+    "list_output_devices",
+    "list_input_devices",
+    "list_midi_inputs",
+    "scope_data",
+    "retry_audio",
     // 以下由 `Command` 通用兜底覆盖（名字 ↔ 变体）
     "set_keyframe",
     "remove_keyframe",
