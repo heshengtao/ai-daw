@@ -112,9 +112,10 @@ jobs:
         run: |
           set -euo pipefail
           short="${SHA:0:7}"
-          sources="${IMAGE}:sha-${short}-amd64 ${IMAGE}:sha-${short}-arm64"
+          # 注意：metadata-action 的 `type=sha,prefix=` 会把前缀清空，实际推上去的是
+          # `<short>-<arch>`（**没有** `sha-` 前缀）。合成时按真实名字取。
+          sources="${IMAGE}:${short}-amd64 ${IMAGE}:${short}-arm64"
 
-          # 单架构构建各自推过 `:sha-<short>-<arch>`，这里合成不带后缀的 sha 标签。
           docker buildx imagetools create -t "${IMAGE}:sha-${short}" ${sources}
 
           if [ "${REF_TYPE}" = "tag" ]; then
