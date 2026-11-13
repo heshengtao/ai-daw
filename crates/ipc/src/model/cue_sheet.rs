@@ -11,7 +11,8 @@ use super::project::{HarmonyBar, Section};
 use super::track::PitchRange;
 
 /// 一份完整的导入计划。
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CueSheetPlan {
     /// 先清空当前工程（含默认分轨模板）再导入；`false` = 追加到现有轨道后面。
     pub clear: bool,
@@ -30,7 +31,8 @@ pub struct CueSheetPlan {
 }
 
 /// 一条要新建的轨道。
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CueTrack {
     pub name: String,
     /// 乐器插件 id；`None` = 空轨，留给 agent 后补。
@@ -52,7 +54,8 @@ pub struct CueTrack {
 }
 
 /// 一条要写入轨道的 MIDI 片段。
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CueClip {
     /// 起始拍。
     pub start: f64,

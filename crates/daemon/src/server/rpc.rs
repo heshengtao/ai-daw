@@ -371,7 +371,20 @@ pub fn dispatch(state: &AppState, cmd: &str, args: Value) -> Result<Value, RpcEr
                 .map(|_| Value::Null)
         }
 
-        other => Err(RpcError::Unknown(other.to_string())),
+        // ---- 通用兜底：命令名 → `Command` 变体 ----
+        //
+        // 编辑类命令有 ~70 条，逐条写参数结构体是纯样板。`Command` 已经能 serde 化
+        // （字段 camelCase，与 Tauri 的参数命名一致），所以这里只要把名字映射成变体，
+        // 再把 JSON 参数原样喂进去即可。
+        other => {
+            let Some(variant) = variant_of(other) else {
+                return Err(RpcError::Unknown(other.to_string()));
+            };
+            let body = serde_json::json!({ variant: args });
+            let command: Command =
+                serde_json::from_value(body).map_err(|err| RpcError::BadArgs(err.to_string()))?;
+            json(crate::commands::run_one(state, command))
+        }
     }
 }
 
@@ -412,4 +425,135 @@ pub const COMMANDS: &[&str] = &[
     "transport_pause",
     "transport_stop",
     "transport_seek",
+    // 以下由 `Command` 通用兜底覆盖（名字 ↔ 变体）
+    "set_keyframe",
+    "remove_keyframe",
+    "add_note_track",
+    "add_audio_track",
+    "add_midi_clip",
+    "add_audio_clip",
+    "set_clip_audio",
+    "set_clip_rate",
+    "move_clips",
+    "set_notes",
+    "remove_notes",
+    "remove_clips",
+    "set_sends",
+    "set_automation",
+    "set_param",
+    "add_effect",
+    "remove_effect",
+    "move_effect",
+    "set_effect_param",
+    "set_effect_enabled",
+    "set_effect_sidechain",
+    "add_master_effect",
+    "remove_master_effect",
+    "move_master_effect",
+    "set_master_effect_param",
+    "set_master_effect_enabled",
+    "set_master_effect_sidechain",
+    "split_clip",
+    "new_project",
+    "new_project_with_tracks",
+    "add_notes",
+    "replace_notes",
+    "update_notes",
+    "remove_notes_by_id",
+    "set_note_velocity",
+    "strum_notes",
+    "apply_swing",
+    "humanize_notes",
+    "set_note_tag",
+    "set_note_tags",
+    "fit_notes_to_range",
+    "duplicate_clip",
+    "merge_clips",
+    "set_project_harmony",
+    "set_project_sections",
+    "set_track_meta",
+    "set_mpe",
+    "set_midi_events",
+    "set_articulations",
+    "apply_cue_sheet",
 ];
+
+/// 命令名（snake_case，与前端 `invoke` 一致）→ `Command` 变体名。
+///
+/// 由 `crates/ipc/src/command.rs` 的变体表机械生成；新增变体时同步补一行。
+fn variant_of(cmd: &str) -> Option<&'static str> {
+    Some(match cmd {
+        "set_tempo" => "SetTempo",
+        "set_time_signature" => "SetTimeSignature",
+        "set_keyframe" => "SetKeyframe",
+        "remove_keyframe" => "RemoveKeyframe",
+        "add_track" => "AddTrack",
+        "add_note_track" => "AddNoteTrack",
+        "add_audio_track" => "AddAudioTrack",
+        "remove_track" => "RemoveTrack",
+        "rename_track" => "RenameTrack",
+        "set_track_instrument" => "SetTrackInstrument",
+        "add_clip" => "AddClip",
+        "add_midi_clip" => "AddMidiClip",
+        "add_audio_clip" => "AddAudioClip",
+        "set_clip_audio" => "SetClipAudio",
+        "set_clip_rate" => "SetClipRate",
+        "remove_clip" => "RemoveClip",
+        "move_clip" => "MoveClip",
+        "move_clips" => "MoveClips",
+        "resize_clip" => "ResizeClip",
+        "add_note" => "AddNote",
+        "set_note" => "SetNote",
+        "set_notes" => "SetNotes",
+        "remove_note" => "RemoveNote",
+        "remove_notes" => "RemoveNotes",
+        "remove_clips" => "RemoveClips",
+        "set_gain" => "SetGain",
+        "set_pan" => "SetPan",
+        "set_mute" => "SetMute",
+        "set_solo" => "SetSolo",
+        "set_master_gain" => "SetMasterGain",
+        "set_sends" => "SetSends",
+        "set_automation" => "SetAutomation",
+        "set_param" => "SetParam",
+        "add_effect" => "AddEffect",
+        "remove_effect" => "RemoveEffect",
+        "move_effect" => "MoveEffect",
+        "set_effect_param" => "SetEffectParam",
+        "set_effect_enabled" => "SetEffectEnabled",
+        "set_effect_sidechain" => "SetEffectSidechain",
+        "add_master_effect" => "AddMasterEffect",
+        "remove_master_effect" => "RemoveMasterEffect",
+        "move_master_effect" => "MoveMasterEffect",
+        "set_master_effect_param" => "SetMasterEffectParam",
+        "set_master_effect_enabled" => "SetMasterEffectEnabled",
+        "set_master_effect_sidechain" => "SetMasterEffectSidechain",
+        "split_clip" => "SplitClip",
+        "rename_project" => "RenameProject",
+        "new_project" => "NewProject",
+        "new_project_with_tracks" => "NewProjectWithTracks",
+        "add_notes" => "AddNotes",
+        "replace_notes" => "ReplaceNotes",
+        "update_notes" => "UpdateNotes",
+        "remove_notes_by_id" => "RemoveNotesById",
+        "transpose_notes" => "TransposeNotes",
+        "set_note_velocity" => "SetNoteVelocity",
+        "quantize_notes" => "QuantizeNotes",
+        "strum_notes" => "StrumNotes",
+        "apply_swing" => "ApplySwing",
+        "humanize_notes" => "HumanizeNotes",
+        "set_note_tag" => "SetNoteTag",
+        "set_note_tags" => "SetNoteTags",
+        "fit_notes_to_range" => "FitNotesToRange",
+        "duplicate_clip" => "DuplicateClip",
+        "merge_clips" => "MergeClips",
+        "set_project_harmony" => "SetProjectHarmony",
+        "set_project_sections" => "SetProjectSections",
+        "set_track_meta" => "SetTrackMeta",
+        "set_mpe" => "SetMpe",
+        "set_midi_events" => "SetMidiEvents",
+        "set_articulations" => "SetArticulations",
+        "apply_cue_sheet" => "ApplyCueSheet",
+        _ => return None,
+    })
+}
