@@ -1,11 +1,10 @@
 name: Docker (ai-daw)
 
 # 无头后端镜像：`ai-daw` 只跑工程引擎 + HTTP API，不链 WebKit。
-# 推送到：<DOCKERHUB_USERNAME>/ai-daw
+# 推送到：ailm32442/ai-daw
 #
-# 需要的仓库 Secrets：
-#   DOCKERHUB_USERNAME  Docker Hub 账号
-#   DOCKERHUB_TOKEN     Docker Hub Access Token（Read & Write）
+# Docker Hub 账号写死为 ailm32442；只需要一个 Secret：
+#   DOCKERHUB_TOKEN  Docker Hub Access Token（Read & Write）
 #
 # 标签规则：
 #   main 分支   → latest、sha-<短 sha>
@@ -22,7 +21,9 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/ai-daw
+  # 账号固定，避免每次 push 都能被一个可变 Secret 改掉目标仓库。
+  DOCKERHUB_USERNAME: ailm32442
+  IMAGE: ailm32442/ai-daw
 
 jobs:
   preflight:
@@ -33,14 +34,13 @@ jobs:
     steps:
       - id: check
         env:
-          USER: ${{ secrets.DOCKERHUB_USERNAME }}
           TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          if [ -n "${USER}" ] && [ -n "${TOKEN}" ]; then
+          if [ -n "${TOKEN}" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::仓库还没配 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN，跳过镜像发布"
+            echo "::notice::仓库还没配 DOCKERHUB_TOKEN，跳过镜像发布"
           fi
 
   build:
@@ -64,7 +64,7 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Image metadata
@@ -101,7 +101,7 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Compose multi-arch tags
