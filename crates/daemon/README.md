@@ -80,6 +80,14 @@ docker compose up --build
 
 首次启动的日志里有 token；数据（会话、预设、音色记忆库、token）都在 `/data` 卷里。
 
+容器里没有声卡：`/health` 会显示 `"audio": false`，日志里有 ALSA 的探测报错，这是正常的
+——`/rpc` 的工程编辑、撤销、导入导出都不依赖输出设备。
+
+> 已实测：在 Debian 13 + webkit2gtk-4.1 环境下 `cargo build --release -p ai-daw-daemon --bin aidawd`
+> 通过，容器内 `aidawd` 能起服务、`/health` 返回 ok、`/rpc/add_track` 能改工程。
+> 本机 Docker Hub 不可达，所以仓库里的 `Dockerfile`（`rust:1-bookworm` / `debian:bookworm-slim`）
+> 未在本地跑通完整镜像构建，包清单与运行期依赖已按 `ldd` 实测结果对齐。
+
 > 过渡期说明：本 crate 仍依赖 `tauri`（只为 `#[tauri::command]` 宏），所以镜像的构建层需要
 > webkit2gtk 头文件、运行层需要它的运行库。等命令层与 Tauri 彻底解耦后，这两层都能瘦很多。
 

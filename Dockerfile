@@ -11,8 +11,11 @@
 #   curl http://127.0.0.1:28430/health
 #
 # 说明：M1 过渡期 `ai-daw-daemon` 仍依赖 `tauri`（只为 `#[tauri::command]` 宏），
-# 所以构建层需要 webkit2gtk 头文件、运行层需要它的运行库。等命令层与 Tauri 彻底
-# 解耦后，这两层都能瘦一大圈。
+# 于是 `aidawd` 会真的链上 webkit2gtk / gtk3 / soup3（实测 `ldd` 确认），构建层要头文件、
+# 运行层要运行库，镜像因此偏大（约 1 GB）。等命令层与 Tauri 彻底解耦后两层都能瘦一大圈。
+#
+# 容器里没有声卡，所以 `/health` 会返回 `"audio": false`、日志里有一串 ALSA 报错——
+# 这**不影响** `/rpc`：工程编辑、撤销、导入导出都不需要输出设备。
 
 # syntax=docker/dockerfile:1
 
