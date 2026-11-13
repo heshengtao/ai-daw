@@ -19,6 +19,11 @@ on:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      cleanup_legacy:
+        description: '删除旧方案留下的 *-amd64 / *-arm64 / main-* 标签'
+        type: boolean
+        default: false
 
 env:
   DOCKERHUB_USERNAME: ailm32442
@@ -145,3 +150,32 @@ jobs:
           docker buildx imagetools create ${tags} ${digests}
         env:
           META_TAGS: ${{ steps.meta.outputs.tags }}
+
+  # 一次性清理：旧方案（每个架构各推一个带后缀的标签）留下的中间标签。
+  # 只在手动触发且勾选 cleanup_legacy 时运行，删完即止。
+  cleanup:
+    name: cleanup legacy tags
+    if: github.event_name == 'workflow_dispatch' && inputs.cleanup_legacy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete arch-suffixed tags
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          REPO: ${{ env.IMAGE }}
+        run: |
+          set -euo pipefail
+          jwt=$(curl -sS -X POST -H 'Content-Type: application/json' \
+            -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
+            https://hub.docker.com/v2/users/login | jq -r .token)
+          curl -sS "https://hub.docker.com/v2/repositories/${REPO}/tags?page_size=100" \
+            | jq -r '.results[].name' > /tmp/tags.txt
+          while read -r tag; do
+            case "$tag" in
+              *-amd64|*-arm64|main-*)
+                code=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+                  -H "Authorization: JWT ${jwt}" \
+                  "https://hub.docker.com/v2/repositories/${REPO}/tags/${tag}/")
+                echo "删除 ${tag} → HTTP ${code}"
+                ;;
+            esac
+          done < /tmp/tags.txt
