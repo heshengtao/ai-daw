@@ -884,6 +884,8 @@ export interface DataDirInfo {
   next: string | null;
   /** 是否需要重启才能切到 `next`。 */
   restart_required: boolean;
+  /** Windows 上数据目录是否在系统盘。 */
+  on_system_drive?: boolean;
 }
 
 /** 数据目录迁移进度。 */

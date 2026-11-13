@@ -6,10 +6,11 @@
  * 但内容泛化成「一次确认」——用于「是否下载模型」这类需要用户点一下才继续的动作。
  * **不用系统原生对话框**（原生框样式与 MD3 对不上）。
  */
+import { nextTick, ref, watch } from "vue";
 import { XMarkIcon } from "@heroicons/vue/24/outline";
 import { useI18n } from "@/i18n";
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     open: boolean;
     /** 标题（同时作为对话框的 `aria-label`）。 */
@@ -36,6 +37,17 @@ const emit = defineEmits<{
 }>();
 
 const i18n = useI18n();
+const confirmButton = ref<HTMLButtonElement | null>(null);
+
+watch(
+  () => props.open,
+  async (open) => {
+    if (!open) return;
+    await nextTick();
+    confirmButton.value?.focus();
+  },
+  { immediate: true },
+);
 
 function cancel(): void {
   emit("cancel");
@@ -58,6 +70,9 @@ function onKey(e: KeyboardEvent): void {
   if (e.key === "Escape") {
     e.stopPropagation();
     cancel();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    confirm();
   }
 }
 </script>
@@ -88,7 +103,7 @@ function onKey(e: KeyboardEvent): void {
           <footer class="foot">
             <button class="btn-text" @click="cancel">{{ cancelLabel ?? i18n.t("common.cancel") }}</button>
             <button v-if="extraLabel" class="btn-text" @click="extra">{{ extraLabel }}</button>
-            <button class="btn-filled" :class="{ danger }" @click="confirm">{{ confirmLabel }}</button>
+            <button ref="confirmButton" class="btn-filled" :class="{ danger }" @click="confirm">{{ confirmLabel }}</button>
           </footer>
         </div>
       </div>
@@ -126,7 +141,7 @@ function onKey(e: KeyboardEvent): void {
 .title {
   flex: 1 1 auto;
   margin: 0;
-  font-size: 16px;
+  font-size: 20px;
   font-weight: 600;
   color: rgb(var(--md-on-surface));
 }
@@ -169,8 +184,8 @@ function onKey(e: KeyboardEvent): void {
   padding: 12px 18px 16px;
 }
 .btn-text {
-  height: 36px;
-  padding: 0 16px;
+  height: 40px;
+  padding: 0 18px;
   border: 0;
   border-radius: 999px;
   background: transparent;
@@ -184,7 +199,7 @@ function onKey(e: KeyboardEvent): void {
   background-color: rgb(var(--md-primary) / 0.08);
 }
 .btn-filled {
-  height: 36px;
+  height: 40px;
   padding: 0 20px;
   border: 0;
   border-radius: 999px;

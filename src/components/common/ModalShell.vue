@@ -11,6 +11,7 @@
  * 内容按插槽拼：`toolbar`（工具条）/ 默认（主体）/ `foot`（页脚）；**焦点归内容自己管**
  * （打开时聚焦搜索框这类约定由各页自己实现，见 `ListToolbar` 暴露的 `focusSearch()`）。
  */
+import { nextTick, ref, watch } from "vue";
 import { XMarkIcon } from "@heroicons/vue/24/outline";
 import { useI18n } from "@/i18n";
 
@@ -34,6 +35,28 @@ const props = withDefaults(
 
 const emit = defineEmits<{ (e: "update:open", value: boolean): void }>();
 
+const dialog = ref<HTMLElement | null>(null);
+let previous: HTMLElement | null = null;
+
+watch(
+  () => props.open,
+  async (open) => {
+    if (open) {
+      previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      await nextTick();
+      const target =
+        dialog.value?.querySelector<HTMLElement>("[data-autofocus]") ??
+        dialog.value?.querySelector<HTMLElement>("button, [href], input, select, textarea") ??
+        null;
+      target?.focus();
+    } else {
+      previous?.focus();
+      previous = null;
+    }
+  },
+  { immediate: true },
+);
+
 const i18n = useI18n();
 
 function close(): void {
@@ -55,6 +78,7 @@ function onKey(e: KeyboardEvent): void {
     <transition name="fade">
       <div v-if="open" class="scrim" @pointerdown.self="close">
         <div
+          ref="dialog"
           class="dialog"
           role="dialog"
           aria-modal="true"
@@ -117,7 +141,7 @@ function onKey(e: KeyboardEvent): void {
 }
 .title {
   margin: 0;
-  font-size: 16px;
+  font-size: 19px;
   font-weight: 600;
   color: rgb(var(--md-on-surface));
 }

@@ -119,9 +119,7 @@ function choose(kind: string): void {
 
       <ul class="deps">
         <li v-for="row in rows" :key="row.id" class="dep">
-          <span class="mark" :class="{ ready: row.installed }" aria-hidden="true">
-            {{ row.installed ? "✓" : "↓" }}
-          </span>
+          <span class="mark" :class="{ ready: row.installed }" aria-hidden="true" />
           <span class="dep-main">
             <span class="dep-label">{{ row.label }}</span>
             <span v-if="row.hint" class="dep-hint">{{ row.hint }}</span>
@@ -140,11 +138,11 @@ function choose(kind: string): void {
         <button class="btn text" type="button" @click="emit('cancel')">
           {{ dismissible ? i18n.t("setup.later") : i18n.t("setup.back") }}
         </button>
+        <span class="spacer" />
         <button class="btn text" type="button" @click="emit('background')">
           {{ i18n.t("setup.background") }}
         </button>
-        <span class="spacer" />
-        <button class="btn filled" type="button" @click="emit('confirm')">
+        <button class="btn filled" type="button" data-autofocus @click="emit('confirm')">
           {{ confirmLabel }}
         </button>
       </div>
@@ -158,6 +156,8 @@ function choose(kind: string): void {
   flex-direction: column;
   gap: 12px;
   padding: 0 22px 8px;
+  overflow-y: auto;
+  min-height: 0;
 }
 .lead {
   margin: 0;

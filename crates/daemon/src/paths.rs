@@ -75,6 +75,9 @@ pub struct DataDirInfo {
     pub next: Option<String>,
     /// 是否需要重启才能切到 `next`。
     pub restart_required: bool,
+    /// Windows 上数据目录是否在系统盘（空间紧张时提示迁移）。
+    #[serde(default)]
+    pub on_system_drive: bool,
 }
 
 /// 指针文件内容。也兼容纯文本（一行路径）——手写或旧版本都能读。
@@ -355,7 +358,25 @@ pub fn info(app: &AppHandle) -> Result<DataDirInfo, String> {
         previous,
         next: next.map(|path| path.to_string_lossy().into_owned()),
         restart_required,
+        on_system_drive: on_system_drive(&current),
     })
+}
+
+/// Windows 上判断目录是否落在系统盘；其它平台恒为 false。
+fn on_system_drive(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let Some(root) = std::env::var_os("SystemDrive") else {
+            return false;
+        };
+        let root = format!("{}\\", root.to_string_lossy()).to_lowercase();
+        path.to_string_lossy().to_lowercase().starts_with(&root)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 fn lower(path: &Path) -> String {

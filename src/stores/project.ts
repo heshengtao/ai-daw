@@ -47,6 +47,62 @@ export const useProjectStore = defineStore("project", () => {
    */
   const restoredSession = ref(false);
 
+  // ---- 跨客户端同步 --------------------------------------------------------
+  // 后端是唯一工程状态。桌面与浏览器各自持有一份快照，靠修订号轮询判断
+  // 「另一边是不是改过」；只有修订号变化且本地不在连续编辑时才拉整份工程。
+  let syncTimer: number | null = null;
+  let syncBusy = false;
+  let lastSeenRevision = -1;
+  let lastLocalEditAt = 0;
+  const SYNC_INTERVAL_MS = 500;
+  const LOCAL_EDIT_GRACE_MS = 900;
+
+  function markLocalEdit(): void {
+    lastLocalEditAt = Date.now();
+  }
+
+  async function syncProject(): Promise<void> {
+    if (syncBusy) return;
+    try {
+      const revision = await api.projectRevision();
+      if (lastSeenRevision < 0) {
+        lastSeenRevision = revision;
+        return;
+      }
+      if (revision === lastSeenRevision) return;
+      // 正在拖拽 / 连续输入：先让本地手势结束，下一轮再收远端更新。
+      if (Date.now() - lastLocalEditAt < LOCAL_EDIT_GRACE_MS) return;
+      syncBusy = true;
+      const [next, path] = await Promise.all([api.getProject(), api.currentProjectPath()]);
+      lastSeenRevision = revision;
+      if (JSON.stringify(next) === JSON.stringify(project.value)) {
+        currentPath.value = path;
+        await refreshDepths();
+        return;
+      }
+      project.value = next;
+      currentPath.value = path;
+      await refreshDepths();
+    } catch {
+      // 网络抖动 / 后端重启：下一轮继续；不打断界面。
+    } finally {
+      syncBusy = false;
+    }
+  }
+
+  /** 启动轮询；重复调用无副作用。 */
+  function startProjectSync(): void {
+    if (syncTimer !== null) return;
+    void syncProject();
+    syncTimer = window.setInterval(() => void syncProject(), SYNC_INTERVAL_MS);
+  }
+
+  function stopProjectSync(): void {
+    if (syncTimer === null) return;
+    window.clearInterval(syncTimer);
+    syncTimer = null;
+  }
+
   /** 按当前语言生成默认分轨名（顺序与引擎模板一致）。 */
   function starterTrackNames(): string[] {
     return STARTER_TRACK_KEYS.map((key) => i18n.t(key));
@@ -65,6 +121,7 @@ export const useProjectStore = defineStore("project", () => {
   }
 
   function applyHistory(state: HistoryState): void {
+    markLocalEdit();
     project.value = state.project;
     undoDepth.value = state.undo_depth;
     redoDepth.value = state.redo_depth;
@@ -82,12 +139,14 @@ export const useProjectStore = defineStore("project", () => {
    * 替换会重建撤销栈：撤回导入得去「历史」里找（后端在替换前已经把旧工程记进去了）。
    */
   async function replaceWith(next: Project): Promise<void> {
+    markLocalEdit();
     project.value = next;
     await refreshDepths();
   }
 
   /** 执行一条返回完整工程快照的编辑命令。 */
   async function edit(run: () => Promise<Project>): Promise<void> {
+    markLocalEdit();
     project.value = await run();
     await refreshDepths();
   }
@@ -732,5 +791,7 @@ export const useProjectStore = defineStore("project", () => {
     applyHistoryState,
     replaceWith,
     refreshDepths,
+    startProjectSync,
+    stopProjectSync,
   };
 });

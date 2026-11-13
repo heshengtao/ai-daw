@@ -14,7 +14,7 @@ import {
   ArrowPathIcon,
   ArrowRightIcon,
   ClockIcon,
-  DocumentPlusIcon,
+  FolderOpenIcon,
   SparklesIcon,
   SquaresPlusIcon,
   XMarkIcon,
@@ -113,6 +113,13 @@ const starters = computed<Starter[]>(() => {
   }
   rest.push(
     {
+      id: "import",
+      icon: ArrowDownTrayIcon,
+      title: i18n.t("onboarding.startImport"),
+      sub: i18n.t("onboarding.startImportHint"),
+      featured: false,
+    },
+    {
       id: "ai",
       icon: SparklesIcon,
       title: i18n.t("onboarding.startAi"),
@@ -120,10 +127,10 @@ const starters = computed<Starter[]>(() => {
       featured: false,
     },
     {
-      id: "import",
-      icon: ArrowDownTrayIcon,
-      title: i18n.t("onboarding.startImport"),
-      sub: i18n.t("onboarding.startImportHint"),
+      id: "open",
+      icon: FolderOpenIcon,
+      title: i18n.t("onboarding.startOpen"),
+      sub: i18n.t("onboarding.startOpenHint"),
       featured: false,
     },
   );
@@ -136,13 +143,6 @@ const starters = computed<Starter[]>(() => {
       featured: false,
     });
   }
-  rest.push({
-    id: "open",
-    icon: DocumentPlusIcon,
-    title: i18n.t("onboarding.startOpen"),
-    sub: i18n.t("onboarding.startOpenHint"),
-    featured: false,
-  });
   return [primary, ...rest];
 });
 
@@ -316,13 +316,14 @@ onUnmounted(() => {
 }
 .brand-name {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: -0.2px;
   color: rgb(var(--md-on-surface));
 }
 .hero {
   margin: auto 0;
   border-radius: 24px;
+  box-shadow: var(--md-elevation-2);
 }
 .art-note {
   margin: 0;

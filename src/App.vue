@@ -711,8 +711,11 @@ onMounted(async () => {
   if (isPrimaryWindow && settings.welcomeOnStart) {
     window.setTimeout(() => onboarding.openWelcome(), 450);
   }
+  // 桌面与浏览器共用同一个后端：轮询修订号，远端改过就刷新本地快照。
+  project.startProjectSync();
 });
 onUnmounted(() => {
+  project.stopProjectSync();
   window.removeEventListener("keydown", onKey);
   window.removeEventListener("resize", onWindowResize);
   if (pollTimer !== null) window.clearInterval(pollTimer);

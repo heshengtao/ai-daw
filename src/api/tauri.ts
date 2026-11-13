@@ -137,6 +137,12 @@ export function getProject(): Promise<Project> {
   return invoke<Project>("get_project");
 }
 
+/** 当前工程修订号：跨客户端同步轮询用（只返回一个数字，不拉整份工程）。 */
+export function projectRevision(): Promise<number> {
+  if (mockEnabled()) return Promise.resolve(0);
+  return invoke<number>("project_revision");
+}
+
 // ---------------------------------------------------------------------------
 // 工程与轨道
 // ---------------------------------------------------------------------------

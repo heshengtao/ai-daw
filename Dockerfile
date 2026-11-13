@@ -1,22 +1,31 @@
-# AI DAW 无头后端（ai-daw）
+# AI DAW 无头后端（aidawd）+ 浏览器界面
 #
-# 只跑后端 + HTTP `/rpc`：不开窗口、不要显示器、不链 WebView。
+# 一条命令就能用：
+#   docker run -p 28430:28430 -v ai-daw-data:/data ailm32442/ai-daw
+# 然后浏览器打开 http://<host>:28430/#token=<日志里的 token>。
 #
-# 构建：
-#   docker build -t ai-daw .
-# 运行：
-#   docker run --rm -p 28430:28430 -v ai-daw-data:/data ai-daw
-# 首次启动会把访问 token 打印到日志（同时落在数据卷的 `web-token` 里）。
-# 验证：
-#   curl http://127.0.0.1:28430/health
+# 镜像里**自带前端产物**（构建阶段用 node 打包，运行阶段只有静态文件 + 20 MB 二进制），
+# 所以不需要 compose、不需要挂载 dist。
 #
-# 体积：二进制约 20 MB，运行层只要 libasound2 + libssl3 + ca-certificates，
-# 整镜像落在 120 MB 上下。**关键在于 `--no-default-features`**：它关掉 crate 的
-# `desktop` 特性，`tauri` 不进依赖图，WebKit/GTK 那一坨（约 612 MB）就不会被链进来。
+# 体积：二进制约 20 MB + 前端 3.5 MB + Debian slim 底座与四个运行库。
+# 关键在 `--no-default-features`：关掉 crate 的 `desktop` 特性后 `tauri` 不进依赖图，
+# WebKit/GTK 那一坨（约 612 MB）不会被链进来。
 
 # syntax=docker/dockerfile:1
 
-# ---- 构建 ----
+# ---- 前端 ----
+FROM node:22-slim AS web
+RUN corepack enable
+WORKDIR /web
+# 先只拷清单：依赖不变时这一层能命中缓存。
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY index.html vite.config.ts tsconfig.json tsconfig.node.json postcss.config.js tailwind.config.js env.d.ts ./
+COPY src ./src
+COPY public ./public
+RUN pnpm build
+
+# ---- 后端 ----
 FROM rust:1-bookworm AS builder
 
 # 无头构建只需要三样：pkg-config（找 libssl / alsa）、openssl 头、alsa 头。
@@ -54,10 +63,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && find /usr/share/doc /usr/share/man /usr/share/locale -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
 
 COPY --from=builder /src/target/release/aidawd /usr/local/bin/aidawd
+# 前端产物：浏览器打开根路径就是它。
+COPY --from=web /web/dist /web
 
 # 数据目录（会话、预设、音色记忆库、token）——挂卷持久化。
 VOLUME ["/data"]
 ENV AIDAW_DATA_DIR=/data
+ENV AIDAW_WEB_DIR=/web
 
 EXPOSE 28430
 

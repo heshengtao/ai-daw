@@ -25,6 +25,9 @@ pub struct Engine {
     next_clip_id: u64,
     /// 引擎的初始工程名；撤销一次 `Clear` 时用它重建，恢复被清空前的名字。
     initial_name: String,
+    /// 工程内容修订号：每次命令 / 撤销 / 重做成功都 +1。桌面与浏览器靠它判断
+    /// 「远端是不是改过」，不需要把整份工程轮询一遍。
+    revision: u64,
     /// 最近一次「保存到文件」时的快照。当前工程与它不同即表示有未保存的改动（dirty）。
     ///
     /// 用整份快照而不是「有没有执行过命令」来判断：撤销回到保存点、改回原值等
@@ -49,6 +52,7 @@ impl Engine {
             next_clip_id: 1,
             initial_name: name,
             saved: project,
+            revision: 0,
         }
     }
 
@@ -74,6 +78,7 @@ impl Engine {
             next_clip_id,
             initial_name,
             saved,
+            revision: 0,
         }
     }
 
@@ -256,6 +261,16 @@ impl Engine {
         self.history.len()
     }
 
+    /// 工程内容修订号（跨客户端同步用）。
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// 替换引擎时把旧修订号接上，保证轮询端不会把「整份替换」当成没变化。
+    pub fn set_revision(&mut self, revision: u64) {
+        self.revision = revision;
+    }
+
     /// 执行命令：产出事件、应用到状态、记录历史。
     pub fn execute(&mut self, command: Command, actor: Actor) -> Vec<Event> {
         self.execute_all(vec![command], actor)
@@ -277,6 +292,7 @@ impl Engine {
             events.extend(produced);
         }
         if !events.is_empty() {
+            self.revision = self.revision.saturating_add(1);
             let op = OpRecord {
                 id: self.next_op_id,
                 at: now_millis(),
@@ -310,6 +326,7 @@ impl Engine {
                     self.redo_ops.push(op);
                 }
                 self.replay_history();
+                self.revision = self.revision.saturating_add(1);
                 true
             }
         }
@@ -331,6 +348,7 @@ impl Engine {
                     self.history_ops.push(op);
                 }
                 self.resync_id_counters();
+                self.revision = self.revision.saturating_add(1);
                 true
             }
         }

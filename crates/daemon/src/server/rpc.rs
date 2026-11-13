@@ -233,6 +233,7 @@ pub fn dispatch(state: &AppState, cmd: &str, args: Value) -> Result<Value, RpcEr
     match cmd {
         // ---- 只读 ----
         "get_project" => json(crate::commands::get_project_impl(state)),
+        "project_revision" => json(state.engine.lock().unwrap().revision()),
         "history_depths" => json(crate::commands::history_depths_impl(state)),
         "transport_status" => json(crate::commands::transport_status_impl(state)),
         "mixer_meters" => json(crate::commands::mixer_meters_impl(state)),
@@ -469,6 +470,7 @@ pub fn dispatch(state: &AppState, cmd: &str, args: Value) -> Result<Value, RpcEr
 /// 已开放的命令名（`/rpc` 的自述，方便调试与前端生成调用代码）。
 pub const COMMANDS: &[&str] = &[
     "get_project",
+    "project_revision",
     "history_depths",
     "transport_status",
     "mixer_meters",

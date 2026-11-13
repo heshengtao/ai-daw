@@ -66,7 +66,7 @@ Every edit an agent makes goes through the same command pipeline as the UI: it l
 
 ## Features
 
-### 🎹 Arranging & Editing — Compose on a real timeline
+### Arranging & Editing — Compose on a real timeline
 
 Lay out a song the way you hear it. Drag clips across tracks, split them where the music changes, and let the ruler and grid follow a tempo and time signature you can change anywhere in the song. MIDI clips draw their own notes and audio clips draw their own waveform, so you can read the arrangement at a glance.
 
@@ -81,7 +81,7 @@ Lay out a song the way you hear it. Drag clips across tracks, split them where t
   <img src="./assets/screenshots/02-edit.png" width="100%" alt="The piano-roll editor showing a chord clip's notes and a velocity lane">
 </p>
 
-### 🎚️ Mixing & Mastering — Finish the track
+### Mixing & Mastering — Finish the track
 
 Balance the song, then make it loud. Channel strips give you gain, pan, sends, buses, mute/solo and metering; a mastering chain on the master bus handles loudness, peaks, and stereo width so you can render something release-ready without leaving the app.
 
@@ -95,7 +95,7 @@ Balance the song, then make it loud. Channel strips give you gain, pan, sends, b
   <img src="./assets/screenshots/03-mix.png" width="100%" alt="The mixer: channel strips for the master bus and each track, with faders, pan and mute/solo">
 </p>
 
-### 🧩 Plugins — Bring your own instruments and effects
+### Plugins — Bring your own instruments and effects
 
 AI DAW hosts **VST3** and **CLAP** plugins everywhere, plus **Audio Units (AU / AUv3)** on macOS, so the tools you already own come with you. A plugin manager searches the open registry, filters by type and OS compatibility, and installs, updates, or removes plugins in one click — or point it at something you already have on disk.
 
@@ -108,7 +108,7 @@ AI DAW hosts **VST3** and **CLAP** plugins everywhere, plus **Audio Units (AU / 
   <img src="./assets/screenshots/04-plugins.png" width="100%" alt="The plugins panel: a built-in synth and effect list, with filters for built-in and external plugins">
 </p>
 
-### 🤖 Local AI — Turn audio into material you can work with
+### Local AI — Turn audio into material you can work with
 
 The AI features are built for real sessions, not demos. Point them at a track and they hand back something you can keep editing: MIDI notes you can move, a vocal take with less room noise, stems you can rebalance. Everything runs on your own hardware — CPU by default, with optional CoreML (macOS) and DirectML (Windows) acceleration.
 
@@ -124,7 +124,7 @@ The AI features are built for real sessions, not demos. Point them at a track an
   <img src="./assets/screenshots/05-ai-panel.png" width="100%" alt="The AI panel: MCP server status, plus entries for audio-to-MIDI, voice cleanup, stem separation and tempo detection">
 </p>
 
-### 🔌 MCP Server — Let an AI agent work in your session
+### MCP Server — Let an AI agent work in your session
 
 Flip one switch and your project becomes something an AI assistant can operate. The built-in **MCP (Model Context Protocol)** server exposes the session over HTTP bound to `127.0.0.1` — connect your agent, hand it a task, and watch it add clips, fix notes, or change levels while the UI updates in real time. The `aidaw` command-line tool is a thin client for the same server.
 
@@ -168,9 +168,9 @@ pnpm build:aidaw      # build the aidaw CLI (see tools/build-aidaw.sh)
 
 | Platform | Status |
 | --- | --- |
-| Windows (x86_64) | ✅ Supported |
-| macOS (Apple Silicon) | ✅ Supported (see the “app is damaged” note below) |
-| Linux (x86_64 / arm64) | ✅ Supported |
+| Windows (x86_64) |  Supported |
+| macOS (Apple Silicon) |  Supported (see the “app is damaged” note below) |
+| Linux (x86_64 / arm64) |  Supported |
 
 > **macOS says “App is damaged”?** The app is ad-hoc signed (not notarized), so macOS
 > quarantines downloads. Run this in Terminal, then open the app normally:

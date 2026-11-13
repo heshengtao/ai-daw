@@ -59,6 +59,12 @@ pub fn get_project(state: State<'_, Arc<AppState>>) -> Project {
     get_project_impl(&state)
 }
 
+/// 当前工程修订号：客户端轮询它，只有变化时才拉整份工程。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn project_revision(state: State<'_, Arc<AppState>>) -> u64 {
+    state.engine.lock().unwrap().revision()
+}
+
 /// 执行一条命令：应用状态、广播事件、把变更同步到音频线程。
 ///
 /// 这是**唯一**的编辑入口——界面与 AI 代理（MCP）都走这里，因此撤销历史、事件流与
@@ -2986,7 +2992,9 @@ pub(crate) fn open_project_impl(app: &crate::tauri_api::AppHandle, path: &str) -
     remember_current(app, &state);
     let snapshot = {
         let mut engine = state.engine.lock().unwrap();
+        let revision = engine.revision().saturating_add(1);
         *engine = Engine::from_project(project);
+        engine.set_revision(revision);
         engine.project().clone()
     };
     state.audio.load(&snapshot);

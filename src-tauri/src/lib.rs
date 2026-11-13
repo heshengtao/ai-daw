@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod tauri_host;
+mod web;
 
 
 use std::sync::{Arc, OnceLock};
@@ -15,9 +16,6 @@ use ai_daw_host_vst3::EditorHandle;
 use ai_daw_daemon::audio::{AudioEngine, TransportSnapshot};
 use ai_daw_daemon::daemon::{Config as DaemonConfig, Daemon};
 use ai_daw_daemon::state::{AppState, EVENT_TRANSPORT};
-
-/// 浏览器客户端连接的固定端口（与 `vite` 的 28420、MCP 的 50562 分开）。
-const WEB_PORT: u16 = 28430;
 
 /// 传输位置的推送周期：跟屏幕刷新对齐（约 60 Hz）。
 ///
@@ -365,6 +363,13 @@ pub fn run() {
             // 目录到位又各重建一次——默认模板的采样音色解码就白白吃掉启动时最显眼的几秒。
             let session = ai_daw_daemon::paths::session_file(app.handle()).and_then(|file| ai_daw_daemon::session::read_session(&file));
             let cached = ai_daw_daemon::manager::cached_catalog(app.handle());
+            // Web 访问配置：设置页可切换局域网绑定；端口默认 28430。
+            // 配置与 token 都落在数据目录，和 `aidawd` 共用。
+            let web_config = crate::web::load_config(app.handle());
+            let web_token = ai_daw_daemon::boot::web_token(
+                &ai_daw_daemon::paths::data_dir(app.handle()).unwrap_or_default(),
+            );
+            app.manage(crate::web::WebState::default());
             // 后端从此刻起就是"daemon"：状态 + 宿主（Tauri 实现）+ 配置。
             // 网页客户端连的是同一个 `Daemon`，所以两边看到的是同一份工程、同一个音频宿主。
             let host = Arc::new(crate::tauri_host::TauriHost::new(app.handle().clone()));
@@ -374,9 +379,9 @@ pub fn run() {
                 host,
                 DaemonConfig {
                     data_dir: app.path().app_data_dir().unwrap_or_default(),
-                    lan: std::env::args().any(|arg| arg == "--lan"),
-                    port: Some(WEB_PORT),
-                    // 桌面端托管的是同一份 `dist/`：浏览器打开 28430 就是同一个界面。
+                    lan: web_config.lan,
+                    port: Some(web_config.port),
+                    // 桌面端托管的是同一份 `dist/`：浏览器打开端口就是同一个界面。
                     web_dir: Some(app.path().resource_dir().unwrap_or_default().join("web")),
                 },
             );
@@ -552,10 +557,18 @@ pub fn run() {
             // 绑定默认只回环；`--lan` 才对外开放，且必须带令牌。
             {
                 let daemon_for_web = std::sync::Arc::clone(&daemon);
+                let handle = app.handle().clone();
+                let token = web_token.clone();
                 tauri::async_runtime::spawn(async move {
-                    let token = ai_daw_daemon::boot::web_token(daemon_for_web.config().data_dir.as_path());
-                    match ai_daw_daemon::boot::serve(daemon_for_web, token).await {
+                    match ai_daw_daemon::boot::serve(daemon_for_web, token.clone()).await {
                         Ok((addr, fut)) => {
+                            let mut running = crate::web::info_for(
+                                &crate::web::load_config(&handle),
+                                &token,
+                            );
+                            running.port = addr.port();
+                            running.running = true;
+                            crate::web::mark_running(&handle, running);
                             ai_daw_daemon::logging::info(format!("[web] 监听 http://{addr}"));
                             fut.await;
                         }
@@ -569,10 +582,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ai_daw_daemon::commands::app_ready,
+            crate::web::web_access_info,
+            crate::web::web_access_set_lan,
             ai_daw_daemon::paths::data_dir_info,
             ai_daw_daemon::paths::data_dir_migrate,
             ai_daw_daemon::paths::data_dir_cleanup_previous,
             ai_daw_daemon::commands::get_project,
+            ai_daw_daemon::commands::project_revision,
             ai_daw_daemon::commands::add_track,
             ai_daw_daemon::commands::remove_track,
             ai_daw_daemon::commands::rename_track,

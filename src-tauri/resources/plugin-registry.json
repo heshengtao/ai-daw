@@ -53560,7 +53560,7 @@
         "0.2.0": {
           "name": "Bifractalizer",
           "author": "Andrew Kotov",
-          "description": "An audio plugin that fractalizes and defractalizes sound 😺",
+          "description": "An audio plugin that fractalizes and defractalizes sound",
           "license": "mit",
           "type": "effect",
           "tags": [
@@ -54142,7 +54142,7 @@
         "1.0.2": {
           "name": "Clockwork",
           "author": "Alexander Weichart",
-          "description": "🎹 Simple MIDI note repeater plugin (VST3/CLAP).",
+          "description": "Simple MIDI note repeater plugin (VST3/CLAP).",
           "license": "gpl-3.0",
           "type": "effect",
           "tags": [

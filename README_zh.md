@@ -66,7 +66,7 @@ Install this Skill: https://github.com/heshengtao/ai-daw
 
 ## 功能
 
-### 🎹 编排与编辑 —— 在真正的时间线上作曲
+### 编排与编辑 —— 在真正的时间线上作曲
 
 怎么想的就怎么摆。跨轨道拖拽片段，在音乐变化处切分，标尺与网格跟着可在曲中任意位置改变的速度与拍号走。MIDI 片段自带音符预览、音频片段自带波形，整首歌一眼就能读出来。
 
@@ -81,7 +81,7 @@ Install this Skill: https://github.com/heshengtao/ai-daw
   <img src="./assets/screenshots/02-edit.png" width="100%" alt="钢琴卷帘编辑器：一段和弦片段的音符与底部的力度车道">
 </p>
 
-### 🎚️ 混音与母带 —— 把作品做完
+### 混音与母带 —— 把作品做完
 
 先做平衡，再做响度。通道条提供增益、声像、发送、总线、静音 / 独奏与电平表；总线上的母带链负责响度、峰值与立体声宽度，不用离开应用就能导出成品。
 
@@ -95,7 +95,7 @@ Install this Skill: https://github.com/heshengtao/ai-daw
   <img src="./assets/screenshots/03-mix.png" width="100%" alt="调音台：总输出与各轨道的通道条，含推子、声像与静音 / 独奏">
 </p>
 
-### 🧩 插件 —— 带你自己的乐器与效果器
+### 插件 —— 带你自己的乐器与效果器
 
 AI DAW 支持 **VST3** 与 **CLAP** 插件（Windows / macOS / Linux），在 macOS 上还额外支持 **Audio Units（AU / AUv3）**，你已有的工具可以直接带过来。插件管理器能搜索开放注册表，按类型与系统兼容性筛选，一键安装 / 更新 / 卸载——也可以直接指向你本机已经装好的插件。
 
@@ -108,7 +108,7 @@ AI DAW 支持 **VST3** 与 **CLAP** 插件（Windows / macOS / Linux），在 ma
   <img src="./assets/screenshots/04-plugins.png" width="100%" alt="插件面板：内置合成器与效果器列表，可按内置 / 外部插件筛选">
 </p>
 
-### 🤖 本地 AI —— 把音频变成能继续加工的材料
+### 本地 AI —— 把音频变成能继续加工的材料
 
 这些 AI 功能是为真实的作品准备的，不是演示品。把一段素材交给它，拿回来的是能接着编辑的东西：可以挪动的 MIDI 音符、更干净的人声、可以重新配比的分轨。全部跑在你自己的硬件上——默认 CPU，可选 CoreML（macOS）与 DirectML（Windows）加速。
 
@@ -124,7 +124,7 @@ AI DAW 支持 **VST3** 与 **CLAP** 插件（Windows / macOS / Linux），在 ma
   <img src="./assets/screenshots/05-ai-panel.png" width="100%" alt="AI 面板：MCP 服务器状态，以及音频转 MIDI、人声降噪、音源分离、节拍检测、歌声合成的入口">
 </p>
 
-### 🔌 MCP 服务器 —— 让 AI 代理在你的工程里干活
+### MCP 服务器 —— 让 AI 代理在你的工程里干活
 
 打开一个开关，你的工程就变成 AI 助手可以操作的对象。内置的 **MCP（Model Context Protocol）服务器**把会话通过只监听 `127.0.0.1` 的 HTTP 端点开放出去——接上你的代理、给它一个任务，就能看它加片段、改音符、调电平，界面实时跟着变。`aidaw` 命令行就是同一个服务器的薄客户端。
 
@@ -168,9 +168,9 @@ pnpm build:aidaw      # 构建 aidaw CLI（见 tools/build-aidaw.sh）
 
 | 平台 | 状态 |
 | --- | --- |
-| Windows (x86_64) | ✅ 支持 |
-| macOS（Apple Silicon） | ✅ 支持（.dmg 首次打开见「App 已损坏」说明） |
-| Linux (x86_64 / arm64) | ✅ 支持 |
+| Windows (x86_64) |  支持 |
+| macOS（Apple Silicon） |  支持（.dmg 首次打开见「App 已损坏」说明） |
+| Linux (x86_64 / arm64) |  支持 |
 
 > **macOS 提示「App 已损坏，无法打开」？** 应用为自签名（未公证），从网络下载会带上隔离属性。在终端执行下面这行命令后即可正常打开：
 >

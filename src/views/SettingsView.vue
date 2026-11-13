@@ -16,6 +16,7 @@ import {
 import { useLayoutStore } from "@/stores/layout";
 import { useProjectStore } from "@/stores/project";
 import { useSettingsStore, MAX_DEFAULT_TEMPO, MIN_DEFAULT_TEMPO } from "@/stores/settings";
+import { useOnboardingStore } from "@/stores/onboarding";
 import Md3Slider from "@/components/common/Md3Slider.vue";
 import NumberField from "@/components/common/NumberField.vue";
 import ComboField from "@/components/common/ComboField.vue";
@@ -28,7 +29,14 @@ import type { SegmentedOption } from "@/components/common/segmented";
 import { useUpdaterStore } from "@/stores/updater";
 import { useI18n, type Locale } from "@/i18n";
 import { copyText } from "@/utils/clipboard";
+import { isTauri } from "@/utils/platform";
 import { restartApp as restartApplication } from "@/utils/restart";
+import {
+  webAccessInfo,
+  webAccessOpen,
+  webAccessSetLan,
+  type WebAccessInfo,
+} from "@/core/webApi";
 import { lastWorkspace } from "@/router";
 import {
   agentConfig,
@@ -115,6 +123,7 @@ const { theme, accent, setTheme, setAccent } = useTheme();
 const layout = useLayoutStore();
 const project = useProjectStore();
 const settings = useSettingsStore();
+const onboarding = useOnboardingStore();
 const plugins = usePluginsStore();
 const updater = useUpdaterStore();
 const i18n = useI18n();
@@ -132,6 +141,12 @@ const projectName = computed(() => {
 
 function back(): void {
   void router.push(lastWorkspace.value);
+}
+
+/** 重看引导：先回工作区（引导锚点在那里），等视图切换完再开始。 */
+function replayTour(): void {
+  void router.push(lastWorkspace.value);
+  window.setTimeout(() => onboarding.replayTour(), 260);
 }
 /** 打开右侧栏的「插件管理器」面板并回到工作区（设置页里只是入口）。 */
 function openManager(): void {
@@ -288,9 +303,8 @@ function toggleMcp(): void {
   void applyMcp(!(mcp.value?.enabled ?? false), clampPort(mcpPort.value));
 }
 
-function onMcpPort(e: Event): void {
-  const raw = (e.target as HTMLInputElement).value;
-  const port = clampPort(raw);
+function onMcpPortValue(value: number): void {
+  const port = clampPort(String(value));
   mcpPort.value = String(port);
   void applyMcp(mcp.value?.enabled ?? false, port);
 }
@@ -463,6 +477,10 @@ const backendSaving = ref(false);
 /** 运行时清单（切后端时要看那份运行时下没下、有多大）。 */
 const runtimes = useRuntimesStore();
 const availableBackends = computed(() => backendInfo.value?.options.filter((o) => o.available) ?? []);
+/** 设置页内联展示的 ONNX / CUDA 运行库（audio.cpp 引擎由 EngineBackendPicker 负责）。 */
+const optionalRuntimes = computed(() =>
+  runtimes.items.filter((item) => item.group === "ort" || item.group.startsWith("cuda")),
+);
 /** 分段控件用的选项（与 `availableBackends` 一一对应；文案走 i18n）。 */
 const backendSegOptions = computed<SegmentedOption[]>(() =>
   availableBackends.value.map((o) => ({
@@ -784,7 +802,7 @@ async function testAgent(): Promise<void> {
   agentProbe.value = "";
   try {
     const probe = await agentTest(agentBaseUrl.value.trim(), agentApiKey.value.trim(), agentModel.value.trim());
-    agentProbe.value = probe.ok ? `✅ ${probe.detail}（${probe.ms} ms）` : `❌ ${probe.detail}`;
+    agentProbe.value = probe.ok ? `${probe.detail}（${probe.ms} ms）` : probe.detail;
   } catch (err) {
     agentProbe.value = String(err);
   } finally {
@@ -955,7 +973,41 @@ async function cleanupPreviousDataDir(): Promise<void> {
   }
 }
 
+// ---- Web 访问（桌面端） --------------------------------------------------
+const webInfo = ref<WebAccessInfo | null>(null);
+
+async function loadWebAccess(): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    webInfo.value = await webAccessInfo();
+  } catch {
+    webInfo.value = null;
+  }
+}
+
+async function setWebLan(lan: boolean): Promise<void> {
+  try {
+    webInfo.value = await webAccessSetLan(lan);
+  } catch (err) {
+    layout.notify(String(err));
+  }
+}
+
+async function openWebAccess(): Promise<void> {
+  try {
+    await webAccessOpen();
+  } catch (err) {
+    layout.notify(String(err));
+  }
+}
+
+async function copyWebUrl(url: string | null | undefined): Promise<void> {
+  if (!url) return;
+  if (await copyText(url)) layout.notify(i18n.t("settings.copy.ok"));
+}
+
 onMounted(() => {
+  void loadWebAccess();
   void loadMcp();
   void loadCli();
   void loadStoreNetwork();
@@ -1080,6 +1132,65 @@ onUnmounted(() => {
                   @click="settings.welcomeOnStart = !settings.welcomeOnStart"
                 />
               </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.welcome.replay") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.welcome.replayHint") }}</span>
+                </div>
+                <button class="scan-btn" @click="replayTour">
+                  {{ i18n.t("settings.welcome.replayAction") }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Web 访问：浏览器 / 第二屏；与桌面端共用同一份工程，可读写。 -->
+          <div v-if="isTauri()" class="group">
+            <div class="group-title">{{ i18n.t("settings.web.title") }}</div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.web.local") }}</span>
+                  <span class="row-sub mono">{{ webInfo?.loopbackUrl ?? "—" }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.web.localHint") }}</span>
+                </div>
+                <button
+                  class="scan-btn"
+                  :disabled="!webInfo"
+                  @click="copyWebUrl(webInfo?.loopbackUrl)"
+                >
+                  {{ i18n.t("settings.web.copy") }}
+                </button>
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.web.lan") }}</span>
+                  <span class="row-sub mono">{{
+                    webInfo?.lanUrl ?? i18n.t("settings.web.lanUnavailable")
+                  }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.web.lanHint") }}</span>
+                  <span v-if="webInfo?.restartRequired" class="row-sub warn">{{
+                    i18n.t("settings.web.restart")
+                  }}</span>
+                </div>
+                <button
+                  class="m3-switch"
+                  :class="{ on: webInfo?.lan ?? false }"
+                  role="switch"
+                  :aria-checked="webInfo?.lan ?? false"
+                  :aria-label="i18n.t('settings.web.lan')"
+                  @click="setWebLan(!(webInfo?.lan ?? false))"
+                />
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.web.open") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.web.openHint") }}</span>
+                </div>
+                <button class="scan-btn primary" @click="openWebAccess">
+                  {{ i18n.t("settings.web.openButton") }}
+                </button>
+              </div>
             </div>
           </div>
         </template>
@@ -1096,6 +1207,11 @@ onUnmounted(() => {
                 </div>
                 <span class="row-value">{{ dataDirSize }}</span>
               </div>
+              <div v-if="dataDir?.on_system_drive && !dataDirNext" class="col-row">
+                <span class="row-sub warn">
+                  {{ i18n.t("settings.storage.systemDrive", { size: dataDirSize }) }}
+                </span>
+              </div>
               <div class="row">
                 <div class="row-text">
                   <span class="row-title">{{ i18n.t("settings.storage.source.label") }}</span>
@@ -1108,6 +1224,13 @@ onUnmounted(() => {
                   <span class="row-sub path">{{ dataDir.default }}</span>
                 </div>
               </div>
+              <div v-if="dataDir" class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.storage.cache") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.storage.cacheHint") }}</span>
+                  <span class="row-sub path">{{ dataDir.cache }}</span>
+                </div>
+              </div>
               <div class="row">
                 <div class="row-text">
                   <span class="row-title">{{ i18n.t("settings.storage.move") }}</span>
@@ -1115,7 +1238,7 @@ onUnmounted(() => {
                 </div>
                 <button
                   class="scan-btn"
-                  :disabled="dataDirBusy || dataDirLoading || dataDir?.portable === true"
+                  :disabled="dataDirBusy || dataDirLoading || dataDir?.portable === true || dataDirNext !== null"
                   @click="chooseDataDir"
                 >
                   {{ i18n.t("settings.storage.choose") }}
@@ -1463,6 +1586,14 @@ onUnmounted(() => {
               <div v-if="proxyProbe" class="col-row">
                 <span class="row-sub">{{ proxyProbe }}</span>
               </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-sub">{{ i18n.t("settings.store.saveHint") }}</span>
+                </div>
+                <button class="scan-btn" :disabled="storeSaving" @click="saveStoreNetwork">
+                  {{ storeSaving ? i18n.t("settings.store.saving") : i18n.t("settings.store.save") }}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1669,6 +1800,24 @@ onUnmounted(() => {
                   </button>
                 </div>
               </div>
+              <div
+                v-for="runtime in optionalRuntimes"
+                :key="runtime.id"
+                class="row runtime-status-row"
+              >
+                <div class="row-text">
+                  <span class="row-title">{{ runtime.label }}</span>
+                  <span class="row-sub">{{ runtime.note }}</span>
+                </div>
+                <span class="row-value" :class="{ 'status-on': runtime.installed }">
+                  {{ humanSize(runtime.bytes) }} ·
+                  {{
+                    runtime.installed
+                      ? i18n.t("runtime.installed")
+                      : i18n.t("runtime.notInstalled")
+                  }}
+                </span>
+              </div>
             </div>
           </div>
         <!-- MCP：并入本节（服务器 + 接入） -->
@@ -1695,16 +1844,16 @@ onUnmounted(() => {
                   <span class="row-title">{{ i18n.t("settings.mcp.port") }}</span>
                   <span class="row-sub">{{ i18n.t("settings.mcp.portHint") }}</span>
                 </div>
-                <input
-                  class="port-input md3-field"
-                  type="number"
-                  min="0"
-                  max="65535"
-                  inputmode="numeric"
-                  :value="mcpPort"
+                <NumberField
+                  :model-value="Number(mcpPort) || 0"
+                  :min="0"
+                  :max="65535"
+                  :step="1"
+                  :decimals="0"
+                  input-width="58px"
+                  :sr-label="i18n.t('settings.mcp.port')"
                   :disabled="mcpSaving || !mcp?.enabled"
-                  :aria-label="i18n.t('settings.mcp.port')"
-                  @change="onMcpPort"
+                  @update:model-value="onMcpPortValue"
                 />
               </div>
               <div class="row">
@@ -1712,8 +1861,8 @@ onUnmounted(() => {
                   <span class="row-title">{{ i18n.t("settings.mcp.status") }}</span>
                   <span class="row-sub">{{ mcpError || mcp?.url || i18n.t("settings.mcp.notListening") }}</span>
                 </div>
-                <span class="row-value">
-                  {{ mcp?.running ? i18n.t("settings.mcp.running") : i18n.t("settings.mcp.stopped") }}
+                <span class="row-value" :class="{ 'status-on': mcp?.running }">
+                  {{ mcpError || (mcp?.running ? i18n.t("settings.mcp.running") : i18n.t("settings.mcp.stopped")) }}
                 </span>
               </div>
               <div v-if="mcpFallbackNote" class="row">
@@ -1929,6 +2078,7 @@ onUnmounted(() => {
     :title="i18n.t('settings.storage.cleanupTitle')"
     :message="i18n.t('settings.storage.cleanupBody', { path: dataDir?.previous ?? '' })"
     :confirm-label="i18n.t('settings.storage.cleanupGo')"
+    danger
     @confirm="cleanupPreviousDataDir"
     @update:open="onCleanupConfirmOpen"
   />
@@ -2087,6 +2237,7 @@ onUnmounted(() => {
 }
 .card {
   background-color: var(--app-inset);
+  border: 1px solid rgb(var(--md-outline-variant) / 0.22);
   border-radius: 20px;
   padding: 4px 16px;
 }
@@ -2129,7 +2280,8 @@ onUnmounted(() => {
   border-top: 1px solid rgb(var(--md-outline-variant) / 0.3);
 }
 /* 数据目录路径：长、可选中复制；用等宽字体避免 `\` 与 `l` 看混。 */
-.row-sub.path {
+.row-sub.path,
+.row-sub.mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
   overflow-wrap: anywhere;
@@ -2177,6 +2329,12 @@ onUnmounted(() => {
 /* 警告：后端看起来可用、但其实会回落 CPU（组件缺失 / provider 没注册成功）。 */
 .row-sub.warn {
   color: rgb(var(--md-error));
+}
+.row-value.status-on {
+  color: rgb(var(--md-primary));
+}
+.runtime-status-row {
+  min-height: 54px;
 }
 .row-value {
   font-size: 13px;
@@ -2262,21 +2420,31 @@ onUnmounted(() => {
 /* 重新扫描按钮 */
 .scan-btn {
   flex: 0 0 auto;
-  height: 26px;
-  padding: 0 12px;
+  height: 32px;
+  padding: 0 14px;
   border: 1px solid rgb(var(--md-outline-variant) / 0.7);
   border-radius: 999px;
   background: transparent;
   color: rgb(var(--md-primary));
-  font-size: 11.5px;
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
   transition: background-color 0.14s ease;
 }
 .scan-btn:hover:not(:disabled) {
   background-color: rgb(var(--md-primary) / 0.08);
 }
+.scan-btn.primary {
+  border-color: transparent;
+  background-color: rgb(var(--md-primary));
+  color: rgb(var(--md-on-primary));
+}
+.scan-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
 .scan-btn:disabled {
-  color: rgb(var(--md-on-surface-muted));
+  opacity: 0.45;
+  color: rgb(var(--md-primary));
   cursor: default;
 }
 /* 扫描目录行：路径用等宽字体，长路径允许在任意位置换行。 */
