@@ -1346,7 +1346,7 @@ pub async fn serve(daemon: Arc<Daemon>, token: String) -> std::io::Result<(Socke
 - [ ] **Step 4: 写 `bin/ai-daw.rs`**
 
 ```rust
-//! 无窗口入口：`ai-daw --port 28430 --lan`。
+//! 无窗口入口：`aidawd --port 28430 --lan`。
 //!
 //! 只跑后端 + HTTP 服务，不开窗口、不初始化 Tauri App。
 
@@ -1410,7 +1410,7 @@ cargo test -p ai-daw-daemon --lib boot::tests 2>&1 | tail -8
 - [ ] **Step 6: 手动冒烟**
 
 ```bash
-cargo run -p ai-daw-daemon --bin ai-daw -- --data-dir /tmp/aidaw-smoke --port 28430 --token devtoken &
+cargo run -p ai-daw-daemon --bin aidawd -- --data-dir /tmp/aidaw-smoke --port 28430 --token devtoken &
 sleep 3
 curl -s http://127.0.0.1:28430/health                                    # 期望 {"status":"ok",...}
 curl -s http://127.0.0.1:28430/rpc/get_project | head -c 120            # 期望 401 unauthorized

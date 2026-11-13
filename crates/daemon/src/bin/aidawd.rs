@@ -1,4 +1,4 @@
-//! 无窗口入口：`ai-daw --port 28430 --lan`。
+//! 无窗口入口：`aidawd --port 28430 --lan`。
 //!
 //! 只跑后端 + HTTP 服务，不开窗口、不初始化 Tauri App。容器里跑的就是它。
 
@@ -9,7 +9,7 @@ use ai_daw_daemon::daemon::Config;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "ai-daw", version, about = "AI DAW 的无窗口后端")]
+#[command(name = "aidawd", version, about = "AI DAW 的无窗口后端")]
 struct Args {
     /// 数据目录；默认用系统临时目录下的 ai-daw-headless。
     #[arg(long)]
@@ -55,7 +55,7 @@ async fn main() -> std::io::Result<()> {
     let daemon = bootstrap(host, cfg);
     let (addr, fut) = serve(daemon, token.clone()).await?;
 
-    println!("ai-daw 已启动：http://{addr}");
+    println!("aidawd 已启动：http://{addr}");
     println!("数据目录：{}", data_dir.display());
     println!("token：{token}");
     println!("试一下：curl -H 'Authorization: Bearer {token}' http://{addr}/rpc/get_project | head -c 200");

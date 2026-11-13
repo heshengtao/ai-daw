@@ -36,8 +36,8 @@ COPY skills ./skills
 COPY src/data ./src/data
 COPY src-tauri/resources ./src-tauri/resources
 
-RUN cargo build --release -p ai-daw-daemon --no-default-features --bin ai-daw \
-    && strip /src/target/release/ai-daw
+RUN cargo build --release -p ai-daw-daemon --no-default-features --bin aidawd \
+    && strip /src/target/release/aidawd
 
 # ---- 运行 ----
 FROM debian:bookworm-slim
@@ -53,7 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && find /usr/share/doc /usr/share/man /usr/share/locale -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
 
-COPY --from=builder /src/target/release/ai-daw /usr/local/bin/ai-daw
+COPY --from=builder /src/target/release/aidawd /usr/local/bin/aidawd
 
 # 数据目录（会话、预设、音色记忆库、token）——挂卷持久化。
 VOLUME ["/data"]
@@ -62,7 +62,7 @@ ENV AIDAW_DATA_DIR=/data
 EXPOSE 28430
 
 # `--lan` 在容器里是**必须**的：容器内的 127.0.0.1 从外面到不了。
-ENTRYPOINT ["ai-daw", "--data-dir", "/data", "--lan", "--port", "28430"]
+ENTRYPOINT ["aidawd", "--data-dir", "/data", "--lan", "--port", "28430"]
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:28430/health || exit 1

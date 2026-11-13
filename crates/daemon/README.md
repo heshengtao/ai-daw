@@ -59,7 +59,7 @@ pub fn set_gain(state: State<'_, Arc<AppState>>, track: u64, gain_db: f32) -> Pr
 ## 无窗口运行
 
 ```bash
-cargo run -p ai-daw-daemon --bin ai-daw -- --data-dir /tmp/ai-daw --port 28430 --token devtoken
+cargo run -p ai-daw-daemon --bin aidawd -- --data-dir /tmp/aidawd --port 28430 --token devtoken
 curl -s -H "Authorization: Bearer devtoken" http://127.0.0.1:28430/rpc/get_project | head -c 200
 curl -s -H "Authorization: Bearer devtoken" -H "content-type: application/json" \
      -d '{"name":"Lead"}' http://127.0.0.1:28430/rpc/add_track | head -c 200
@@ -73,7 +73,7 @@ curl -s -H "Authorization: Bearer devtoken" -H "content-type: application/json" 
 
 ```bash
 npm run build                                    # 产出 dist/
-cargo run -p ai-daw-daemon --bin ai-daw -- --token dev --port 28430 --web-dir dist
+cargo run -p ai-daw-daemon --bin aidawd -- --token dev --port 28430 --web-dir dist
 # 打开 http://127.0.0.1:28430/#token=dev
 ```
 
@@ -95,7 +95,7 @@ docker compose up --build
 容器里没有声卡：`/health` 会显示 `"audio": false`，日志里有 ALSA 的探测报错，这是正常的
 ——`/rpc` 的工程编辑、撤销、导入导出都不依赖输出设备。
 
-> 已实测：在 Debian 13 + webkit2gtk-4.1 环境下 `cargo build --release -p ai-daw-daemon --bin ai-daw`
+> 已实测：在 Debian 13 + webkit2gtk-4.1 环境下 `cargo build --release -p ai-daw-daemon --bin aidawd`
 > 通过，容器内 `ai-daw` 能起服务、`/health` 返回 ok、`/rpc/add_track` 能改工程。
 > 本机 Docker Hub 不可达，所以仓库里的 `Dockerfile`（`rust:1-bookworm` / `debian:bookworm-slim`）
 > 未在本地跑通完整镜像构建，包清单与运行期依赖已按 `ldd` 实测结果对齐。
