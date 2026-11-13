@@ -100,8 +100,9 @@ docker compose up --build
 > 本机 Docker Hub 不可达，所以仓库里的 `Dockerfile`（`rust:1-bookworm` / `debian:bookworm-slim`）
 > 未在本地跑通完整镜像构建，包清单与运行期依赖已按 `ldd` 实测结果对齐。
 
-> **体积**：二进制约 20 MB；运行层只要 `libasound2` + `libssl3` + `ca-certificates`，
-> 整镜像约 **120 MB**。
+> **体积（实测）**：`aidawd:latest` = **201 MB**（二进制 20 MB + Debian slim 底座 +
+> libasound2 / libssl3 / libxcb1 / libx11-6 / ca-certificates）。之前带 WebKit 的版本是
+> 1.07 GB —— 现在 `ldd` 里**没有任何 webkit / gtk**。
 >
 > 关键在 `--no-default-features`：本 crate 的 `desktop` 特性（默认开）才会启用 `tauri`，
 > 关掉之后 `tauri` 根本不进依赖图，WebKit/GTK 那 612 MB 也就不会被链进来。

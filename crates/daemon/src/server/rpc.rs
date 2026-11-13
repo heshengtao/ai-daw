@@ -201,6 +201,10 @@ pub fn dispatch(state: &AppState, cmd: &str, args: Value) -> Result<Value, RpcEr
         "history_depths" => json(crate::commands::history_depths_impl(state)),
         "transport_status" => json(crate::commands::transport_status_impl(state)),
         "mixer_meters" => json(crate::commands::mixer_meters_impl(state)),
+        "current_project_path" => json(crate::commands::current_project_path_impl(state)),
+        "session_restored" => json(crate::commands::session_restored_impl(state)),
+        "list_plugins" => json(crate::commands::list_plugins_impl(state)),
+        "list_presets" => json(crate::commands::list_presets_impl(state)),
 
         // ---- 工程 ----
         "add_track" => {
@@ -377,6 +381,10 @@ pub const COMMANDS: &[&str] = &[
     "history_depths",
     "transport_status",
     "mixer_meters",
+    "current_project_path",
+    "session_restored",
+    "list_plugins",
+    "list_presets",
     "add_track",
     "remove_track",
     "rename_track",

@@ -2765,14 +2765,26 @@ pub async fn read_import_file(path: String) -> Result<crate::tauri_api::ipc::Res
 
 /// 当前工程对应的文件路径（尚未保存过时为 `null`）。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn current_project_path(state: State<'_, Arc<AppState>>) -> Option<String> {
+pub fn current_project_path_impl(state: &AppState) -> Option<String> {
     state.session_path()
+}
+
+/// current_project_path（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn current_project_path(state: State<'_, Arc<AppState>>) -> Option<String> {
+    current_project_path_impl(&state)
 }
 
 /// 启动时是否从会话缓存还原了上次的工程（欢迎页据此推荐「打开上次工程」）。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn session_restored(state: State<'_, Arc<AppState>>) -> bool {
+pub fn session_restored_impl(state: &AppState) -> bool {
     state.restored_session()
+}
+
+/// session_restored（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn session_restored(state: State<'_, Arc<AppState>>) -> bool {
+    session_restored_impl(&state)
 }
 
 /// 把当前工作状态落进会话缓存（纯落盘，不改动内存里的工程）。
@@ -3623,8 +3635,14 @@ fn recording_path(app: &crate::tauri_api::AppHandle) -> Result<String, String> {
 
 /// 已扫描到的外部插件目录（界面把它与内置音色合并展示）。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_plugins(state: State<'_, Arc<AppState>>) -> Vec<CatalogPlugin> {
+pub fn list_plugins_impl(state: &AppState) -> Vec<CatalogPlugin> {
     state.catalog_snapshot()
+}
+
+/// list_plugins（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn list_plugins(state: State<'_, Arc<AppState>>) -> Vec<CatalogPlugin> {
+    list_plugins_impl(&state)
 }
 
 /// 最近一次插件扫描的结果摘要。
@@ -4759,8 +4777,14 @@ pub fn audition_midi_events(state: State<'_, Arc<AppState>>, track: u64, events:
 
 /// 全部用户预设（跨工程）。
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_presets(state: State<'_, Arc<AppState>>) -> Vec<Preset> {
+pub fn list_presets_impl(state: &AppState) -> Vec<Preset> {
     state.presets.lock().unwrap().all()
+}
+
+/// list_presets（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn list_presets(state: State<'_, Arc<AppState>>) -> Vec<Preset> {
+    list_presets_impl(&state)
 }
 
 /// 把「某个插件当前的参数快照」存成一条预设。

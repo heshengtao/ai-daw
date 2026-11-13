@@ -47,6 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         libasound2 \
         libssl3 \
+        # 插件宿主（VST3/CLAP）的 GUI 走 X11，哪怕无头也要求 libxcb 存在。
+        libxcb1 \
+        libx11-6 \
     && rm -rf /var/lib/apt/lists/* \
     && find /usr/share/doc /usr/share/man /usr/share/locale -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
 
