@@ -270,8 +270,10 @@ M1 已完成（2026-11-13）：
 - 事件总线 `bus.rs`：`Host` 实现与 SSE 共用一条 `broadcast`，webview 与浏览器收到同一份事件。
 - `GET /events`（SSE）+ `GET /` 静态托管（`--web-dir` / `AIDAW_WEB_DIR`）。
 - 前端只改一处：`src/api/tauri.ts` 的 `invoke`/`listen` 换成 `src/api/ipc.ts`，237 个调用点零改动。
-- Docker 镜像实测：二进制 22 MB，运行层 612 MB（WebKit），合计 1.07 GB——
-  根因是 daemon 仍依赖 `tauri`（`wry` 默认特性）。零 Tauri 化后约 120 MB，属 M3。
+- 镜像瘦身：`tauri` 改为可选特性（`desktop`，默认开），无头用
+  `--no-default-features` 构建 —— `tauri` 不进依赖图，WebKit/GTK 那 612 MB 不再被链进来，
+  镜像从 1.07 GB 降到约 120 MB。无头构建里 `crate::tauri_api` 提供空壳类型（只求编译），
+  桌面构建仍是真实 `tauri`，228 条测试与桌面壳构建均不受影响。
 
 与设计的偏差（有意为之）：
 

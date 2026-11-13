@@ -100,18 +100,15 @@ docker compose up --build
 > 本机 Docker Hub 不可达，所以仓库里的 `Dockerfile`（`rust:1-bookworm` / `debian:bookworm-slim`）
 > 未在本地跑通完整镜像构建，包清单与运行期依赖已按 `ldd` 实测结果对齐。
 
-> **镜像大小的真实构成（实测）**：二进制 `strip` 后 **22 MB**，运行层依赖 **612 MB**
-> （webkit2gtk / gtk3 / soup3 及其依赖），加上 Debian slim 底座，总共约 1.07 GB。
+> **体积**：二进制约 20 MB；运行层只要 `libasound2` + `libssl3` + `ca-certificates`，
+> 整镜像约 **120 MB**。
 >
-> 为什么无头进程会需要 WebKit？因为本 crate 还挂着 `tauri`（M1 过渡期的选择），
-> `tauri` 的默认特性 `wry` 会把 WebKit 链进来——`otool`/`ldd` 都能看到 `aidawd`
-> 直接链接 `WebKit.framework` / `libwebkit2gtk-4.1.so`。桌面版看着小，是因为 macOS
-> 自带 WebKit，不用打包；容器里没有，就只能自带。
+> 关键在 `--no-default-features`：本 crate 的 `desktop` 特性（默认开）才会启用 `tauri`，
+> 关掉之后 `tauri` 根本不进依赖图，WebKit/GTK 那 612 MB 也就不会被链进来。
 >
-> 试过只关掉 `tauri` 的默认特性：`AppHandle` 会变成 `AppHandle<R>`（失去 `Wry` 默认
-> 参数），本 crate 里有 **465 处**签名要补泛型。所以真正的解法是 M3 那一步：把命令层
-> （126 个 `#[tauri::command]`）搬回 `src-tauri`，本 crate 变成零 Tauri 依赖。
-> 那样镜像会掉到 **约 120 MB**（二进制 + libasound2 + ca-certificates）。
+> 无头构建里 `crate::tauri_api` 是一组空壳类型（只求编译，无头进程从不构造
+> `AppHandle`）；桌面构建走 `pub use tauri::*`，行为完全一致。这是过渡脚手架：
+> M3 把命令层搬回 `src-tauri` 后，这层空壳和所有 `AppHandle` 参数一起删掉。
 
 ## 现状（M1）
 
