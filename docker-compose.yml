@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: aidawd:local
+    image: ai-daw:local
     container_name: aidawd
     # 容器里必须绑 0.0.0.0，端口映射才有意义（Dockerfile 的 ENTRYPOINT 已带 --lan）。
     ports:

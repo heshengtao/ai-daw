@@ -121,7 +121,7 @@ docker compose up --build
 | push `v1.7.0` | `1.7.0`、`1.7`、`latest`、`sha-<短 sha>` |
 | 手动触发 | `sha-<短 sha>` |
 
-镜像名是 `<DOCKERHUB_USERNAME>/ai-daw-aidawd`，需要在仓库里配两个 Secret：
+镜像名是 `<DOCKERHUB_USERNAME>/ai-daw`，需要在仓库里配两个 Secret：
 
 - `DOCKERHUB_USERNAME`：Docker Hub 账号
 - `DOCKERHUB_TOKEN`：Docker Hub → Account Settings → Personal access tokens

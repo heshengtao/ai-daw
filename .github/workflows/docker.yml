@@ -1,7 +1,7 @@
 name: Docker (aidawd)
 
 # 无头后端镜像：`aidawd` 只跑工程引擎 + HTTP API，不链 WebKit。
-# 推送到：<DOCKERHUB_USERNAME>/ai-daw-aidawd
+# 推送到：<DOCKERHUB_USERNAME>/ai-daw
 #
 # 需要的仓库 Secrets：
 #   DOCKERHUB_USERNAME  Docker Hub 账号
@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/ai-daw-aidawd
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/ai-daw
 
 jobs:
   preflight:
