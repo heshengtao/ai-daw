@@ -1,0 +1,58 @@
+name: CI
+
+# 主线与 PR 的最小回归防线：
+# - Rust：daemon 的单测（**无 headless 之外的重依赖**，不装 WebKit）
+# - 前端：类型检查 + 打包（`pnpm build` = vue-tsc + vite build）
+#
+# 桌面壳（src-tauri）的完整构建由 release.yml 在打 tag 时覆盖，这里不重复跑，
+# 免得每次 PR 都背上 webkit2gtk 的安装与半小时编译。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rust:
+    name: rust / daemon
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev libasound2-dev
+
+      - name: Test (headless, no Tauri)
+        run: cargo test -p ai-daw-daemon --lib --no-default-features
+
+      - name: Build aidawd
+        run: cargo build --release -p ai-daw-daemon --no-default-features --bin aidawd
+
+  web:
+    name: web / build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Type check + bundle
+        run: pnpm build

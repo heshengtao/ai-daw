@@ -111,6 +111,26 @@ docker compose up --build
 > `AppHandle`）；桌面构建走 `pub use tauri::*`，行为完全一致。这是过渡脚手架：
 > M3 把命令层搬回 `src-tauri` 后，这层空壳和所有 `AppHandle` 参数一起删掉。
 
+## CI / Docker Hub 发布
+
+`.github/workflows/docker.yml` 在 `main` 与 `v*` tag 上构建并推送镜像：
+
+| 触发 | 产出标签 |
+| --- | --- |
+| push `main` | `latest`、`sha-<短 sha>` |
+| push `v1.7.0` | `1.7.0`、`1.7`、`latest`、`sha-<短 sha>` |
+| 手动触发 | `sha-<短 sha>` |
+
+镜像名是 `<DOCKERHUB_USERNAME>/ai-daw-aidawd`，需要在仓库里配两个 Secret：
+
+- `DOCKERHUB_USERNAME`：Docker Hub 账号
+- `DOCKERHUB_TOKEN`：Docker Hub → Account Settings → Personal access tokens
+
+架构：amd64 用 `ubuntu-latest`、arm64 用 `ubuntu-24.04-arm` 各建一次（不走 QEMU），
+最后由 `imagetools create` 合成多架构 manifest。
+
+`.github/workflows/ci.yml` 是 PR 门禁：跑 daemon 的无 Tauri 单测 + 前端类型检查与打包。
+
 ## 现状（M1）
 
 | 项 | 状态 |
