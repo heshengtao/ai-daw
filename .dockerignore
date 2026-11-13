@@ -1,0 +1,20 @@
+# 构建上下文只需要源码：把体积大的本地产物全部挡掉。
+# 注意**不能**排除 `src/data/`、`skills/`、`src-tauri/resources/`——daemon 用
+# `include_str!` 把它们编进了二进制（出厂预设、MCP 技能文档、插件注册表）。
+target/
+**/target/
+src-tauri/target/
+node_modules/
+dist/
+.tmp/
+.git/
+docs/
+models/
+test-files/
+demo.wav
+ls/
+assets/
+public/
+*.wav
+*.mp3
+.DS_Store

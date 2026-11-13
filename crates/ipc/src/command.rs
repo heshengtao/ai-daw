@@ -9,7 +9,12 @@ use crate::model::{
 ///
 /// 所有数值都必须在 `Engine::translate` 里被归一化/夹紧——命令既来自界面，也来自
 /// AI 代理与工程文件，绝不能假设调用方已经校验过。
-#[derive(Debug, Clone, PartialEq)]
+///
+/// **可以被序列化**：`/rpc` 直接把前端发来的 JSON 参数喂给这条枚举，
+/// 于是"一条 HTTP 命令要写一个参数结构体"的样板没有了。字段名按 camelCase
+/// 与 Tauri 的命令参数保持一致（`plugin_id` → `pluginId`）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all_fields = "camelCase")]
 pub enum Command {
     /// 设置工程速度（BPM）。
     SetTempo(f64),

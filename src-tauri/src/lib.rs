@@ -1,45 +1,7 @@
 #![forbid(unsafe_code)]
 
-mod abc;
-mod agent;
-mod ai;
-mod articulation_map;
-mod assets;
-mod audio;
-mod backends;
-mod capabilities;
-mod cli;
-mod commands;
-mod cue_sheet;
-mod factory_presets;
-mod history;
-mod job;
-mod logging;
-mod main_thread;
-mod manager;
-mod mcp;
-mod midi_import;
-mod midi_input;
-mod models;
-mod paths;
-mod pick;
-mod plugin_dirs;
-mod plugin_info;
-mod plugins;
-mod presets;
-mod quarantine;
-mod runtimes;
-mod session;
-mod singing;
-mod sound_memories;
-mod state;
-mod svc;
-mod voices;
-mod yue;
-mod yue_engine;
-mod yue_lyrics;
-mod yue_midi;
-mod yue_transcribe;
+mod tauri_host;
+
 
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -50,8 +12,12 @@ use tauri::{Emitter, Manager};
 use ai_daw_engine::registry::PluginSlot;
 use ai_daw_host_vst3::EditorHandle;
 
-use crate::audio::{AudioEngine, TransportSnapshot};
-use crate::state::{AppState, EVENT_TRANSPORT};
+use ai_daw_daemon::audio::{AudioEngine, TransportSnapshot};
+use ai_daw_daemon::daemon::{Config as DaemonConfig, Daemon};
+use ai_daw_daemon::state::{AppState, EVENT_TRANSPORT};
+
+/// 浏览器客户端连接的固定端口（与 `vite` 的 28420、MCP 的 50562 分开）。
+const WEB_PORT: u16 = 28430;
 
 /// 传输位置的推送周期：跟屏幕刷新对齐（约 60 Hz）。
 ///
@@ -83,7 +49,7 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWind
                 tauri::webview::PageLoadEvent::Started => "开始加载",
                 tauri::webview::PageLoadEvent::Finished => "加载完成",
             };
-            crate::logging::info(format!(
+            ai_daw_daemon::logging::info(format!(
                 "[startup] webview {stage}（进程入口 +{} ms）",
                 boot_ms()
             ));
@@ -163,12 +129,12 @@ fn spawn_plugin_scan(app: tauri::AppHandle) {
             // 首次发声抢 CPU 只会把启动拖得更长。目录已经用缓存装好了，晚几秒扫描
             // 不影响可用性；最多等 5 秒（没有音频设备时也照常往下走）。
             for _ in 0..50 {
-                if app.state::<AppState>().audio.snapshot().available {
+                if app.state::<Arc<AppState>>().audio.snapshot().available {
                     break;
                 }
                 thread::sleep(Duration::from_millis(100));
             }
-            crate::manager::rescan_with_managed(&app);
+            ai_daw_daemon::manager::rescan_with_managed(&app);
         })
         .expect("failed to spawn plugin scan thread");
 }
@@ -185,11 +151,11 @@ fn on_host_window_closing(window: &tauri::Window, event: &tauri::WindowEvent) {
     if !matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
         return;
     }
-    let Some(key) = crate::commands::host_window_track(window.label()) else {
+    let Some(key) = ai_daw_daemon::commands::host_window_track(window.label()) else {
         return;
     };
     let state = window.app_handle().state::<AppState>();
-    if let Some(plugin_window) = crate::state::with_editor_windows(|windows| windows.remove(&key)) {
+    if let Some(plugin_window) = ai_daw_daemon::state::with_editor_windows(|windows| windows.remove(&key)) {
         plugin_window.close();
     }
     state.open_editors.lock().unwrap().remove(&key);
@@ -208,7 +174,7 @@ fn spawn_editor_ticker(app: tauri::AppHandle) {
             thread::sleep(EDITOR_TICK);
 
             let modules: Vec<std::path::PathBuf> = {
-                let state = app.state::<AppState>();
+                let state = app.state::<Arc<AppState>>();
                 let handles = state.editor_handles.lock().unwrap();
                 let mut modules: Vec<std::path::PathBuf> = handles
                     .values()
@@ -241,13 +207,13 @@ fn spawn_editor_ticker(app: tauri::AppHandle) {
 /// `plugin_thread` 只用来区分「这一趟是不是插件线程那趟」：CLAP 的 `request_callback`
 /// 必须在主线程上服务，与窗口是否打开无关。
 fn service_editor_windows(app: &tauri::AppHandle, plugin_thread: bool) {
-    let state = app.state::<AppState>();
+    let state = app.state::<Arc<AppState>>();
     let hosts = state.host_windows.clone();
     // 需要连带关掉的宿主窗口，等到借用结束之后再关（见下面的说明）。
     let mut close_hosts: Vec<(u64, PluginSlot)> = Vec::new();
     let mut doomed: Vec<(u64, PluginSlot)> = Vec::new();
 
-    crate::state::with_editor_windows(|windows| {
+    ai_daw_daemon::state::with_editor_windows(|windows| {
         for window in windows.values() {
             window.service();
         }
@@ -262,7 +228,7 @@ fn service_editor_windows(app: &tauri::AppHandle, plugin_thread: bool) {
                 let is_host = hosts.lock().unwrap().contains(*key);
                 is_host
                     && app
-                        .get_webview_window(&crate::commands::host_window_label(key.0, key.1))
+                        .get_webview_window(&ai_daw_daemon::commands::host_window_label(key.0, key.1))
                         .is_none()
             })
             .map(|(key, _)| *key)
@@ -285,7 +251,7 @@ fn service_editor_windows(app: &tauri::AppHandle, plugin_thread: bool) {
     // `CloseRequested`，我们的处理器又要去借同一个 RefCell——嵌套借用会 panic。
     for key in close_hosts {
         if let Some(window) =
-            app.get_webview_window(&crate::commands::host_window_label(key.0, key.1))
+            app.get_webview_window(&ai_daw_daemon::commands::host_window_label(key.0, key.1))
         {
             let _ = window.close();
         }
@@ -325,14 +291,14 @@ fn service_editor_windows(app: &tauri::AppHandle, plugin_thread: bool) {
 ///
 /// 拿不到目录时返回 `None`（预设仍能用，只是重启后不保留），不因此启动失败。
 fn preset_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    crate::paths::config_dir(app)
+    ai_daw_daemon::paths::config_dir(app)
         .ok()
         .map(|dir| dir.join("presets.json"))
 }
 
 /// 音色记忆库文件的位置：应用配置目录下的 `sound-memories.json`。
 fn sound_memory_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    crate::paths::config_dir(app)
+    ai_daw_daemon::paths::config_dir(app)
         .ok()
         .map(|dir| dir.join("sound-memories.json"))
 }
@@ -342,37 +308,19 @@ fn sound_memory_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 /// `mcp-url` 与 `cli-path` 都是给外部工具按 bundle id 找的发现文件，必须留在默认位置，
 /// 不能跟着数据目录搬走（它们只有几十字节，留在系统盘无所谓）。
 fn mcp_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    crate::paths::default_config_dir(app).map(|dir| dir.join("mcp.json"))
-}
-
-/// 会话缓存文件的位置：应用配置目录下的 `session.json`。
-///
-/// 它记录「上次退出时的工作状态」，供下次启动还原；拿不到配置目录时返回 `None`（不缓存）。
-pub(crate) fn session_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    crate::paths::config_dir(app)
-        .ok()
-        .map(|dir| dir.join("session.json"))
-}
-
-/// 历史工程目录：应用配置目录下的 `history/`。
-///
-/// 拿不到配置目录时返回 `None`（历史功能不可用，但不影响编辑）。
-pub(crate) fn history_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    crate::paths::config_dir(app)
-        .ok()
-        .map(|dir| dir.join("history"))
+    ai_daw_daemon::paths::default_config_dir(app).map(|dir| dir.join("mcp.json"))
 }
 
 /// 写歌智能体配置文件的位置：应用配置目录下的 `ai.json`。
 fn agent_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    crate::paths::config_dir(app)
+    ai_daw_daemon::paths::config_dir(app)
         .ok()
         .map(|dir| dir.join("ai.json"))
 }
 
 /// 写歌智能体会话目录：应用配置目录下的 `agent/sessions/`。
 fn agent_sessions_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    crate::paths::config_dir(app)
+    ai_daw_daemon::paths::config_dir(app)
         .ok()
         .map(|dir| dir.join("agent").join("sessions"))
 }
@@ -381,7 +329,7 @@ fn agent_sessions_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 pub fn run() {
     let _ = BOOT.set(Instant::now());
     // 数据目录必须在**任何路径解析之前**定下来：日志、会话、插件缓存都按它落盘。
-    crate::paths::init_from_args();
+    ai_daw_daemon::paths::init_from_args();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         // 自动更新：`updater` 负责检查 / 下载 / 验签安装，`process` 负责装完重启。
@@ -392,18 +340,18 @@ pub fn run() {
             // 启动耗时：`setup` 跑完才进事件循环，这一段越久，首屏越像「黑屏卡住」。
             let setup_started = std::time::Instant::now();
             // 日志要最先装上：启动阶段的崩溃也得留下线索。
-            crate::logging::init(app.handle());
+            ai_daw_daemon::logging::init(app.handle());
             // 数据目录迁移后，旧工程文件里的素材引用还要能找到新位置。
-            crate::paths::init_remap(app.handle());
-            crate::logging::info(format!(
+            ai_daw_daemon::paths::init_remap(app.handle());
+            ai_daw_daemon::logging::info(format!(
                 "[startup] setup 开始（进程入口 +{} ms）",
                 boot_ms()
             ));
             // 宿主 crate 的日志（哪个插件超时、哪条模块线程卡住）一并进同一份日志。
-            ai_daw_host_vst3::set_log_sink(|line| crate::logging::info(format!("[host] {line}")));
+            ai_daw_host_vst3::set_log_sink(|line| ai_daw_daemon::logging::info(format!("[host] {line}")));
             // 「加载未响应」的插件隔离名单：下次启动不再为它等一次超时。
-            crate::quarantine::init(
-                crate::paths::config_dir(app.handle())
+            ai_daw_daemon::quarantine::init(
+                ai_daw_daemon::paths::config_dir(app.handle())
                     .ok()
                     .map(|dir| dir.join("plugin-quarantine.json")),
             );
@@ -411,35 +359,50 @@ pub fn run() {
             ai_daw_host_vst3::mark_main_thread();
             // 还得给它一个「把活派到主线程」的手：CLAP 的 init / 参数枚举 / activate 都只能
             // 在主线程做，而这些调用发生在音频线程构建 Player 的时候。
-            crate::main_thread::TauriMainThread::install(app.handle());
+            ai_daw_daemon::main_thread::TauriMainThread::install(app.handle());
             // 会话缓存与插件目录都要在**建状态之前**读出来：`AppState::bootstrap` 会让音频线程
             // 一次性装载「最终工程 + 已缓存目录」。以前是常驻的默认工程先装一遍、会话再装一遍、
             // 目录到位又各重建一次——默认模板的采样音色解码就白白吃掉启动时最显眼的几秒。
-            let session = session_file(app.handle()).and_then(|file| session::read_session(&file));
-            let cached = crate::manager::cached_catalog(app.handle());
-            app.manage(AppState::bootstrap(session, cached));
-            crate::logging::info(format!(
+            let session = ai_daw_daemon::paths::session_file(app.handle()).and_then(|file| ai_daw_daemon::session::read_session(&file));
+            let cached = ai_daw_daemon::manager::cached_catalog(app.handle());
+            // 后端从此刻起就是"daemon"：状态 + 宿主（Tauri 实现）+ 配置。
+            // 网页客户端连的是同一个 `Daemon`，所以两边看到的是同一份工程、同一个音频宿主。
+            let host = Arc::new(crate::tauri_host::TauriHost::new(app.handle().clone()));
+            let state = AppState::bootstrap_with_host(session, cached, host.clone());
+            let daemon = Daemon::new(
+                Arc::new(state),
+                host,
+                DaemonConfig {
+                    data_dir: app.path().app_data_dir().unwrap_or_default(),
+                    lan: std::env::args().any(|arg| arg == "--lan"),
+                    port: Some(WEB_PORT),
+                    // 桌面端托管的是同一份 `dist/`：浏览器打开 28430 就是同一个界面。
+                    web_dir: Some(app.path().resource_dir().unwrap_or_default().join("web")),
+                },
+            );
+            app.manage(Arc::clone(&daemon));
+            app.manage(Arc::clone(daemon.state_arc()));
+            ai_daw_daemon::logging::info(format!(
                 "[startup] 会话与插件缓存装载完成（进程入口 +{} ms）",
                 boot_ms()
             ));
             // 插件线程不需要预先启动：每个 VST3 模块在第一次用到时各自起一条（带消息循环），
             // 于是一个插件卡住只影响它自己。见 `host_vst3::plugin_thread`。
             build_main_window(app.handle())?;
-            crate::logging::info(format!(
+            ai_daw_daemon::logging::info(format!(
                 "[startup] 主窗口创建完成（进程入口 +{} ms）",
                 boot_ms()
             ));
-            let state = app.state::<AppState>();
+            let state = app.state::<Arc<AppState>>();
             state.init_presets(preset_file(app.handle()));
             state.init_sound_memories(sound_memory_file(app.handle()));
-            let audio = state.audio.clone();
             drop(state);
             // 插件源的网络配置（镜像 / 下载代理）：要在预热线程之前装上。
-            app.manage(crate::manager::StoreRuntime::load(app.handle()));
+            app.manage(ai_daw_daemon::manager::StoreRuntime::load(app.handle()));
             // 执行后端：CoreML 编译缓存目录 + 按 store.json 的偏好落地 + 校验并打印一行。
             // **必须在任何 ort 调用之前**（只决定「用哪个 EP」，不触发加载，所以放这儿安全）。
-            crate::backends::init_runtime(app.handle());
-            spawn_transport_ticker(app.handle().clone(), audio);
+            ai_daw_daemon::backends::init_runtime(app.handle());
+            // 传输状态推送已搬进 daemon（浏览器客户端也要收），这里不再重复起线程。
             // 正常的装载由前端的 `app_ready`（挂载之后的第一帧）触发。
             // 页面万一根本没起来（dev server 没起、页面脚本报错），也不能永远不出窗口、
             // 永远没声音：留一个 6 秒的兜底，超时就直接显示窗口并装载。
@@ -454,7 +417,7 @@ pub fn run() {
                         if let Some(window) = handle.get_webview_window("main") {
                             let _ = window.show();
                         }
-                        handle.state::<AppState>().start_audio();
+                        handle.state::<Arc<AppState>>().start_audio();
                     });
             }
             // 插件目录已随 `AppState::bootstrap` 交给音频线程了；这里只启动后台扫描，
@@ -466,25 +429,25 @@ pub fn run() {
                 let handle = app.handle().clone();
                 let _ = thread::Builder::new()
                     .name("ai-daw-store-warm".into())
-                    .spawn(move || crate::manager::warm_registry_cache(&handle));
+                    .spawn(move || ai_daw_daemon::manager::warm_registry_cache(&handle));
             }
             // 内嵌 MCP 服务器：把 DAW 能力暴露给 AI 代理（只监听回环）。按设置启动。
-            let mcp = crate::mcp::McpRuntime::load(app.handle().clone(), mcp_file(app.handle()));
+            let mcp = ai_daw_daemon::mcp::McpRuntime::load(app.handle().clone(), mcp_file(app.handle()));
             mcp.autostart();
             app.manage(mcp);
             // 写歌智能体：OpenAI 兼容端点配置（`ai.json`）+ 会话运行时（`agent/sessions/`）。
-            app.manage(crate::agent::AgentConfigRuntime::load(agent_file(
+            app.manage(ai_daw_daemon::agent::AgentConfigRuntime::load(agent_file(
                 app.handle(),
             )));
-            app.manage(crate::agent::AgentRuntime::new(agent_sessions_dir(
+            app.manage(ai_daw_daemon::agent::AgentRuntime::new(agent_sessions_dir(
                 app.handle(),
             )));
             // 注意：`aidaw` CLI 的挂载**不做任何自动动作**——它是设置页里的一个显式开关
             // （见 `cli.rs`）。启动时碰 PATH 会平白弹一次密码框，体验很差。
             // 但要**登记自己在哪**：别的 AI harness 按 bundle id 推导配置目录、读 `cli-path`
             // 就能拿到全路径，不必搜索、也不必用户开挂载开关。
-            if let Some(dir) = crate::paths::default_config_dir(app.handle()) {
-                crate::cli::publish_path(&dir);
+            if let Some(dir) = ai_daw_daemon::paths::default_config_dir(app.handle()) {
+                ai_daw_daemon::cli::publish_path(&dir);
             }
             // 让模型层知道去哪找权重：**下载落点**（应用配置目录的 models/）与**随包小模型**
             // （打包后的资源目录 models/）。本 crate 不依赖 Tauri，所以由宿主在这里登记。
@@ -493,14 +456,14 @@ pub fn run() {
                 if let Ok(dir) = app.path().resource_dir() {
                     extra.push(dir.join("models"));
                 }
-                if let Ok(dir) = crate::paths::config_dir(app.handle()) {
+                if let Ok(dir) = ai_daw_daemon::paths::config_dir(app.handle()) {
                     extra.push(dir.join("models"));
                 }
                 ai_daw_local_ai::models::set_extra_dirs(extra);
             }
             // 已下线模型（清单里没有、权重可能还在盘上）：顺手收掉，别让它们变成
             // 管理器里找不到入口的无主文件（如抓歌词的 SenseVoice-Small）。
-            crate::models::purge_retired(app.handle());
+            ai_daw_daemon::models::purge_retired(app.handle());
             // 诊断开关：`AIDAW_EDITOR_SELFTEST` 驱动一条不依赖鼠标的插件界面回归链路。
             //
             // - `1`      启动 12 秒后给 1 号轨道开一次界面（默认）；
@@ -519,18 +482,18 @@ pub fn run() {
                         std::thread::sleep(Duration::from_secs(12));
 
                         let open = |title: &str| {
-                            let state = handle.state::<AppState>();
-                            crate::commands::open_plugin_window(
+                            let state = handle.state::<Arc<AppState>>();
+                            ai_daw_daemon::commands::open_plugin_window(
                                 handle.clone(),
                                 state,
                                 1,
                                 title.to_string(),
                             )
                         };
-                        let close = || crate::commands::close_plugin_window(handle.clone(), 1);
+                        let close = || ai_daw_daemon::commands::close_plugin_window(handle.clone(), 1);
                         let select = |plugin_id: &str| {
-                            let state = handle.state::<AppState>();
-                            crate::commands::set_track_instrument(
+                            let state = handle.state::<Arc<AppState>>();
+                            ai_daw_daemon::commands::set_track_instrument(
                                 handle.clone(),
                                 state,
                                 1,
@@ -580,257 +543,274 @@ pub fn run() {
                     });
             }
             // 这一段决定了「窗口出来之前黑了多久」：超过 ~300 ms 就值得查是谁拖的。
-            crate::logging::info(format!(
+            ai_daw_daemon::logging::info(format!(
                 "[startup] setup 完成，用时 {} ms（进程入口 +{} ms）",
                 setup_started.elapsed().as_millis(),
                 boot_ms()
             ));
+            // 浏览器客户端：与桌面共用同一个 Daemon（同一份工程、同一个音频宿主）。
+            // 绑定默认只回环；`--lan` 才对外开放，且必须带令牌。
+            {
+                let daemon_for_web = std::sync::Arc::clone(&daemon);
+                tauri::async_runtime::spawn(async move {
+                    let token = ai_daw_daemon::boot::web_token(daemon_for_web.config().data_dir.as_path());
+                    match ai_daw_daemon::boot::serve(daemon_for_web, token).await {
+                        Ok((addr, fut)) => {
+                            ai_daw_daemon::logging::info(format!("[web] 监听 http://{addr}"));
+                            fut.await;
+                        }
+                        Err(err) => {
+                            ai_daw_daemon::logging::info(format!("[web] 启动失败：{err}"))
+                        }
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::app_ready,
-            paths::data_dir_info,
-            paths::data_dir_migrate,
-            paths::data_dir_cleanup_previous,
-            commands::get_project,
-            commands::add_track,
-            commands::remove_track,
-            commands::rename_track,
-            commands::set_track_instrument,
-            commands::set_param,
-            commands::set_params,
-            commands::set_tempo,
-            commands::set_time_signature,
-            commands::set_keyframe,
-            commands::remove_keyframe,
-            commands::new_project,
-            commands::rename_project,
-            commands::localize_starter_tracks,
-            commands::current_project_path,
-            commands::session_restored,
-            commands::cache_session,
-            commands::project_history,
-            commands::delete_project_history,
-            commands::restore_project_history,
-            commands::add_clip,
-            commands::remove_clip,
-            commands::move_clip,
-            commands::move_clips,
-            commands::resize_clip,
-            commands::set_clip_rate,
-            commands::trim_clip,
-            commands::split_clip,
-            commands::add_note,
-            commands::set_note,
-            commands::set_notes,
-            commands::remove_note,
-            commands::remove_notes,
-            commands::remove_clips,
-            commands::add_notes,
-            commands::replace_notes,
-            commands::update_notes,
-            commands::remove_notes_by_id,
-            commands::transpose_notes,
-            commands::set_note_velocity,
-            commands::quantize_notes,
-            commands::strum_notes,
-            commands::apply_swing,
-            commands::humanize_notes,
-            commands::fit_notes_to_range,
-            commands::duplicate_clip,
-            commands::merge_clips,
-            commands::get_track_note_stats,
-            commands::analyze_track_overlap,
-            commands::analyze_harmony,
-            commands::set_project_harmony,
-            commands::set_project_sections,
-            commands::set_track_meta,
-            commands::set_mpe,
-            commands::set_midi_events,
-            commands::set_articulations,
-            commands::list_articulation_maps,
-            commands::import_articulation_map,
-            commands::set_note_tag,
-            commands::set_note_tags,
-            commands::track_midi_capabilities,
-            commands::set_gain,
-            commands::set_pan,
-            commands::set_mute,
-            commands::set_solo,
-            commands::set_master_gain,
-            commands::set_sends,
-            commands::set_automation,
-            commands::monitor_track_mix,
-            commands::history_depths,
-            commands::undo,
-            commands::redo,
-            commands::ops_list,
-            commands::ops_revert_to,
-            commands::ops_reapply_to,
-            commands::transport_status,
-            commands::retry_audio,
-            commands::list_output_devices,
-            commands::set_output_device,
-            commands::transport_play,
-            commands::transport_pause,
-            commands::transport_stop,
-            commands::transport_seek,
-            commands::transport_set_loop,
-            commands::transport_set_loop_range,
-            commands::transport_set_metronome,
-            commands::save_project,
-            commands::export_score,
-            commands::export_midi,
-            commands::import_project,
-            commands::read_import_file,
-            commands::open_project,
-            commands::render_preview,
-            commands::analyze_project,
-            commands::export_audio,
-            commands::import_audio,
-            commands::add_audio_clip,
-            commands::audio_waveform,
-            commands::clip_bounds,
-            commands::list_input_devices,
-            commands::set_input_device,
-            commands::input_level,
-            commands::list_midi_inputs,
-            commands::set_midi_input,
-            commands::midi_input_device,
-            commands::add_midi_clip,
-            commands::record_start,
-            commands::record_stop,
-            commands::list_plugins,
-            commands::plugin_scan_status,
-            plugin_dirs::plugin_scan_dirs,
-            plugin_dirs::plugin_set_scan_dirs,
-            commands::rescan_plugins,
-            commands::plugin_params,
-            commands::add_effect,
-            commands::remove_effect,
-            commands::move_effect,
-            commands::set_effect_param,
-            commands::open_plugin_window,
-            commands::close_plugin_window,
-            commands::plugin_window_open,
-            commands::open_synth_window,
-            commands::open_effect_window,
-            commands::open_effect_plugin_window,
-            commands::close_effect_plugin_window,
-            commands::effect_plugin_window_open,
-            commands::set_effect_params,
-            commands::set_effect_enabled,
-            commands::set_effect_sidechain,
-            commands::add_master_effect,
-            commands::remove_master_effect,
-            commands::move_master_effect,
-            commands::set_master_effect_param,
-            commands::set_master_effect_enabled,
-            commands::set_master_effect_sidechain,
-            commands::mixer_meters,
-            commands::clear_meter_clip,
-            commands::scope_data,
-            commands::audition_note,
-            commands::audition_midi_events,
-            commands::list_presets,
-            commands::save_preset,
-            commands::update_preset,
-            commands::delete_preset,
-            commands::list_sound_memories,
-            commands::save_sound_memory,
-            commands::update_sound_memory,
-            commands::delete_sound_memory,
-            commands::apply_sound_memory,
-            mcp::mcp_status,
-            mcp::set_mcp_config,
-            agent::agent_config,
-            agent::agent_set_config,
-            agent::agent_models,
-            agent::agent_test,
-            agent::agent_sessions,
-            agent::agent_session,
-            agent::agent_delete_session,
-            agent::agent_set_head,
-            agent::agent_send,
-            agent::agent_cancel,
-            agent::agent_running,
-            cli::cli_status,
-            cli::install_cli,
-            cli::uninstall_cli,
-            manager::plugin_manager_registry,
-            manager::plugin_manager_installed,
-            manager::plugin_manager_foreign,
-            manager::plugin_manager_install,
-            manager::plugin_manager_resolve_url,
-            manager::plugin_manager_import,
-            manager::plugin_manager_remove,
-            manager::plugin_manager_open,
-            manager::plugin_manager_network,
-            manager::plugin_manager_set_network,
-            manager::plugin_manager_probe_proxy,
-            manager::plugin_manager_proxy_status,
-            ai::ai_status,
-            ai::ai_models,
-            ai::ai_start,
-            ai::ai_cancel,
-            voices::voice_list,
-            voices::voice_save,
-            voices::voice_update,
-            voices::voice_delete,
-            singing::singing_models,
-            singing::singing_status,
-            singing::singing_render,
-            singing::singing_cancel,
-            svc::svc_models,
-            svc::svc_status,
-            svc::svc_render,
-            svc::svc_cancel,
-            models::model_catalog,
-            models::model_download,
-            manager::model_save_hf_token,
-            manager::model_hf_token_status,
-            models::model_cancel,
-            models::model_remove,
-            models::model_reveal,
-            models::model_resolve_url,
-            models::model_probe,
-            paths::disk_free_bytes,
-            backends::ai_backend_info,
-            backends::ai_set_backend,
-            runtimes::ai_runtime_catalog,
-            runtimes::ai_runtime_discover,
-            runtimes::ai_runtime_import,
-            runtimes::ai_runtime_install,
-            runtimes::ai_runtime_cancel,
-            runtimes::ai_runtime_busy,
-            runtimes::ai_runtime_remove,
-            runtimes::ai_runtime_reveal,
-            yue::ai_yue_catalog,
-            yue::ai_yue_install,
-            yue::ai_yue_import,
-            yue::ai_yue_cancel,
-            yue::ai_yue_remove,
-            yue::ai_yue_reveal,
-            yue::ai_yue_select,
-            yue_engine::ai_yue_engine_status,
-            yue_engine::ai_yue_engine_log,
-            yue_engine::ai_yue_cuda_perf,
-            yue_engine::ai_yue_set_cuda_perf,
-            yue_engine::ai_yue_engine_start,
-            yue_engine::ai_yue_engine_stop,
-            yue_engine::ai_yue_compose,
-            yue_engine::ai_yue_compose_cancel,
-            yue_engine::ai_yue_import_abc,
-            yue_engine::ai_yue_score,
-            yue_engine::ai_yue_record,
-            yue_engine::ai_yue_continuable,
-            yue_engine::ai_yue_lora,
-            yue_engine::ai_yue_set_lora,
-            yue_transcribe::ai_yue_transcribe,
-            yue_transcribe::ai_yue_transcribe_cancel,
-            yue_midi::ai_yue_midi_abc,
-            yue_lyrics::ai_yue_lyrics,
-            yue_lyrics::ai_yue_lyrics_cancel,
+            ai_daw_daemon::commands::app_ready,
+            ai_daw_daemon::paths::data_dir_info,
+            ai_daw_daemon::paths::data_dir_migrate,
+            ai_daw_daemon::paths::data_dir_cleanup_previous,
+            ai_daw_daemon::commands::get_project,
+            ai_daw_daemon::commands::add_track,
+            ai_daw_daemon::commands::remove_track,
+            ai_daw_daemon::commands::rename_track,
+            ai_daw_daemon::commands::set_track_instrument,
+            ai_daw_daemon::commands::set_param,
+            ai_daw_daemon::commands::set_params,
+            ai_daw_daemon::commands::set_tempo,
+            ai_daw_daemon::commands::set_time_signature,
+            ai_daw_daemon::commands::set_keyframe,
+            ai_daw_daemon::commands::remove_keyframe,
+            ai_daw_daemon::commands::new_project,
+            ai_daw_daemon::commands::rename_project,
+            ai_daw_daemon::commands::localize_starter_tracks,
+            ai_daw_daemon::commands::current_project_path,
+            ai_daw_daemon::commands::session_restored,
+            ai_daw_daemon::commands::cache_session,
+            ai_daw_daemon::commands::project_history,
+            ai_daw_daemon::commands::delete_project_history,
+            ai_daw_daemon::commands::restore_project_history,
+            ai_daw_daemon::commands::add_clip,
+            ai_daw_daemon::commands::remove_clip,
+            ai_daw_daemon::commands::move_clip,
+            ai_daw_daemon::commands::move_clips,
+            ai_daw_daemon::commands::resize_clip,
+            ai_daw_daemon::commands::set_clip_rate,
+            ai_daw_daemon::commands::trim_clip,
+            ai_daw_daemon::commands::split_clip,
+            ai_daw_daemon::commands::add_note,
+            ai_daw_daemon::commands::set_note,
+            ai_daw_daemon::commands::set_notes,
+            ai_daw_daemon::commands::remove_note,
+            ai_daw_daemon::commands::remove_notes,
+            ai_daw_daemon::commands::remove_clips,
+            ai_daw_daemon::commands::add_notes,
+            ai_daw_daemon::commands::replace_notes,
+            ai_daw_daemon::commands::update_notes,
+            ai_daw_daemon::commands::remove_notes_by_id,
+            ai_daw_daemon::commands::transpose_notes,
+            ai_daw_daemon::commands::set_note_velocity,
+            ai_daw_daemon::commands::quantize_notes,
+            ai_daw_daemon::commands::strum_notes,
+            ai_daw_daemon::commands::apply_swing,
+            ai_daw_daemon::commands::humanize_notes,
+            ai_daw_daemon::commands::fit_notes_to_range,
+            ai_daw_daemon::commands::duplicate_clip,
+            ai_daw_daemon::commands::merge_clips,
+            ai_daw_daemon::commands::get_track_note_stats,
+            ai_daw_daemon::commands::analyze_track_overlap,
+            ai_daw_daemon::commands::analyze_harmony,
+            ai_daw_daemon::commands::set_project_harmony,
+            ai_daw_daemon::commands::set_project_sections,
+            ai_daw_daemon::commands::set_track_meta,
+            ai_daw_daemon::commands::set_mpe,
+            ai_daw_daemon::commands::set_midi_events,
+            ai_daw_daemon::commands::set_articulations,
+            ai_daw_daemon::commands::list_articulation_maps,
+            ai_daw_daemon::commands::import_articulation_map,
+            ai_daw_daemon::commands::set_note_tag,
+            ai_daw_daemon::commands::set_note_tags,
+            ai_daw_daemon::commands::track_midi_capabilities,
+            ai_daw_daemon::commands::set_gain,
+            ai_daw_daemon::commands::set_pan,
+            ai_daw_daemon::commands::set_mute,
+            ai_daw_daemon::commands::set_solo,
+            ai_daw_daemon::commands::set_master_gain,
+            ai_daw_daemon::commands::set_sends,
+            ai_daw_daemon::commands::set_automation,
+            ai_daw_daemon::commands::monitor_track_mix,
+            ai_daw_daemon::commands::history_depths,
+            ai_daw_daemon::commands::undo,
+            ai_daw_daemon::commands::redo,
+            ai_daw_daemon::commands::ops_list,
+            ai_daw_daemon::commands::ops_revert_to,
+            ai_daw_daemon::commands::ops_reapply_to,
+            ai_daw_daemon::commands::transport_status,
+            ai_daw_daemon::commands::retry_audio,
+            ai_daw_daemon::commands::list_output_devices,
+            ai_daw_daemon::commands::set_output_device,
+            ai_daw_daemon::commands::transport_play,
+            ai_daw_daemon::commands::transport_pause,
+            ai_daw_daemon::commands::transport_stop,
+            ai_daw_daemon::commands::transport_seek,
+            ai_daw_daemon::commands::transport_set_loop,
+            ai_daw_daemon::commands::transport_set_loop_range,
+            ai_daw_daemon::commands::transport_set_metronome,
+            ai_daw_daemon::commands::save_project,
+            ai_daw_daemon::commands::export_score,
+            ai_daw_daemon::commands::export_midi,
+            ai_daw_daemon::commands::import_project,
+            ai_daw_daemon::commands::read_import_file,
+            ai_daw_daemon::commands::open_project,
+            ai_daw_daemon::commands::render_preview,
+            ai_daw_daemon::commands::analyze_project,
+            ai_daw_daemon::commands::export_audio,
+            ai_daw_daemon::commands::import_audio,
+            ai_daw_daemon::commands::add_audio_clip,
+            ai_daw_daemon::commands::audio_waveform,
+            ai_daw_daemon::commands::clip_bounds,
+            ai_daw_daemon::commands::list_input_devices,
+            ai_daw_daemon::commands::set_input_device,
+            ai_daw_daemon::commands::input_level,
+            ai_daw_daemon::commands::list_midi_inputs,
+            ai_daw_daemon::commands::set_midi_input,
+            ai_daw_daemon::commands::midi_input_device,
+            ai_daw_daemon::commands::add_midi_clip,
+            ai_daw_daemon::commands::record_start,
+            ai_daw_daemon::commands::record_stop,
+            ai_daw_daemon::commands::list_plugins,
+            ai_daw_daemon::commands::plugin_scan_status,
+            ai_daw_daemon::plugin_dirs::plugin_scan_dirs,
+            ai_daw_daemon::plugin_dirs::plugin_set_scan_dirs,
+            ai_daw_daemon::commands::rescan_plugins,
+            ai_daw_daemon::commands::plugin_params,
+            ai_daw_daemon::commands::add_effect,
+            ai_daw_daemon::commands::remove_effect,
+            ai_daw_daemon::commands::move_effect,
+            ai_daw_daemon::commands::set_effect_param,
+            ai_daw_daemon::commands::open_plugin_window,
+            ai_daw_daemon::commands::close_plugin_window,
+            ai_daw_daemon::commands::plugin_window_open,
+            ai_daw_daemon::commands::open_synth_window,
+            ai_daw_daemon::commands::open_effect_window,
+            ai_daw_daemon::commands::open_effect_plugin_window,
+            ai_daw_daemon::commands::close_effect_plugin_window,
+            ai_daw_daemon::commands::effect_plugin_window_open,
+            ai_daw_daemon::commands::set_effect_params,
+            ai_daw_daemon::commands::set_effect_enabled,
+            ai_daw_daemon::commands::set_effect_sidechain,
+            ai_daw_daemon::commands::add_master_effect,
+            ai_daw_daemon::commands::remove_master_effect,
+            ai_daw_daemon::commands::move_master_effect,
+            ai_daw_daemon::commands::set_master_effect_param,
+            ai_daw_daemon::commands::set_master_effect_enabled,
+            ai_daw_daemon::commands::set_master_effect_sidechain,
+            ai_daw_daemon::commands::mixer_meters,
+            ai_daw_daemon::commands::clear_meter_clip,
+            ai_daw_daemon::commands::scope_data,
+            ai_daw_daemon::commands::audition_note,
+            ai_daw_daemon::commands::audition_midi_events,
+            ai_daw_daemon::commands::list_presets,
+            ai_daw_daemon::commands::save_preset,
+            ai_daw_daemon::commands::update_preset,
+            ai_daw_daemon::commands::delete_preset,
+            ai_daw_daemon::commands::list_sound_memories,
+            ai_daw_daemon::commands::save_sound_memory,
+            ai_daw_daemon::commands::update_sound_memory,
+            ai_daw_daemon::commands::delete_sound_memory,
+            ai_daw_daemon::commands::apply_sound_memory,
+            ai_daw_daemon::mcp::mcp_status,
+            ai_daw_daemon::mcp::set_mcp_config,
+            ai_daw_daemon::agent::agent_config,
+            ai_daw_daemon::agent::agent_set_config,
+            ai_daw_daemon::agent::agent_models,
+            ai_daw_daemon::agent::agent_test,
+            ai_daw_daemon::agent::agent_sessions,
+            ai_daw_daemon::agent::agent_session,
+            ai_daw_daemon::agent::agent_delete_session,
+            ai_daw_daemon::agent::agent_set_head,
+            ai_daw_daemon::agent::agent_send,
+            ai_daw_daemon::agent::agent_cancel,
+            ai_daw_daemon::agent::agent_running,
+            ai_daw_daemon::cli::cli_status,
+            ai_daw_daemon::cli::install_cli,
+            ai_daw_daemon::cli::uninstall_cli,
+            ai_daw_daemon::manager::plugin_manager_registry,
+            ai_daw_daemon::manager::plugin_manager_installed,
+            ai_daw_daemon::manager::plugin_manager_foreign,
+            ai_daw_daemon::manager::plugin_manager_install,
+            ai_daw_daemon::manager::plugin_manager_resolve_url,
+            ai_daw_daemon::manager::plugin_manager_import,
+            ai_daw_daemon::manager::plugin_manager_remove,
+            ai_daw_daemon::manager::plugin_manager_open,
+            ai_daw_daemon::manager::plugin_manager_network,
+            ai_daw_daemon::manager::plugin_manager_set_network,
+            ai_daw_daemon::manager::plugin_manager_probe_proxy,
+            ai_daw_daemon::manager::plugin_manager_proxy_status,
+            ai_daw_daemon::ai::ai_status,
+            ai_daw_daemon::ai::ai_models,
+            ai_daw_daemon::ai::ai_start,
+            ai_daw_daemon::ai::ai_cancel,
+            ai_daw_daemon::voices::voice_list,
+            ai_daw_daemon::voices::voice_save,
+            ai_daw_daemon::voices::voice_update,
+            ai_daw_daemon::voices::voice_delete,
+            ai_daw_daemon::singing::singing_models,
+            ai_daw_daemon::singing::singing_status,
+            ai_daw_daemon::singing::singing_render,
+            ai_daw_daemon::singing::singing_cancel,
+            ai_daw_daemon::svc::svc_models,
+            ai_daw_daemon::svc::svc_status,
+            ai_daw_daemon::svc::svc_render,
+            ai_daw_daemon::svc::svc_cancel,
+            ai_daw_daemon::models::model_catalog,
+            ai_daw_daemon::models::model_download,
+            ai_daw_daemon::manager::model_save_hf_token,
+            ai_daw_daemon::manager::model_hf_token_status,
+            ai_daw_daemon::models::model_cancel,
+            ai_daw_daemon::models::model_remove,
+            ai_daw_daemon::models::model_reveal,
+            ai_daw_daemon::models::model_resolve_url,
+            ai_daw_daemon::models::model_probe,
+            ai_daw_daemon::paths::disk_free_bytes,
+            ai_daw_daemon::backends::ai_backend_info,
+            ai_daw_daemon::backends::ai_set_backend,
+            ai_daw_daemon::runtimes::ai_runtime_catalog,
+            ai_daw_daemon::runtimes::ai_runtime_discover,
+            ai_daw_daemon::runtimes::ai_runtime_import,
+            ai_daw_daemon::runtimes::ai_runtime_install,
+            ai_daw_daemon::runtimes::ai_runtime_cancel,
+            ai_daw_daemon::runtimes::ai_runtime_busy,
+            ai_daw_daemon::runtimes::ai_runtime_remove,
+            ai_daw_daemon::runtimes::ai_runtime_reveal,
+            ai_daw_daemon::yue::ai_yue_catalog,
+            ai_daw_daemon::yue::ai_yue_install,
+            ai_daw_daemon::yue::ai_yue_import,
+            ai_daw_daemon::yue::ai_yue_cancel,
+            ai_daw_daemon::yue::ai_yue_remove,
+            ai_daw_daemon::yue::ai_yue_reveal,
+            ai_daw_daemon::yue::ai_yue_select,
+            ai_daw_daemon::yue_engine::ai_yue_engine_status,
+            ai_daw_daemon::yue_engine::ai_yue_engine_log,
+            ai_daw_daemon::yue_engine::ai_yue_cuda_perf,
+            ai_daw_daemon::yue_engine::ai_yue_set_cuda_perf,
+            ai_daw_daemon::yue_engine::ai_yue_engine_start,
+            ai_daw_daemon::yue_engine::ai_yue_engine_stop,
+            ai_daw_daemon::yue_engine::ai_yue_compose,
+            ai_daw_daemon::yue_engine::ai_yue_compose_cancel,
+            ai_daw_daemon::yue_engine::ai_yue_import_abc,
+            ai_daw_daemon::yue_engine::ai_yue_score,
+            ai_daw_daemon::yue_engine::ai_yue_record,
+            ai_daw_daemon::yue_engine::ai_yue_continuable,
+            ai_daw_daemon::yue_engine::ai_yue_lora,
+            ai_daw_daemon::yue_engine::ai_yue_set_lora,
+            ai_daw_daemon::yue_transcribe::ai_yue_transcribe,
+            ai_daw_daemon::yue_transcribe::ai_yue_transcribe_cancel,
+            ai_daw_daemon::yue_midi::ai_yue_midi_abc,
+            ai_daw_daemon::yue_lyrics::ai_yue_lyrics,
+            ai_daw_daemon::yue_lyrics::ai_yue_lyrics_cancel,
         ])
         .build(tauri::generate_context!())
         .expect("error while building ai-daw");
@@ -840,13 +820,13 @@ pub fn run() {
         // 守卫不会触发——只靠 10 秒一次的自动保存，最近一次保存之后的改动（比如刚添加的
         // 效果器）会整段丢失。这里由后端兜底再存一次会话缓存。
         if let tauri::RunEvent::ExitRequested { .. } = event {
-            if let Err(err) = commands::write_session(app_handle) {
+            if let Err(err) = ai_daw_daemon::commands::write_session(app_handle) {
                 eprintln!("退出时写会话缓存失败：{err}");
             }
             // 会话缓存之外再留一份历史：下次打开即使点了「新建工程」，也能从历史回去。
-            commands::remember_before_exit(app_handle);
+            ai_daw_daemon::commands::remember_before_exit(app_handle);
             // 别把 yue-server 留在后台占着几个 GB 显存。
-            yue_engine::shutdown_on_exit();
+            ai_daw_daemon::yue_engine::shutdown_on_exit();
         }
     });
 }

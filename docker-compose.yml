@@ -1,0 +1,29 @@
+services:
+  aidawd:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aidawd:local
+    container_name: aidawd
+    # 容器里必须绑 0.0.0.0，端口映射才有意义（Dockerfile 的 ENTRYPOINT 已带 --lan）。
+    ports:
+      - "28430:28430"
+    volumes:
+      - aidaw-data:/data
+      # 前端产物：先在宿主机 `npm run build`，再把 `dist/` 只读挂进来。
+      # 不挂也能用——只是没有界面，只有 `/rpc` API。
+      - ./dist:/web:ro
+    environment:
+      # 想固定 token 就设它；不设则用数据卷里已生成的，没有就新建并打印到日志。
+      AIDAW_TOKEN: ${AIDAW_TOKEN:-}
+      AIDAW_WEB_DIR: /web
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:28430/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 25s
+
+volumes:
+  aidaw-data:

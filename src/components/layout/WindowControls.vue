@@ -9,17 +9,20 @@ import { ref, onMounted, onUnmounted } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Tooltip from "@/components/common/Tooltip.vue";
 import { useI18n } from "@/i18n";
+import { isTauri } from "@/utils/platform";
 
 const i18n = useI18n();
 const isMaximized = ref(false);
-const appWindow = getCurrentWindow();
+// 浏览器里没有窗口控件：整块按钮不渲染（模板里用 `v-if="appWindow"` 兜住）。
+const appWindow = isTauri() ? getCurrentWindow() : null;
 
 let unlisten: (() => void) | null = null;
 
 onMounted(async () => {
+  if (!appWindow) return;
   isMaximized.value = await appWindow.isMaximized();
   unlisten = await appWindow.onResized(() => {
-    void appWindow.isMaximized().then((v) => (isMaximized.value = v));
+    void appWindow?.isMaximized().then((v) => (isMaximized.value = v));
   });
 });
 
@@ -34,7 +37,7 @@ onUnmounted(() => {
       <button
         class="window-control-btn"
         :aria-label="i18n.t('window.minimize')"
-        @click="appWindow.minimize()"
+        @click="appWindow?.minimize()"
       >
         <svg width="12" height="12" viewBox="0 0 11 11" aria-hidden="true">
           <rect x="0.5" y="5" width="10" height="1" fill="currentColor" rx="0.5" />
@@ -48,7 +51,7 @@ onUnmounted(() => {
       <button
         class="window-control-btn"
         :aria-label="isMaximized ? i18n.t('window.restore') : i18n.t('window.maximize')"
-        @click="appWindow.toggleMaximize()"
+        @click="appWindow?.toggleMaximize()"
       >
         <svg v-if="isMaximized" width="12" height="12" viewBox="0 0 11 11" aria-hidden="true">
           <rect
@@ -87,7 +90,7 @@ onUnmounted(() => {
       <button
         class="window-control-btn window-control-close"
         :aria-label="i18n.t('window.close')"
-        @click="appWindow.close()"
+        @click="appWindow?.close()"
       >
         <svg width="12" height="12" viewBox="0 0 11 11" aria-hidden="true">
           <path

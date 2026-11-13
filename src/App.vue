@@ -22,6 +22,7 @@ import WelcomeDialog from "@/components/onboarding/WelcomeDialog.vue";
 import GuidedTour from "@/components/onboarding/GuidedTour.vue";
 import type { WelcomeStart } from "@/types/onboarding";
 import { useProjectSync } from "@/composables/useProjectSync";
+import { useWebMonitor } from "@/composables/useWebMonitor";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
 import { useEngineEventsStore } from "@/stores/engineEvents";
@@ -76,6 +77,8 @@ const route = useRoute();
 // 二级窗口改工程（例如合成器窗口切预设换掉整条效果链）时，主窗口也能立刻跟上——
 // 否则主窗口会拿着一条过时的效果链，按过时序号打开效果界面（见 open_effect_window）。
 useProjectSync();
+// 浏览器里播放时收 daemon 推来的 PCM（桌面端不启用，声音从本机声卡出）。
+useWebMonitor();
 
 /** 设置页独占中栏：不显示音轨栏与右侧面板。 */
 const isSettings = computed(() => route.path.startsWith("/settings"));

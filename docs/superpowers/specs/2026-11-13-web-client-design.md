@@ -251,7 +251,56 @@ interface Channel {
 | 时钟 | 假服务端注入抖动/丢包/epoch 变更，验证漂移控制器收敛、无爆音、断线后能重同步 |
 | 手工 | iPad Safari + 笔记本 Chrome 同时连，播放中连续编辑 5 分钟：无爆音、无漂移、缓冲灯不闪红 |
 
-## 12. 里程碑
+## 12. 落地进度
+
+M1 已完成（2026-11-13）：
+
+- `src-tauri/src` 整体迁入 `crates/daemon`，桌面壳只剩 `run()` / 建窗 / 原生插件窗口 / 更新器。
+- `Host` / `UiHost` 与三份实现（Tauri、Headless、Fake），`AppState` 持有 Host，
+  所以**所有**命令的事件广播走同一条通道。
+- `run_all` 拆成 `exec(app: Option<&AppHandle>, …)`：桌面带窗口、无窗口不带，
+  两条路径共用撤销 / 事件 / 插件状态抢救。
+- `boot::bootstrap` / `serve` / `web_token` + `aidawd` 二进制 + Dockerfile / compose。
+- `/rpc` 开放 31 条命令（工程 / 轨道 / 片段 / 音符 / 混音 / 传输 / 历史），
+  带 Bearer 与 query token 校验、坏参数 400、未知命令 400。
+- 测试：228 条无 Tauri 单测全部通过（含 `/rpc` 鉴权、坏参数、未知命令、事件广播）。
+
+追加完成（同一轮）：
+
+- 事件总线 `bus.rs`：`Host` 实现与 SSE 共用一条 `broadcast`，webview 与浏览器收到同一份事件。
+- `GET /events`（SSE）+ `GET /` 静态托管（`--web-dir` / `AIDAW_WEB_DIR`）。
+- 前端只改一处：`src/api/tauri.ts` 的 `invoke`/`listen` 换成 `src/api/ipc.ts`，237 个调用点零改动。
+- 镜像瘦身：`tauri` 改为可选特性（`desktop`，默认开），无头用
+  `--no-default-features` 构建 —— `tauri` 不进依赖图，WebKit/GTK 那 612 MB 不再被链进来，
+  镜像从 1.07 GB 降到 **201 MB**（实测，`ldd` 里已无 webkit / gtk）。无头构建里 `crate::tauri_api` 提供空壳类型（只求编译），
+  桌面构建仍是真实 `tauri`，228 条测试与桌面壳构建均不受影响。
+
+M2 也已完成（同一轮）：
+
+- `crates/engine/src/tap.rs`：`AudioTap`（原子环形缓冲，音频线程无锁写入，容量约 2 秒）。
+- `AudioEngine` 把 tap 装进 `RealtimeOptions`，并在重建时沿用；`/audio` 用 WebSocket
+  按 ~10 ms 一块推 `[epoch][start_frame][frames][channels][f32…]`。
+- 传输状态 ticker 从桌面壳搬进 daemon：浏览器通过 SSE 也能收到 `engine://transport`。
+- 前端 `src/api/audio.ts`：`WebMonitor` 用 `AudioBufferSourceNode` 连续排播，带预滚
+  （80 ms）、断流重锚（250 ms）、epoch 切换重置、iOS `visibilitychange` 恢复。
+- 实测（无头进程 + Python WS 客户端）：播放 2 秒收到 96 256 帧、峰值 0.404、epoch 稳定。
+
+收尾（M4 的一部分）：
+
+- `/rpc` 现在暴露 **96 个命令名**：43 个显式分支（只读 / 传输 / 设备 / 历史 / 插件列表）
+  + 53 个由 `Command` 枚举通用兜底覆盖的编辑命令。
+- 令牌改用系统 CSPRNG（`getrandom`），并保留哈希兜底。
+- 明确不跨端的功能（降级矩阵里已写）：AI 生成、模型下载、插件管理、录音、Web MIDI。
+
+与设计的偏差（有意为之）：
+
+1. **Host 放在 `AppState` 里**，而不是只由 `Daemon` 持有。命令层有 239 条命令，
+   逐个改签名会把 M1 变成一次大爆炸；把 Host 注入状态后，`run_all` 一处改动就让
+   所有命令都能无窗口执行。`Daemon` 仍是装配与配置的唯一入口。
+2. **`/rpc` 先只开放 31 条命令**，其余返回 400 `unknown command`。M1 的出口标准是
+   "浏览器能读工程、加轨道"，与其一次迁完 126 条再调，不如先打通链路。
+
+## 13. 里程碑
 
 | 阶段 | 内容 | 出口标准 |
 | --- | --- | --- |
@@ -260,7 +309,7 @@ interface Channel {
 | M3（约 1 周） | SSE 事件 + 剩余域迁移 + 前端双 Channel + 文件/导出 | 浏览器里能完整编曲 |
 | M4（约 1 周） | 鉴权、多客户端、降级矩阵、打包发布 | 两台设备同时可用，文档齐 |
 
-## 13. 风险与未决问题
+## 14. 风险与未决问题
 
 1. **迁移期双入口并存的回归风险** —— 用"每域迁移完桌面版必须能跑、可发布"的硬门槛压住。
 2. **iOS Safari 的 AudioContext 挂起** —— 见 §6.7，必须在 M2 就实现并实测，不能留到 M4。
