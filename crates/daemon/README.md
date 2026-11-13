@@ -59,7 +59,7 @@ pub fn set_gain(state: State<'_, Arc<AppState>>, track: u64, gain_db: f32) -> Pr
 ## 无窗口运行
 
 ```bash
-cargo run -p ai-daw-daemon --bin ai-daw -- --data-dir /tmp/aidaw --port 28430 --token devtoken
+cargo run -p ai-daw-daemon --bin ai-daw -- --data-dir /tmp/ai-daw --port 28430 --token devtoken
 curl -s -H "Authorization: Bearer devtoken" http://127.0.0.1:28430/rpc/get_project | head -c 200
 curl -s -H "Authorization: Bearer devtoken" -H "content-type: application/json" \
      -d '{"name":"Lead"}' http://127.0.0.1:28430/rpc/add_track | head -c 200
