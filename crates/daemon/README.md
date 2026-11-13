@@ -118,8 +118,11 @@ docker compose up --build
 | 触发 | 产出标签 |
 | --- | --- |
 | push `main` | `latest`、`sha-<短 sha>` |
-| push `v1.7.0` | `1.7.0`、`1.7`、`latest`、`sha-<短 sha>` |
-| 手动触发 | `sha-<短 sha>` |
+| push `v1.7.0` | **`1.7.0`**、**`1.7`**、`latest`、`sha-<短 sha>` |
+| 手动触发 | `latest`、`sha-<短 sha>` |
+
+构建按 **digest** 推送，仓库里不会出现 `main-amd64` 这类中间标签；两个架构的 digest
+最后一个 job 合成多架构 manifest。
 
 镜像名是 `<DOCKERHUB_USERNAME>/ai-daw`，需要在仓库里配两个 Secret：
 

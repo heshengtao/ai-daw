@@ -1,18 +1,18 @@
 name: Docker (ai-daw)
 
-# 无头后端镜像：`ai-daw` 只跑工程引擎 + HTTP API，不链 WebKit。
+# 无头后端镜像：只跑工程引擎 + HTTP API，不链 WebKit。
 # 推送到：ailm32442/ai-daw
 #
-# Docker Hub 账号写死为 ailm32442；只需要一个 Secret：
-#   DOCKERHUB_TOKEN  Docker Hub Access Token（Read & Write）
+# 只需要一个 Secret：DOCKERHUB_TOKEN（Docker Hub Access Token，Read & Write）。
 #
-# 标签规则：
-#   main 分支   → latest、sha-<短 sha>
-#   v1.7.0 tag  → 1.7.0、1.7、latest、sha-<短 sha>
-#   手动触发    → sha-<短 sha>
+# 标签策略（和 git tag 对齐）：
+#   v1.7.1  → 1.7.1、1.7、latest、sha-<短 sha>
+#   main    → latest、sha-<短 sha>
 #
-# 架构：amd64 与 arm64 各用一台**原生** runner 构建（不走 QEMU —— Rust 全量 release
-# 编译在模拟层里要一小时起步），最后由 `imagetools create` 合成多架构 manifest。
+# 架构：amd64 / arm64 各用一台原生 runner 构建（不走 QEMU），但**按 digest 推送**——
+# 不再产生 `main-amd64` 这类中间标签：每台机器只交出镜像 digest，最后在 merge 任务里
+# 用 `imagetools create` 把两个 digest 合成一份多架构 manifest。
+# 参考实现：ExamBot/.github/workflows/release-docker.yml
 
 on:
   push:
@@ -21,7 +21,6 @@ on:
   workflow_dispatch:
 
 env:
-  # 账号固定，避免每次 push 都能被一个可变 Secret 改掉目标仓库。
   DOCKERHUB_USERNAME: ailm32442
   IMAGE: ailm32442/ai-daw
 
@@ -44,18 +43,20 @@ jobs:
           fi
 
   build:
-    name: build (${{ matrix.arch }})
+    name: build (${{ matrix.platform }})
     needs: preflight
     if: needs.preflight.outputs.ready == 'true'
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: ubuntu-latest
-            arch: amd64
-          - platform: ubuntu-24.04-arm
-            arch: arm64
-    runs-on: ${{ matrix.platform }}
+          - platform: amd64
+            runner: ubuntu-latest
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -67,35 +68,51 @@ jobs:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Image metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE }}
-          # 只出「带架构后缀」的临时标签，公开的多架构标签在 merge 任务里合成。
-          tags: |
-            type=sha,format=short,prefix=,suffix=-${{ matrix.arch }}
-            type=ref,event=branch,suffix=-${{ matrix.arch }}
-            type=semver,pattern={{version}},suffix=-${{ matrix.arch }}
-
-      - name: Build and push (single arch)
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/${{ matrix.arch }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=ai-daw-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=ai-daw-${{ matrix.arch }}
+          platforms: linux/${{ matrix.platform }}
+          # 关键：不落任何 tag，只推 digest —— 仓库里因此不会出现 `-amd64` 这类标签。
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=aidawd-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=aidawd-${{ matrix.platform }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.platform }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
 
   merge:
-    name: multi-arch manifest
+    name: publish multi-arch
     needs: [preflight, build]
     if: needs.preflight.outputs.ready == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: digests
+          merge-multiple: true
+          pattern: digest-*
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
@@ -104,37 +121,27 @@ jobs:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Compose multi-arch tags
-        env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
-          SHA: ${{ github.sha }}
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest
+
+      - name: Create and push manifest
         run: |
           set -euo pipefail
-          short="${SHA:0:7}"
-          # 注意：metadata-action 的 `type=sha,prefix=` 会把前缀清空，实际推上去的是
-          # `<short>-<arch>`（**没有** `sha-` 前缀）。合成时按真实名字取。
-          sources="${IMAGE}:${short}-amd64 ${IMAGE}:${short}-arm64"
-
-          docker buildx imagetools create -t "${IMAGE}:sha-${short}" ${sources}
-
-          if [ "${REF_TYPE}" = "tag" ]; then
-            base="${REF_NAME#v}"          # v1.7.0 → 1.7.0
-            minor="${base%.*}"            # 1.7.0 → 1.7
-            tags="${base} latest"
-            # `v2` 这种没有次版本号的 tag：`${base%.*}` 还是它自己，别重复发布。
-            if [ "${minor}" != "${base}" ]; then
-              tags="${base} ${minor} latest"
-            fi
-            for tag in ${tags}; do
-              docker buildx imagetools create -t "${IMAGE}:${tag}" \
-                "${IMAGE}:${base}-amd64" "${IMAGE}:${base}-arm64"
-            done
-            echo "已发布：${tags} sha-${short}"
-          elif [ "${REF_NAME}" = "main" ]; then
-            docker buildx imagetools create -t "${IMAGE}:latest" \
-              "${IMAGE}:main-amd64" "${IMAGE}:main-arm64"
-            echo "已发布：latest sha-${short}"
-          else
-            echo "已发布：sha-${short}（非 main 分支，只出 sha 标签）"
-          fi
+          tags=$(echo "${META_TAGS}" | tr '\n' ' ' | xargs -n1 printf -- '-t %s ')
+          digests=""
+          for f in $(find digests -type f); do
+            digests="${digests} ${IMAGE}@sha256:$(basename "$f")"
+          done
+          echo "tags: ${tags}"
+          echo "digests: ${digests}"
+          docker buildx imagetools create ${tags} ${digests}
+        env:
+          META_TAGS: ${{ steps.meta.outputs.tags }}
