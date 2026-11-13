@@ -3,7 +3,7 @@
 AI DAW 的后端 crate：工程模型、音频引擎、插件宿主、本地 AI、MCP 服务，以及给浏览器用的 HTTP `/rpc`。
 
 它**不拥有窗口**。需要原生能力（对话框、插件编辑器窗口、主线程泵）时通过 `host::Host` 拿；
-桌面端（`src-tauri`）与无窗口进程（`aidawd`）各注入一份实现。于是同一套命令实现既服务
+桌面端（`src-tauri`）与无窗口进程（`ai-daw`）各注入一份实现。于是同一套命令实现既服务
 webview，也服务浏览器客户端。
 
 ```
@@ -12,7 +12,7 @@ crates/daemon/          ← 你在这里
 ├── src/daemon.rs       Daemon 容器（Arc<AppState> + Host + Config）
 ├── src/boot.rs         无窗口启动：bootstrap / serve / web_token
 ├── src/server/         axum：/rpc/{cmd}、/health、/commands
-├── src/bin/aidawd.rs   无窗口入口
+├── src/bin/ai-daw.rs   无窗口入口
 └── src/ …              原有后端模块（commands / audio / state / mcp / manager …）
 ```
 
@@ -59,7 +59,7 @@ pub fn set_gain(state: State<'_, Arc<AppState>>, track: u64, gain_db: f32) -> Pr
 ## 无窗口运行
 
 ```bash
-cargo run -p ai-daw-daemon --bin aidawd -- --data-dir /tmp/aidaw --port 28430 --token devtoken
+cargo run -p ai-daw-daemon --bin ai-daw -- --data-dir /tmp/aidaw --port 28430 --token devtoken
 curl -s -H "Authorization: Bearer devtoken" http://127.0.0.1:28430/rpc/get_project | head -c 200
 curl -s -H "Authorization: Bearer devtoken" -H "content-type: application/json" \
      -d '{"name":"Lead"}' http://127.0.0.1:28430/rpc/add_track | head -c 200
@@ -73,7 +73,7 @@ curl -s -H "Authorization: Bearer devtoken" -H "content-type: application/json" 
 
 ```bash
 npm run build                                    # 产出 dist/
-cargo run -p ai-daw-daemon --bin aidawd -- --token dev --port 28430 --web-dir dist
+cargo run -p ai-daw-daemon --bin ai-daw -- --token dev --port 28430 --web-dir dist
 # 打开 http://127.0.0.1:28430/#token=dev
 ```
 
@@ -84,8 +84,8 @@ cargo run -p ai-daw-daemon --bin aidawd -- --token dev --port 28430 --web-dir di
 ## Docker
 
 ```bash
-docker build -t aidawd .
-docker run --rm -p 28430:28430 -v aidaw-data:/data aidawd
+docker build -t ai-daw .
+docker run --rm -p 28430:28430 -v ai-daw-data:/data ai-daw
 # 或
 docker compose up --build
 ```
@@ -95,12 +95,12 @@ docker compose up --build
 容器里没有声卡：`/health` 会显示 `"audio": false`，日志里有 ALSA 的探测报错，这是正常的
 ——`/rpc` 的工程编辑、撤销、导入导出都不依赖输出设备。
 
-> 已实测：在 Debian 13 + webkit2gtk-4.1 环境下 `cargo build --release -p ai-daw-daemon --bin aidawd`
-> 通过，容器内 `aidawd` 能起服务、`/health` 返回 ok、`/rpc/add_track` 能改工程。
+> 已实测：在 Debian 13 + webkit2gtk-4.1 环境下 `cargo build --release -p ai-daw-daemon --bin ai-daw`
+> 通过，容器内 `ai-daw` 能起服务、`/health` 返回 ok、`/rpc/add_track` 能改工程。
 > 本机 Docker Hub 不可达，所以仓库里的 `Dockerfile`（`rust:1-bookworm` / `debian:bookworm-slim`）
 > 未在本地跑通完整镜像构建，包清单与运行期依赖已按 `ldd` 实测结果对齐。
 
-> **体积（实测）**：`aidawd:latest` = **201 MB**（二进制 20 MB + Debian slim 底座 +
+> **体积（实测）**：`ai-daw:latest` = **201 MB**（二进制 20 MB + Debian slim 底座 +
 > libasound2 / libssl3 / libxcb1 / libx11-6 / ca-certificates）。之前带 WebKit 的版本是
 > 1.07 GB —— 现在 `ldd` 里**没有任何 webkit / gtk**。
 >

@@ -34,8 +34,8 @@ jobs:
       - name: Test (headless, no Tauri)
         run: cargo test -p ai-daw-daemon --lib --no-default-features
 
-      - name: Build aidawd
-        run: cargo build --release -p ai-daw-daemon --no-default-features --bin aidawd
+      - name: Build ai-daw
+        run: cargo build --release -p ai-daw-daemon --no-default-features --bin ai-daw
 
   web:
     name: web / build

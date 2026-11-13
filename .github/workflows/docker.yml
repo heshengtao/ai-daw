@@ -1,6 +1,6 @@
-name: Docker (aidawd)
+name: Docker (ai-daw)
 
-# 无头后端镜像：`aidawd` 只跑工程引擎 + HTTP API，不链 WebKit。
+# 无头后端镜像：`ai-daw` 只跑工程引擎 + HTTP API，不链 WebKit。
 # 推送到：<DOCKERHUB_USERNAME>/ai-daw
 #
 # 需要的仓库 Secrets：
@@ -87,8 +87,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=aidawd-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=aidawd-${{ matrix.arch }}
+          cache-from: type=gha,scope=ai-daw-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=ai-daw-${{ matrix.arch }}
 
   merge:
     name: multi-arch manifest

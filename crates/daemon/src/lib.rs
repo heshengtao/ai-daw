@@ -59,7 +59,7 @@ use std::time::Instant;
 /// 进程入口时刻：所有「启动到哪一步花了多久」都以此为基准写进日志。
 static BOOT: OnceLock<Instant> = OnceLock::new();
 
-/// 在进程入口调用一次（桌面壳的 `run()` 与 `aidawd` 的 `main()` 各调一次）。
+/// 在进程入口调用一次（桌面壳的 `run()` 与 `ai-daw` 的 `main()` 各调一次）。
 pub fn mark_boot() {
     let _ = BOOT.set(Instant::now());
 }

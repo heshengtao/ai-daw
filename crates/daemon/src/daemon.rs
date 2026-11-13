@@ -1,6 +1,6 @@
 //! 后端容器：一份共享状态 + 一个宿主实现 + 一份配置。
 //!
-//! 桌面端与 `aidawd` 都构造它，命令实现只认它——不认 Tauri，也不认 axum。
+//! 桌面端与 `ai-daw` 都构造它，命令实现只认它——不认 Tauri，也不认 axum。
 //! 这样同一批 `*_impl` 既能被 webview 的命令薄壳调用，也能被 HTTP 的 `/rpc` 调用。
 
 use std::path::PathBuf;
@@ -36,7 +36,7 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    /// 装配一个后端。`state` 与 `host` 都由外壳提供（桌面端或 `aidawd`）。
+    /// 装配一个后端。`state` 与 `host` 都由外壳提供（桌面端或 `ai-daw`）。
     pub fn new(state: Arc<AppState>, host: Arc<dyn Host>, cfg: Config) -> Arc<Self> {
         Arc::new(Self { state, host, cfg })
     }

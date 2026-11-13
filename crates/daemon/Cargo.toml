@@ -17,7 +17,7 @@ default = ["desktop"]
 desktop = ["dep:tauri"]
 
 [dependencies]
-# 过渡期保留：命令层还要用 `#[tauri::command]` 宏与 `State` 类型。`aidawd`（无窗口
+# 过渡期保留：命令层还要用 `#[tauri::command]` 宏与 `State` 类型。`ai-daw`（无窗口
 # 二进制）运行时不初始化任何 Tauri App，只借用宏生成的那层薄壳。
 #
 # 关掉默认特性会让 `AppHandle` 变成 `AppHandle<R>`（失去 `Wry` 默认参数），

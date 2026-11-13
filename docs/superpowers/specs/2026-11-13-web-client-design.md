@@ -45,7 +45,7 @@ AI DAW 现在是 Tauri 桌面应用：界面在 webview 里，工程模型、音
 | 路径 | 做法 | 判断 |
 | --- | --- | --- |
 | ① 进程内网桥 | 在 `src-tauri` 里再起一个 axum，转发到现有命令 | 一周可验证，但后端永远绑着 Tauri，浏览器版必须依赖桌面 App 开着 |
-| ② headless daemon（**采纳**） | 抽出 `crates/daemon`，命令实现只依赖 `Host` trait；桌面 App 与 `aidawd` 都是它的外壳 | 终态干净，一条后端两种前端 |
+| ② headless daemon（**采纳**） | 抽出 `crates/daemon`，命令实现只依赖 `Host` trait；桌面 App 与 `ai-daw` 都是它的外壳 | 终态干净，一条后端两种前端 |
 | ③ 先①后② | 先网桥验证推流，再按域迁移 | 把风险最高的事串行化，不采纳 |
 
 采纳 ② 的理由：这个方案里唯一**不确定**的只有"WiFi 下 50 ms 能不能听"，但重构本身是确定的机械工作量。
@@ -54,7 +54,7 @@ AI DAW 现在是 Tauri 桌面应用：界面在 webview 里，工程模型、音
 ## 4. 进程与部署拓扑
 
 ```
-aidawd（库 + 二进制）                    桌面 App（Tauri）
+ai-daw（库 + 二进制）                    桌面 App（Tauri）
 ┌────────────────────────────┐          ┌────────────────────────────┐
 │ Engine / AudioEngine       │          │ 同一份 daemon（进程内嵌）   │
 │ 插件宿主 / MCP             │          │ + webview 窗口              │
@@ -69,7 +69,7 @@ aidawd（库 + 二进制）                    桌面 App（Tauri）
 硬约束：
 
 1. **`crates/daemon` 是可嵌入的库**：`Daemon::start(Config) -> Handle`。桌面 App 的 `lib.rs` 调它，
-   `aidawd` 的 `main.rs` 也调它。后端只有一份实现。
+   `ai-daw` 的 `main.rs` 也调它。后端只有一份实现。
 2. **桌面能力通过 `UiHost` 注入**：只有 Tauri 外壳提供原生对话框、插件原生窗口、主线程泵。
 3. **端口与绑定**：默认 `127.0.0.1:28430`（与 vite dev 的 28420 分开，也避开 MCP 的 50562）；
    `--lan` 才绑 `0.0.0.0`。
@@ -260,7 +260,7 @@ M1 已完成（2026-11-13）：
   所以**所有**命令的事件广播走同一条通道。
 - `run_all` 拆成 `exec(app: Option<&AppHandle>, …)`：桌面带窗口、无窗口不带，
   两条路径共用撤销 / 事件 / 插件状态抢救。
-- `boot::bootstrap` / `serve` / `web_token` + `aidawd` 二进制 + Dockerfile / compose。
+- `boot::bootstrap` / `serve` / `web_token` + `ai-daw` 二进制 + Dockerfile / compose。
 - `/rpc` 开放 31 条命令（工程 / 轨道 / 片段 / 音符 / 混音 / 传输 / 历史），
   带 Bearer 与 query token 校验、坏参数 400、未知命令 400。
 - 测试：228 条无 Tauri 单测全部通过（含 `/rpc` 鉴权、坏参数、未知命令、事件广播）。

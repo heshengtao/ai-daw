@@ -16,7 +16,7 @@
 - `crates/daemon` 加入根 workspace；`src-tauri` 是**独立 workspace**，只通过 path 依赖引用 daemon。
 - 桌面版每一个 task 结束时都必须还能 `cd src-tauri && cargo build`。
 - 不允许改前端 `src/`（M1 纯后端）；`invoke` 的命令名与参数名保持不变。
-- 迁移期间 `crates/daemon` 允许依赖 `tauri`（为了 `#[tauri::command]` 宏与 `State` 类型），但 `aidawd` 运行时**不得初始化**任何 Tauri App。
+- 迁移期间 `crates/daemon` 允许依赖 `tauri`（为了 `#[tauri::command]` 宏与 `State` 类型），但 `ai-daw` 运行时**不得初始化**任何 Tauri App。
 - 新增代码注释用中文，与现有风格一致；每个 `pub` 项都要有 doc 注释。
 - 命令实现函数统一命名 `<name>_impl`，放在原文件里，Tauri 薄壳紧挨着它。
 
@@ -30,7 +30,7 @@
 | `crates/daemon/src/server/mod.rs` | axum `Router`、鉴权、`/health` |
 | `crates/daemon/src/server/rpc.rs` | `dispatch()`：命令名 → `*_impl` 的 match 表 |
 | `crates/daemon/src/boot.rs` | `bootstrap(host, cfg) -> Arc<Daemon>`：会话、预设、插件目录、管理器 |
-| `crates/daemon/src/bin/aidawd.rs` | 无窗口入口：解析参数、建 `HeadlessHost`、起服务 |
+| `crates/daemon/src/bin/ai-daw.rs` | 无窗口入口：解析参数、建 `HeadlessHost`、起服务 |
 | `src-tauri/src/tauri_host.rs` | `TauriHost`：`Host` + `UiHost` 的 Tauri 实现 |
 | `src-tauri/src/lib.rs` | 只保留 `run()`、建窗、窗口事件、`TauriHost` 装配 |
 
@@ -79,7 +79,7 @@ name = "ai_daw_daemon"
 path = "src/lib.rs"
 
 [dependencies]
-# 过渡期保留：命令层还要用 `#[tauri::command]` 宏与 `State` 类型；`aidawd`
+# 过渡期保留：命令层还要用 `#[tauri::command]` 宏与 `State` 类型；`ai-daw`
 # 运行时不初始化 App（见 host.rs 的说明）。
 tauri = { version = "2", features = [] }
 chrono = "0.4"
@@ -285,7 +285,7 @@ cargo test -p ai-daw-daemon --lib host::tests 2>&1 | tail -5
 ```rust
 //! 宿主抽象：后端需要的一切"进程外部"能力都从这里拿。
 //!
-//! 桌面端提供原生对话框与插件编辑器窗口；无窗口进程（`aidawd`）把这些能力
+//! 桌面端提供原生对话框与插件编辑器窗口；无窗口进程（`ai-daw`）把这些能力
 //! 明确降级为 `None`——**不静默失败**，调用方据此给出「此操作需要桌面端」的提示。
 
 use std::path::PathBuf;
@@ -499,7 +499,7 @@ cargo test -p ai-daw-daemon --lib daemon::tests 2>&1 | tail -5
 ```rust
 //! 后端容器：一份共享状态 + 一个宿主实现 + 一份配置。
 //!
-//! 桌面端与 `aidawd` 都构造它，命令实现只认它——不认 Tauri、也不认 axum。
+//! 桌面端与 `ai-daw` 都构造它，命令实现只认它——不认 Tauri、也不认 axum。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1219,11 +1219,11 @@ git add -A && git commit -m "feat(daemon): /rpc 分发与 axum 服务（含 toke
 
 ---
 
-### Task 8: `boot::bootstrap` 与 `aidawd` 无窗口入口
+### Task 8: `boot::bootstrap` 与 `ai-daw` 无窗口入口
 
 **Files:**
 - Create: `crates/daemon/src/boot.rs`
-- Create: `crates/daemon/src/bin/aidawd.rs`
+- Create: `crates/daemon/src/bin/ai-daw.rs`
 - Modify: `crates/daemon/src/lib.rs`（`pub mod boot;`）
 - Modify: `crates/daemon/Cargo.toml`（`clap`）
 
@@ -1232,7 +1232,7 @@ git add -A && git commit -m "feat(daemon): /rpc 分发与 axum 服务（含 toke
   - `boot::HeadlessHost`（`Host` 实现，`data_dir` 可配、`ui()` 为 `None`）
   - `boot::bootstrap(host: Arc<dyn Host>, cfg: Config) -> Arc<Daemon>`
   - `boot::serve(daemon: Arc<Daemon>, token: String) -> (SocketAddr, impl Future<Output = ()>)`
-  - `bin/aidawd`：`aidawd [--data-dir DIR] [--port 28430] [--lan] [--token TOKEN]`
+  - `bin/ai-daw`：`ai-daw [--data-dir DIR] [--port 28430] [--lan] [--token TOKEN]`
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1279,7 +1279,7 @@ cargo test -p ai-daw-daemon --lib boot::tests 2>&1 | tail -5
 ```rust
 //! 无窗口启动：会话、预设、插件目录、管理器，然后交给调用方决定听哪里。
 //!
-//! 桌面端的 `setup()` 与 `aidawd` 都调这里；**桌面独有的部分**（建窗、原生插件窗口、
+//! 桌面端的 `setup()` 与 `ai-daw` 都调这里；**桌面独有的部分**（建窗、原生插件窗口、
 //! 更新器）留在外壳里，不进来。
 
 use std::net::SocketAddr;
@@ -1343,10 +1343,10 @@ pub async fn serve(daemon: Arc<Daemon>, token: String) -> std::io::Result<(Socke
 
 `paths::init_with_data_dir` 是新增函数（现有 `paths.rs` 的路径解析都从 `app.path()` 取）。实现方式：在 `paths.rs` 里加一个 `static DATA_DIR: OnceLock<PathBuf>`，所有内部取目录的地方优先读它，读不到再走 `AppHandle`。M1 只要求 `data_dir()`/`config_dir()`/`models_dir()` 三个函数走这条覆盖，其余保持原样。
 
-- [ ] **Step 4: 写 `bin/aidawd.rs`**
+- [ ] **Step 4: 写 `bin/ai-daw.rs`**
 
 ```rust
-//! 无窗口入口：`aidawd --port 28430 --lan`。
+//! 无窗口入口：`ai-daw --port 28430 --lan`。
 //!
 //! 只跑后端 + HTTP 服务，不开窗口、不初始化 Tauri App。
 
@@ -1357,7 +1357,7 @@ use ai_daw_daemon::daemon::Config;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "aidawd", version, about = "AI DAW 的无窗口后端")]
+#[command(name = "ai-daw", version, about = "AI DAW 的无窗口后端")]
 struct Args {
     /// 数据目录；默认用系统配置目录下的 com.aidaw.app。
     #[arg(long)]
@@ -1391,7 +1391,7 @@ async fn main() -> std::io::Result<()> {
     let cfg = Config { data_dir, lan: args.lan, port: Some(args.port) };
     let daemon = bootstrap(host, cfg);
     let (addr, fut) = serve(daemon, token.clone()).await?;
-    println!("aidawd 已启动：http://{addr}");
+    println!("ai-daw 已启动：http://{addr}");
     println!("token: {token}");
     println!("试一下：curl -H 'Authorization: Bearer {token}' http://{addr}/rpc/get_project");
     fut.await;
@@ -1410,7 +1410,7 @@ cargo test -p ai-daw-daemon --lib boot::tests 2>&1 | tail -8
 - [ ] **Step 6: 手动冒烟**
 
 ```bash
-cargo run -p ai-daw-daemon --bin aidawd -- --data-dir /tmp/aidaw-smoke --port 28430 --token devtoken &
+cargo run -p ai-daw-daemon --bin ai-daw -- --data-dir /tmp/aidaw-smoke --port 28430 --token devtoken &
 sleep 3
 curl -s http://127.0.0.1:28430/health                                    # 期望 {"status":"ok",...}
 curl -s http://127.0.0.1:28430/rpc/get_project | head -c 120            # 期望 401 unauthorized
@@ -1423,7 +1423,7 @@ kill %1
 - [ ] **Step 7: 提交**
 
 ```bash
-git add -A && git commit -m "feat(daemon): boot::bootstrap 与 aidawd 无窗口入口"
+git add -A && git commit -m "feat(daemon): boot::bootstrap 与 ai-daw 无窗口入口"
 ```
 
 ---
@@ -1558,7 +1558,7 @@ cargo test --workspace 2>&1 | tail -15
 
 - [ ] **Step 2: 写 `crates/daemon/README.md`**
 
-内容必须包含：这个 crate 是什么、`Host`/`UiHost` 的契约、如何加一个新命令（`_impl` + 薄壳 + `dispatch` 分支三处）、`aidawd` 怎么跑、M2/M3 还要接什么（`/events`、`/audio`）。
+内容必须包含：这个 crate 是什么、`Host`/`UiHost` 的契约、如何加一个新命令（`_impl` + 薄壳 + `dispatch` 分支三处）、`ai-daw` 怎么跑、M2/M3 还要接什么（`/events`、`/audio`）。
 
 - [ ] **Step 3: 在 spec 的 §5.2 打勾**
 

@@ -1,6 +1,6 @@
 //! 无窗口启动：会话、预设、音色记忆库，然后交给调用方决定听哪里。
 //!
-//! 桌面端的 `setup()` 与 `aidawd` 都调这里；**桌面独有的部分**（建窗、原生插件窗口、
+//! 桌面端的 `setup()` 与 `ai-daw` 都调这里；**桌面独有的部分**（建窗、原生插件窗口、
 //! 更新器）留在外壳里，不进来。
 
 use std::net::SocketAddr;
@@ -94,7 +94,7 @@ pub async fn serve(
 
 /// 访问令牌：读 `<data_dir>/web-token`，没有就生成一份并落盘。
 ///
-/// 桌面端与 `aidawd` 共用同一个文件，所以浏览器在两种模式下填的是同一串 token。
+/// 桌面端与 `ai-daw` 共用同一个文件，所以浏览器在两种模式下填的是同一串 token。
 pub fn web_token(data_dir: &Path) -> String {
     let path = data_dir.join("web-token");
     if let Ok(text) = std::fs::read_to_string(&path) {

@@ -1,15 +1,15 @@
 services:
-  aidawd:
+  ai-daw:
     build:
       context: .
       dockerfile: Dockerfile
     image: ai-daw:local
-    container_name: aidawd
+    container_name: ai-daw
     # 容器里必须绑 0.0.0.0，端口映射才有意义（Dockerfile 的 ENTRYPOINT 已带 --lan）。
     ports:
       - "28430:28430"
     volumes:
-      - aidaw-data:/data
+      - ai-daw-data:/data
       # 前端产物：先在宿主机 `npm run build`，再把 `dist/` 只读挂进来。
       # 不挂也能用——只是没有界面，只有 `/rpc` API。
       - ./dist:/web:ro
@@ -26,4 +26,4 @@ services:
       start_period: 25s
 
 volumes:
-  aidaw-data:
+  ai-daw-data:
