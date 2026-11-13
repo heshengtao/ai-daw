@@ -25,8 +25,28 @@ env:
   IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/ai-daw-aidawd
 
 jobs:
+  preflight:
+    name: check secrets
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "${USER}" ] && [ -n "${TOKEN}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::仓库还没配 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN，跳过镜像发布"
+          fi
+
   build:
     name: build (${{ matrix.arch }})
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -72,7 +92,8 @@ jobs:
 
   merge:
     name: multi-arch manifest
-    needs: build
+    needs: [preflight, build]
+    if: needs.preflight.outputs.ready == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: docker/setup-buildx-action@v3
