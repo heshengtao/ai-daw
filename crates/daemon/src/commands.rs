@@ -707,7 +707,7 @@ pub(crate) fn set_tempo_as(app: &tauri::AppHandle, actor: Actor, bpm: f64) -> Pr
 /// 所以这里合成**一次**事务：一次应用、一次广播、一个撤销步骤。
 #[tauri::command]
 pub fn set_params(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     params: HashMap<String, f32>,
@@ -3964,7 +3964,7 @@ pub fn set_effect_param(
 /// 一次设置效果器的**多个**参数（「恢复默认值」走它：一次事务，只占一个撤销步骤）。
 #[tauri::command]
 pub fn set_effect_params(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     index: usize,
@@ -4873,7 +4873,7 @@ pub fn delete_sound_memory(
 /// 把一条音色记忆应用到轨道（一次事务：乐器 + 效果链 + 增益/声像）。
 #[tauri::command]
 pub fn apply_sound_memory(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     id: String,
     track: u64,
