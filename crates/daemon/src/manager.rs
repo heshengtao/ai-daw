@@ -19,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager};
+use crate::tauri_api::{AppHandle, Emitter, Manager};
 
 use ai_daw_host_vst3::CatalogPlugin;
 
@@ -2470,9 +2470,9 @@ impl InstallRequest {
 // ---------------------------------------------------------------------------
 
 /// 注册表列表（带缓存；`force` 强制联网刷新）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn plugin_manager_registry(app: AppHandle, force: bool) -> Result<RegistryIndex, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::tauri_api::async_runtime::spawn_blocking(move || {
         let cache_dir = registry_cache_dir(&app)?;
         // 源 = 配置的镜像（按顺序）+ 官方源兜底（环境变量优先级最高）。
         let network = app.state::<StoreRuntime>().network();
@@ -2494,7 +2494,7 @@ pub async fn plugin_manager_registry(app: AppHandle, force: bool) -> Result<Regi
 }
 
 /// 本管理器装过的插件（会清掉磁盘上已不存在的记录）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn plugin_manager_installed(app: AppHandle) -> Result<Vec<InstallRecord>, String> {
     let dirs = ManagedDirs::resolve(&app)?;
     let mut manifest = read_manifest(&dirs);
@@ -2505,12 +2505,12 @@ pub fn plugin_manager_installed(app: AppHandle) -> Result<Vec<InstallRecord>, St
 }
 
 /// 从注册表下载并安装（也是更新）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn plugin_manager_install(app: AppHandle, req: InstallRequest) -> Result<(), String> {
     let slug = req.slug.clone();
     let app_for_job = app.clone();
     let outcome =
-        tauri::async_runtime::spawn_blocking(move || install_from_registry(&app_for_job, &req))
+        crate::tauri_api::async_runtime::spawn_blocking(move || install_from_registry(&app_for_job, &req))
             .await
             .map_err(|e| e.to_string())?;
     // 失败时广播一次 `error`，前端好把那条进度条收掉并弹出原因。
@@ -2524,27 +2524,27 @@ pub async fn plugin_manager_install(app: AppHandle, req: InstallRequest) -> Resu
 ///
 /// 界面上的「复制下载链接」用它——保证复制到的和真去下的是同一个 URL，
 /// 而不是在前端重写一遍（两处规则迟早会不一致）。
-#[tauri::command]
-pub fn plugin_manager_resolve_url(runtime: tauri::State<'_, StoreRuntime>, url: String) -> String {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn plugin_manager_resolve_url(runtime: crate::tauri_api::State<'_, StoreRuntime>, url: String) -> String {
     rewrite_download_url(&url, &runtime.network().download_prefix)
 }
 
 /// 导入本地 `.vst3` / `.clap`（macOS 上还有 `.component`）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn plugin_manager_import(app: AppHandle, path: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || import_local(&app, &path))
+    crate::tauri_api::async_runtime::spawn_blocking(move || import_local(&app, &path))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// 删除一条托管安装。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn plugin_manager_remove(app: AppHandle, key: String) -> Result<(), String> {
     remove_installed(&app, &key)
 }
 
 /// 在浏览器里打开下载页（安装器类型用）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn plugin_manager_open(url: String) -> Result<(), String> {
     open_external(&url)
 }
@@ -2552,7 +2552,7 @@ pub fn plugin_manager_open(url: String) -> Result<(), String> {
 /// 用户**自己装**的插件：扫描到、但不在托管库里的那些。
 ///
 /// 它们由系统标准目录 / 其他安装器管理，本管理器**只读**（不提供删除）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn plugin_manager_foreign(app: AppHandle) -> Result<Vec<ForeignPlugin>, String> {
     let dirs = ManagedDirs::resolve(&app)?;
     // VST3 / CLAP 的托管目录是应用数据目录，位置即身份；AU 装在**共享的**用户 Components
@@ -2589,8 +2589,8 @@ fn path_is_managed(path: &Path, dirs: &ManagedDirs, installed: &HashSet<PathBuf>
 }
 
 /// 读取插件源的网络配置（镜像 / 下载代理）。
-#[tauri::command]
-pub fn plugin_manager_network(runtime: tauri::State<'_, StoreRuntime>) -> StoreNetwork {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn plugin_manager_network(runtime: crate::tauri_api::State<'_, StoreRuntime>) -> StoreNetwork {
     // 不把 token 回传给界面：设置页只需要知道「有没有配」，用
     // [`model_hf_token_status`] 看掩码就够了。回传只会给凭据多一条外泄路径
     // （错误提示、日志、崩溃报告都从这条数据流上走）。
@@ -2608,8 +2608,8 @@ pub struct HfTokenStatus {
     pub hint: String,
 }
 
-#[tauri::command]
-pub fn model_hf_token_status(runtime: tauri::State<'_, StoreRuntime>) -> HfTokenStatus {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn model_hf_token_status(runtime: crate::tauri_api::State<'_, StoreRuntime>) -> HfTokenStatus {
     let token = runtime.network().hf_token;
     if token.is_empty() {
         return HfTokenStatus {
@@ -2632,9 +2632,9 @@ pub fn model_hf_token_status(runtime: tauri::State<'_, StoreRuntime>) -> HfToken
 }
 
 /// 写入插件源的网络配置（落 `store.json`）。空白项会被丢弃。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn plugin_manager_set_network(
-    runtime: tauri::State<'_, StoreRuntime>,
+    runtime: crate::tauri_api::State<'_, StoreRuntime>,
     registry_mirrors: Vec<String>,
     download_prefix: String,
     proxy_mode: ProxyMode,
@@ -2678,9 +2678,9 @@ pub fn plugin_manager_set_network(
 ///
 /// 单独成一个命令而不是塞进 `plugin_manager_set_network`：授权弹窗要在下载流程中间
 /// 立刻写入并重试，不该逼前端把整份网络配置回传一遍。传空串 = 清除。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn model_save_hf_token(
-    runtime: tauri::State<'_, StoreRuntime>,
+    runtime: crate::tauri_api::State<'_, StoreRuntime>,
     token: String,
 ) -> Result<(), String> {
     let token = token.trim().to_string();
@@ -2702,8 +2702,8 @@ pub struct ProxyStatus {
 }
 
 /// 当前配置会解析成什么代理（不发请求，设置页打开时就能显示）。
-#[tauri::command]
-pub fn plugin_manager_proxy_status(runtime: tauri::State<'_, StoreRuntime>) -> ProxyStatus {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn plugin_manager_proxy_status(runtime: crate::tauri_api::State<'_, StoreRuntime>) -> ProxyStatus {
     let resolved = resolve_proxy(&runtime.network());
     ProxyStatus {
         proxy: proxy_display(&resolved),
@@ -2740,9 +2740,9 @@ pub struct ProxyProbe {
 /// 这也是回答「我明明开了代理，为什么还是下不动」的唯一靠谱办法：它把
 /// 「解析到了哪个代理」与「这个代理能不能用」分开报——解析不到说明模式/地址不对，
 /// 解析到却连不上说明代理本身没在跑（代理软件退出后经常把系统代理设置留在原地）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn plugin_manager_probe_proxy(
-    runtime: tauri::State<'_, StoreRuntime>,
+    runtime: crate::tauri_api::State<'_, StoreRuntime>,
     proxy_mode: ProxyMode,
     proxy_url: String,
 ) -> Result<ProxyProbe, String> {
@@ -2754,7 +2754,7 @@ pub async fn plugin_manager_probe_proxy(
     let source = resolved.source.clone();
 
     let started = Instant::now();
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
+    let outcome = crate::tauri_api::async_runtime::spawn_blocking(move || {
         fetch_registry_from(&fetch_agent(resolved.proxy.as_ref()), REGISTRY_URL)
     })
     .await

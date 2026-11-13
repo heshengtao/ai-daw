@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use crate::tauri_api::Manager;
 
 use ai_daw_engine::model::TrackId;
 
@@ -110,7 +110,7 @@ pub fn list(state: &AppState) -> Vec<VoiceEntry> {
 
 /// 把一条参考声线存进音色库（写 WAV + 一条带「人声」标签的音色记忆）。
 pub fn save(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     state: &AppState,
     args: VoiceSaveArgs,
 ) -> Result<VoiceEntry, String> {
@@ -215,7 +215,7 @@ pub(crate) fn load_reference(
 
 /// 把来源读成「单声道 24 kHz」，并给一个缺省名字。
 fn read_source(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     state: &AppState,
     args: &VoiceSaveArgs,
 ) -> Result<(Vec<f32>, String, f64), String> {
@@ -284,8 +284,8 @@ fn to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
 }
 
 /// 列出人声音色库（新存的在前）。
-#[tauri::command]
-pub fn voice_list(state: tauri::State<'_, Arc<AppState>>) -> Vec<VoiceEntry> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn voice_list(state: crate::tauri_api::State<'_, Arc<AppState>>) -> Vec<VoiceEntry> {
     list(&state)
 }
 
@@ -294,12 +294,12 @@ pub fn voice_list(state: tauri::State<'_, Arc<AppState>>) -> Vec<VoiceEntry> {
 /// **异步 + 阻塞线程池**：这里要做解码、重采样、还有一遍 FFT 找「最适合当参考的 10 秒」，
 /// 一首 4 分钟的歌是几百毫秒到几秒的活。以前是同步命令（Tauri 的同步命令跑在主线程），
 /// 于是导入时窗口直接转圈、界面点不动。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn voice_save(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     args: VoiceSaveArgs,
 ) -> Result<VoiceEntry, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::tauri_api::async_runtime::spawn_blocking(move || {
         let state = app.state::<Arc<AppState>>();
         save(&app, &state, args)
     })
@@ -308,9 +308,9 @@ pub async fn voice_save(
 }
 
 /// 改名字 / 描述 / 标签。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn voice_update(
-    state: tauri::State<'_, Arc<AppState>>,
+    state: crate::tauri_api::State<'_, Arc<AppState>>,
     id: String,
     name: Option<String>,
     description: Option<String>,
@@ -320,8 +320,8 @@ pub fn voice_update(
 }
 
 /// 删除一条人声音色（连 WAV）。
-#[tauri::command]
-pub fn voice_delete(state: tauri::State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn voice_delete(state: crate::tauri_api::State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
     delete(&state, id)
 }
 

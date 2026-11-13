@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use tar::Archive as TarArchive;
-use tauri::{AppHandle, Emitter, Manager};
+use crate::tauri_api::{AppHandle, Emitter, Manager};
 
 use ai_daw_local_ai::engine::{self, EngineArchive, EnginePack, EngineSource};
 
@@ -418,7 +418,7 @@ fn usable(device: &str) -> bool {
 }
 
 /// 全部引擎后端的状态（下载管理器用）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_catalog(app: AppHandle) -> Vec<YueStatus> {
     statuses(&app)
 }
@@ -491,7 +491,7 @@ pub fn statuses(app: &AppHandle) -> Vec<YueStatus> {
 }
 
 /// 开始下载并安装一个引擎后端（后台线程；进度走 `engine://yue`）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_install(app: AppHandle, id: String) -> Result<(), String> {
     let target = parse_id(&id)?;
     if engine::installed(target.pack) {
@@ -530,7 +530,7 @@ pub fn ai_yue_install(app: AppHandle, id: String) -> Result<(), String> {
 ///
 /// 这是给「GitHub / 魔搭都连不上」或「已经手动下好包」的用户的兜底：不联网，
 /// 但仍逐包校验 sha256 / 体积，和下载路径一样严格。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_import(app: AppHandle, id: String, dir: String) -> Result<(), String> {
     let pack = parse_id(&id)?.pack;
     if downloader().running.load(Ordering::SeqCst) {
@@ -597,13 +597,13 @@ fn verify_archive(
 }
 
 /// 取消下载（线程在下一个数据块处停下，半截文件不会落地）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_cancel() {
     downloader().cancel.store(true, Ordering::Relaxed);
 }
 
 /// 删除一个已下载的后端（只删清单列出的文件）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_remove(app: AppHandle, id: String) -> Result<(), String> {
     let target = parse_id(&id)?;
     if cpu_shares_metal() && target.device == "cpu" {
@@ -623,7 +623,7 @@ pub fn ai_yue_remove(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 /// 在系统文件管理器里显示引擎目录。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_reveal(id: String) -> Result<(), String> {
     let pack = parse_id(&id)?.pack;
     let dir = engine::dir_of(pack);
@@ -632,7 +632,7 @@ pub fn ai_yue_reveal(id: String) -> Result<(), String> {
 }
 
 /// 记下用户挑的后端（`None` = 恢复「按显卡自动」）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_select(id: Option<String>) -> Result<(), String> {
     let path = engine::dir().join("preferred");
     match id {

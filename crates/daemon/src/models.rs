@@ -25,7 +25,7 @@ use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Emitter, Manager};
+use crate::tauri_api::{AppHandle, Emitter, Manager};
 
 use ai_daw_local_ai::models::catalog::{self, ModelEntry, ModelFile, ModelSource};
 
@@ -275,13 +275,13 @@ pub(crate) fn statuses(app: &AppHandle) -> Vec<ModelStatus> {
 }
 
 /// 列出全部模型与本地状态。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn model_catalog(app: AppHandle) -> Vec<ModelStatus> {
     statuses(&app)
 }
 
 /// 开始下载某个模型（后台线程；进度走 `engine://model`）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn model_download(app: AppHandle, id: String) -> Result<(), String> {
     let entry = catalog::by_id(&id).ok_or_else(|| format!("未知模型：{id}"))?;
     if !entry.files.iter().any(|f| !f.sources.is_empty()) {
@@ -304,7 +304,7 @@ pub fn model_download(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 /// 取消正在进行的下载（下载线程在下一个数据块处停下，并删掉半成品）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn model_cancel() {
     runtime().cancel.store(true, Ordering::Relaxed);
 }
@@ -317,7 +317,7 @@ pub(crate) fn busy() -> bool {
 /// 删除**已下载**的模型文件（只删下载目录里的，不动随包的资源文件）。
 ///
 /// 组条目会把整组文件都删掉（含子目录），这样「重下」才有干净的状态。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn model_remove(app: AppHandle, id: String) -> Result<(), String> {
     let entry = catalog::by_id(&id).ok_or_else(|| format!("未知模型：{id}"))?;
     let dir = entry_dir_path(&app, entry)?;
@@ -353,7 +353,7 @@ fn shared_with_installed(entry: &ModelEntry, filename: &str) -> bool {
 }
 
 /// 在系统文件管理器里显示模型文件（找不到就直接打开下载目录）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn model_reveal(app: AppHandle, id: String) -> Result<(), String> {
     let entry = catalog::by_id(&id).ok_or_else(|| format!("未知模型：{id}"))?;
     // 权重不一定躺在下载目录里：随包的在资源目录、开发时可能在仓库 `models/`、
@@ -375,9 +375,9 @@ pub fn model_reveal(app: AppHandle, id: String) -> Result<(), String> {
 ///
 /// 组条目逐个文件都有各自的地址，这里给的是**代表文件**（第一个）的地址。
 /// `auto` 偏好会联网探测一次连通性，故放到 `spawn_blocking`，不阻塞界面。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn model_resolve_url(app: AppHandle, id: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::tauri_api::async_runtime::spawn_blocking(move || {
         let entry = catalog::by_id(&id).ok_or_else(|| format!("未知模型：{id}"))?;
         let file = entry
             .primary()
@@ -417,9 +417,9 @@ pub struct SourceProbe {
 ///
 /// 只取代表文件（第一个）的各源：区域连通性跟具体文件无关，用户点「测试源」是为了
 /// 判断**该不该换国内 / 国外源**，逐个文件探一遍只会白等几十秒。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn model_probe(app: AppHandle, id: String) -> Result<Vec<SourceProbe>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::tauri_api::async_runtime::spawn_blocking(move || {
         let entry = catalog::by_id(&id).ok_or_else(|| format!("未知模型：{id}"))?;
         let file = entry
             .primary()

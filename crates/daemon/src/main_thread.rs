@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ai_daw_host_vst3::MainThreadDispatch;
-use tauri::AppHandle;
+use crate::tauri_api::AppHandle;
 
 /// 用 `AppHandle::run_on_main_thread` 实现的主线程派发。
 pub struct TauriMainThread {

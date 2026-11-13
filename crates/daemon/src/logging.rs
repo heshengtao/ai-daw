@@ -15,7 +15,7 @@ use std::sync::OnceLock;
 static LOG: OnceLock<PathBuf> = OnceLock::new();
 
 /// 装上日志：定文件位置、轮转、接管 panic。`setup` 一开始调一次。
-pub fn init(app: &tauri::AppHandle) {
+pub fn init(app: &crate::tauri_api::AppHandle) {
     // 用统一的数据目录解析：设置里把数据搬走之后，日志也跟着走。
     let Ok(dir) = crate::paths::config_dir(app) else {
         return;

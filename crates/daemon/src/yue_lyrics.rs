@@ -91,7 +91,7 @@ fn cancel_flag() -> &'static AtomicBool {
 }
 
 /// 取消当前抓歌词（杀掉一次性引擎进程；阻塞中的请求会立刻返回失败）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_lyrics_cancel() {
     cancel_flag().store(true, Ordering::Relaxed);
     kill_child();
@@ -481,7 +481,7 @@ fn vocals_only(samples: &[f32], channels: usize, sample_rate: f64) -> Option<Vec
 
 /// 同步跑一次抓歌词（界面异步包装 / MCP 共用）。
 pub fn lyrics_blocking(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     args: LyricsArgs,
 ) -> Result<LyricsOutcome, String> {
     let _busy = crate::yue_transcribe::BusyGuard::acquire()?;
@@ -558,12 +558,12 @@ pub fn lyrics_blocking(
 }
 
 /// 抓歌词（界面；分钟级，异步跑在阻塞线程池里）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ai_yue_lyrics(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     args: LyricsArgs,
 ) -> Result<LyricsOutcome, String> {
-    tauri::async_runtime::spawn_blocking(move || lyrics_blocking(&app, args))
+    crate::tauri_api::async_runtime::spawn_blocking(move || lyrics_blocking(&app, args))
         .await
         .map_err(|e| format!("抓歌词线程崩了：{e}"))?
 }

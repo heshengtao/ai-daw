@@ -205,13 +205,13 @@ fn group_lyrics(lyrics: &[(i64, String)]) -> String {
 }
 
 /// 把一个 MIDI 片段转成 ABC（界面「翻唱 → 工程内 MIDI」用；不改工程）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_midi_abc(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     track: u64,
     clip: Option<u64>,
 ) -> Result<MidiScore, String> {
-    use tauri::Manager;
+    use crate::tauri_api::Manager;
     let state = app.state::<crate::state::AppState>();
     let project = {
         let engine = state.engine.lock().unwrap();

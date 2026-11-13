@@ -10,7 +10,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tauri::{Emitter, Manager};
+use crate::tauri_api::{Emitter, Manager};
 
 use ai_daw_engine::audio::{AudioBuffer, DecodedAudio};
 use ai_daw_engine::command::Command;
@@ -127,8 +127,8 @@ impl AiRuntime {
 }
 
 /// 取当前任务状态。
-#[tauri::command]
-pub fn ai_status(state: tauri::State<'_, Arc<AppState>>) -> AiStatus {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_status(state: crate::tauri_api::State<'_, Arc<AppState>>) -> AiStatus {
     state.ai.status()
 }
 
@@ -146,7 +146,7 @@ pub struct AiModels {
 }
 
 /// 查询本地 AI 模型的可用情况（权重放在 `models/` 目录，见 `tools/fetch-models.sh`）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_models() -> AiModels {
     let available = ai_daw_local_ai::models::availability();
     AiModels {
@@ -159,8 +159,8 @@ pub fn ai_models() -> AiModels {
 
 /// 取消当前任务（下一次进度回调时停下，已处理的部分保留/丢弃由任务自己决定）。
 
-#[tauri::command]
-pub fn ai_cancel(state: tauri::State<'_, Arc<AppState>>) {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_cancel(state: crate::tauri_api::State<'_, Arc<AppState>>) {
     state.ai.cancel.store(true, Ordering::Relaxed);
 }
 
@@ -171,10 +171,10 @@ pub fn ai_cancel(state: tauri::State<'_, Arc<AppState>>) {
 /// `master` 作用于**整个工程的离线混音**（不看 `track`，`master` 参数只在它身上有意义）。
 /// `model` 在 `separate` / `to_midi` 上有意义：`separate` 选分离档（缺省 = 4 分轨的
 /// HTDemucs），`to_midi` 选转录档（缺省 = Basic Pitch，可选 `muscriptor-*`，走 audio.cpp）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_start(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
+    app: crate::tauri_api::AppHandle,
+    state: crate::tauri_api::State<'_, Arc<AppState>>,
     kind: String,
     track: u64,
     master: Option<MasterArgs>,
@@ -298,7 +298,7 @@ pub(crate) fn track_input(
 }
 
 /// 任务收尾：写摘要、清运行标志、广播一次终态。
-fn finish(app: &tauri::AppHandle, runtime: &AiRuntime, outcome: Result<String, String>) {
+fn finish(app: &crate::tauri_api::AppHandle, runtime: &AiRuntime, outcome: Result<String, String>) {
     {
         let mut message = runtime.message.lock().unwrap();
         *message = Some(match outcome {
@@ -313,7 +313,7 @@ fn finish(app: &tauri::AppHandle, runtime: &AiRuntime, outcome: Result<String, S
 
 /// 后台线程里跑的实际工作。
 fn run_job(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     runtime: &AiRuntime,
     kind: &str,
     input: &TrackInput,
@@ -386,7 +386,7 @@ fn run_job(
 /// 结果插到**源轨道的下一行**（而不是最末尾）：转 MIDI 的直觉是「结果就贴在原轨下面」。
 /// 多乐器的 MuScriptor 按乐器分组，每组一条 MIDI 轨——一次事务提交，一次撤销整体回退。
 fn transcribe_input(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     input: &TrackInput,
     samples: &[f32],
     channels: usize,
@@ -584,7 +584,7 @@ fn wav_from_samples(
 /// 方便两条轨道对比试听。素材窗口原样沿用源片段（`offset_frames` / `frames`）：处理的是
 /// 整个文件，新文件与旧文件逐帧等长，所以同样的窗口 = 同样的时间跨度与速度。
 fn enhance_input(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     input: &TrackInput,
     samples: &[f32],
     channels: usize,
@@ -729,7 +729,7 @@ fn separate_with_model(
 ///
 /// 一次事务提交全部 `AddAudioTrack`，因此一次撤销即可整体回退。返回新建轨道数。
 fn place_stems(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     input: &TrackInput,
     stems: &ai_daw_local_ai::models::Stems,
     channels: usize,
@@ -781,7 +781,7 @@ fn place_stems(
 ///
 /// `model` 选择模型（缺省 4 分轨）。返回新建轨道数。行为与界面一致（同一条命令管线、一次事务）。
 pub(crate) fn separate_track(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     track: u64,
     model: Option<String>,
 ) -> Result<usize, String> {
@@ -822,7 +822,7 @@ fn clip_window<'a>(samples: &'a [f32], channels: usize, source: &AudioSource) ->
 ///   小节线；没有重拍就退回 0）；
 /// - `length` → 素材窗口在新速度下的自然拍长（方框与素材等长），`rate` 复位到 1.0（原速）。
 fn apply_tempo_detection(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     input: &TrackInput,
     samples: &[f32],
     channels: usize,
@@ -888,7 +888,7 @@ fn apply_tempo_detection(
 }
 
 /// 同步跑一遍节拍检测（供 MCP 工具用；无进度回调，整体阻塞在调用线程）。
-pub(crate) fn detect_tempo_track(app: &tauri::AppHandle, track: u64) -> Result<String, String> {
+pub(crate) fn detect_tempo_track(app: &crate::tauri_api::AppHandle, track: u64) -> Result<String, String> {
     let state = app.state::<Arc<AppState>>();
     let input = track_input(&state, track, None)?;
     let audio = state.assets.load(&input.source.path)?;
@@ -903,7 +903,7 @@ pub(crate) fn detect_tempo_track(app: &tauri::AppHandle, track: u64) -> Result<S
 
 /// 同步跑一遍音频转 MIDI（供 MCP 工具用；无进度回调，整体阻塞在调用线程）。
 pub(crate) fn transcribe_track(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     track: u64,
     model: Option<&str>,
 ) -> Result<String, String> {
@@ -931,7 +931,7 @@ pub(crate) fn transcribe_track(
 
 /// 同步跑一遍降噪（供 MCP 工具用；`dsp = true` 走内置 DSP，即「乐器底噪降噪」）。
 pub(crate) fn enhance_track(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     track: u64,
     dsp: bool,
 ) -> Result<String, String> {
@@ -959,14 +959,14 @@ pub(crate) fn enhance_track(
 }
 
 /// 走与界面/代理同一条命令管线（会广播事件、进撤销历史）。
-fn commands_run(app: &tauri::AppHandle, command: Command) -> Result<(), String> {
+fn commands_run(app: &crate::tauri_api::AppHandle, command: Command) -> Result<(), String> {
     // `run_agent` 署名 `Agent("mcp")`；这里也用代理署名——它是「AI 动作」，会点亮 AI 指示。
     let _ = crate::commands::run_agent(app, command);
     Ok(())
 }
 
 /// 粗粒度进度：渲染与母带都是一整段不可打断的调用，只能报里程碑。
-fn step(runtime: &AiRuntime, app: &tauri::AppHandle, progress: f32) {
+fn step(runtime: &AiRuntime, app: &crate::tauri_api::AppHandle, progress: f32) {
     runtime.progress.store(
         (progress.clamp(0.0, 1.0) * 1000.0) as u32,
         Ordering::Relaxed,
@@ -981,7 +981,7 @@ fn step(runtime: &AiRuntime, app: &tauri::AppHandle, progress: f32) {
 ///
 /// 母带链本身是纯 DSP（`crates/mastering`）：响度归一 + 真峰值限幅 + 立体声宽度。
 fn run_master_job(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     runtime: &AiRuntime,
     options: &ai_daw_mastering::MasterOptions,
 ) -> Result<String, String> {
@@ -1020,7 +1020,7 @@ fn run_master_job(
 /// 两边的区别只在渲染调度（进度 / 取消），落地必须完全一致，否则同一首歌两条路径会得到
 /// 不同的轨道内容。
 fn land_master_audio(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     project: &ai_daw_engine::model::Project,
     processed: Vec<f32>,
     channels: usize,
@@ -1082,7 +1082,7 @@ fn land_master_audio(
 /// 与界面任务走同一段落地逻辑（[`land_master_audio`]），只是不经过 `AiRuntime` 的进度 /
 /// 取消状态机——MCP 调用本身就是阻塞的，再挂一个看不见的进度条没有意义。
 pub(crate) fn master_to_track(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     options: &ai_daw_mastering::MasterOptions,
 ) -> Result<String, String> {
     let state = app.state::<Arc<AppState>>();
@@ -1098,7 +1098,7 @@ pub(crate) fn master_to_track(
 }
 
 /// AI 产出的文件路径：应用数据目录 `local-ai/<kind>-<epochms>.wav`。
-fn ai_output_path(app: &tauri::AppHandle, kind: &str) -> Result<String, String> {
+fn ai_output_path(app: &crate::tauri_api::AppHandle, kind: &str) -> Result<String, String> {
     let dir = crate::paths::data_dir(app)?.join("local-ai");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()

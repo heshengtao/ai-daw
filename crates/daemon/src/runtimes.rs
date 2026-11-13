@@ -26,7 +26,7 @@ use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Emitter, Manager};
+use crate::tauri_api::{AppHandle, Emitter, Manager};
 
 use ai_daw_local_ai::backend::runtime;
 use ai_daw_local_ai::backend::runtime::{
@@ -172,7 +172,7 @@ fn has_core_library(dir: &Path) -> bool {
 }
 
 /// 全部运行时的状态（设置页用）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_runtime_catalog(app: AppHandle) -> Vec<RuntimeStatus> {
     statuses(&app)
 }
@@ -421,7 +421,7 @@ fn asset_of(id: &str) -> Result<&'static RuntimeAsset, String> {
 }
 
 /// 开始下载并安装一个运行时（后台线程；进度走 `engine://runtime`）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_runtime_install(app: AppHandle, id: String) -> Result<(), String> {
     // 引擎后端（`audiocpp-*`）与 ONNX Runtime 是两条安装路径，界面只认一个 id。
     if id.starts_with("audiocpp-") {
@@ -447,14 +447,14 @@ pub fn ai_runtime_install(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 /// 取消下载（线程在下一个数据块处停下，并删掉半成品）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_runtime_cancel() {
     crate::yue::ai_yue_cancel();
     downloader().cancel.store(true, Ordering::Relaxed);
 }
 
 /// 当前是否有运行时正在下载（界面挂载时用来纠正「卡在下载中」的状态）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_runtime_busy() -> bool {
     downloader().running.load(Ordering::SeqCst) || crate::yue::busy()
 }
@@ -463,7 +463,7 @@ pub fn ai_runtime_busy() -> bool {
 ///
 /// 文件被本进程映射时（Windows 删不掉已加载的 dll）不报错：记进「待删除」，
 /// 下次启动在加载任何 dylib 之前清掉。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_runtime_remove(app: AppHandle, id: String) -> Result<(), String> {
     if id.starts_with("audiocpp-") {
         return crate::yue::ai_yue_remove(app, id);
@@ -504,7 +504,7 @@ pub fn ai_runtime_remove(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 /// 在系统文件管理器里显示运行时目录。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_runtime_reveal(id: String) -> Result<(), String> {
     if id.starts_with("audiocpp-") {
         return crate::yue::ai_yue_reveal(id);
@@ -529,7 +529,7 @@ pub struct DiscoveredRuntime {
 }
 
 /// 扫描本机已有的 CUDA 版 ONNX Runtime（只做有限深度，设置页打开时调用）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_runtime_discover() -> Vec<DiscoveredRuntime> {
     // macOS 静态链接、也没有 CUDA 后端：没有要借的运行时。
     if ai_daw_local_ai::backend::runtime::statically_linked() {
@@ -547,7 +547,7 @@ pub fn ai_runtime_discover() -> Vec<DiscoveredRuntime> {
 }
 
 /// 把发现的那一份**复制**进应用自己的运行时目录（对方升级 / 卸载都不再影响我们）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_runtime_import(dir: String) -> Result<(), String> {
     let installed = ai_daw_local_ai::backend::runtime::import_cuda(std::path::Path::new(&dir))?;
     // 借来的这份同样是「装好了但本进程没加载」：CUDA 正在用时得重启才生效。

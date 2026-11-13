@@ -1,6 +1,6 @@
 # AI DAW 无头后端（aidawd）
 #
-# 只跑后端 + HTTP `/rpc`：不开窗口、不要显示器、不需要 WebView 运行期。
+# 只跑后端 + HTTP `/rpc`：不开窗口、不要显示器、不链 WebView。
 #
 # 构建：
 #   docker build -t aidawd .
@@ -10,26 +10,20 @@
 # 验证：
 #   curl http://127.0.0.1:28430/health
 #
-# 说明：M1 过渡期 `ai-daw-daemon` 仍依赖 `tauri`（只为 `#[tauri::command]` 宏），
-# 于是 `aidawd` 会真的链上 webkit2gtk / gtk3 / soup3（实测 `ldd` 确认），构建层要头文件、
-# 运行层要运行库，镜像因此偏大（约 1 GB）。等命令层与 Tauri 彻底解耦后两层都能瘦一大圈。
-#
-# 容器里没有声卡，所以 `/health` 会返回 `"audio": false`、日志里有一串 ALSA 报错——
-# 这**不影响** `/rpc`：工程编辑、撤销、导入导出都不需要输出设备。
+# 体积：二进制约 20 MB，运行层只要 libasound2 + libssl3 + ca-certificates，
+# 整镜像落在 120 MB 上下。**关键在于 `--no-default-features`**：它关掉 crate 的
+# `desktop` 特性，`tauri` 不进依赖图，WebKit/GTK 那一坨（约 612 MB）就不会被链进来。
 
 # syntax=docker/dockerfile:1
 
 # ---- 构建 ----
 FROM rust:1-bookworm AS builder
 
+# 无头构建只需要三样：pkg-config（找 libssl / alsa）、openssl 头、alsa 头。
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
         libssl-dev \
         libasound2-dev \
-        libwebkit2gtk-4.1-dev \
-        libgtk-3-dev \
-        libsoup-3.0-dev \
-        libjavascriptcoregtk-4.1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -42,7 +36,8 @@ COPY skills ./skills
 COPY src/data ./src/data
 COPY src-tauri/resources ./src-tauri/resources
 
-RUN cargo build --release -p ai-daw-daemon --bin aidawd
+RUN cargo build --release -p ai-daw-daemon --no-default-features --bin aidawd \
+    && strip /src/target/release/aidawd
 
 # ---- 运行 ----
 FROM debian:bookworm-slim
@@ -52,9 +47,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         libasound2 \
         libssl3 \
-        libwebkit2gtk-4.1-0 \
-        libgtk-3-0 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && find /usr/share/doc /usr/share/man /usr/share/locale -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
 
 COPY --from=builder /src/target/release/aidawd /usr/local/bin/aidawd
 
@@ -67,5 +61,5 @@ EXPOSE 28430
 # `--lan` 在容器里是**必须**的：容器内的 127.0.0.1 从外面到不了。
 ENTRYPOINT ["aidawd", "--data-dir", "/data", "--lan", "--port", "28430"]
 
-HEALTHCHECK --interval=15s --timeout=3s --start-period=25s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:28430/health || exit 1

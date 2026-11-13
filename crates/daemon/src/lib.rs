@@ -45,6 +45,7 @@ pub mod singing;
 pub mod sound_memories;
 pub mod state;
 pub mod svc;
+pub mod tauri_api;
 pub mod voices;
 pub mod yue;
 pub mod yue_engine;

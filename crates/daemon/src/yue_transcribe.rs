@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tauri::Manager;
+use crate::tauri_api::Manager;
 
 use ai_daw_local_ai::engine;
 use ai_daw_local_ai::models::catalog;
@@ -104,7 +104,7 @@ impl Drop for BusyGuard {
 }
 
 /// 取消当前转谱（杀掉一次性引擎进程；阻塞中的请求会立刻返回失败）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_transcribe_cancel() {
     cancel_flag().store(true, Ordering::Relaxed);
     kill_child();
@@ -125,7 +125,7 @@ fn kill_child() {
 ///
 /// 抓歌词（`yue_lyrics`）复用这一份：音频输入的解析规则只能有一套。
 pub(crate) fn load_input(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     audio: Option<&str>,
     track: Option<u64>,
     clip: Option<u64>,
@@ -448,7 +448,7 @@ fn parse_abc(text: &str) -> Result<String, String> {
 ///
 /// 会把写歌引擎停掉腾显存——**转谱和写歌不并行**，顺序永远是「先转谱，再按谱重唱」。
 pub fn transcribe_blocking(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     args: TranscribeArgs,
 ) -> Result<TranscribeOutcome, String> {
     let _busy = BusyGuard::acquire()?;
@@ -502,12 +502,12 @@ pub fn transcribe_blocking(
 }
 
 /// 转谱（界面；分钟级，异步跑在阻塞线程池里）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ai_yue_transcribe(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     args: TranscribeArgs,
 ) -> Result<TranscribeOutcome, String> {
-    tauri::async_runtime::spawn_blocking(move || transcribe_blocking(&app, args))
+    crate::tauri_api::async_runtime::spawn_blocking(move || transcribe_blocking(&app, args))
         .await
         .map_err(|e| format!("转谱线程崩了：{e}"))?
 }

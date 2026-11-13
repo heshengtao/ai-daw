@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tauri::{Emitter, Manager};
+use crate::tauri_api::{Emitter, Manager};
 
 use ai_daw_engine::audio::{AudioBuffer, DecodedAudio};
 use ai_daw_engine::command::Command;
@@ -84,7 +84,7 @@ impl SvcRuntime {
         self.cancel.load(Ordering::Relaxed)
     }
 
-    fn finish(&self, app: &tauri::AppHandle, outcome: Result<String, String>) {
+    fn finish(&self, app: &crate::tauri_api::AppHandle, outcome: Result<String, String>) {
         *self.message.lock().unwrap() = Some(match outcome {
             Ok(text) => text,
             Err(err) => format!("失败：{err}"),
@@ -107,7 +107,7 @@ pub struct SvcModels {
 }
 
 /// 查询模型状态。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn svc_models() -> SvcModels {
     use ai_daw_local_ai::models::catalog;
     let default = svc::soulx::default_precision();
@@ -121,14 +121,14 @@ pub fn svc_models() -> SvcModels {
 }
 
 /// 查询任务状态。
-#[tauri::command]
-pub fn svc_status(state: tauri::State<'_, Arc<AppState>>) -> SvcStatus {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn svc_status(state: crate::tauri_api::State<'_, Arc<AppState>>) -> SvcStatus {
     state.svc.status()
 }
 
 /// 取消当前任务（下一次进度回调时停下，什么都不落地）。
-#[tauri::command]
-pub fn svc_cancel(state: tauri::State<'_, Arc<AppState>>) {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn svc_cancel(state: crate::tauri_api::State<'_, Arc<AppState>>) {
     state.svc.cancel.store(true, Ordering::Relaxed);
 }
 
@@ -181,10 +181,10 @@ impl SwapArgs {
 }
 
 /// 开始一次替换（后台线程）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn svc_render(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
+    app: crate::tauri_api::AppHandle,
+    state: crate::tauri_api::State<'_, Arc<AppState>>,
     args: SwapArgs,
 ) -> Result<(), String> {
     if state.svc.running.swap(true, Ordering::SeqCst) {
@@ -218,7 +218,7 @@ pub fn svc_render(
 }
 
 /// 同步替换（MCP 工具用：整体阻塞在调用线程，返回一句摘要）。
-pub(crate) fn render_blocking(app: &tauri::AppHandle, args: &SwapArgs) -> Result<String, String> {
+pub(crate) fn render_blocking(app: &crate::tauri_api::AppHandle, args: &SwapArgs) -> Result<String, String> {
     let state = app.state::<Arc<AppState>>();
     let runtime = state.svc.clone();
     if runtime.running.swap(true, Ordering::SeqCst) {
@@ -232,7 +232,7 @@ pub(crate) fn render_blocking(app: &tauri::AppHandle, args: &SwapArgs) -> Result
 }
 
 /// 替换的共用实现（进度 / 取消 / 落地都在这里）。
-fn render(app: &tauri::AppHandle, runtime: &SvcRuntime, args: &SwapArgs) -> Result<String, String> {
+fn render(app: &crate::tauri_api::AppHandle, runtime: &SvcRuntime, args: &SwapArgs) -> Result<String, String> {
     let state = app.state::<Arc<AppState>>();
 
     // ---- 1. 目标片段（锁只在这里短暂持有）----
@@ -421,7 +421,7 @@ fn to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
 }
 
 /// 输出 WAV 路径（应用数据目录 `local-ai/`，与其它 AI 产物放一起）。
-fn output_path(app: &tauri::AppHandle, kind: &str) -> Result<String, String> {
+fn output_path(app: &crate::tauri_api::AppHandle, kind: &str) -> Result<String, String> {
     let dir = crate::paths::data_dir(app)?.join("local-ai");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()

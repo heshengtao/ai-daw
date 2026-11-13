@@ -35,7 +35,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tauri::{Emitter, Manager};
+use crate::tauri_api::{Emitter, Manager};
 
 use ai_daw_engine::command::Command as EngineCommand;
 use ai_daw_engine::model::AudioSource;
@@ -146,22 +146,22 @@ fn update(f: impl FnOnce(&mut EngineStatus)) {
     f(&mut engine_state().status.lock().unwrap());
 }
 
-fn emit_engine(app: &tauri::AppHandle) {
+fn emit_engine(app: &crate::tauri_api::AppHandle) {
     let _ = app.emit(EVENT_ENGINE, status());
 }
 
-fn emit_job(app: &tauri::AppHandle, job: &JobStatus) {
+fn emit_job(app: &crate::tauri_api::AppHandle, job: &JobStatus) {
     let _ = app.emit(EVENT_JOB, job.clone());
 }
 
 /// 当前引擎状态（界面初始化用）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_engine_status() -> EngineStatus {
     status()
 }
 
 /// 引擎日志的最后若干行（界面轮询用；日志只落文件，服务端没有 SSE）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_engine_log(lines: Option<usize>) -> String {
     log_tail(lines.unwrap_or(80).clamp(1, 500))
 }
@@ -175,8 +175,8 @@ pub(crate) fn composing() -> bool {
 }
 
 /// 把生成时落盘的 `.abc` 谱转成工程 MIDI 轨（乐谱视图读的是工程里的 MIDI）。
-#[tauri::command]
-pub fn ai_yue_import_abc(app: tauri::AppHandle, path: String) -> Result<String, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_yue_import_abc(app: crate::tauri_api::AppHandle, path: String) -> Result<String, String> {
     let text = std::fs::read_to_string(&path).map_err(|e| format!("读谱面失败：{e}"))?;
     let voices = crate::abc::parse(&text)?;
     if voices.is_empty() {
@@ -203,16 +203,16 @@ pub fn ai_yue_import_abc(app: tauri::AppHandle, path: String) -> Result<String, 
 }
 
 /// 引擎的 CUDA `cuda_perf` 预设开关（默认开；8 GB 显存的卡可关）。
-#[tauri::command]
-pub fn ai_yue_cuda_perf(app: tauri::AppHandle) -> bool {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_yue_cuda_perf(app: crate::tauri_api::AppHandle) -> bool {
     app.state::<crate::manager::StoreRuntime>()
         .network()
         .yue_cuda_perf
 }
 
 /// 写 `cuda_perf` 开关（下次启动引擎时生效）。
-#[tauri::command]
-pub fn ai_yue_set_cuda_perf(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_yue_set_cuda_perf(app: crate::tauri_api::AppHandle, enabled: bool) -> Result<(), String> {
     let runtime = app.state::<crate::manager::StoreRuntime>();
     let mut network = runtime.network();
     network.yue_cuda_perf = enabled;
@@ -220,13 +220,13 @@ pub fn ai_yue_set_cuda_perf(app: tauri::AppHandle, enabled: bool) -> Result<(), 
 }
 
 /// 读生成时落盘的 ABC 谱（写歌页「载入刚生成的谱」用）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_score(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("读谱面失败：{e}"))
 }
 
 /// 读一份生成记录 `.json`（界面把参数填回表单 = 重放）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_record(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("读生成记录失败：{e}"))
 }
@@ -288,8 +288,8 @@ fn record_conditions(audio: &str) -> (Option<String>, Option<String>, Option<Str
 ///
 /// 一条轨道可能已经续写过（多个音频片段）：取**最后一个**有音频的片段——续写总是接在
 /// 最新那一段后面，而不是回到整条轨道的开头。
-#[tauri::command]
-pub fn ai_yue_continuable(app: tauri::AppHandle) -> Vec<ContinuableTrack> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_yue_continuable(app: crate::tauri_api::AppHandle) -> Vec<ContinuableTrack> {
     let state = app.state::<Arc<AppState>>();
     let tracks: Vec<(u64, String)> = {
         let engine = state.engine.lock().unwrap();
@@ -327,16 +327,16 @@ pub fn ai_yue_continuable(app: tauri::AppHandle) -> Vec<ContinuableTrack> {
 }
 
 /// 当前的 LoRA 设置（两半各一份）。
-#[tauri::command]
-pub fn ai_yue_lora(app: tauri::AppHandle) -> crate::manager::YueLora {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_yue_lora(app: crate::tauri_api::AppHandle) -> crate::manager::YueLora {
     app.state::<crate::manager::StoreRuntime>()
         .network()
         .yue_lora
 }
 
 /// 写 LoRA 设置（**下次启动引擎生效**：适配器在会话创建时合并进权重）。
-#[tauri::command]
-pub fn ai_yue_set_lora(app: tauri::AppHandle, lora: crate::manager::YueLora) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_yue_set_lora(app: crate::tauri_api::AppHandle, lora: crate::manager::YueLora) -> Result<(), String> {
     let runtime = app.state::<crate::manager::StoreRuntime>();
     let mut network = runtime.network();
     network.yue_lora = lora;
@@ -359,8 +359,8 @@ fn log_tail(lines: usize) -> String {
 /// 启动引擎（后台线程；状态走 `engine://yue-engine`）。
 ///
 /// 已就绪时直接返回；正在启动时不重复拉起。
-#[tauri::command]
-pub fn ai_yue_engine_start(app: tauri::AppHandle, model: Option<String>) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_yue_engine_start(app: crate::tauri_api::AppHandle, model: Option<String>) -> Result<(), String> {
     let current = status();
     let wanted = model.filter(|m| !m.trim().is_empty());
     // 换了权重就要用新权重重新加载（模型是启动参数，不能中途换）。
@@ -416,8 +416,8 @@ pub fn ai_yue_engine_start(app: tauri::AppHandle, model: Option<String>) -> Resu
 }
 
 /// 停掉引擎（下次生成时重新拉起）。
-#[tauri::command]
-pub fn ai_yue_engine_stop(app: tauri::AppHandle) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_yue_engine_stop(app: crate::tauri_api::AppHandle) -> Result<(), String> {
     shutdown();
     update(|s| {
         s.state = "stopped".into();
@@ -440,7 +440,7 @@ fn shutdown() {
 
 /// 下载 / 删除引擎文件前先停掉进程：Windows 上覆盖正在运行的 `.exe` / `.dll` 会
 /// 共享冲突，macOS / Linux 上覆盖正在执行的二进制也不安全。
-pub(crate) fn stop_for_install(app: &tauri::AppHandle) {
+pub(crate) fn stop_for_install(app: &crate::tauri_api::AppHandle) {
     shutdown();
     update(|s| {
         s.state = "stopped".into();
@@ -695,7 +695,7 @@ fn write_config(
 
 /// 拉起 `audiocpp_server` 并等到 `/health` 应答（模型加载完成才回，给 10 分钟）。
 fn boot(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     pack: &'static engine::EnginePack,
     device: &'static str,
     wanted: Option<&str>,
@@ -705,7 +705,7 @@ fn boot(
 
 /// 用**已经解析好的**权重拉起引擎：写歌与 MuScriptor 转录共用这一条（只有 `task` 不同）。
 fn boot_choice(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     pack: &'static engine::EnginePack,
     device: &'static str,
     choice: ModelChoice,
@@ -1157,7 +1157,7 @@ fn reject_prefix_outside_yue2(args: &ComposeArgs, family: &str) -> Result<(), St
 
 /// 每秒把 `elapsed` 推给界面。服务端是「一次请求跑到底」，没有进度回调；
 /// 没有这个线程，UI 会一直停在「已 0 秒」，看起来像卡死。
-fn spawn_job_ticker(app: tauri::AppHandle, started: Instant) {
+fn spawn_job_ticker(app: crate::tauri_api::AppHandle, started: Instant) {
     let _ = std::thread::Builder::new()
         .name("ai-daw-yue-tick".into())
         .spawn(move || loop {
@@ -1181,8 +1181,8 @@ fn spawn_job_ticker(app: tauri::AppHandle, started: Instant) {
 /// 提交一次生成（后台跑；进度与结果走 `engine://yue-job`）。
 ///
 /// 引擎没就绪也不报错：任务线程里先把它拉起来再提交（见 [`ensure_ready`]）。
-#[tauri::command]
-pub fn ai_yue_compose(app: tauri::AppHandle, args: ComposeArgs) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_yue_compose(app: crate::tauri_api::AppHandle, args: ComposeArgs) -> Result<(), String> {
     if args.style.trim().is_empty() && args.lyrics.trim().is_empty() {
         return Err("风格和歌词至少给一样".into());
     }
@@ -1244,7 +1244,7 @@ pub fn ai_yue_compose(app: tauri::AppHandle, args: ComposeArgs) -> Result<(), St
 
 /// 一次生成的实际工作（放在 `job::guard` 里跑，panic 会变成 failed 事件）。
 fn run_compose_job(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     port: u16,
     mut args: ComposeArgs,
     started: Instant,
@@ -1289,7 +1289,7 @@ fn run_compose_job(
 
 /// 同步写歌（MCP / 无界面调用）：必要时拉起引擎，等就绪，提交并等结果入轨。
 pub(crate) fn compose_blocking(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     args: ComposeArgs,
 ) -> Result<String, String> {
     // 与界面的 `ai_yue_compose` 共用同一个 busy 位：既挡住并发生成，也让
@@ -1307,7 +1307,7 @@ pub(crate) fn compose_blocking(
 ///
 /// 「生成」是用户眼里唯一那一步：转谱 / 听写为了腾显存会把引擎停掉，翻唱一口气跑下来
 /// 时必须能自己把引擎点着，而不是甩一句「先点启动引擎」再让用户点两次。
-fn ensure_ready(app: &tauri::AppHandle, model: Option<String>) -> Result<u16, String> {
+fn ensure_ready(app: &crate::tauri_api::AppHandle, model: Option<String>) -> Result<u16, String> {
     let wanted = model.filter(|m| !m.trim().is_empty());
     let current = status();
     let same_model =
@@ -1338,7 +1338,7 @@ fn ensure_ready(app: &tauri::AppHandle, model: Option<String>) -> Result<u16, St
 }
 
 /// MuScriptor 版「引擎就绪」：比对的是**转录权重 id**，不是写歌模型。
-fn ensure_midi_ready(app: &tauri::AppHandle, model: Option<&str>) -> Result<u16, String> {
+fn ensure_midi_ready(app: &crate::tauri_api::AppHandle, model: Option<&str>) -> Result<u16, String> {
     let wanted = model.filter(|m| !m.trim().is_empty());
     let current = status();
     let same_model =
@@ -1369,7 +1369,7 @@ fn ensure_midi_ready(app: &tauri::AppHandle, model: Option<&str>) -> Result<u16,
 }
 
 /// 拉起引擎并加载 MuScriptor（`--task midi`）：换档同样要整进程重来。
-fn start_midi(app: tauri::AppHandle, model: Option<String>) -> Result<(), String> {
+fn start_midi(app: crate::tauri_api::AppHandle, model: Option<String>) -> Result<(), String> {
     let wanted = model.filter(|m| !m.trim().is_empty());
     let choice = resolve_midi_model(wanted.as_deref())?;
     let current = status();
@@ -1428,7 +1428,7 @@ fn start_midi(app: tauri::AppHandle, model: Option<String>) -> Result<(), String
 /// 引擎内部按 `--task midi --family muscriptor` 生成；请求/响应形状见 audio.cpp 的
 /// `app/server/api.md`（`request.audio_base64` 进，`artifacts` 里 `kind = "midi"` 出）。
 pub(crate) fn transcribe_midi_blocking(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     model: Option<&str>,
     wav: &[u8],
 ) -> Result<Vec<u8>, String> {
@@ -1454,7 +1454,7 @@ pub(crate) fn transcribe_midi_blocking(
         .ok_or_else(|| "引擎没有返回 MIDI（artifacts 里没有 kind = midi）".to_string())
 }
 
-fn compose_blocking_inner(app: &tauri::AppHandle, mut args: ComposeArgs) -> Result<String, String> {
+fn compose_blocking_inner(app: &crate::tauri_api::AppHandle, mut args: ComposeArgs) -> Result<String, String> {
     if args.style.trim().is_empty() && args.lyrics.trim().is_empty() {
         return Err("风格和歌词至少给一样".into());
     }
@@ -1479,8 +1479,8 @@ fn compose_blocking_inner(app: &tauri::AppHandle, mut args: ComposeArgs) -> Resu
 }
 
 /// 取消当前生成：服务端没有取消端点，只能**停引擎**（权重还在显存里，杀掉最干净）。
-#[tauri::command]
-pub fn ai_yue_compose_cancel(app: tauri::AppHandle) {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_yue_compose_cancel(app: crate::tauri_api::AppHandle) {
     engine_state().cancel.store(true, Ordering::Relaxed);
     shutdown();
     update(|s| {
@@ -1677,7 +1677,7 @@ fn default_track_name(family: &str, args: &ComposeArgs) -> String {
 /// `stop_after=abc|semantic` 时没有音频：只落盘，不碰工程——那一步的产物就是谱/码本身。
 /// ACE-Step 不写谱也没有语义码，所以它永远是「只有音频」那一路。
 fn collect(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     args: &ComposeArgs,
     body: &serde_json::Value,
     run: RunResult,
@@ -1919,7 +1919,7 @@ fn collect(
 /// 要续写时拿 `semantic` 当 `semantic_prefix_file`。
 #[allow(clippy::too_many_arguments)]
 fn write_record(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     base: &str,
     args: &ComposeArgs,
     body: &serde_json::Value,
@@ -1967,7 +1967,7 @@ fn write_record(
 }
 
 /// 输出路径（与其它 AI 产物同一个 `local-ai/` 目录）。
-fn output_path(app: &tauri::AppHandle, kind: &str) -> Result<String, String> {
+fn output_path(app: &crate::tauri_api::AppHandle, kind: &str) -> Result<String, String> {
     let dir = crate::paths::data_dir(app)?.join("local-ai");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = SystemTime::now()

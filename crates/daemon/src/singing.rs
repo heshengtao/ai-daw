@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tauri::{Emitter, Manager};
+use crate::tauri_api::{Emitter, Manager};
 
 use ai_daw_engine::audio::{AudioBuffer, DecodedAudio};
 use ai_daw_engine::command::Command;
@@ -85,7 +85,7 @@ impl SingingRuntime {
         self.cancel.load(Ordering::Relaxed)
     }
 
-    fn finish(&self, app: &tauri::AppHandle, outcome: Result<String, String>) {
+    fn finish(&self, app: &crate::tauri_api::AppHandle, outcome: Result<String, String>) {
         *self.message.lock().unwrap() = Some(match outcome {
             Ok(text) => text,
             Err(err) => format!("失败：{err}"),
@@ -108,7 +108,7 @@ pub struct SingingModels {
 }
 
 /// 查询模型状态。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn singing_models() -> SingingModels {
     use ai_daw_local_ai::models::catalog;
     let default = singing::soulx::default_precision();
@@ -122,14 +122,14 @@ pub fn singing_models() -> SingingModels {
 }
 
 /// 查询任务状态。
-#[tauri::command]
-pub fn singing_status(state: tauri::State<'_, Arc<AppState>>) -> SingingStatus {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn singing_status(state: crate::tauri_api::State<'_, Arc<AppState>>) -> SingingStatus {
     state.singing.status()
 }
 
 /// 取消当前任务（下一次进度回调时停下，什么都不落地）。
-#[tauri::command]
-pub fn singing_cancel(state: tauri::State<'_, Arc<AppState>>) {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn singing_cancel(state: crate::tauri_api::State<'_, Arc<AppState>>) {
     state.singing.cancel.store(true, Ordering::Relaxed);
 }
 
@@ -180,10 +180,10 @@ impl SingArgs {
 }
 
 /// 开始一次渲染（后台线程）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn singing_render(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
+    app: crate::tauri_api::AppHandle,
+    state: crate::tauri_api::State<'_, Arc<AppState>>,
     args: SingArgs,
 ) -> Result<(), String> {
     if state.singing.running.swap(true, Ordering::SeqCst) {
@@ -217,7 +217,7 @@ pub fn singing_render(
 }
 
 /// 同步渲染（MCP 工具用：整体阻塞在调用线程，返回一句摘要）。
-pub(crate) fn render_blocking(app: &tauri::AppHandle, args: &SingArgs) -> Result<String, String> {
+pub(crate) fn render_blocking(app: &crate::tauri_api::AppHandle, args: &SingArgs) -> Result<String, String> {
     let state = app.state::<Arc<AppState>>();
     let runtime = state.singing.clone();
     if runtime.running.swap(true, Ordering::SeqCst) {
@@ -232,7 +232,7 @@ pub(crate) fn render_blocking(app: &tauri::AppHandle, args: &SingArgs) -> Result
 
 /// 渲染的共用实现（进度 / 取消 / 落地都在这里）。
 fn render(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     runtime: &SingingRuntime,
     args: &SingArgs,
 ) -> Result<String, String> {
@@ -454,7 +454,7 @@ fn to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
 }
 
 /// 输出 WAV 路径（应用数据目录 `local-ai/`，与其它 AI 产物放一起）。
-fn output_path(app: &tauri::AppHandle, kind: &str) -> Result<String, String> {
+fn output_path(app: &crate::tauri_api::AppHandle, kind: &str) -> Result<String, String> {
     let dir = crate::paths::data_dir(app)?.join("local-ai");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()

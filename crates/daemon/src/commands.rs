@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use tauri::{Emitter, Manager, State};
+use crate::tauri_api::{Emitter, Manager, State};
 
 use ai_daw_engine::audio::{AudioBuffer, DecodedAudio};
 use ai_daw_engine::bus::Engine;
@@ -48,13 +48,13 @@ pub struct HistoryDepths {
 }
 
 /// 读取当前工程快照。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_project_impl(state: &AppState) -> Project {
     state.engine.lock().unwrap().project().clone()
 }
 
 /// 读取当前工程快照（Tauri 入口）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_project(state: State<'_, Arc<AppState>>) -> Project {
     get_project_impl(&state)
 }
@@ -64,7 +64,7 @@ pub fn get_project(state: State<'_, Arc<AppState>>) -> Project {
 /// 这是**唯一**的编辑入口——界面与 AI 代理（MCP）都走这里，因此撤销历史、事件流与
 /// 实时播放天然保持一致。`actor` 决定事件流里的署名是人还是代理。
 fn run_as(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     state: &AppState,
     actor: Actor,
     command: Command,
@@ -74,7 +74,7 @@ fn run_as(
 
 /// 执行一批命令（**合成一个撤销步骤**）：应用状态、广播事件、把变更同步到音频线程。
 fn run_all(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     state: &AppState,
     actor: Actor,
     commands: Vec<Command>,
@@ -96,7 +96,7 @@ pub fn run_one(state: &AppState, command: Command) -> Project {
 }
 
 fn exec(
-    app: Option<&tauri::AppHandle>,
+    app: Option<&crate::tauri_api::AppHandle>,
     state: &AppState,
     actor: Actor,
     commands: Vec<Command>,
@@ -200,7 +200,7 @@ pub(crate) fn capture_plugin_states(state: &AppState) {
 /// 只把引擎当前状态写进历史；调用方负责先抢救插件状态。
 ///
 /// 历史是「尽力而为」：拿不到配置目录、写盘失败都只打一行日志，绝不阻断保存 / 新建 / 打开。
-fn remember_snapshot(app: &tauri::AppHandle, state: &AppState) {
+fn remember_snapshot(app: &crate::tauri_api::AppHandle, state: &AppState) {
     let Some(dir) = crate::paths::history_dir(app) else {
         return;
     };
@@ -217,7 +217,7 @@ fn remember_snapshot(app: &tauri::AppHandle, state: &AppState) {
 /// 把当前工程收进历史（工程即将被替换时调用）。
 ///
 /// 外部插件的内部状态也要先抢救进工程，否则历史里的那份会丢掉插件补丁。
-fn remember_current(app: &tauri::AppHandle, state: &AppState) {
+fn remember_current(app: &crate::tauri_api::AppHandle, state: &AppState) {
     capture_plugin_states(state);
     remember_snapshot(app, state);
 }
@@ -226,7 +226,7 @@ fn remember_current(app: &tauri::AppHandle, state: &AppState) {
 ///
 /// 这样「保存坏了的一版」不会把上一版顶掉——旧版还能从历史卡片里找回来。
 /// 文件不存在、读不出来或不是合法工程都只是跳过（历史不能妨碍保存本身）。
-fn remember_file_version(app: &tauri::AppHandle, path: &str) {
+fn remember_file_version(app: &crate::tauri_api::AppHandle, path: &str) {
     let Some(dir) = crate::paths::history_dir(app) else {
         return;
     };
@@ -246,20 +246,20 @@ fn remember_file_version(app: &tauri::AppHandle, path: &str) {
 /// 应用退出兜底：会话缓存已经落盘、插件状态也抢救过了，这里再记一份历史。
 ///
 /// 程序坞「退出」/ Cmd+Q 不会走前端的关闭守卫，只能靠后端这一下。
-pub fn remember_before_exit(app: &tauri::AppHandle) {
+pub fn remember_before_exit(app: &crate::tauri_api::AppHandle) {
     let state = app.state::<Arc<AppState>>();
     remember_snapshot(app, &state);
 }
 
 /// 界面走的编辑入口（署名 `Actor::Human`）。
-fn run(app: &tauri::AppHandle, state: &State<'_, Arc<AppState>>, command: Command) -> Project {
+fn run(app: &crate::tauri_api::AppHandle, state: &State<'_, Arc<AppState>>, command: Command) -> Project {
     run_as(app, state, Actor::Human, command).0
 }
 
 /// MCP 服务器走的编辑入口：署名 `Actor::Agent("mcp")`，其余管线与界面**完全一致**。
 ///
 /// 返回新工程与本次产生的事件，便于工具把手边新对象的 id 回给代理。
-pub(crate) fn run_agent(app: &tauri::AppHandle, command: Command) -> (Project, Vec<Event>) {
+pub(crate) fn run_agent(app: &crate::tauri_api::AppHandle, command: Command) -> (Project, Vec<Event>) {
     run_agent_as(app, Actor::Agent("mcp".into()), command)
 }
 
@@ -267,7 +267,7 @@ pub(crate) fn run_agent(app: &tauri::AppHandle, command: Command) -> (Project, V
 ///
 /// 与 [`run_agent`] 同一条管线，只是署名不同——事件流与撤销历史因此能区分是哪个代理在写。
 pub(crate) fn run_agent_as(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     actor: Actor,
     command: Command,
 ) -> (Project, Vec<Event>) {
@@ -278,7 +278,7 @@ pub(crate) fn run_agent_as(
 /// 以代理身份执行**一批**命令（**合成一个撤销步骤**）：用于一次产出多条轨道的 AI 动作
 /// （如音源分离一次生成鼓/贝斯/其他/人声四条分轨），一次撤销即可整体回退。
 pub(crate) fn run_agent_all(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     commands: Vec<Command>,
 ) -> (Project, Vec<Event>) {
     run_agent_all_as(app, Actor::Agent("mcp".into()), commands)
@@ -286,7 +286,7 @@ pub(crate) fn run_agent_all(
 
 /// 同 [`run_agent_all`]，但由调用方决定署名（MCP 与内置写歌智能体都能用）。
 pub(crate) fn run_agent_all_as(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     actor: Actor,
     commands: Vec<Command>,
 ) -> (Project, Vec<Event>) {
@@ -425,7 +425,7 @@ fn on_ui_thread<R: std::marker::Send + 'static>(
 ///
 /// 清句柄**必须在开窗线程上做**：句柄可能正好是实例的最后一个引用，而释放会触发
 /// `clap_plugin.destroy()` / VST3 的界面拆卸——两者都是线程专属调用。
-fn close_plugin_windows_for(app: &tauri::AppHandle, keys: Vec<(u64, PluginSlot)>) {
+fn close_plugin_windows_for(app: &crate::tauri_api::AppHandle, keys: Vec<(u64, PluginSlot)>) {
     if keys.is_empty() {
         return;
     }
@@ -465,7 +465,7 @@ fn close_plugin_windows_for(app: &tauri::AppHandle, keys: Vec<(u64, PluginSlot)>
 }
 
 /// 在某条线程上收掉一批插件窗口（调用方负责挑对线程）。
-fn close_plugin_window_batch(app: &tauri::AppHandle, keys: &[(u64, PluginSlot)]) {
+fn close_plugin_window_batch(app: &crate::tauri_api::AppHandle, keys: &[(u64, PluginSlot)]) {
     let state = app.state::<Arc<AppState>>();
     with_editor_windows(|windows| {
         for key in keys {
@@ -502,7 +502,7 @@ fn close_plugin_window_batch(app: &tauri::AppHandle, keys: &[(u64, PluginSlot)])
 }
 
 /// 关掉**全部**插件窗口（整个工程被替换时用，例如打开另一个工程）。
-fn close_all_plugin_windows(app: &tauri::AppHandle, state: &AppState) {
+fn close_all_plugin_windows(app: &crate::tauri_api::AppHandle, state: &AppState) {
     let keys: Vec<(u64, PluginSlot)> = state.open_editors.lock().unwrap().iter().copied().collect();
     close_plugin_windows_for(app, keys);
 }
@@ -513,7 +513,7 @@ fn close_all_plugin_windows(app: &tauri::AppHandle, state: &AppState) {
 /// 个**槽位的插件没换**，它的窗口（以及插件内部状态）就照旧有效——**不要关**。只有插件被
 /// 换掉、轨道/效果槽位被删、或整个工程被替换时，旧窗口才真的失效，必须关掉，否则窗口会指着
 /// 一个已销毁的实例。
-fn close_stale_plugin_windows(app: &tauri::AppHandle, state: &AppState) {
+fn close_stale_plugin_windows(app: &crate::tauri_api::AppHandle, state: &AppState) {
     let project = { state.engine.lock().unwrap().project().clone() };
 
     /// 某个槽位当前应当承载的 plugin id（轨道/槽位不存在时返回 None）。
@@ -554,21 +554,21 @@ fn close_stale_plugin_windows(app: &tauri::AppHandle, state: &AppState) {
 // ---------------------------------------------------------------------------
 
 /// 新增一条轨道。
-#[tauri::command]
-pub fn add_track(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, name: String) -> Project {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn add_track(app: crate::tauri_api::AppHandle, state: State<'_, Arc<AppState>>, name: String) -> Project {
     run(&app, &state, Command::AddTrack { name })
 }
 
 /// 删除一条轨道（含其片段与音符）。
-#[tauri::command]
-pub fn remove_track(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, track: u64) -> Project {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn remove_track(app: crate::tauri_api::AppHandle, state: State<'_, Arc<AppState>>, track: u64) -> Project {
     run(&app, &state, Command::RemoveTrack(TrackId(track)))
 }
 
 /// 重命名一条轨道。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn rename_track(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     name: String,
@@ -584,9 +584,9 @@ pub fn rename_track(
 }
 
 /// 为轨道设置乐器插件。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_track_instrument(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     plugin_id: String,
@@ -602,9 +602,9 @@ pub fn set_track_instrument(
 }
 
 /// 设置轨道乐器的参数（参数 id 由插件自身定义）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_param(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     param: String,
@@ -663,7 +663,7 @@ pub(crate) fn resize_audio_clips_for_transport(
 
 /// 走 `run_all`（**一条撤销**）：先发 `command`，再把音频片段的方框重算到 `new_transport`。
 fn run_tempo(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     state: &State<'_, Arc<AppState>>,
     actor: Actor,
     command: Command,
@@ -681,15 +681,15 @@ fn run_tempo(
 }
 
 /// 设置速度（BPM）。
-#[tauri::command]
-pub fn set_tempo(app: tauri::AppHandle, bpm: f64) -> Project {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn set_tempo(app: crate::tauri_api::AppHandle, bpm: f64) -> Project {
     set_tempo_as(&app, Actor::Human, bpm)
 }
 
 /// 设置速度的共用实现（界面命令与 MCP 工具共用）。
 ///
 /// 音频片段的「拍长」会跟着重算——与界面改 BPM 的行为完全一致，否则导出会与工程对不上。
-pub(crate) fn set_tempo_as(app: &tauri::AppHandle, actor: Actor, bpm: f64) -> Project {
+pub(crate) fn set_tempo_as(app: &crate::tauri_api::AppHandle, actor: Actor, bpm: f64) -> Project {
     let state = app.state::<Arc<AppState>>();
     let bpm = if bpm.is_finite() {
         bpm.clamp(1.0, 1000.0)
@@ -705,9 +705,9 @@ pub(crate) fn set_tempo_as(app: &tauri::AppHandle, actor: Actor, bpm: f64) -> Pr
 ///
 /// 逐条调 `set_param` 会有 N 次 IPC、N 次工程克隆、N 个撤销步骤；预设动辄上百个参数，
 /// 所以这里合成**一次**事务：一次应用、一次广播、一个撤销步骤。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_params(
-    _app: tauri::AppHandle,
+    _app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     params: HashMap<String, f32>,
@@ -801,7 +801,7 @@ pub(crate) fn apply_preset_inner(
 
 /// 应用一条预设（代理入口）：取状态 → 执行 → 广播 → 同步音频线程；署名由 `actor` 决定。
 pub(crate) fn apply_preset_agent_as(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     actor: Actor,
     track: TrackId,
     params: &HashMap<String, f32>,
@@ -949,7 +949,7 @@ pub(crate) fn apply_sound_memory_inner(
 
 /// 应用一条音色记忆（代理入口）：执行 → 广播 → 同步音频线程。
 pub(crate) fn apply_sound_memory_agent_as(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     actor: Actor,
     track: TrackId,
     memory: &SoundMemory,
@@ -964,14 +964,14 @@ pub(crate) fn apply_sound_memory_agent_as(
 }
 
 /// 音色记忆库变更后通知前端刷新。
-pub(crate) fn notify_sound_memories(app: &tauri::AppHandle) {
+pub(crate) fn notify_sound_memories(app: &crate::tauri_api::AppHandle) {
     let _ = app.emit(crate::state::EVENT_SOUND_MEMORIES, ());
 }
 
 /// 设置拍号；越界值由引擎归一化（分子 1..=32，分母吸附到 2 的幂）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_time_signature(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     num: u8,
     den: u8,
@@ -980,14 +980,14 @@ pub fn set_time_signature(
 }
 
 /// 在第 `beat` 拍插入/更新关键点（BPM + 拍号）。
-#[tauri::command]
-pub fn set_keyframe(app: tauri::AppHandle, beat: f64, tempo: f64, num: u8, den: u8) -> Project {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn set_keyframe(app: crate::tauri_api::AppHandle, beat: f64, tempo: f64, num: u8, den: u8) -> Project {
     set_keyframe_as(&app, Actor::Human, beat, tempo, num, den)
 }
 
 /// 写入速度关键点的共用实现（界面命令与 MCP 工具共用）。
 pub(crate) fn set_keyframe_as(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     actor: Actor,
     beat: f64,
     tempo: f64,
@@ -1019,13 +1019,13 @@ pub(crate) fn set_keyframe_as(
 }
 
 /// 删除第 `beat` 拍的关键点。
-#[tauri::command]
-pub fn remove_keyframe(app: tauri::AppHandle, beat: f64) -> Project {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn remove_keyframe(app: crate::tauri_api::AppHandle, beat: f64) -> Project {
     remove_keyframe_as(&app, Actor::Human, beat)
 }
 
 /// 删除速度关键点的共用实现（界面命令与 MCP 工具共用）。
-pub(crate) fn remove_keyframe_as(app: &tauri::AppHandle, actor: Actor, beat: f64) -> Project {
+pub(crate) fn remove_keyframe_as(app: &crate::tauri_api::AppHandle, actor: Actor, beat: f64) -> Project {
     let state = app.state::<Arc<AppState>>();
     let mut t = state.engine.lock().unwrap().project().transport.clone();
     t.remove_keyframe(beat);
@@ -1036,9 +1036,9 @@ pub(crate) fn remove_keyframe_as(app: &tauri::AppHandle, actor: Actor, beat: f64
 ///
 /// 速度变了 → 素材真实时长变了 → 方框（拍长）也要跟着，否则方框与素材错位（与速度命令同一批，
 /// 一条撤销）。升降调不改时长，只影响音高。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_clip_rate(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     track: u64,
     clip: u64,
     rate: f64,
@@ -1049,7 +1049,7 @@ pub fn set_clip_rate(
 
 /// 设置片段速度 / 升降调的共用实现（界面命令与 MCP 工具共用）。
 pub(crate) fn set_clip_rate_as(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     actor: Actor,
     track: u64,
     clip: u64,
@@ -1096,9 +1096,9 @@ pub(crate) fn set_clip_rate_as(
 /// 音频片段按**资产采样率**把「拍」换算成源帧：拖左边缘推进 `offset_frames` 并缩短窗口，
 /// 拖右边缘只改窗口长度——**不改速度、不变调**（速度 / 升降调是检查器里的独立参数）。
 /// MIDI 片段只改起点 / 长度。同一批命令 → 一条撤销。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn trim_clip(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     track: u64,
     clip: u64,
     start: f64,
@@ -1109,7 +1109,7 @@ pub fn trim_clip(
 
 /// 裁剪片段的共用实现（界面命令与 MCP 工具共用）。
 pub(crate) fn trim_clip_as(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     actor: Actor,
     track: u64,
     clip: u64,
@@ -1216,7 +1216,7 @@ pub struct ClipBounds {
 ///
 /// **音频片段**用素材的实际首尾（左边缘往左拖最多露出素材第 0 帧，往右拖最多到素材最后一帧）。
 /// **MIDI 片段是用户自定义的，没有素材边界**——长度随便改，所以不做夹取。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn clip_bounds(
     state: State<'_, Arc<AppState>>,
     track: u64,
@@ -1253,9 +1253,9 @@ pub fn clip_bounds(
 ///
 /// `track_names` 由界面按**当前语言**给出（按模板顺序）；不传就用引擎的兜底名。
 /// 名字写进工程后就是用户数据了，之后切换界面语言不会再动它。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn new_project(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     track_names: Option<Vec<String>>,
     tempo: Option<f64>,
 ) -> Project {
@@ -1264,7 +1264,7 @@ pub fn new_project(
 
 /// 新建工程的共用实现（界面署名 `Human`，MCP 用代理署名）。
 pub(crate) fn new_project_as(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     actor: Actor,
     track_names: Option<Vec<String>>,
     tempo: Option<f64>,
@@ -1292,7 +1292,7 @@ pub(crate) fn new_project_as(
 
 /// 新建工程，但**只创建给定的轨道**（agent / 影片清单用），不铺默认分轨模板。
 pub(crate) fn new_project_exact_as(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     actor: Actor,
     track_names: Vec<String>,
     tempo: Option<f64>,
@@ -1316,8 +1316,8 @@ pub(crate) fn new_project_exact_as(
 }
 
 /// 重命名当前工程。
-#[tauri::command]
-pub fn rename_project(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, name: String) -> Project {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn rename_project(app: crate::tauri_api::AppHandle, state: State<'_, Arc<AppState>>, name: String) -> Project {
     run(&app, &state, Command::RenameProject { name })
 }
 
@@ -1327,7 +1327,7 @@ pub fn rename_project(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, na
 /// 原封不动的默认模板时生效（引擎侧判断），所以对已经动过的工程完全无害。
 ///
 /// 改名属于「初始状态」而不是用户编辑：它不进撤销栈，也不广播事件——界面直接用返回值刷新。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn localize_starter_tracks(state: State<'_, Arc<AppState>>, names: Vec<String>) -> Project {
     let mut engine = state.engine.lock().unwrap();
     engine.localize_starter_tracks(&names);
@@ -1339,9 +1339,9 @@ pub fn localize_starter_tracks(state: State<'_, Arc<AppState>>, names: Vec<Strin
 // ---------------------------------------------------------------------------
 
 /// 在轨道上新增一个 MIDI 片段。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn add_clip(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     start: f64,
@@ -1359,9 +1359,9 @@ pub fn add_clip(
 }
 
 /// 新增一个**带音符**的 MIDI 片段（MIDI 录音落盘用；片段 + 全部音符 = 一条撤销记录）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn add_midi_clip(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     start: f64,
@@ -1381,9 +1381,9 @@ pub fn add_midi_clip(
 }
 
 /// 删除一个片段。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remove_clip(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1399,9 +1399,9 @@ pub fn remove_clip(
 }
 
 /// 把片段移动到新的起始拍。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn move_clip(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1419,9 +1419,9 @@ pub fn move_clip(
 }
 
 /// 批量移动片段（多选拖动，一次提交一条撤销记录）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn move_clips(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     items: Vec<ClipPlacement>,
 ) -> Project {
@@ -1429,9 +1429,9 @@ pub fn move_clips(
 }
 
 /// 改变片段长度（拍）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn resize_clip(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1449,9 +1449,9 @@ pub fn resize_clip(
 }
 
 /// 在片段中新增一个音符。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn add_note(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1469,9 +1469,9 @@ pub fn add_note(
 }
 
 /// 改写片段内的某个音符（按片段内索引定位）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_note(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1491,9 +1491,9 @@ pub fn set_note(
 }
 
 /// 批量改写片段内的多个音符（多选拖动、属性面板一次改多个）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_notes(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1511,9 +1511,9 @@ pub fn set_notes(
 }
 
 /// 删除片段内的某个音符（按片段内索引定位）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remove_note(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1531,9 +1531,9 @@ pub fn remove_note(
 }
 
 /// 批量删除片段内的多个音符（框选后删除）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remove_notes(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1551,9 +1551,9 @@ pub fn remove_notes(
 }
 
 /// 批量删除片段（可跨轨道，用于框选删除）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remove_clips(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     items: Vec<ClipRef>,
 ) -> Project {
@@ -1565,9 +1565,9 @@ pub fn remove_clips(
 // ---------------------------------------------------------------------------
 
 /// 一次新增一组音符（一次事务 = 一条撤销记录）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn add_notes(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1585,9 +1585,9 @@ pub fn add_notes(
 }
 
 /// 原子替换片段内的全部音符（空数组 = 清空片段）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn replace_notes(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1605,9 +1605,9 @@ pub fn replace_notes(
 }
 
 /// 按稳定 id 批量改写音符（只改给出的字段）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn update_notes(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1625,9 +1625,9 @@ pub fn update_notes(
 }
 
 /// 按稳定 id 批量删除音符。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remove_notes_by_id(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1645,9 +1645,9 @@ pub fn remove_notes_by_id(
 }
 
 /// 批量移调（半音），可限定范围。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transpose_notes(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1667,9 +1667,9 @@ pub fn transpose_notes(
 }
 
 /// 批量设置力度（固定 / 渐变 / 缩放）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_note_velocity(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1691,9 +1691,9 @@ pub fn set_note_velocity(
 }
 
 /// 量化：把起点吸到 `grid` 的整数倍。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn quantize_notes(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1717,9 +1717,9 @@ pub fn quantize_notes(
 }
 
 /// Swing：把指定子拍的第二个往后推。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn apply_swing(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1743,9 +1743,9 @@ pub fn apply_swing(
 }
 
 /// 扫弦：把**起点相同**的音符按音高依次错开（`step_ms = 0` = 回到同时发声）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn strum_notes(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1767,9 +1767,9 @@ pub fn strum_notes(
 }
 
 /// 人性化：位置 / 力度的确定性抖动。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn humanize_notes(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1797,9 +1797,9 @@ pub fn humanize_notes(
 }
 
 /// 把音符收进目标音域（`fold` 八度折返 / `report` 只报告）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn fit_notes_to_range(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1823,9 +1823,9 @@ pub fn fit_notes_to_range(
 }
 
 /// 复制片段（缺省贴在原片段之后）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn duplicate_clip(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -1845,9 +1845,9 @@ pub fn duplicate_clip(
 }
 
 /// 合并同一轨道上的多个 MIDI 片段。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn merge_clips(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clips: Vec<u64>,
@@ -1867,7 +1867,7 @@ pub fn merge_clips(
 // ---------------------------------------------------------------------------
 
 /// 单条轨道（或其中某个片段）的音符统计。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_track_note_stats(
     state: State<'_, Arc<AppState>>,
     track: u64,
@@ -1885,7 +1885,7 @@ pub fn get_track_note_stats(
 }
 
 /// 多条轨道之间的音区重叠与分工冲突。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn analyze_track_overlap(
     state: State<'_, Arc<AppState>>,
     tracks: Vec<u64>,
@@ -1924,7 +1924,7 @@ pub fn analyze_track_overlap(
 }
 
 /// 和声检查：`bars` 缺省时用工程里存的和弦表；`tracks` 缺省时检查所有有音符的轨道。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn analyze_harmony(
     state: State<'_, Arc<AppState>>,
     bars: Option<Vec<HarmonyBar>>,
@@ -2004,9 +2004,9 @@ pub fn analyze_harmony(
 }
 
 /// 整体替换工程的小节和弦表（空 = 清除）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_harmony(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     bars: Vec<HarmonyBar>,
 ) -> Project {
@@ -2014,9 +2014,9 @@ pub fn set_project_harmony(
 }
 
 /// 整体替换工程的段落表（空 = 清除）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_sections(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     sections: Vec<Section>,
 ) -> Project {
@@ -2024,9 +2024,9 @@ pub fn set_project_sections(
 }
 
 /// 设置轨道的编曲元数据（分工 / 目标音域 / 弯音范围）；三者都空 = 清除。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_track_meta(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     role: Option<String>,
@@ -2052,9 +2052,9 @@ pub fn set_track_meta(
 }
 
 /// 设置轨道的 MPE 配置（`zone` = `lower` / `upper` / `off`）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_mpe(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     zone: String,
@@ -2084,9 +2084,9 @@ pub fn set_mpe(
 }
 
 /// 设置轨道的通用 MIDI 事件表（整体替换；空 = 清空）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_midi_events(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     events: Vec<MidiEventAt>,
@@ -2102,9 +2102,9 @@ pub fn set_midi_events(
 }
 
 /// 设置轨道的奏法映射（整体替换；空 = 清空）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_articulations(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     articulations: std::collections::BTreeMap<String, ArticulationSwitch>,
@@ -2124,7 +2124,7 @@ pub fn set_articulations(
 }
 
 /// 随包映射库在运行时 / 开发环境下的位置。
-pub(crate) fn articulation_maps_root(app: &tauri::AppHandle) -> std::path::PathBuf {
+pub(crate) fn articulation_maps_root(app: &crate::tauri_api::AppHandle) -> std::path::PathBuf {
     if let Ok(dir) = app.path().resource_dir() {
         let candidate = dir.join("articulation-maps");
         if candidate.is_dir() {
@@ -2135,9 +2135,9 @@ pub(crate) fn articulation_maps_root(app: &tauri::AppHandle) -> std::path::PathB
 }
 
 /// 搜索随包奏法映射库（厂商 / 产品 / patch）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_articulation_maps(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     query: Option<String>,
     limit: Option<usize>,
 ) -> Vec<ArticulationMapSummary> {
@@ -2146,9 +2146,9 @@ pub fn list_articulation_maps(
 }
 
 /// 把映射库里的某一份映射导入轨道（整体替换或合并）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn import_articulation_map(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     id: String,
@@ -2185,9 +2185,9 @@ pub fn import_articulation_map(
 }
 
 /// 写入 / 清除一个音符的装饰音与奏法标签。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_note_tag(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -2214,9 +2214,9 @@ pub fn set_note_tag(
 }
 
 /// 一次给多个音符写同一个奏法标签（多选切换 = 一个撤销步）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_note_tags(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -2247,9 +2247,9 @@ pub fn set_note_tags(
 // ---------------------------------------------------------------------------
 
 /// 设置轨道增益（dB）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_gain(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     gain_db: f32,
@@ -2265,8 +2265,8 @@ pub fn set_gain(
 }
 
 /// 设置轨道声像（-1.0 最左，1.0 最右）。
-#[tauri::command]
-pub fn set_pan(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, track: u64, pan: f32) -> Project {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn set_pan(app: crate::tauri_api::AppHandle, state: State<'_, Arc<AppState>>, track: u64, pan: f32) -> Project {
     run(
         &app,
         &state,
@@ -2278,9 +2278,9 @@ pub fn set_pan(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, track: u6
 }
 
 /// 设置轨道静音。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_mute(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     mute: bool,
@@ -2296,9 +2296,9 @@ pub fn set_mute(
 }
 
 /// 设置轨道独奏。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_solo(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     solo: bool,
@@ -2314,15 +2314,15 @@ pub fn set_solo(
 }
 
 /// 设置总输出增益（dB）。
-#[tauri::command]
-pub fn set_master_gain(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, gain_db: f32) -> Project {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn set_master_gain(app: crate::tauri_api::AppHandle, state: State<'_, Arc<AppState>>, gain_db: f32) -> Project {
     run(&app, &state, Command::SetMasterGain(gain_db))
 }
 
 /// 设置轨道的发送列表（整体替换；空 = 清空）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_sends(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     sends: Vec<Send>,
@@ -2338,9 +2338,9 @@ pub fn set_sends(
 }
 
 /// 设置一条自动化车道（整体替换该参数的曲线；空 `points` = 删除该车道）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_automation(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     param: String,
@@ -2360,7 +2360,7 @@ pub fn set_automation(
 /// 实时监听用的混音预览：**不写入工程、不进入撤销历史**。
 ///
 /// 拖动推子时界面以每秒数十次的频率调用它；松手时才发一条真正的 `set_gain`。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn monitor_track_mix(
     state: State<'_, Arc<AppState>>,
     track: u64,
@@ -2389,7 +2389,7 @@ pub fn history_depths_impl(state: &AppState) -> HistoryDepths {
 }
 
 /// 历史深度（Tauri 入口）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn history_depths(state: State<'_, Arc<AppState>>) -> HistoryDepths {
     history_depths_impl(&state)
 }
@@ -2438,15 +2438,15 @@ pub(crate) fn redo_now(state: &AppState) -> HistoryState {
 }
 
 /// 操作记录：本次编辑会话的全部操作（含人工与 AI），按时间从旧到新排列。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ops_list(state: State<'_, Arc<AppState>>) -> Vec<OpRecord> {
     state.engine.lock().unwrap().ops()
 }
 
 /// 回撤到某条操作之前：该操作及其之后的改动都会被撤销（可再重做回来）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ops_revert_to(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     id: u64,
 ) -> Result<HistoryState, String> {
@@ -2464,9 +2464,9 @@ pub fn ops_revert_to(
 }
 
 /// 重做到某条被撤销的操作（包含该操作本身）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ops_reapply_to(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     id: u64,
 ) -> Result<HistoryState, String> {
@@ -2483,8 +2483,8 @@ pub fn ops_reapply_to(
 }
 
 /// 撤销最后一次命令。
-#[tauri::command]
-pub fn undo(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> HistoryState {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn undo(app: crate::tauri_api::AppHandle, state: State<'_, Arc<AppState>>) -> HistoryState {
     let out = undo_now(&state);
     // 撤销可能改回别的乐器：实例对不上的窗口要关掉（对得上的仍然保留）。
     close_stale_plugin_windows(&app, &state);
@@ -2492,8 +2492,8 @@ pub fn undo(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> HistorySt
 }
 
 /// 重做上一次被撤销的命令。
-#[tauri::command]
-pub fn redo(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> HistoryState {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn redo(app: crate::tauri_api::AppHandle, state: State<'_, Arc<AppState>>) -> HistoryState {
     let out = redo_now(&state);
     close_stale_plugin_windows(&app, &state);
     out
@@ -2504,13 +2504,13 @@ pub fn redo(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> HistorySt
 // ---------------------------------------------------------------------------
 
 /// 当前传输状态（可用性、播放中、位置、采样率）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_status_impl(state: &AppState) -> TransportSnapshot {
     state.audio.snapshot()
 }
 
 /// 实时传输状态（Tauri 入口）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_status(state: State<'_, Arc<AppState>>) -> TransportSnapshot {
     transport_status_impl(&state)
 }
@@ -2519,7 +2519,7 @@ pub fn transport_status(state: State<'_, Arc<AppState>>) -> TransportSnapshot {
 ///
 /// 底栏的「离线试听」指示离线时变成按钮，点击后走这条命令；探测结果仍由
 /// `engine://transport` 事件推送回来，界面无需自己刷新。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn retry_audio(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     state.audio.retry_audio();
     Ok(())
@@ -2531,8 +2531,8 @@ pub fn retry_audio(state: State<'_, Arc<AppState>>) -> Result<(), String> {
 /// 里的全部素材（本机实测 4–21 秒）、还可能实例化插件。这段活只要抢在首帧之前，WebView
 /// 的首次绘制就会被拖到十几秒之后——用户看到的就是「窗口出来了，里面黑很久」。
 /// 以前后端在页面加载完成（或等 3 秒）时自己装载，这两个时机都早于真正的首帧。
-#[tauri::command]
-pub fn app_ready(window: tauri::WebviewWindow) {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn app_ready(window: crate::tauri_api::WebviewWindow) {
     // 合成器 / 效果器 / 插件宿主这些独立窗口没有工程要装。
     if window.label() != "main" {
         return;
@@ -2555,67 +2555,67 @@ pub fn app_ready(window: tauri::WebviewWindow) {
 }
 
 /// 本机可用的音频输出设备。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_output_devices() -> Vec<ai_daw_engine::realtime::OutputDeviceInfo> {
     ai_daw_engine::realtime::list_output_devices()
 }
 
 /// 选择输出设备（`None` = 跟随系统默认设备）。音频线程会立刻重建流。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_output_device(state: State<'_, Arc<AppState>>, device: Option<String>) -> Result<(), String> {
     state.audio.set_output_device(device)
 }
 
 /// 开始播放。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_play_impl(state: &AppState) -> Result<(), String> {
     state.audio.send(TransportCommand::Play)
 }
 
 /// 开始播放（Tauri 入口）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_play(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     transport_play_impl(&state)
 }
 
 /// 暂停（保留当前位置）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_pause_impl(state: &AppState) -> Result<(), String> {
     state.audio.send(TransportCommand::Pause)
 }
 
 /// 暂停（Tauri 入口）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_pause(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     transport_pause_impl(&state)
 }
 
 /// 停止并回到起点。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_stop_impl(state: &AppState) -> Result<(), String> {
     state.audio.send(TransportCommand::Stop)
 }
 
 /// 停止（Tauri 入口）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_stop(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     transport_stop_impl(&state)
 }
 
 /// 定位到指定帧。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_seek_impl(state: &AppState, frame: u64) -> Result<(), String> {
     state.audio.send(TransportCommand::Seek { frame })
 }
 
 /// 定位（Tauri 入口）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_seek(state: State<'_, Arc<AppState>>, frame: u64) -> Result<(), String> {
     transport_seek_impl(&state, frame)
 }
 
 /// 开关循环播放：播到工程结尾无缝回到起点继续。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_set_loop(state: State<'_, Arc<AppState>>, on: bool) -> Result<(), String> {
     state.audio.send(TransportCommand::SetLoop(on))
 }
@@ -2624,7 +2624,7 @@ pub fn transport_set_loop(state: State<'_, Arc<AppState>>, on: bool) -> Result<(
 ///
 /// `end <= start` = 取消范围。范围本身不启动播放，也不改「是否循环」——那是
 /// `transport_set_loop` 的事。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_set_loop_range(
     state: State<'_, Arc<AppState>>,
     start: u64,
@@ -2636,7 +2636,7 @@ pub fn transport_set_loop_range(
 }
 
 /// 开关节拍器：按工程速度 / 拍号在整数拍上打点（重音在小节头），只在播放时出声。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transport_set_metronome(state: State<'_, Arc<AppState>>, on: bool) -> Result<(), String> {
     state.audio.send(TransportCommand::SetMetronome(on))
 }
@@ -2646,15 +2646,15 @@ pub fn transport_set_metronome(state: State<'_, Arc<AppState>>, on: bool) -> Res
 // ---------------------------------------------------------------------------
 
 /// 把当前工程保存为 JSON 文件，返回写入的绝对路径。
-#[tauri::command]
-pub async fn save_project(app: tauri::AppHandle, path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || save_project_impl(&app, &path))
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn save_project(app: crate::tauri_api::AppHandle, path: String) -> Result<String, String> {
+    crate::tauri_api::async_runtime::spawn_blocking(move || save_project_impl(&app, &path))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// 保存工程的同步实现（界面命令与 MCP 工具共用）。
-pub(crate) fn save_project_impl(app: &tauri::AppHandle, path: &str) -> Result<String, String> {
+pub(crate) fn save_project_impl(app: &crate::tauri_api::AppHandle, path: &str) -> Result<String, String> {
     let state = app.state::<Arc<AppState>>();
     // 落盘前先把插件实例的内部状态抢救进工程，否则存出去的工程会丢掉外部插件的补丁。
     capture_plugin_states(&state);
@@ -2676,9 +2676,9 @@ pub(crate) fn save_project_impl(app: &tauri::AppHandle, path: &str) -> Result<St
 /// 与 `save_project` 的区别：乐谱是从当前工程**派生**出来的只读产物，所以不改工程状态、
 /// 不进历史、也不触发插件状态回收。音频工程里没有 MIDI 文件导出，这条命令顺便给「交给
 /// MuseScore / Dorico 继续加工」留了口子。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn export_score(path: String, xml: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+    crate::tauri_api::async_runtime::spawn_blocking(move || -> Result<String, String> {
         if let Some(dir) = std::path::Path::new(&path).parent() {
             if !dir.as_os_str().is_empty() {
                 std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -2696,14 +2696,14 @@ pub async fn export_score(path: String, xml: String) -> Result<String, String> {
 /// `tracks` 给定时只导出这些轨道；音频轨不进 MIDI（没有音符可写）。与 `export_score` 一样
 /// 是**只读派生**：不改工程状态、不进历史。时间轴按「1 拍 = 四分音符」换算，速度图与拍号图
 /// 写进指挥轨，`cc:` 自动化曲线与逐音歌词一并带过去。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn export_midi(
     state: State<'_, Arc<AppState>>,
     path: String,
     tracks: Option<Vec<u64>>,
 ) -> Result<String, String> {
     let project = state.engine.lock().unwrap().project().clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+    crate::tauri_api::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let bytes = ai_daw_engine::midi::project_to_smf(&project, tracks.as_deref())?;
         if let Some(dir) = std::path::Path::new(&path).parent() {
             if !dir.as_os_str().is_empty() {
@@ -2722,14 +2722,14 @@ pub async fn export_midi(
 /// 走的是「历史恢复」那条路：先把当前工程收进历史，再整体换掉引擎状态——所以导入本身
 /// 也能从「历史」里回退。和 `open_project` 的区别是**不动会话文件路径**：导入进来的是一份
 /// 新内容，保存时应该让用户重新选位置（否则会把原文件覆盖掉）。
-#[tauri::command]
-pub async fn import_project(app: tauri::AppHandle, project: Project) -> Result<Project, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn import_project(app: crate::tauri_api::AppHandle, project: Project) -> Result<Project, String> {
     import_project_impl(&app, project)
 }
 
 /// 导入工程的同步实现。
 pub(crate) fn import_project_impl(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     project: Project,
 ) -> Result<Project, String> {
     let state = app.state::<Arc<AppState>>();
@@ -2753,24 +2753,24 @@ pub(crate) fn import_project_impl(
 ///
 /// 用 `Response` 直接回字节（和 `render_preview` 一样），不走 JSON 数组——一兆的谱面要是
 /// 按 `[0,1,2,…]` 传，光序列化就够呛。
-#[tauri::command]
-pub async fn read_import_file(path: String) -> Result<tauri::ipc::Response, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn read_import_file(path: String) -> Result<crate::tauri_api::ipc::Response, String> {
+    crate::tauri_api::async_runtime::spawn_blocking(move || {
         let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-        Ok(tauri::ipc::Response::new(bytes))
+        Ok(crate::tauri_api::ipc::Response::new(bytes))
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 /// 当前工程对应的文件路径（尚未保存过时为 `null`）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn current_project_path(state: State<'_, Arc<AppState>>) -> Option<String> {
     state.session_path()
 }
 
 /// 启动时是否从会话缓存还原了上次的工程（欢迎页据此推荐「打开上次工程」）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn session_restored(state: State<'_, Arc<AppState>>) -> bool {
     state.restored_session()
 }
@@ -2781,7 +2781,7 @@ pub fn session_restored(state: State<'_, Arc<AppState>>) -> bool {
 /// 直接调它：macOS 从程序坞「退出」/ Cmd+Q 是进程级退出，前端的 `onCloseRequested` 守卫根本
 /// 不触发，只靠 10 秒一次的自动保存会把「最近一次保存之后」的改动（比如刚添加的效果器）
 /// 整段丢掉。
-pub fn write_session(app: &tauri::AppHandle) -> Result<(), String> {
+pub fn write_session(app: &crate::tauri_api::AppHandle) -> Result<(), String> {
     let Some(file) = crate::paths::session_file(app) else {
         return Ok(());
     };
@@ -2806,9 +2806,9 @@ pub fn write_session(app: &tauri::AppHandle) -> Result<(), String> {
 /// 把当前工程写入会话缓存（退出前 / 编辑过程中定期调用，供下次启动还原）。
 ///
 /// 缓存同时记录工作副本与保存基线，因此带着未保存改动退出后，下次打开依旧显示「未保存」。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn cache_session(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     path: Option<String>,
 ) -> Result<(), String> {
@@ -2817,16 +2817,16 @@ pub fn cache_session(
 }
 
 /// 历史工程列表（展示用元信息；完整快照留在配置目录里，按 id 恢复）。
-#[tauri::command]
-pub fn project_history(app: tauri::AppHandle) -> Vec<crate::history::HistoryEntry> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn project_history(app: crate::tauri_api::AppHandle) -> Vec<crate::history::HistoryEntry> {
     crate::paths::history_dir(&app)
         .map(|dir| crate::history::load_index(&dir))
         .unwrap_or_default()
 }
 
 /// 删除一份历史快照（只动历史目录，不影响磁盘上的工程文件）。
-#[tauri::command]
-pub fn delete_project_history(app: tauri::AppHandle, id: String) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn delete_project_history(app: crate::tauri_api::AppHandle, id: String) -> Result<(), String> {
     let dir = crate::paths::history_dir(&app).ok_or_else(|| "拿不到应用配置目录".to_string())?;
     crate::history::delete(&dir, &id)
 }
@@ -2835,14 +2835,14 @@ pub fn delete_project_history(app: tauri::AppHandle, id: String) -> Result<(), S
 ///
 /// 恢复前先把**当前**工程收进历史，所以来回切换不会丢东西；被恢复的那份则从列表里取出
 /// （它已经是当前工程了，再留在列表里只会制造重复项）。
-#[tauri::command]
-pub fn restore_project_history(app: tauri::AppHandle, id: String) -> Result<Project, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn restore_project_history(app: crate::tauri_api::AppHandle, id: String) -> Result<Project, String> {
     restore_project_history_impl(&app, &id)
 }
 
 /// 从历史恢复工程的同步实现（界面命令与 MCP 工具共用）。
 pub(crate) fn restore_project_history_impl(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     id: &str,
 ) -> Result<Project, String> {
     let state = app.state::<Arc<AppState>>();
@@ -2907,15 +2907,15 @@ fn normalize_project(mut project: Project) -> Project {
 }
 
 /// 从 JSON 文件导入工程：替换当前工程并清空历史（导入是一个新的起点）。
-#[tauri::command]
-pub async fn open_project(app: tauri::AppHandle, path: String) -> Result<Project, String> {
-    tauri::async_runtime::spawn_blocking(move || open_project_impl(&app, &path))
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn open_project(app: crate::tauri_api::AppHandle, path: String) -> Result<Project, String> {
+    crate::tauri_api::async_runtime::spawn_blocking(move || open_project_impl(&app, &path))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// 打开工程的同步实现（界面命令与 MCP 工具共用）。
-pub(crate) fn open_project_impl(app: &tauri::AppHandle, path: &str) -> Result<Project, String> {
+pub(crate) fn open_project_impl(app: &crate::tauri_api::AppHandle, path: &str) -> Result<Project, String> {
     let state = app.state::<Arc<AppState>>();
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let project: Project =
@@ -2952,34 +2952,34 @@ fn validate_sample_rate(sample_rate: u32) -> Result<(), String> {
 /// 离线渲染当前工程为 WAV 字节。
 ///
 /// 实时播放不可用（或用户只想要一次性试听）时的回退路径；导出同样走它。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn render_preview(
     state: State<'_, Arc<AppState>>,
     sample_rate: u32,
-) -> Result<tauri::ipc::Response, String> {
+) -> Result<crate::tauri_api::ipc::Response, String> {
     validate_sample_rate(sample_rate)?;
     let inputs = render_inputs(&state);
-    let bytes = tauri::async_runtime::spawn_blocking(move || {
+    let bytes = crate::tauri_api::async_runtime::spawn_blocking(move || {
         let buffer = render_offline(inputs, sample_rate, 0.5);
         wav_bytes(&buffer, sample_rate)
     })
     .await
     .map_err(|e| e.to_string())?;
-    Ok(tauri::ipc::Response::new(bytes))
+    Ok(crate::tauri_api::ipc::Response::new(bytes))
 }
 
 /// 对当前工程做一次离线分析：响度（LUFS/LRA/真峰值）、RMS、平均幅度谱。
 ///
 /// 与预览/导出走同一条渲染路径（同样的插件实例、同样的逐块推进），所以分析的是**真实输出**。
 /// 这是 AI 层的「听感」入口：分析结果可以喂给代理做混音/母带决策，也可以给界面画频谱。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn analyze_project(
     state: State<'_, Arc<AppState>>,
     sample_rate: u32,
 ) -> Result<ai_daw_analysis::Report, String> {
     validate_sample_rate(sample_rate)?;
     let inputs = render_inputs(&state);
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::tauri_api::async_runtime::spawn_blocking(move || {
         // 分析只关心工程正文，不加尾音。
         let buffer = render_offline(inputs, sample_rate, 0.0);
         ai_daw_analysis::analyze(buffer.data(), buffer.channels(), sample_rate as f64)
@@ -3020,7 +3020,7 @@ pub struct ExportProgress {
 
 /// 发一条导出进度事件（发后即忘；界面没在听也无所谓）。
 fn emit_export(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     path: &str,
     phase: &'static str,
     frames: u64,
@@ -3046,9 +3046,9 @@ fn emit_export(
 ///
 /// 渲染与编码都在阻塞线程池上跑，并且**边走边发** `engine://export` 进度事件——界面由此画顶边
 /// 进度条，同时继续响应其它操作（发事件是发后即忘，不会回头等界面）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn export_audio(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     path: String,
     sample_rate: u32,
@@ -3060,7 +3060,7 @@ pub async fn export_audio(
     let inputs = render_inputs(&state);
     let progress_app = app.clone();
     let progress_path = path.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::tauri_api::async_runtime::spawn_blocking(move || {
         // 阶段一：建实例 +（引用了外部插件时）等它把素材装载完。这一段没有可细分的进度，
         // 就是「准备中」——但它是真实存在的等待（最长 EXTERNAL_PLUGIN_SETTLE_SECONDS）。
         emit_export(&progress_app, &progress_path, "preparing", 0, None, None);
@@ -3209,7 +3209,7 @@ pub struct ImportProgress {
 
 /// 广播一次导入解码进度。
 fn emit_import(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     path: &str,
     state: &str,
     frames: u64,
@@ -3232,9 +3232,9 @@ fn emit_import(
 ///
 /// 解码放到阻塞线程池：它既慢又可能失败，绝不能占住命令线程。解码途中经 `engine://import`
 /// 推送进度（顶栏下边缘的进度条据此绘制）；解码完成后才落片段。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn import_audio(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     path: String,
     track: u64,
@@ -3247,7 +3247,7 @@ pub async fn import_audio(
     let path_for_load = path.clone();
     let progress_app = app.clone();
     let progress_path = path.clone();
-    let loaded = tauri::async_runtime::spawn_blocking(move || {
+    let loaded = crate::tauri_api::async_runtime::spawn_blocking(move || {
         assets.load_with_progress(&path_for_load, |p| {
             emit_import(
                 &progress_app,
@@ -3306,9 +3306,9 @@ pub async fn import_audio(
 ///
 /// 与 [`import_audio`] 的区别：素材早就解码过，长度也由调用方给（粘贴要的是**一模一样**的副本），
 /// 所以这里不重新解码、也不重新按素材量长度——一次事务，一个撤销步骤。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn add_audio_clip(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     start: f64,
@@ -3339,9 +3339,9 @@ pub fn add_audio_clip(
 ///
 /// 旧工程的音频片段可能没记素材窗口长度，切分需要它，所以先从素材库补上——补写与切分在
 /// **同一批命令**里执行，因此仍然只占一个撤销步骤。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn split_clip(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     clip: u64,
@@ -3361,7 +3361,7 @@ pub async fn split_clip(
     if let Some(src) = stale_audio {
         let assets = Arc::clone(&state.assets);
         let path = src.path.clone();
-        let audio = tauri::async_runtime::spawn_blocking(move || assets.load(&path))
+        let audio = crate::tauri_api::async_runtime::spawn_blocking(move || assets.load(&path))
             .await
             .map_err(|e| e.to_string())??;
         // 切分按「方框占素材窗口的比例」切，所以要补的是**方框对应的帧数**（不是到素材结尾）。
@@ -3421,7 +3421,7 @@ pub struct WaveformSlice {
 ///
 /// `offset_frames` / `frames` 用来只取素材的一个**窗口**（片段引用的是窗口而不是整段素材）；
 /// 缺省表示整段。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn audio_waveform(
     state: State<'_, Arc<AppState>>,
     path: String,
@@ -3430,7 +3430,7 @@ pub async fn audio_waveform(
     frames: Option<u64>,
 ) -> Result<WaveformSlice, String> {
     let assets = Arc::clone(&state.assets);
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::tauri_api::async_runtime::spawn_blocking(move || {
         let audio = assets.load(&path)?;
         let total = audio.frames() as u64;
         let offset = offset_frames.unwrap_or(0).min(total);
@@ -3452,7 +3452,7 @@ pub async fn audio_waveform(
 // ---------------------------------------------------------------------------
 
 /// 本机可用的音频输入设备。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_input_devices() -> Vec<ai_daw_engine::recorder::InputDeviceInfo> {
     ai_daw_engine::recorder::list_input_devices()
 }
@@ -3463,7 +3463,7 @@ pub fn list_input_devices() -> Vec<ai_daw_engine::recorder::InputDeviceInfo> {
 /// 装载带音频片段的工程，等它只会白等出「等待音频线程超时」。设备真打不开时电平表会一直是 0。
 ///
 /// 界面**不会**在启动时自动调用它——麦克风只在用户显式选设备或开始录音时才被占用。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_input_device(state: State<'_, Arc<AppState>>, device: Option<String>) -> Result<(), String> {
     match device {
         Some(name) => state.audio.arm_input(Some(name), false),
@@ -3475,7 +3475,7 @@ pub fn set_input_device(state: State<'_, Arc<AppState>>, device: Option<String>)
 }
 
 /// 输入电平表：最近 `points` 个采样（供界面画条）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn input_level(state: State<'_, Arc<AppState>>, points: usize) -> Vec<f32> {
     state.audio.input_scope_snapshot(points)
 }
@@ -3485,7 +3485,7 @@ pub fn input_level(state: State<'_, Arc<AppState>>, points: usize) -> Vec<f32> {
 // ---------------------------------------------------------------------------
 
 /// 本机可用的 MIDI 输入端口。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_midi_inputs() -> Vec<crate::midi_input::MidiInputDeviceInfo> {
     crate::midi_input::list_devices()
 }
@@ -3493,9 +3493,9 @@ pub fn list_midi_inputs() -> Vec<crate::midi_input::MidiInputDeviceInfo> {
 /// 打开 / 替换 / 关闭 MIDI 输入（`None` = 关闭并释放端口）。
 ///
 /// 只维护一条连接：同一颗键从两个端口进来会响两遍，所以换设备时先关旧的。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_midi_input(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     device: Option<String>,
 ) -> Result<(), String> {
@@ -3503,13 +3503,13 @@ pub fn set_midi_input(
 }
 
 /// 当前打开的 MIDI 输入端口（`None` = 没占用任何端口）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn midi_input_device(state: State<'_, Arc<AppState>>) -> Option<String> {
     state.midi.device()
 }
 
 /// 开始录音：打开输入设备、开始采集，并从播放头走带。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn record_start(
     state: State<'_, Arc<AppState>>,
     track: u64,
@@ -3538,16 +3538,16 @@ pub(crate) fn record_start_impl(
 }
 
 /// 结束录音：停带、写 WAV、把片段挂到轨道上（一个撤销步骤）。没录到内容返回 `None`。
-#[tauri::command]
-pub async fn record_stop(app: tauri::AppHandle) -> Result<Option<Project>, String> {
-    tauri::async_runtime::spawn_blocking(move || record_stop_as(&app, Actor::Human))
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn record_stop(app: crate::tauri_api::AppHandle) -> Result<Option<Project>, String> {
+    crate::tauri_api::async_runtime::spawn_blocking(move || record_stop_as(&app, Actor::Human))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// 结束录音的共用实现（界面署名 `Human`，MCP 用代理署名）。
 pub(crate) fn record_stop_as(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     actor: Actor,
 ) -> Result<Option<Project>, String> {
     let state = app.state::<Arc<AppState>>();
@@ -3604,7 +3604,7 @@ pub(crate) fn record_stop_as(
 }
 
 /// 录音文件路径：应用数据目录下的 `recordings/rec-<epochms>.wav`。
-fn recording_path(app: &tauri::AppHandle) -> Result<String, String> {
+fn recording_path(app: &crate::tauri_api::AppHandle) -> Result<String, String> {
     let dir = crate::paths::data_dir(app)?.join("recordings");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()
@@ -3622,7 +3622,7 @@ fn recording_path(app: &tauri::AppHandle) -> Result<String, String> {
 // ---------------------------------------------------------------------------
 
 /// 已扫描到的外部插件目录（界面把它与内置音色合并展示）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_plugins(state: State<'_, Arc<AppState>>) -> Vec<CatalogPlugin> {
     state.catalog_snapshot()
 }
@@ -3640,7 +3640,7 @@ pub struct PluginScanStatus {
 ///
 /// 扫描本身总能完成；跳过的插件不会出现在 `list_plugins` 里，界面用这份报告提示用户
 /// 「这些插件没扫到」，并允许重扫。`error` 用来区分「本机确实没有插件」与「扫描没跑起来」。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn plugin_scan_status(state: State<'_, Arc<AppState>>) -> PluginScanStatus {
     let mut skipped = state.scan_skipped_snapshot();
     // 「加载超时被隔离」的插件也并进这份报告：界面本来就会提示「这些插件有问题，可重扫」，
@@ -3664,10 +3664,10 @@ pub fn plugin_scan_status(state: State<'_, Arc<AppState>>) -> PluginScanStatus {
 ///
 /// 一并扫描**插件管理器**的托管目录，所以「装完新插件点重扫」能看到新装的东西。
 /// 同时清空「加载未响应」的隔离名单：用户重扫通常正是因为修好了插件 / 放行了防火墙。
-#[tauri::command]
-pub async fn rescan_plugins(app: tauri::AppHandle) -> Result<Vec<CatalogPlugin>, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn rescan_plugins(app: crate::tauri_api::AppHandle) -> Result<Vec<CatalogPlugin>, String> {
     crate::quarantine::clear();
-    tauri::async_runtime::spawn_blocking(move || crate::manager::rescan_with_managed(&app))
+    crate::tauri_api::async_runtime::spawn_blocking(move || crate::manager::rescan_with_managed(&app))
         .await
         .map_err(|e| e.to_string())
 }
@@ -3859,34 +3859,34 @@ pub(crate) fn midi_capabilities_with(
 }
 
 /// 读取轨道的 MIDI 能力与降级报告（供界面展示）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn track_midi_capabilities(
     state: State<'_, Arc<AppState>>,
     track: u64,
 ) -> Result<serde_json::Value, String> {
     let catalog = state.catalog_snapshot();
     let project = state.engine.lock().unwrap().project().clone();
-    tauri::async_runtime::spawn_blocking(move || midi_capabilities_with(&catalog, &project, track))
+    crate::tauri_api::async_runtime::spawn_blocking(move || midi_capabilities_with(&catalog, &project, track))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// 取某个插件的参数表（内置插件从注册表拿，外部插件按目录加载）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn plugin_params(
     state: State<'_, Arc<AppState>>,
     plugin_id: String,
 ) -> Result<Vec<ParamInfo>, String> {
     let catalog = state.catalog_snapshot();
-    tauri::async_runtime::spawn_blocking(move || plugin_params_with(&catalog, &plugin_id))
+    crate::tauri_api::async_runtime::spawn_blocking(move || plugin_params_with(&catalog, &plugin_id))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// 在轨道效果链末尾追加一个效果器。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn add_effect(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     plugin_id: String,
@@ -3902,9 +3902,9 @@ pub fn add_effect(
 }
 
 /// 从轨道效果链移除一个效果器（按链内序号）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remove_effect(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     index: usize,
@@ -3920,9 +3920,9 @@ pub fn remove_effect(
 }
 
 /// 调整效果器在链中的位置。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn move_effect(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     from: usize,
@@ -3940,9 +3940,9 @@ pub fn move_effect(
 }
 
 /// 设置效果器参数（参数 id 由插件自身定义）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_effect_param(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     index: usize,
@@ -3962,9 +3962,9 @@ pub fn set_effect_param(
 }
 
 /// 一次设置效果器的**多个**参数（「恢复默认值」走它：一次事务，只占一个撤销步骤）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_effect_params(
-    _app: tauri::AppHandle,
+    _app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     index: usize,
@@ -3997,9 +3997,9 @@ pub fn set_effect_params(
 }
 
 /// 启用 / 旁通轨道上的一个效果器（不重建播放器，出声不断）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_effect_enabled(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     index: usize,
@@ -4017,9 +4017,9 @@ pub fn set_effect_enabled(
 }
 
 /// 设置轨道效果器的侧链来源（`None` = 不接）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_effect_sidechain(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     index: usize,
@@ -4037,9 +4037,9 @@ pub fn set_effect_sidechain(
 }
 
 /// 在主总线插入链末尾追加一个效果器。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn add_master_effect(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     plugin_id: String,
 ) -> Project {
@@ -4047,9 +4047,9 @@ pub fn add_master_effect(
 }
 
 /// 从主总线插入链移除一个效果器（按链内序号）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remove_master_effect(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     index: usize,
 ) -> Project {
@@ -4057,9 +4057,9 @@ pub fn remove_master_effect(
 }
 
 /// 调整主总线效果器在链中的位置。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn move_master_effect(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     from: usize,
     to: usize,
@@ -4068,9 +4068,9 @@ pub fn move_master_effect(
 }
 
 /// 设置主总线效果器参数。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_master_effect_param(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     index: usize,
     param: String,
@@ -4088,9 +4088,9 @@ pub fn set_master_effect_param(
 }
 
 /// 启用 / 旁通主总线上的一个效果器。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_master_effect_enabled(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     index: usize,
     enabled: bool,
@@ -4103,9 +4103,9 @@ pub fn set_master_effect_enabled(
 }
 
 /// 设置主总线效果器的侧链来源（`None` = 不接）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_master_effect_sidechain(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     index: usize,
     source: Option<u64>,
@@ -4161,13 +4161,13 @@ pub fn mixer_meters_impl(state: &AppState) -> MeterSnapshot {
 }
 
 /// 读一次电平表（Tauri 入口）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn mixer_meters(state: State<'_, Arc<AppState>>) -> MeterSnapshot {
     mixer_meters_impl(&state)
 }
 
 /// 清掉所有削波锁存（界面点表头时调用）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn clear_meter_clip(state: State<'_, Arc<AppState>>) {
     state.audio.meter().clear_clip();
 }
@@ -4213,21 +4213,21 @@ pub fn host_window_track(label: &str) -> Option<(u64, PluginSlot)> {
 ///
 /// 已经开着就复用（插件的尺寸由它自己定，窗口跟着走）。
 fn build_host_window(
-    app: &tauri::AppHandle,
+    app: &crate::tauri_api::AppHandle,
     track: u64,
     slot: PluginSlot,
     title: &str,
     width: u32,
     height: u32,
-) -> Result<tauri::WebviewWindow, String> {
+) -> Result<crate::tauri_api::WebviewWindow, String> {
     let label = host_window_label(track, slot);
     if let Some(existing) = app.get_webview_window(&label) {
         return Ok(existing);
     }
-    let mut builder = tauri::WebviewWindowBuilder::new(
+    let mut builder = crate::tauri_api::WebviewWindowBuilder::new(
         app,
         &label,
-        tauri::WebviewUrl::App("index.html#/blank".into()),
+        crate::tauri_api::WebviewUrl::App("index.html#/blank".into()),
     )
     .title(title)
     .decorations(true)
@@ -4236,7 +4236,7 @@ fn build_host_window(
     #[cfg(target_os = "macos")]
     {
         builder = builder
-            .title_bar_style(tauri::TitleBarStyle::Transparent)
+            .title_bar_style(crate::tauri_api::TitleBarStyle::Transparent)
             .hidden_title(false);
     }
 
@@ -4245,19 +4245,19 @@ fn build_host_window(
 
 /// 取窗口的原生视图句柄，交给插件 `set_parent`。
 #[cfg(target_os = "macos")]
-fn native_view_handle(window: &tauri::WebviewWindow) -> Option<usize> {
+fn native_view_handle(window: &crate::tauri_api::WebviewWindow) -> Option<usize> {
     // CLAP 的 cocoa 后端要的是 NSView（这里是窗口的内容视图）。
     window.ns_view().ok().map(|view| view as usize)
 }
 
 #[cfg(target_os = "windows")]
-fn native_view_handle(window: &tauri::WebviewWindow) -> Option<usize> {
+fn native_view_handle(window: &crate::tauri_api::WebviewWindow) -> Option<usize> {
     // win32 后端要的是 HWND。
     window.hwnd().ok().map(|hwnd| hwnd.0 as usize)
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn native_view_handle(_window: &tauri::WebviewWindow) -> Option<usize> {
+fn native_view_handle(_window: &crate::tauri_api::WebviewWindow) -> Option<usize> {
     // X11 要 gdk 拿 window id，还没接。
     None
 }
@@ -4279,7 +4279,7 @@ fn track_name(state: &AppState, track: u64) -> String {
 /// 插件自己开的原生窗口（VST3、CLAP 浮动）只能靠句柄抬——`vst3-host` 建窗时不会激活它，
 /// 所以新窗口默认待在最大化的主窗口后面。「嵌入模式」那扇是宿主自己建的 Tauri 窗口，走 Tauri
 /// 的聚焦接口。两条路都试过，用户点「打开界面」才不会是「毫无反应」。
-fn focus_plugin_window(app: &tauri::AppHandle, state: &AppState, track: u64, slot: PluginSlot) {
+fn focus_plugin_window(app: &crate::tauri_api::AppHandle, state: &AppState, track: u64, slot: PluginSlot) {
     let native = state
         .editor_windows
         .lock()
@@ -4301,14 +4301,14 @@ fn focus_plugin_window(app: &tauri::AppHandle, state: &AppState, track: u64, slo
 
 /// 主窗口的原生句柄：插件窗口据此摆到同一块屏幕中央。
 #[cfg(target_os = "windows")]
-fn main_window_handle(app: &tauri::AppHandle) -> Option<ai_daw_host_vst3::NativeWindow> {
+fn main_window_handle(app: &crate::tauri_api::AppHandle) -> Option<ai_daw_host_vst3::NativeWindow> {
     app.get_webview_window("main")
         .and_then(|window| window.hwnd().ok())
         .map(|hwnd| hwnd.0 as ai_daw_host_vst3::NativeWindow)
 }
 
 #[cfg(not(target_os = "windows"))]
-fn main_window_handle(_app: &tauri::AppHandle) -> Option<ai_daw_host_vst3::NativeWindow> {
+fn main_window_handle(_app: &crate::tauri_api::AppHandle) -> Option<ai_daw_host_vst3::NativeWindow> {
     None
 }
 
@@ -4335,7 +4335,7 @@ fn resolve_effect_index(state: &AppState, track: u64, plugin_id: &str) -> Result
 /// 窗口只能在**创建插件实例的那条线程**上开：VST3 归它自己的模块线程（实例就在那里加载的），
 /// CLAP / AU 归主线程（macOS 的 `NSWindow` 只能在那里建）。见 [`ai_daw_host_vst3::plugin_thread`]。
 fn open_slot_editor(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: &AppState,
     track: u64,
     slot: PluginSlot,
@@ -4395,7 +4395,7 @@ fn open_slot_editor(
         // 嵌入模式下插件会自己决定界面多大——它通过 `request_resize` 告诉我们，我们改窗口。
         if let Some(window) = host_window.clone() {
             handle.set_resize_handler(Box::new(move |width, height| {
-                let _ = window.set_size(tauri::LogicalSize::new(width as f64, height as f64));
+                let _ = window.set_size(crate::tauri_api::LogicalSize::new(width as f64, height as f64));
             }));
         }
 
@@ -4452,9 +4452,9 @@ fn open_slot_editor(
 }
 
 /// 为某条轨道打开**乐器**的原生界面（已经开着就聚焦）。
-#[tauri::command(async)]
+#[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn open_plugin_window(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     title: String,
@@ -4475,9 +4475,9 @@ pub fn open_plugin_window(
 /// 为某条轨道上的**某个效果器**打开它**自带的**原生界面（已经开着就聚焦）。
 ///
 /// 与 [`open_effect_window`]（内置面板窗口）不同：这条命令开的是插件自己的窗口。
-#[tauri::command(async)]
+#[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn open_effect_plugin_window(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     plugin_id: String,
@@ -4497,7 +4497,7 @@ pub fn open_effect_plugin_window(
 /// 关掉某个槽位的插件窗口，但**保留编辑器句柄**（用户只是关界面，之后还要能再开）。
 ///
 /// 与 [`close_plugin_windows_for`] 的区别：那个用于「实例已经不在」的收尾，会连句柄一并清掉。
-fn close_slot_window(app: &tauri::AppHandle, key: (u64, PluginSlot)) -> Result<(), String> {
+fn close_slot_window(app: &crate::tauri_api::AppHandle, key: (u64, PluginSlot)) -> Result<(), String> {
     // 窗口归哪条线程管：VST3 按模块查（实例登记时记下的），CLAP / AU 是主线程。
     let module = {
         let state = app.state::<Arc<AppState>>();
@@ -4540,15 +4540,15 @@ fn close_slot_window(app: &tauri::AppHandle, key: (u64, PluginSlot)) -> Result<(
 }
 
 /// 关闭某条轨道的**乐器**窗口（保留编辑器句柄，之后还能再开）。
-#[tauri::command(async)]
-pub fn close_plugin_window(app: tauri::AppHandle, track: u64) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command(async))]
+pub fn close_plugin_window(app: crate::tauri_api::AppHandle, track: u64) -> Result<(), String> {
     close_slot_window(&app, (track, PluginSlot::Instrument))
 }
 
 /// 关闭某条轨道上某个**效果器**的原生窗口（保留编辑器句柄，之后还能再开）。
-#[tauri::command(async)]
+#[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn close_effect_plugin_window(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     plugin_id: String,
@@ -4558,7 +4558,7 @@ pub fn close_effect_plugin_window(
 }
 
 /// 某条轨道的**乐器**窗口是否开着（用户自己点关闭按钮后会变回 false）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn plugin_window_open(state: State<'_, Arc<AppState>>, track: u64) -> bool {
     state
         .open_editors
@@ -4568,7 +4568,7 @@ pub fn plugin_window_open(state: State<'_, Arc<AppState>>, track: u64) -> bool {
 }
 
 /// 某条轨道上某个**效果器**的原生窗口是否开着。效果器不在链上时返回 false。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn effect_plugin_window_open(
     state: State<'_, Arc<AppState>>,
     track: u64,
@@ -4589,7 +4589,7 @@ pub fn effect_plugin_window_open(
 /// 两块内置面板（合成器 / 效果器）共用这条路径：同一套前端换一条路由。
 /// 面板是**流体布局**（铺满窗口），所以允许缩放——只给一个下限，免得控件被压扁变形。
 async fn open_panel_window(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     label: String,
     url: String,
     title: String,
@@ -4606,7 +4606,7 @@ async fn open_panel_window(
     // 建窗口必须在主线程上做。
     let app_for_main = app.clone();
     on_ui_thread(move || {
-        tauri::WebviewWindowBuilder::new(&app_for_main, &label, tauri::WebviewUrl::App(url.into()))
+        crate::tauri_api::WebviewWindowBuilder::new(&app_for_main, &label, crate::tauri_api::WebviewUrl::App(url.into()))
             .title(title)
             .inner_size(size.0, size.1)
             .min_inner_size(min.0, min.1)
@@ -4620,9 +4620,9 @@ async fn open_panel_window(
 ///
 /// 内置合成器没有原生编辑器，但它的面板也不该只能挤在侧边栏里——给它一个自己的窗口，
 /// 「打开界面」这个动作对所有音色就都成立。窗口标题是「轨道名 - 插件名」。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn open_synth_window(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     title: String,
@@ -4643,9 +4643,9 @@ pub async fn open_synth_window(
 ///
 /// 效果器参数不在检查器里就地调：链上效果一多，检查器会被几十个滑块塞满。
 /// 与内置合成器同一个约定——检查器只给入口，编辑去它自己的界面。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn open_effect_window(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     plugin_id: String,
@@ -4711,13 +4711,13 @@ fn encode_query_value(value: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// 取最近 `points` 个输出采样，供界面画实时波形。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn scope_data(state: State<'_, Arc<AppState>>, points: usize) -> Vec<f32> {
     state.audio.scope_snapshot(points)
 }
 
 /// 试听一个音（合成器界面里的键盘）：不写工程、不进撤销历史、不等传输。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn audition_note(state: State<'_, Arc<AppState>>, track: u64, note: u8, velocity: u8, on: bool) {
     state
         .audio
@@ -4727,7 +4727,7 @@ pub fn audition_note(state: State<'_, Arc<AppState>>, track: u64, note: u8, velo
 /// 试听一组 MIDI 事件（奏法切换序列）：不写工程、不进撤销历史。
 ///
 /// NoteOn 和显式 NoteOff 会在 240 ms 后补发，避免试听时挂住插件。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn audition_midi_events(state: State<'_, Arc<AppState>>, track: u64, events: Vec<MidiEvent>) {
     let mut immediate = Vec::new();
     let mut delayed = Vec::new();
@@ -4758,13 +4758,13 @@ pub fn audition_midi_events(state: State<'_, Arc<AppState>>, track: u64, events:
 // ---------------------------------------------------------------------------
 
 /// 全部用户预设（跨工程）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_presets(state: State<'_, Arc<AppState>>) -> Vec<Preset> {
     state.presets.lock().unwrap().all()
 }
 
 /// 把「某个插件当前的参数快照」存成一条预设。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_preset(
     state: State<'_, Arc<AppState>>,
     name: String,
@@ -4779,7 +4779,7 @@ pub fn save_preset(
 }
 
 /// 覆盖一条已存在的预设（改名或更新参数快照）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn update_preset(
     state: State<'_, Arc<AppState>>,
     id: String,
@@ -4790,7 +4790,7 @@ pub fn update_preset(
 }
 
 /// 删除一条预设。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn delete_preset(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
     state.presets.lock().unwrap().remove(&id)
 }
@@ -4800,7 +4800,7 @@ pub fn delete_preset(state: State<'_, Arc<AppState>>, id: String) -> Result<(), 
 // ---------------------------------------------------------------------------
 
 /// 全部音色记忆的摘要（不含参数/状态，界面列表用）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_sound_memories(
     state: State<'_, Arc<AppState>>,
 ) -> Vec<crate::sound_memories::SoundMemorySummary> {
@@ -4808,9 +4808,9 @@ pub fn list_sound_memories(
 }
 
 /// 把当前轨道的音色链存成一条记忆；传 `id` 表示覆盖该条记忆的内容。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_sound_memory(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     track: u64,
     name: String,
@@ -4837,9 +4837,9 @@ pub fn save_sound_memory(
 }
 
 /// 只修改一条记忆的元数据（名称/描述/标签/分工），不动声音快照。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn update_sound_memory(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     id: String,
     name: Option<String>,
@@ -4859,9 +4859,9 @@ pub fn update_sound_memory(
 }
 
 /// 删除一条音色记忆。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn delete_sound_memory(
-    app: tauri::AppHandle,
+    app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
@@ -4871,9 +4871,9 @@ pub fn delete_sound_memory(
 }
 
 /// 把一条音色记忆应用到轨道（一次事务：乐器 + 效果链 + 增益/声像）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn apply_sound_memory(
-    _app: tauri::AppHandle,
+    _app: crate::tauri_api::AppHandle,
     state: State<'_, Arc<AppState>>,
     id: String,
     track: u64,

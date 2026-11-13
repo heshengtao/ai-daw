@@ -9,6 +9,13 @@ description = "AI DAW 的后端：工程模型、音频引擎、插件宿主、M
 name = "ai_daw_daemon"
 path = "src/lib.rs"
 
+[features]
+# 默认按桌面构建：`tauri` 可用，`#[tauri::command]` 薄壳照常生成。
+default = ["desktop"]
+# 桌面外壳需要的能力（宏、State、AppHandle）。关掉它得到"零 Tauri 依赖"的后端，
+# 无头镜像因此不必背 WebKit（约 612 MB）。
+desktop = ["dep:tauri"]
+
 [dependencies]
 # 过渡期保留：命令层还要用 `#[tauri::command]` 宏与 `State` 类型。`aidawd`（无窗口
 # 二进制）运行时不初始化任何 Tauri App，只借用宏生成的那层薄壳。
@@ -16,7 +23,7 @@ path = "src/lib.rs"
 # 关掉默认特性会让 `AppHandle` 变成 `AppHandle<R>`（失去 `Wry` 默认参数），
 # 本 crate 里 465 处签名都要补泛型——那是 M3「命令层与 Tauri 彻底解耦」的活，
 # 不是改一个依赖声明能解决的。所以这里保留默认特性，no-wry 构建走 M3。
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = [], optional = true }
 # 运行日志的时间戳（已在依赖树里，不引入新包）。
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }

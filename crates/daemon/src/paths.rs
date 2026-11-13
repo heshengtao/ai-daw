@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use crate::tauri_api::{AppHandle, Emitter, Manager};
 
 /// 指针文件名（放在默认配置目录）。
 const POINTER: &str = "data-dir.json";
@@ -755,9 +755,9 @@ fn emit(
 }
 
 /// 设置页读：当前数据目录、默认目录、占用大小、来源。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn data_dir_info(app: AppHandle) -> Result<DataDirInfo, String> {
-    tauri::async_runtime::spawn_blocking(move || info(&app))
+    crate::tauri_api::async_runtime::spawn_blocking(move || info(&app))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -767,7 +767,7 @@ pub async fn data_dir_info(app: AppHandle) -> Result<DataDirInfo, String> {
 /// **尽力而为**：拿不到（无权限、命令被策略禁用、非本地盘）就返回 `None`，由前端当作
 /// 「不知道」放行。这里刻意不用 `unsafe` 直接调 `GetDiskFreeSpaceExW`——整个 crate 是
 /// `#![forbid(unsafe_code)]`，一次 200–400 ms 的 PowerShell 探测换个心安。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn disk_free_bytes(app: AppHandle) -> Option<u64> {
     let dir = config_dir(&app).ok()?;
     free_bytes_at(&dir)
@@ -813,17 +813,17 @@ fn free_bytes_at(path: &Path) -> Option<u64> {
 }
 
 /// 设置页一键迁移：复制当前数据到 `target`，写指针，返回需要重启的新状态。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn data_dir_migrate(app: AppHandle, target: String) -> Result<DataDirInfo, String> {
-    tauri::async_runtime::spawn_blocking(move || migrate(&app, target))
+    crate::tauri_api::async_runtime::spawn_blocking(move || migrate(&app, target))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// 重启后清理上一次迁移的旧目录（返回清掉的路径）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn data_dir_cleanup_previous(app: AppHandle) -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || cleanup_previous(&app))
+    crate::tauri_api::async_runtime::spawn_blocking(move || cleanup_previous(&app))
         .await
         .map_err(|e| e.to_string())?
 }

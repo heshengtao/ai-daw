@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use midir::{MidiInput, MidiInputConnection};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use crate::tauri_api::{AppHandle, Emitter};
 
 /// MIDI 消息广播的前端事件名。
 pub const EVENT_MIDI: &str = "engine://midi";

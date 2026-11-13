@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use tauri::AppHandle;
+use crate::tauri_api::AppHandle;
 
 /// 配置文件里的结构（只存字符串，平台切换 / 目录迁移时也不会解析失败）。
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -101,7 +101,7 @@ fn info(dirs: &[PathBuf]) -> Vec<ScanDirInfo> {
 }
 
 /// 当前自定义扫描目录（界面打开设置页时拉一次）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn plugin_scan_dirs(app: AppHandle) -> Vec<ScanDirInfo> {
     info(&load(&app))
 }
@@ -110,7 +110,7 @@ pub fn plugin_scan_dirs(app: AppHandle) -> Vec<ScanDirInfo> {
 ///
 /// 只接受绝对路径：相对路径会随当前工作目录变化，扫描结果不可预期。
 /// 不要求目录存在：网络盘暂时没挂上、插拔硬盘时不能连「删掉这条」都做不了。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn plugin_set_scan_dirs(app: AppHandle, dirs: Vec<String>) -> Result<Vec<ScanDirInfo>, String> {
     let mut next: Vec<PathBuf> = Vec::new();
     for raw in dirs {

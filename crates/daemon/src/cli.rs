@@ -623,19 +623,19 @@ fn normalize_path(path: &Path) -> String {
 // ---------------------------------------------------------------------------
 
 /// 读取 `aidaw` 的挂载状态。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn cli_status() -> CliStatus {
     status()
 }
 
 /// 把 `aidaw` 接进 PATH（macOS 会弹一次管理员授权）。由设置页的开关调用。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn install_cli() -> Result<CliStatus, String> {
     install()
 }
 
 /// 撤掉本应用挂的 `aidaw`。由设置页的开关调用。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn uninstall_cli() -> Result<CliStatus, String> {
     uninstall()
 }

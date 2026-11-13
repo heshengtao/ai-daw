@@ -20,7 +20,7 @@
 //! 非 Windows 没有 DirectML、macOS 没有 CUDA——设置页只会列出本机可用的项。
 //! CUDA 另加一条：明确认出本机是 AMD / Intel / Apple 显卡时同样不给选（省掉 2.9 GB 白下）。
 
-use tauri::{AppHandle, Manager};
+use crate::tauri_api::{AppHandle, Manager};
 
 use crate::manager::{BackendPreference, StoreRuntime};
 use ai_daw_local_ai::backend::{self as rt, BackendKind, RuntimeId};
@@ -100,13 +100,13 @@ pub fn init_runtime(app: &AppHandle) {
 }
 
 /// 当前状态（设置页加载时调用）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_backend_info(app: AppHandle) -> BackendInfo {
     info_of(&app)
 }
 
 /// 保存执行后端偏好（返回最新状态；运行时没装的话界面会去下载）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_set_backend(
     app: AppHandle,
     preference: BackendPreference,

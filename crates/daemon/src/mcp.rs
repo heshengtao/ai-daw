@@ -25,7 +25,7 @@ use rmcp::transport::streamable_http_server::{
 };
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use crate::tauri_api::{AppHandle, Manager, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::articulation_map::{plan_import, ArticulationMapCatalog};
@@ -6790,7 +6790,7 @@ impl DawMcpServer {
     )]
     async fn rescan_plugins(&self) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::rescan_plugins(&app))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::rescan_plugins(&app))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -6804,7 +6804,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<DescribePluginArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::describe_plugin(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::describe_plugin(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -6845,7 +6845,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<SearchPluginStoreArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::search_plugin_store(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::search_plugin_store(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -6864,7 +6864,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<InstallPluginArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::install_plugin(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::install_plugin(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7181,7 +7181,7 @@ impl DawMcpServer {
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
         let actor = self.actor();
-        tauri::async_runtime::spawn_blocking(move || tools::trim_clip(&app, &actor, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::trim_clip(&app, &actor, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7248,7 +7248,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<OverlapArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::analyze_track_overlap(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::analyze_track_overlap(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7262,7 +7262,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<HarmonyArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::analyze_harmony(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::analyze_harmony(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7453,7 +7453,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<SaveProjectArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::save_project(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::save_project(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7465,7 +7465,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<OpenProjectArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::open_project(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::open_project(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7522,7 +7522,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<AnalyzeArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::analyze_project(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::analyze_project(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7536,7 +7536,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<ExportArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::export_wav(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::export_wav(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7550,7 +7550,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<ExportStemsArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::export_stems(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::export_stems(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7564,7 +7564,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<MasterExportArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::master_project(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::master_project(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7578,7 +7578,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<SeparateArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::separate_stems(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::separate_stems(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7592,7 +7592,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<DetectTempoArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::detect_tempo(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::detect_tempo(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7637,7 +7637,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<SingSongArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::sing_song(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::sing_song(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7651,7 +7651,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<TranscribeArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::transcribe_audio(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::transcribe_audio(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7665,7 +7665,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<EnhanceArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::enhance_audio(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::enhance_audio(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7680,7 +7680,7 @@ impl DawMcpServer {
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
         let actor = self.actor();
-        tauri::async_runtime::spawn_blocking(move || tools::import_audio(&app, &actor, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::import_audio(&app, &actor, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7692,7 +7692,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<WaveformArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::audio_waveform(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::audio_waveform(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7700,7 +7700,7 @@ impl DawMcpServer {
 
     #[tool(description = "列出本机可用的音频输入设备（录音用）。")]
     async fn list_input_devices(&self) -> Result<String, ErrorData> {
-        tauri::async_runtime::spawn_blocking(tools::list_input_devices)
+        crate::tauri_api::async_runtime::spawn_blocking(tools::list_input_devices)
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7722,7 +7722,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<RecordStartArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::record_start(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::record_start(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7734,7 +7734,7 @@ impl DawMcpServer {
     async fn record_stop(&self) -> Result<String, ErrorData> {
         let app = self.app.clone();
         let actor = self.actor();
-        tauri::async_runtime::spawn_blocking(move || tools::record_stop(&app, &actor))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::record_stop(&app, &actor))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7752,7 +7752,7 @@ impl DawMcpServer {
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
         let actor = self.actor();
-        tauri::async_runtime::spawn_blocking(move || tools::apply_preset(&app, &actor, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::apply_preset(&app, &actor, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7813,7 +7813,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<SaveSoundMemoryArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::save_sound_memory(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::save_sound_memory(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7844,7 +7844,7 @@ impl DawMcpServer {
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
         let actor = self.actor();
-        tauri::async_runtime::spawn_blocking(move || tools::apply_sound_memory(&app, &actor, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::apply_sound_memory(&app, &actor, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7863,7 +7863,7 @@ impl DawMcpServer {
     #[tool(description = "当前 AI 任务状态：是否在跑、是哪个功能、进度、消息。")]
     async fn get_ai_status(&self) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::get_ai_status(&app))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::get_ai_status(&app))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7872,7 +7872,7 @@ impl DawMcpServer {
     #[tool(description = "取消当前 AI 任务（下一次进度回调时停下）。已写入工程的部分不会自动回滚。")]
     async fn cancel_ai_task(&self) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::cancel_ai_task(&app))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::cancel_ai_task(&app))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7883,7 +7883,7 @@ impl DawMcpServer {
     )]
     async fn get_ai_backend(&self) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::get_ai_backend(&app))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::get_ai_backend(&app))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7897,7 +7897,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<SetBackendArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::set_ai_backend(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::set_ai_backend(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7924,7 +7924,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<RuntimeIdArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::install_runtime(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::install_runtime(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7936,7 +7936,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<RuntimeIdArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::remove_runtime(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::remove_runtime(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7948,7 +7948,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<ModelIdArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::remove_model(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::remove_model(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7962,7 +7962,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<StartYueEngineArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::start_yue_engine(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::start_yue_engine(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7971,7 +7971,7 @@ impl DawMcpServer {
     #[tool(description = "停止 YuE2 引擎（同时结束在跑的生成）。")]
     async fn stop_yue_engine(&self) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::stop_yue_engine(&app))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::stop_yue_engine(&app))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7983,7 +7983,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<EngineLogArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::get_yue_engine_log(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::get_yue_engine_log(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -7995,7 +7995,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<CudaPerfArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::set_yue_cuda_perf(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::set_yue_cuda_perf(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -8009,7 +8009,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<ComposeSongArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::compose_song(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::compose_song(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -8023,7 +8023,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<TranscribeScoreArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::transcribe_score(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::transcribe_score(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -8035,7 +8035,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<ReadTextArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::read_yue_score(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::read_yue_score(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -8049,7 +8049,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<MidiToAbcArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::midi_to_abc(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::midi_to_abc(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -8063,7 +8063,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<ExportMidiArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::export_midi(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::export_midi(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -8077,7 +8077,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<SwapVoiceArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::swap_voice(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::swap_voice(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -8091,7 +8091,7 @@ impl DawMcpServer {
         Parameters(args): Parameters<PreviewMixArgs>,
     ) -> Result<String, ErrorData> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || tools::preview_track_mix(&app, args))
+        crate::tauri_api::async_runtime::spawn_blocking(move || tools::preview_track_mix(&app, args))
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
@@ -8349,7 +8349,7 @@ impl McpRuntime {
         }
 
         let app = self.app.clone();
-        tauri::async_runtime::spawn(async move {
+        crate::tauri_api::async_runtime::spawn(async move {
             let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
                 eprintln!("[mcp] 接管监听失败");
                 // 提前返回也要通知 stop()，否则它会把整个等待窗口耗完。
@@ -8535,13 +8535,13 @@ fn classify_bind_error(error: &std::io::Error) -> BindFailure {
 }
 
 /// 读取 MCP 服务器的配置与运行状态。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn mcp_status(runtime: State<'_, McpRuntime>) -> McpStatus {
     runtime.status()
 }
 
 /// 更新 MCP 配置（写盘并即时启停），返回最新状态。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_mcp_config(
     runtime: State<'_, McpRuntime>,
     enabled: bool,

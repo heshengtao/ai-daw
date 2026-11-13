@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use crate::tauri_api::{AppHandle, Emitter, State};
 use tokio_util::sync::CancellationToken;
 
 use ai_daw_engine::event::Actor;
@@ -131,13 +131,13 @@ impl AgentRuntime {
 // ---------------------------------------------------------------------------
 
 /// 读取智能体配置。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_config(runtime: State<'_, AgentConfigRuntime>) -> AgentConfig {
     runtime.get()
 }
 
 /// 保存智能体配置。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_set_config(
     runtime: State<'_, AgentConfigRuntime>,
     base_url: String,
@@ -152,7 +152,7 @@ pub fn agent_set_config(
 }
 
 /// 拉取模型的 id 列表（用**传入的**配置，不写盘——便于测试尚未保存的值）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_models(
     base_url: String,
     api_key: String,
@@ -167,7 +167,7 @@ pub async fn agent_models(
 }
 
 /// 测试连通性（同样用传入的配置，不写盘）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_test(
     base_url: String,
     api_key: String,
@@ -182,13 +182,13 @@ pub async fn agent_test(
 }
 
 /// 全部会话摘要。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_sessions(runtime: State<'_, AgentRuntime>) -> Vec<SessionSummary> {
     runtime.sessions.list()
 }
 
 /// 载入一个会话（含完整节点树）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_session(runtime: State<'_, AgentRuntime>, id: String) -> Result<Session, String> {
     runtime
         .sessions
@@ -197,13 +197,13 @@ pub fn agent_session(runtime: State<'_, AgentRuntime>, id: String) -> Result<Ses
 }
 
 /// 删除一个会话。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_delete_session(runtime: State<'_, AgentRuntime>, id: String) {
     runtime.sessions.delete(&id);
 }
 
 /// 切换某会话的活跃分支（`head`）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_set_head(
     runtime: State<'_, AgentRuntime>,
     id: String,
@@ -220,7 +220,7 @@ pub fn agent_set_head(
 }
 
 /// 停止当前一轮。返回「停下之前是否真的有一轮在跑」，供前端判断要不要本地收尾。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_cancel(runtime: State<'_, AgentRuntime>) -> bool {
     let was_running = runtime.running.load(Ordering::SeqCst);
     if let Some(token) = runtime.cancel.lock().unwrap().as_ref() {
@@ -230,7 +230,7 @@ pub fn agent_cancel(runtime: State<'_, AgentRuntime>) -> bool {
 }
 
 /// 当前是否有轮次在跑（面板重新挂载后用它跟后端对齐状态）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_running(runtime: State<'_, AgentRuntime>) -> bool {
     runtime.running.load(Ordering::SeqCst)
 }
@@ -239,7 +239,7 @@ pub fn agent_running(runtime: State<'_, AgentRuntime>) -> bool {
 ///
 /// `session_id` 为空时新建会话；`parent_id` 为空时接在会话当前 `head` 之后。
 /// 「编辑某条用户输入后重答」= 传入被编辑节点的 `parent` 作为 `parent_id`（产生分支）。
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_send(
     app: AppHandle,
     runtime: State<'_, AgentRuntime>,
@@ -284,7 +284,7 @@ pub fn agent_send(
 
     let handle = app.clone();
     let rt = runtime.handle();
-    tauri::async_runtime::spawn(run_turn(handle, rt, cfg, token, session, parent_id, text));
+    crate::tauri_api::async_runtime::spawn(run_turn(handle, rt, cfg, token, session, parent_id, text));
     Ok(id)
 }
 
@@ -667,7 +667,7 @@ async fn dispatch_tool(
     let app = app.clone();
     let actor = actor.clone();
     let name = call.name.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = crate::tauri_api::async_runtime::spawn_blocking(move || {
         crate::mcp::tools::dispatch(&app, &actor, &name, args)
     })
     .await;

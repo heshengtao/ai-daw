@@ -10,7 +10,7 @@
 //! 内置 DSP 兜底的功能（转 MIDI / 降噪 / 母带 / MIDI 导出）恒为可用，只在缺模型时标 `degraded`。
 
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use crate::tauri_api::AppHandle;
 
 use crate::models::ModelStatus;
 use crate::runtimes::RuntimeStatus;
