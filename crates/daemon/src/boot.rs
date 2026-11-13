@@ -27,9 +27,9 @@ impl HeadlessHost {
 }
 
 impl Host for HeadlessHost {
-    fn emit_value(&self, _event: &'static str, _payload: Value) {
-        // 事件目前没有订阅者：M3 接上 SSE 后这里改成广播。
-        // 注意**不要**因此跳过 emit —— 未来的订阅者只依赖这一条通道。
+    fn emit_value(&self, event: &'static str, payload: Value) {
+        // 无窗口进程没有 webview，但浏览器客户端要通过 SSE 收到同一条事件。
+        crate::bus::publish(event, payload);
     }
 
     fn data_dir(&self) -> PathBuf {
@@ -73,7 +73,12 @@ pub async fn serve(
     };
     let listener = TcpListener::bind((std::net::IpAddr::V4(ip), port)).await?;
     let addr = listener.local_addr()?;
-    let app = crate::server::router(Arc::new(crate::server::ServerState { daemon, token }));
+    let static_dir = daemon.config().web_dir.clone();
+    let app = crate::server::router(Arc::new(crate::server::ServerState {
+        daemon,
+        token,
+        static_dir,
+    }));
     Ok((addr, async move {
         let _ = axum::serve(listener, app).await;
     }))
@@ -126,6 +131,7 @@ mod tests {
             data_dir: dir.path().to_path_buf(),
             lan: false,
             port: None,
+            web_dir: None,
         };
         let daemon = bootstrap(host, cfg);
         assert!(!daemon.state().engine.lock().unwrap().project().tracks.is_empty());
@@ -150,6 +156,7 @@ mod tests {
             data_dir: dir.path().to_path_buf(),
             lan: false,
             port: Some(0),
+            web_dir: None,
         };
         let daemon = bootstrap(host, cfg);
         let (addr, fut) = serve(daemon, "t".into()).await.unwrap();

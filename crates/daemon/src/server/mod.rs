@@ -6,10 +6,12 @@
 
 pub mod rpc;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -26,14 +28,19 @@ pub struct ServerState {
     pub daemon: Arc<Daemon>,
     /// 访问令牌。
     pub token: String,
+    /// 前端构建产物目录；`None` = 只提供 API，不托管界面。
+    pub static_dir: Option<PathBuf>,
 }
 
 /// 组装路由。
 pub fn router(state: Arc<ServerState>) -> Router {
     Router::new()
         .route("/rpc/{cmd}", post(rpc_handler))
+        .route("/events", get(events_handler))
         .route("/health", get(health))
         .route("/commands", get(commands))
+        // 其余路径交给前端产物（hash 路由，不需要 SPA 兜底规则，但仍兜一下更稳）。
+        .fallback(get(static_handler))
         .with_state(state)
 }
 
@@ -93,6 +100,94 @@ async fn health(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
     }))
 }
 
+/// 事件流（Server-Sent Events）。
+///
+/// `EventSource` 带不了自定义 header，所以 token 走 query。每条事件都带着原始通道名
+/// （`engine://event` 之类），前端按名字过滤即可——与桌面端的 `listen` 用法一致。
+async fn events_handler(
+    State(state): State<Arc<ServerState>>,
+    Query(query): Query<TokenQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !authorized(&headers, &query, &state.token) {
+        return RpcError::Unauthorized.into_response();
+    }
+    let rx = crate::bus::subscribe();
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok((name, payload)) => {
+                    let data = serde_json::json!({ "event": name, "payload": payload }).to_string();
+                    return Some((
+                        Ok::<_, std::convert::Infallible>(Event::default().event("engine").data(data)),
+                        rx,
+                    ));
+                }
+                // 客户端跟不上：丢旧事件，继续（UI 关心的是最新状态）。
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+/// 前端产物：`dist/` 下的静态文件。
+async fn static_handler(
+    State(state): State<Arc<ServerState>>,
+    uri: axum::http::Uri,
+) -> Response {
+    let Some(dir) = &state.static_dir else {
+        return (
+            StatusCode::NOT_FOUND,
+            "这个 daemon 没有配置前端产物目录（--web-dir）",
+        )
+            .into_response();
+    };
+    let mut relative = uri.path().trim_start_matches('/');
+    if relative.is_empty() {
+        relative = "index.html";
+    }
+    // 目录穿越防护：只接受普通相对路径。
+    if relative.split('/').any(|part| part == "..") {
+        return (StatusCode::BAD_REQUEST, "bad path").into_response();
+    }
+    let file = dir.join(relative);
+    let bytes = match tokio::fs::read(&file).await {
+        Ok(bytes) => bytes,
+        // 不认识的路由回落到 index.html（hash 路由用不到，但直接访问 `/` 之外也顺手）。
+        Err(_) => match tokio::fs::read(dir.join("index.html")).await {
+            Ok(bytes) => bytes,
+            Err(_) => return (StatusCode::NOT_FOUND, "not found").into_response(),
+        },
+    };
+    let mime = guess_mime(relative);
+    ([(axum::http::header::CONTENT_TYPE, mime)], bytes).into_response()
+}
+
+/// 够用就行的 MIME 表：前端产物只有这几类文件。
+fn guess_mime(path: &str) -> &'static str {
+    match path.rsplit('.').next() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") | Some("mjs") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("wasm") => "application/wasm",
+        Some("map") => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
 async fn commands() -> impl IntoResponse {
     axum::Json(serde_json::json!({ "commands": rpc::COMMANDS }))
 }
@@ -112,7 +207,7 @@ mod tests {
         let host = Arc::new(FakeHost::default());
         let state = Arc::new(AppState::bootstrap_with_host(None, Vec::new(), host.clone()));
         let daemon = Daemon::new(state, host.clone(), Config::default());
-        (router(Arc::new(ServerState { daemon, token: "t0ken".into() })), host)
+        (router(Arc::new(ServerState { daemon, token: "t0ken".into(), static_dir: None })), host)
     }
 
     async fn call(

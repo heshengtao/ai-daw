@@ -12,6 +12,10 @@ path = "src/lib.rs"
 [dependencies]
 # 过渡期保留：命令层还要用 `#[tauri::command]` 宏与 `State` 类型。`aidawd`（无窗口
 # 二进制）运行时不初始化任何 Tauri App，只借用宏生成的那层薄壳。
+#
+# 关掉默认特性会让 `AppHandle` 变成 `AppHandle<R>`（失去 `Wry` 默认参数），
+# 本 crate 里 465 处签名都要补泛型——那是 M3「命令层与 Tauri 彻底解耦」的活，
+# 不是改一个依赖声明能解决的。所以这里保留默认特性，no-wry 构建走 M3。
 tauri = { version = "2", features = [] }
 # 运行日志的时间戳（已在依赖树里，不引入新包）。
 chrono = "0.4"

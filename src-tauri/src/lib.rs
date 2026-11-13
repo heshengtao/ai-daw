@@ -376,6 +376,8 @@ pub fn run() {
                     data_dir: app.path().app_data_dir().unwrap_or_default(),
                     lan: std::env::args().any(|arg| arg == "--lan"),
                     port: Some(WEB_PORT),
+                    // 桌面端托管的是同一份 `dist/`：浏览器打开 28430 就是同一个界面。
+                    web_dir: Some(app.path().resource_dir().unwrap_or_default().join("web")),
                 },
             );
             app.manage(Arc::clone(&daemon));

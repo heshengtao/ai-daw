@@ -24,7 +24,9 @@ impl TauriHost {
 impl Host for TauriHost {
     fn emit_value(&self, event: &'static str, payload: Value) {
         // 建窗 / 关窗那一瞬间 webview 可能还没准备好；广播失败只影响这一次推送。
-        let _ = self.app.emit(event, payload);
+        let _ = self.app.emit(event, payload.clone());
+        // 同一条事件也要进总线：浏览器客户端（SSE）和 webview 看到的是同一份状态。
+        ai_daw_daemon::bus::publish(event, payload);
     }
 
     fn data_dir(&self) -> PathBuf {

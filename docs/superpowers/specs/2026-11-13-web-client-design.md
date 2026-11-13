@@ -265,6 +265,14 @@ M1 已完成（2026-11-13）：
   带 Bearer 与 query token 校验、坏参数 400、未知命令 400。
 - 测试：228 条无 Tauri 单测全部通过（含 `/rpc` 鉴权、坏参数、未知命令、事件广播）。
 
+追加完成（同一轮）：
+
+- 事件总线 `bus.rs`：`Host` 实现与 SSE 共用一条 `broadcast`，webview 与浏览器收到同一份事件。
+- `GET /events`（SSE）+ `GET /` 静态托管（`--web-dir` / `AIDAW_WEB_DIR`）。
+- 前端只改一处：`src/api/tauri.ts` 的 `invoke`/`listen` 换成 `src/api/ipc.ts`，237 个调用点零改动。
+- Docker 镜像实测：二进制 22 MB，运行层 612 MB（WebKit），合计 1.07 GB——
+  根因是 daemon 仍依赖 `tauri`（`wry` 默认特性）。零 Tauri 化后约 120 MB，属 M3。
+
 与设计的偏差（有意为之）：
 
 1. **Host 放在 `AppState` 里**，而不是只由 `Daemon` 持有。命令层有 239 条命令，

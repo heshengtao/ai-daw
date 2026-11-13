@@ -9,6 +9,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { mockEnabled } from "./mock";
+import { isTauri } from "@/utils/platform";
 
 /** 仓库的 Releases 页：更新日志总入口。 */
 export const RELEASES_URL = "https://github.com/heshengtao/ai-daw/releases";
@@ -36,13 +37,13 @@ let pending: Update | null = null;
 
 /** 当前应用版本号（来自 `tauri.conf.json` 的 `version`）。 */
 export async function currentVersion(): Promise<string> {
-  if (mockEnabled()) return "0.0.0";
+  if (mockEnabled() || !isTauri()) return "web";
   return getVersion();
 }
 
 /** 查一次更新；返回 `null` 表示已是最新。 */
 export async function checkUpdate(): Promise<UpdateInfo | null> {
-  if (mockEnabled()) return null;
+  if (mockEnabled() || !isTauri()) return null;
   const found = await check();
   pending = found;
   if (!found) return null;
@@ -82,6 +83,6 @@ export async function downloadAndInstall(
 
 /** 重启应用（让新装好的版本生效）。 */
 export async function relaunchApp(): Promise<void> {
-  if (mockEnabled()) return;
+  if (mockEnabled() || !isTauri()) return;
   await relaunch();
 }

@@ -23,6 +23,10 @@ struct Args {
     /// 访问令牌；不给就用数据目录里已有的（没有则生成）。
     #[arg(long)]
     token: Option<String>,
+    /// 前端构建产物目录（`dist/`）。给了就能直接用浏览器打开 `http://<host>:<port>/`。
+    /// 也可以走环境变量 `AIDAW_WEB_DIR`（容器里更顺手）。
+    #[arg(long)]
+    web_dir: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
@@ -40,7 +44,14 @@ async fn main() -> std::io::Result<()> {
         .or_else(|| std::env::var("AIDAW_TOKEN").ok().filter(|v| !v.is_empty()))
         .unwrap_or_else(|| web_token(&data_dir));
     let host = Arc::new(HeadlessHost::new(&data_dir));
-    let cfg = Config { data_dir: data_dir.clone(), lan: args.lan, port: Some(args.port) };
+    let cfg = Config {
+        data_dir: data_dir.clone(),
+        lan: args.lan,
+        port: Some(args.port),
+        web_dir: args.web_dir.or_else(|| {
+            std::env::var_os("AIDAW_WEB_DIR").map(std::path::PathBuf::from)
+        }),
+    };
     let daemon = bootstrap(host, cfg);
     let (addr, fut) = serve(daemon, token.clone()).await?;
 

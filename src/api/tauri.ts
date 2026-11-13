@@ -4,8 +4,7 @@
  *
  * 在浏览器里（非 Tauri）开发时回退到 `mock.ts`，方便无后端预览界面。
  */
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke, listen, type UnlistenFn } from "./ipc";
 import { mockApi, mockEnabled } from "./mock";
 import type {
   HfTokenStatus,

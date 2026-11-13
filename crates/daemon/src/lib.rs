@@ -14,6 +14,7 @@ pub mod assets;
 pub mod audio;
 pub mod backends;
 pub mod boot;
+pub mod bus;
 pub mod capabilities;
 pub mod cli;
 pub mod commands;

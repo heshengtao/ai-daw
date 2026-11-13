@@ -69,6 +69,18 @@ curl -s -H "Authorization: Bearer devtoken" -H "content-type: application/json" 
 - token 来源优先级：`--token` → `AIDAW_TOKEN` 环境变量 → 数据目录里的 `web-token` → 新生成并落盘。
 - 没有令牌时 `serve` 直接 panic：局域网内的裸 `/rpc` 等于把整台机器的文件读写交出去。
 
+## 浏览器直接用
+
+```bash
+npm run build                                    # 产出 dist/
+cargo run -p ai-daw-daemon --bin aidawd -- --token dev --port 28430 --web-dir dist
+# 打开 http://127.0.0.1:28430/#token=dev
+```
+
+前端只有一处改动：`src/api/tauri.ts` 的 `invoke` / `listen` 换成 `src/api/ipc.ts` 的同名实现，
+在浏览器里自动走 `POST /rpc/<cmd>` 与 `GET /events`（SSE）。命令名、参数名、事件通道名
+三者与桌面端完全一致，所以 237 个调用点一行没改。
+
 ## Docker
 
 ```bash
@@ -88,8 +100,18 @@ docker compose up --build
 > 本机 Docker Hub 不可达，所以仓库里的 `Dockerfile`（`rust:1-bookworm` / `debian:bookworm-slim`）
 > 未在本地跑通完整镜像构建，包清单与运行期依赖已按 `ldd` 实测结果对齐。
 
-> 过渡期说明：本 crate 仍依赖 `tauri`（只为 `#[tauri::command]` 宏），所以镜像的构建层需要
-> webkit2gtk 头文件、运行层需要它的运行库。等命令层与 Tauri 彻底解耦后，这两层都能瘦很多。
+> **镜像大小的真实构成（实测）**：二进制 `strip` 后 **22 MB**，运行层依赖 **612 MB**
+> （webkit2gtk / gtk3 / soup3 及其依赖），加上 Debian slim 底座，总共约 1.07 GB。
+>
+> 为什么无头进程会需要 WebKit？因为本 crate 还挂着 `tauri`（M1 过渡期的选择），
+> `tauri` 的默认特性 `wry` 会把 WebKit 链进来——`otool`/`ldd` 都能看到 `aidawd`
+> 直接链接 `WebKit.framework` / `libwebkit2gtk-4.1.so`。桌面版看着小，是因为 macOS
+> 自带 WebKit，不用打包；容器里没有，就只能自带。
+>
+> 试过只关掉 `tauri` 的默认特性：`AppHandle` 会变成 `AppHandle<R>`（失去 `Wry` 默认
+> 参数），本 crate 里有 **465 处**签名要补泛型。所以真正的解法是 M3 那一步：把命令层
+> （126 个 `#[tauri::command]`）搬回 `src-tauri`，本 crate 变成零 Tauri 依赖。
+> 那样镜像会掉到 **约 120 MB**（二进制 + libasound2 + ca-certificates）。
 
 ## 现状（M1）
 

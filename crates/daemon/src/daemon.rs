@@ -18,11 +18,13 @@ pub struct Config {
     pub lan: bool,
     /// HTTP 端口；`None` = 不启动 HTTP 服务。
     pub port: Option<u16>,
+    /// 前端构建产物目录（`dist/`）。给了就由 daemon 托管，浏览器直接连它。
+    pub web_dir: Option<PathBuf>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { data_dir: PathBuf::from("."), lan: false, port: None }
+        Self { data_dir: PathBuf::from("."), lan: false, port: None, web_dir: None }
     }
 }
 
