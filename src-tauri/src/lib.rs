@@ -555,8 +555,12 @@ pub fn run() {
             {
                 let daemon_for_web = std::sync::Arc::clone(&daemon);
                 let handle = app.handle().clone();
+                // 浏览器发来的命令要在本进程里执行，所以要带上真实句柄。
+                let rpc_handle = handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    match ai_daw_daemon::boot::serve(daemon_for_web).await {
+                    match ai_daw_daemon::boot::serve_with_app(daemon_for_web, Some(rpc_handle))
+                        .await
+                    {
                         Ok((addr, fut)) => {
                             let mut running =
                                 crate::web::info_for(&crate::web::load_config(&handle));

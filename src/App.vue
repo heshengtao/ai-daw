@@ -396,8 +396,12 @@ async function onProjectDialogSubmit(name: string): Promise<void> {
     return;
   }
   const path = await pickProjectToSave(`${safeFilename(name)}.json`);
-  if (!path) return;
-  await writeProject(path);
+  // 浏览器里没有保存对话框，`pickProjectToSave` 返回空串表示「让服务端分配路径」；
+  // 只有 `null` 才是用户取消。
+  if (path === null) return;
+  if (!(await writeProject(path))) return;
+  // 浏览器里工程留在服务端数据目录，顺手把这份 JSON 也给用户下载一份。
+  if (!isTauri() && project.currentPath) await downloadFromServer(project.currentPath);
 }
 
 /**

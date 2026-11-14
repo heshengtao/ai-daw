@@ -134,11 +134,20 @@ fn env_override() -> Option<PathBuf> {
 }
 
 fn default_data(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_data_dir().ok()
+    // 无头进程没有 Tauri 路径解析：当前生效的目录就是唯一事实，拿它当"默认"，
+    // 否则设置页会因为"算不出默认目录"整块打不开。
+    app.path().app_data_dir().ok().or_else(effective_dir)
 }
 
 fn default_config(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_config_dir().ok()
+    app.path().app_config_dir().ok().or_else(effective_dir)
+}
+
+/// 已经确定的生效目录（无头进程由 `--data-dir` / 环境变量给出）。
+fn effective_dir() -> Option<PathBuf> {
+    EFFECTIVE
+        .get()
+        .and_then(|value| value.as_ref().map(|(dir, _)| dir.clone()))
 }
 
 /// **系统默认**配置目录（不受数据目录覆盖影响）。

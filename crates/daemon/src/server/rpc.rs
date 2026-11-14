@@ -21,6 +21,8 @@ pub enum RpcError {
     BadArgs(String),
     /// 命令执行本身失败（例如没有音频设备）。
     Failed(String),
+    /// 命令存在，但只有桌面端能做到（原生窗口 / 系统集成 / 后台运行时）。
+    Unsupported(String),
     /// 令牌缺失或不匹配。
     Unauthorized,
 }
@@ -31,6 +33,7 @@ impl IntoResponse for RpcError {
             RpcError::Unknown(cmd) => (StatusCode::BAD_REQUEST, format!("unknown command: {cmd}")),
             RpcError::BadArgs(err) => (StatusCode::BAD_REQUEST, format!("bad args: {err}")),
             RpcError::Failed(err) => (StatusCode::INTERNAL_SERVER_ERROR, err),
+            RpcError::Unsupported(why) => (StatusCode::NOT_IMPLEMENTED, why),
             RpcError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".into()),
         };
         (status, axum::Json(serde_json::json!({ "error": message }))).into_response()
@@ -254,7 +257,13 @@ struct SeekArgs {
 }
 
 /// 分发一条命令。**与 Tauri 命令同名同参**，前端的两套传输层可以共用一份调用代码。
-pub fn dispatch(state: &AppState, cmd: &str, args: Value) -> Result<Value, RpcError> {
+pub fn dispatch(server: &super::ServerState, cmd: &str, args: Value) -> Result<Value, RpcError> {
+    let state: &AppState = server.daemon.state();
+    // 先问「按 Tauri 签名写的那张表」：工程 / 插件 / 设备 / 分析这些命令都躺在那里。
+    // 它们和桌面端执行的是同一份实现，网页端不该有第二套行为。
+    if let Some(result) = super::cmds::call(&server.app_handle(), cmd, args.clone()) {
+        return result;
+    }
     match cmd {
         // ---- 只读 ----
         "get_project" => json(crate::commands::get_project_impl(state)),

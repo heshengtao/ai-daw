@@ -885,6 +885,16 @@ export function openProject(path: string): Promise<Project> {
 /** 离线渲染当前工程，返回可播放的 WAV Blob（实时播放不可用时的回退路径）。 */
 export async function renderPreview(sampleRate = 44100): Promise<Blob> {
   if (mockEnabled()) return mockApi.renderPreview();
+  if (!isTauri()) {
+    // 浏览器里没有 IPC 的二进制通道：这条命令回的是 `audio/wav` 原始字节。
+    const response = await fetch("/rpc/render_preview", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sampleRate }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    return new Blob([await response.arrayBuffer()], { type: "audio/wav" });
+  }
   const bytes = await invoke<ArrayBuffer>("render_preview", { sampleRate });
   return new Blob([bytes], { type: "audio/wav" });
 }

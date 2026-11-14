@@ -50,6 +50,9 @@ pub fn bootstrap(host: Arc<dyn Host>, cfg: Config) -> Arc<Daemon> {
         Vec::new(),
         Arc::clone(&host),
     ));
+    // HTTP 命令层按 Tauri 签名写的，靠这张托管表取状态；桌面端由 `app.manage()` 填。
+    crate::tauri_api::share_rpc_state(&state);
+    crate::tauri_api::share_headless_runtimes();
     // 用户的预设与音色记忆库是跨工程资产，按数据目录加载（拿不到就空着，不影响启动）。
     state.init_presets(Some(cfg.data_dir.join("presets.json")));
     state.init_sound_memories(Some(cfg.data_dir.join("sound-memories.json")));
@@ -70,6 +73,16 @@ pub fn bootstrap(host: Arc<dyn Host>, cfg: Config) -> Arc<Daemon> {
 pub async fn serve(
     daemon: Arc<Daemon>,
 ) -> std::io::Result<(SocketAddr, impl std::future::Future<Output = ()>)> {
+    serve_with_app(daemon, None).await
+}
+
+/// 起 HTTP 服务，并把宿主句柄交给命令层（桌面端用它替 web 客户端执行命令）。
+///
+/// 无头进程传 `None`：命令层改用空壳句柄 + 全局托管表（见 `tauri_api::share_rpc_state`）。
+pub async fn serve_with_app(
+    daemon: Arc<Daemon>,
+    app: Option<crate::tauri_api::AppHandle>,
+) -> std::io::Result<(SocketAddr, impl std::future::Future<Output = ()>)> {
     let cfg = daemon.config().clone();
     let port = cfg.port.unwrap_or(28430);
     let ip = if cfg.lan {
@@ -80,12 +93,13 @@ pub async fn serve(
     let listener = TcpListener::bind((std::net::IpAddr::V4(ip), port)).await?;
     let addr = listener.local_addr()?;
     let static_dir = daemon.config().web_dir.clone();
-    let app = crate::server::router(Arc::new(crate::server::ServerState {
+    let router = crate::server::router(Arc::new(crate::server::ServerState {
         daemon,
         static_dir,
+        app,
     }));
     Ok((addr, async move {
-        let _ = axum::serve(listener, app).await;
+        let _ = axum::serve(listener, router).await;
     }))
 }
 

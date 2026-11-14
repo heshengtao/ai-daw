@@ -2707,7 +2707,9 @@ pub async fn save_project(app: crate::tauri_api::AppHandle, path: String) -> Res
         .map_err(|e| e.to_string())?
 }
 
-/// 无窗口也能保存：写盘、标记已保存、记下路径（历史留档由桌面端负责）。
+/// 保存工程但**不进历史**：给"只想落盘"的内部调用用。
+///
+/// 界面与 `/rpc` 都走 [`save_project_impl`]（会留历史快照）；这里只保留给测试与导出流水线。
 pub fn save_project_state(state: &AppState, path: &str) -> Result<String, String> {
     capture_plugin_states(state);
     let project = { state.engine.lock().unwrap().project().clone() };
@@ -3064,15 +3066,19 @@ pub async fn render_preview(
     state: State<'_, Arc<AppState>>,
     sample_rate: u32,
 ) -> Result<crate::tauri_api::ipc::Response, String> {
-    validate_sample_rate(sample_rate)?;
-    let inputs = render_inputs(&state);
-    let bytes = crate::tauri_api::async_runtime::spawn_blocking(move || {
-        let buffer = render_offline(inputs, sample_rate, 0.5);
-        wav_bytes(&buffer, sample_rate)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    let bytes = render_preview_wav(&state, sample_rate)?;
     Ok(crate::tauri_api::ipc::Response::new(bytes))
+}
+
+/// 离线试听的 WAV 字节。
+///
+/// 桌面端装进 IPC 的二进制响应里；浏览器端没有那条通道，`/rpc/render_preview` 直接把它
+/// 当 `audio/wav` 回出去（没有声卡的容器里，这就是播放的唯一途径）。
+pub fn render_preview_wav(state: &AppState, sample_rate: u32) -> Result<Vec<u8>, String> {
+    validate_sample_rate(sample_rate)?;
+    let inputs = render_inputs(state);
+    let buffer = render_offline(inputs, sample_rate, 0.5);
+    Ok(wav_bytes(&buffer, sample_rate))
 }
 
 /// 对当前工程做一次离线分析：响度（LUFS/LRA/真峰值）、RMS、平均幅度谱。

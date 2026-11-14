@@ -16,7 +16,34 @@ pub use tauri::*;
 
 #[cfg(not(feature = "desktop"))]
 mod stub {
+    use std::any::{Any, TypeId};
+    use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::RwLock;
+
+    /// 无头进程的托管状态表：`TypeId → &'static dyn Any`。
+    ///
+    /// Tauri 的 `AppHandle::state::<T>()` 背后就是一张"类型 → 单例"的表，桌面端由
+    /// `app.manage()` 填。无头进程没有 AppHandle，于是这张表由 [`install_state`] 填，
+    /// 命令层里 `app.state::<T>()` 照常写、照常取——**同一份命令代码两种构建都能跑**。
+    ///
+    /// 存 `&'static` 是刻意泄漏：这里只装进程级的少量单例（`Arc<AppState>` 等），
+    /// 生命周期本来就等于进程；泄漏换来的是 `State<'static, T>` 这种零成本的返回。
+    static MANAGED: RwLock<Option<HashMap<TypeId, &'static (dyn Any + Send + Sync)>>> = RwLock::new(None);
+
+    /// 装一份托管状态（可重复安装同类型，后写的生效）。
+    ///
+    /// 传什么类型就以什么类型登记：`install_state(Arc::clone(&state))` 对应
+    /// `app.state::<Arc<AppState>>()`，`install_state(runtime)` 对应
+    /// `app.state::<StoreRuntime>()`——与桌面端 `app.manage(x)` 的键完全一致。
+    pub fn install_state<T: Any + Send + Sync>(value: T) {
+        let leaked: &'static T = Box::leak(Box::new(value));
+        let any: &'static (dyn Any + Send + Sync) = leaked;
+        let mut guard = MANAGED.write().unwrap();
+        guard
+            .get_or_insert_with(HashMap::new)
+            .insert(TypeId::of::<T>(), any);
+    }
 
     /// 空壳应用句柄：无头进程里没有任何东西会构造它。
     #[derive(Clone, Default)]
@@ -45,9 +72,17 @@ mod stub {
             Ok(())
         }
 
-        /// 空壳：取托管状态。
-        pub fn state<T: Send + Sync + 'static>(&self) -> State<'_, T> {
-            unimplemented!("无头构建不应访问 AppHandle::state")
+        /// 取托管状态（与 Tauri 的 `AppHandle::state` 同义，数据来自 [`install_state`]）。
+        pub fn state<T: Send + Sync + 'static>(&self) -> State<'static, T> {
+            let guard = MANAGED.read().unwrap();
+            let table = guard.as_ref().expect("[tauri_api] 无头进程还没有安装任何托管状态");
+            let any = *table
+                .get(&TypeId::of::<T>())
+                .unwrap_or_else(|| panic!("[tauri_api] 托管状态里没有 {:?}", std::any::type_name::<T>()));
+            State(
+                any.downcast_ref::<T>()
+                    .unwrap_or_else(|| panic!("[tauri_api] 托管状态类型不匹配：{}", std::any::type_name::<T>())),
+            )
         }
 
         /// 空壳：路径解析。
@@ -56,7 +91,14 @@ mod stub {
         }
 
         /// 空壳：广播事件。
-        pub fn emit<S: serde::Serialize>(&self, _event: &str, _payload: S) -> Result<(), String> {
+        ///
+        /// 转发给进程内事件总线，SSE 客户端与 `/audio` 元数据都能收到——桌面端
+        /// `app.emit` 发给 webview，这里发给浏览器，二者是同一层语义。
+        pub fn emit<S: serde::Serialize>(&self, event: &str, payload: S) -> Result<(), String> {
+            match serde_json::to_value(payload) {
+                Ok(value) => crate::bus::publish(event, value),
+                Err(err) => eprintln!("[emit] 事件 {event} 序列化失败：{err}"),
+            }
             Ok(())
         }
 
@@ -260,3 +302,50 @@ mod stub {
 
 #[cfg(not(feature = "desktop"))]
 pub use stub::*;
+
+/* -------------------------------------------------------------------------- */
+/* HTTP 命令层用的桥：让 `*_tauri_command` 在两种构建里都能被直接调用            */
+/* -------------------------------------------------------------------------- */
+
+/// 把引擎状态装进无头进程的托管表（桌面端由 `app.manage()` 负责，这里不需要做事）。
+#[cfg(not(feature = "desktop"))]
+pub fn share_rpc_state(state: &std::sync::Arc<crate::state::AppState>) {
+    stub::install_state(std::sync::Arc::clone(state));
+}
+
+/// 无头进程里桌面端会 `app.manage()` 的那些运行时（插件商店设置等）。
+///
+/// 这几样只依赖数据目录，浏览器客户端也该能用（改镜像源、下载模型、装插件）。
+#[cfg(not(feature = "desktop"))]
+pub fn share_headless_runtimes() {
+    let app = rpc_app_handle();
+    stub::install_state(crate::manager::StoreRuntime::load(&app));
+}
+
+/// 桌面端由 `app.manage()` 负责，这里空实现。
+#[cfg(feature = "desktop")]
+pub fn share_headless_runtimes() {}
+
+/// 把引擎状态装进无头进程的托管表（桌面端已托管，空实现）。
+#[cfg(feature = "desktop")]
+pub fn share_rpc_state(_state: &std::sync::Arc<crate::state::AppState>) {}
+
+/// `/rpc` 里拿 `AppHandle` 的地方用它。
+///
+/// 桌面端由外壳把真实句柄交给 HTTP 服务（`serve_with_app`），无头进程则返回空壳——
+/// 空壳的 `state()` / `emit()` 已经接上全局托管表与事件总线，命令照常执行。
+#[cfg(not(feature = "desktop"))]
+pub fn rpc_app_handle() -> AppHandle {
+    AppHandle::default()
+}
+
+/// `/rpc` 里拿 `AppHandle` 的地方用它（桌面端必须由外壳传入，见 `serve_with_app`）。
+#[cfg(feature = "desktop")]
+pub fn rpc_app_handle() -> AppHandle {
+    panic!("桌面构建的 HTTP 服务没有拿到 AppHandle：请用 serve_with_app 启动")
+}
+
+/// 从 `AppHandle` 取引擎状态（两种构建同形，桌面端走 `app.state`）。
+pub fn app_state(app: &AppHandle) -> State<'_, std::sync::Arc<crate::state::AppState>> {
+    app.state::<std::sync::Arc<crate::state::AppState>>()
+}

@@ -5,6 +5,7 @@
 //! **不鉴权**：这个服务的定位是"无头版本"——给没有显示器的机器用，打开端口就是界面。
 //! 访问控制交给部署侧（局域网、容器网络、反向代理/网关）。要对外暴露就自己加一层。
 
+pub mod cmds;
 pub mod rpc;
 
 use std::path::PathBuf;
@@ -30,6 +31,19 @@ pub struct ServerState {
     pub daemon: Arc<Daemon>,
     /// 前端构建产物目录；`None` = 只提供 API，不托管界面。
     pub static_dir: Option<PathBuf>,
+    /// 桌面外壳的应用句柄。
+    ///
+    /// 浏览器客户端发来的命令要和 webview 里点按钮**走同一条实现**——那些实现按 Tauri
+    /// 签名写着（`AppHandle` / `State`），所以得把句柄带进来。无头进程没有句柄，用
+    /// `tauri_api::rpc_app_handle()` 的空壳（它的 `state()` 背后是全局托管表）。
+    pub app: Option<crate::tauri_api::AppHandle>,
+}
+
+impl ServerState {
+    /// 命令层要的 `AppHandle`：桌面端用外壳给的，无头进程用空壳。
+    pub fn app_handle(&self) -> crate::tauri_api::AppHandle {
+        self.app.clone().unwrap_or_else(crate::tauri_api::rpc_app_handle)
+    }
 }
 
 
@@ -102,7 +116,7 @@ async fn rpc_handler(
         )
         .await
         {
-            Ok(path) => axum::Json(serde_json::json!({ "path": path })).into_response(),
+            Ok(path) => axum::Json(serde_json::Value::String(path)).into_response(),
             Err(err) => RpcError::Failed(err).into_response(),
         };
     }
@@ -121,9 +135,10 @@ async fn rpc_handler(
         } else {
             parsed.path
         };
-        let daemon = Arc::clone(&state.daemon);
-        return match crate::commands::save_project_state(daemon.state(), &path) {
-            Ok(path) => axum::Json(serde_json::json!({ "path": path })).into_response(),
+        // 走桌面端同一条实现：覆盖旧文件前留历史、写盘后记一份快照。
+        let app = state.app_handle();
+        return match crate::commands::save_project_impl(&app, &path) {
+            Ok(path) => axum::Json(serde_json::Value::String(path)).into_response(),
             Err(err) => RpcError::Failed(err).into_response(),
         };
     }
@@ -146,7 +161,7 @@ async fn rpc_handler(
         };
         let daemon = Arc::clone(&state.daemon);
         return match crate::commands::export_midi_impl(daemon.state(), path, parsed.tracks).await {
-            Ok(path) => axum::Json(serde_json::json!({ "path": path })).into_response(),
+            Ok(path) => axum::Json(serde_json::Value::String(path)).into_response(),
             Err(err) => RpcError::Failed(err).into_response(),
         };
     }
@@ -167,8 +182,36 @@ async fn rpc_handler(
             parsed.path
         };
         return match crate::commands::export_score(path, parsed.xml).await {
-            Ok(path) => axum::Json(serde_json::json!({ "path": path })).into_response(),
+            Ok(path) => axum::Json(serde_json::Value::String(path)).into_response(),
             Err(err) => RpcError::Failed(err).into_response(),
+        };
+    }
+    // 离线试听：返回 WAV 原始字节（前端拿去当 Blob 播）。没有声卡的容器里这是唯一的播放路径。
+    if cmd == "render_preview" {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Args {
+            #[serde(default = "default_preview_rate")]
+            sample_rate: u32,
+        }
+        fn default_preview_rate() -> u32 {
+            44_100
+        }
+        let parsed: Args = match serde_json::from_value(args) {
+            Ok(value) => value,
+            Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
+        };
+        let daemon = Arc::clone(&state.daemon);
+        return match tokio::task::spawn_blocking(move || {
+            crate::commands::render_preview_wav(daemon.state(), parsed.sample_rate)
+        })
+        .await
+        {
+            Ok(Ok(bytes)) => {
+                ([(axum::http::header::CONTENT_TYPE, "audio/wav")], bytes).into_response()
+            }
+            Ok(Err(err)) => RpcError::Failed(err).into_response(),
+            Err(err) => RpcError::Failed(format!("render failed: {err}")).into_response(),
         };
     }
     // 整体替换工程（MIDI / MusicXML / 工程 JSON 导入的最后一步）。
@@ -225,12 +268,16 @@ async fn rpc_handler(
             Err(err) => RpcError::Failed(err).into_response(),
         };
     }
+    // 要 await 的命令（打开工程、重扫插件、录音收尾、参数枚举…）：单独在这里 await。
+    if let Some(result) = cmds::call_async(&state.app_handle(), &cmd, args.clone()).await {
+        return match result {
+            Ok(value) => axum::Json(value).into_response(),
+            Err(err) => err.into_response(),
+        };
+    }
     // 其余命令实现里有渲染、读盘、加锁：绝不能放在 async 任务的 poll 里。
-    let daemon = Arc::clone(&state.daemon);
-    let result = tokio::task::spawn_blocking(move || {
-        rpc::dispatch(daemon.state(), &cmd, args)
-    })
-    .await;
+    let server = Arc::clone(&state);
+    let result = tokio::task::spawn_blocking(move || rpc::dispatch(&server, &cmd, args)).await;
     match result {
         Ok(Ok(value)) => axum::Json(value).into_response(),
         Ok(Err(err)) => err.into_response(),
@@ -497,7 +544,15 @@ fn guess_mime(path: &str) -> &'static str {
 }
 
 async fn commands() -> impl IntoResponse {
-    axum::Json(serde_json::json!({ "commands": rpc::COMMANDS }))
+    // 两张表合在一起：`rpc::COMMANDS` 是手写的分发分支，`cmds::NAMES` 是直接调用
+    // Tauri 命令实现的那批。前端据此知道哪些名字可用（其余会拿到明确的 501）。
+    let mut all: Vec<&str> = rpc::COMMANDS.to_vec();
+    for name in cmds::NAMES {
+        if !all.contains(name) {
+            all.push(name);
+        }
+    }
+    axum::Json(serde_json::json!({ "commands": all }))
 }
 
 #[cfg(test)]
@@ -514,10 +569,21 @@ mod tests {
     fn server() -> (Router, Arc<FakeHost>) {
         let host = Arc::new(FakeHost::default());
         let state = Arc::new(AppState::bootstrap_with_host(None, Vec::new(), host.clone()));
-        let daemon = Daemon::new(state, host.clone(), Config::default());
+        // 命令层按 Tauri 签名写，靠托管表取状态（无头进程里由这里填）。
+        crate::tauri_api::share_rpc_state(&state);
+        // 数据目录指到临时目录：`save_project` 会往里写 `projects/*.json`，
+        // 用相对路径会把测试产物落在源码树里。
+        let dir = std::env::temp_dir().join("ai-daw-rpc-tests");
+        let _ = std::fs::create_dir_all(&dir);
+        let daemon = Daemon::new(
+            state,
+            host.clone(),
+            Config { data_dir: dir, ..Config::default() },
+        );
         (router(Arc::new(ServerState {
             daemon,
             static_dir: None,
+            app: None,
         })), host)
     }
 
@@ -577,5 +643,74 @@ mod tests {
         let (app, _) = server();
         let (status, _) = call(app, "/rpc/add_track", "{}").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// 工程相关命令必须走「按 Tauri 签名写的那张表」（`cmds`），不能是 unknown。
+    ///
+    /// 这几条以前在网页端全报 `unknown command: …`，回归时最容易再掉一个。
+    #[tokio::test]
+    async fn project_commands_are_not_unknown() {
+        let (app, _) = server();
+        for cmd in [
+            "project_history",
+            "cache_session",
+            "ops_list",
+            "trim_clip",
+            "audition_note",
+            "plugin_scan_status",
+        ] {
+            let (_status, body) = call(app.clone(), &format!("/rpc/{cmd}"), "{}").await;
+            // 少参数会得到 400 `bad args`（正常）；只有 `unknown command` 才是没接上。
+            assert!(
+                !body.contains("unknown command"),
+                "{cmd} 又变成未知命令了：{body}"
+            );
+        }
+    }
+
+    /// 保存工程返回的是**裸路径字符串**（与桌面端 `Result<String, String>` 一致）。
+    ///
+    /// 以前返回 `{"path": …}`，前端 `currentPath` 会拿到一个对象，之后再保存就整条坏掉。
+    #[tokio::test]
+    async fn save_project_returns_a_bare_path_string() {
+        let (app, _) = server();
+        let (status, body) = call(app, "/rpc/save_project", r#"{"path":""}"#).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.starts_with('"'), "应当是 JSON 字符串：{body}");
+        assert!(body.contains("project-"), "应当是服务端分配的路径：{body}");
+    }
+
+    /// 只有桌面端能做到的命令给出明确原因（501），而不是「未知命令」。
+    #[tokio::test]
+    async fn desktop_only_command_is_501_with_reason() {
+        let (app, _) = server();
+        let (status, body) = call(app, "/rpc/open_plugin_window", r#"{"track":1}"#).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert!(body.contains("桌面端"), "{body}");
+    }
+
+    /// 离线试听回的是 WAV 原始字节（没有声卡的容器里，这是唯一的播放路径）。
+    #[tokio::test]
+    async fn render_preview_returns_wav_bytes() {
+        let (app, _) = server();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/rpc/render_preview")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"sampleRate":22050}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "audio/wav"
+        );
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(bytes.len() > 44, "至少要有 WAV 头 + 数据");
+        assert_eq!(&bytes[0..4], b"RIFF");
     }
 }
