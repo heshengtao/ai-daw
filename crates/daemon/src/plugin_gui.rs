@@ -81,22 +81,29 @@ pub struct OpenResult {
     pub url: String,
 }
 
-fn sessions() -> &'static Mutex<HashMap<String, Arc<Session>>> {
-    static SLOT: OnceLock<Mutex<HashMap<String, Arc<Session>>>> = OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(HashMap::new()))
+/// 会话表：两份索引——按「轨道:插件」找（开/关/是否已开），按会话 id 找（WebSocket）。
+#[derive(Default)]
+struct Registry {
+    by_key: HashMap<String, String>,
+    by_id: HashMap<String, Arc<Session>>,
+}
+
+fn registry() -> &'static Mutex<Registry> {
+    static SLOT: OnceLock<Mutex<Registry>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(Registry::default()))
 }
 
 /// 某个槽位的界面是否开着（页面的"是否已打开"查询用）。
 pub fn is_open(track: u64, plugin_id: &Option<String>) -> bool {
-    sessions()
+    registry()
         .lock()
-        .map(|map| map.contains_key(&key_of(track, plugin_id)))
+        .map(|registry| registry.by_key.contains_key(&key_of(track, plugin_id)))
         .unwrap_or(false)
 }
 
 /// 按 id 取会话（WebSocket 处理器用）。
 pub fn session(id: &str) -> Option<Arc<Session>> {
-    sessions().lock().ok()?.get(id).cloned()
+    registry().lock().ok()?.by_id.get(id).cloned()
 }
 
 /// 会话 id：16 位十六进制（不需要全局唯一，只要同一进程内不撞）。
@@ -154,8 +161,11 @@ pub fn selftest() -> Result<Value, RpcError> {
         capture: Mutex::new(None),
         input: input_tx,
     });
-    if let Ok(mut map) = sessions().lock() {
-        map.insert("selftest".to_string(), Arc::clone(&session));
+    if let Ok(mut registry) = registry().lock() {
+        registry
+            .by_key
+            .insert("selftest".to_string(), id.clone());
+        registry.by_id.insert(id.clone(), Arc::clone(&session));
     }
     Ok(json!(OpenResult {
         stream_id: id.clone(),
@@ -182,8 +192,12 @@ pub fn open(
         ));
     };
     let key = key_of(track, &plugin_id);
-    if let Some(existing) = session(&key) {
-        // 已经开着：直接复用（页面上再点一次不该开第二个窗口）。
+    // 已经开着：直接复用（页面上再点一次不该开第二个窗口）。
+    let existing = registry().lock().ok().and_then(|registry| {
+        let id = registry.by_key.get(&key)?;
+        registry.by_id.get(id).cloned()
+    });
+    if let Some(existing) = existing {
         return Ok(json!(OpenResult {
             stream_id: existing.id.clone(),
             width: existing.width,
@@ -249,10 +263,10 @@ pub fn open(
         capture: Mutex::new(None),
         input: input_tx,
     });
-    if let Ok(mut map) = sessions().lock() {
-        map.insert(key, Arc::clone(&session));
+    if let Ok(mut registry) = registry().lock() {
+        registry.by_key.insert(key, id.clone());
+        registry.by_id.insert(id.clone(), Arc::clone(&session));
     }
-    // 会话结束时回收：编辑器线程与抓帧进程都靠 `stop` 退出。
     // 编辑器线程在自己的 `stop` 置位后收尾；这里只是别让 handle 泄漏成 detach。
     let _ = thread;
 
@@ -272,17 +286,19 @@ pub fn close(
     plugin_id: Option<String>,
 ) -> Result<Value, RpcError> {
     let key = key_of(track, &plugin_id);
-    if let Ok(mut map) = sessions().lock() {
-        if let Some(session) = map.remove(&key) {
-            session.stop.store(true, Ordering::Relaxed);
-            if let Ok(mut capture) = session.capture.lock() {
-                if let Some(mut child) = capture.take() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
+    let removed = registry().lock().ok().and_then(|mut registry| {
+        let id = registry.by_key.remove(&key)?;
+        registry.by_id.remove(&id)
+    });
+    if let Some(session) = removed {
+        session.stop.store(true, Ordering::Relaxed);
+        if let Ok(mut capture) = session.capture.lock() {
+            if let Some(mut child) = capture.take() {
+                let _ = child.kill();
+                let _ = child.wait();
             }
-            return Ok(json!({ "closed": true, "streamId": session.id }));
         }
+        return Ok(json!({ "closed": true, "streamId": session.id }));
     }
     Ok(json!({ "closed": false }))
 }
