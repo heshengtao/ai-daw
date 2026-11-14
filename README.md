@@ -182,6 +182,74 @@ pnpm build:aidaw      # build the aidaw CLI (see tools/build-aidaw.sh)
 > **Intel Macs are not supported yet.** ONNX Runtime publishes no prebuilt binaries for
 > `x86_64-apple-darwin`, so the local AI models cannot be linked for Intel macOS.
 
+## Browser access & headless
+
+AI DAW can run **without a window** and serve the same interface to any browser on your
+network. The desktop app and the browser client drive the *same* session — same project,
+same undo history, same audio engine.
+
+### Docker (pre-built image)
+
+```bash
+docker run -d --name ai-daw -p 28430:28430 -v ai-daw-data:/data ailm32442/ai-daw
+```
+
+Open <http://localhost:28430>. **No token in the URL** — the server issues a session cookie
+on first load, so the browser just works. Scripts can still call the API with the token
+printed in the container log (`docker logs ai-daw | grep token`) as
+`Authorization: Bearer <token>`.
+
+### Docker (build from source)
+
+```bash
+git clone https://github.com/heshengtao/ai-daw.git
+cd ai-daw
+docker build -t ai-daw .
+docker run -d -p 28430:28430 -v ai-daw-data:/data ai-daw
+```
+
+### Headless binary
+
+```bash
+npm run build                                                # produces dist/
+cargo run -p ai-daw-daemon --no-default-features --bin aidawd -- \
+  --data-dir ~/.ai-daw --port 28430 --web-dir dist
+```
+
+### Environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AIDAW_DATA_DIR` | `/data` in the image | sessions, presets, models, access token |
+| `AIDAW_WEB_DIR` | `/web` in the image | built frontend to serve |
+| `AIDAW_TOKEN` | generated once | fixed token for scripts/CI (browsers don't need it) |
+| `AIDAW_NO_AUDIO` | unset | skip opening an audio device (containers without ALSA) |
+| `AIDAW_MCP_URL` | auto-discovered | where the `aidaw` CLI looks for the running app |
+
+### HTTP API
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/rpc/{command}` | 96 commands, same names and arguments as the app's IPC |
+| `GET` | `/events` | Server-Sent Events: engine edits and transport state |
+| `GET` | `/audio` | WebSocket: live PCM (48 kHz stereo float32, ~10 ms blocks) |
+| `GET` | `/health` | liveness + whether an audio device is available |
+| `GET` | `/commands` | every command name the server exposes |
+
+## Architecture
+
+```
+src-tauri/          Tauri shell: windows, native plugin editors, auto-updater
+crates/daemon/      the whole backend: project engine, audio host, MCP, HTTP
+crates/engine/      DSP + scheduling + rendering (no Tauri dependency)
+crates/ipc/         the command/event schema shared by app, CLI and MCP
+src/                Vue 3 frontend — identical for desktop and browser
+```
+
+The frontend never talks to Rust directly: `src/api/ipc.ts` picks a transport (`Tauri IPC`
+or `HTTP + SSE + WebSocket`), so every screen works in both shells. That is why the browser
+build is not a port — it is the same app talking to the same backend over the network.
+
 ## FAQ
 
 ### Is AI DAW free?
@@ -209,6 +277,22 @@ VST3 and CLAP on Windows, macOS and Linux; **Audio Units (AU / AUv3)** as well o
 ### Do I need the app running to let an agent drive it?
 
 Yes. The Skill and the `aidaw` CLI talk to a running AI DAW over MCP, so start the app first (`aidaw status` will tell you if it is up).
+
+## Support
+
+### Please star us!
+
+If AI DAW is useful to you, a star helps other people find it — and it is the clearest
+signal that this work is worth continuing.
+
+### Follow us
+
+- GitHub: <https://github.com/heshengtao>
+- Issues and ideas: <https://github.com/heshengtao/ai-daw/issues>
+
+### Join the community
+
+Questions, workflows and half-finished songs are all welcome in the issue tracker.
 
 ## License
 

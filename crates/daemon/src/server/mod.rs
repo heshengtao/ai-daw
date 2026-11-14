@@ -31,7 +31,15 @@ pub struct ServerState {
     pub token: String,
     /// 前端构建产物目录；`None` = 只提供 API，不托管界面。
     pub static_dir: Option<PathBuf>,
+    /// 浏览器会话：打开过界面就发一个，之后 `/rpc`、`/events`、`/audio` 认它。
+    ///
+    /// 这样浏览器地址栏里**不需要带 token**（与 ExamBot 的体验一致）；
+    /// 命令行 / 脚本仍然可以用 `Authorization: Bearer <token>`。
+    pub sessions: std::sync::Mutex<std::collections::HashSet<String>>,
 }
+
+/// 浏览器会话 cookie 名。
+const SESSION_COOKIE: &str = "ai-daw-session";
 
 /// 组装路由。
 pub fn router(state: Arc<ServerState>) -> Router {
@@ -51,12 +59,58 @@ struct TokenQuery {
     token: Option<String>,
 }
 
-fn authorized(headers: &HeaderMap, query: &TokenQuery, token: &str) -> bool {
+/// 请求是否被授权。
+///
+/// 三条通道，任一成立即可：
+/// 1. `Authorization: Bearer <token>`（命令行、脚本）；
+/// 2. `?token=<token>`（`EventSource` / `WebSocket` 带不了 header 时的兜底）；
+/// 3. 浏览器会话 cookie（打开过界面就有，地址栏不必带 token）。
+fn authorized(state: &ServerState, headers: &HeaderMap, query: &TokenQuery) -> bool {
+    let token = state.token.as_str();
     let bearer = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "));
-    bearer == Some(token) || query.token.as_deref() == Some(token)
+    if bearer == Some(token) || query.token.as_deref() == Some(token) {
+        return true;
+    }
+    let Some(session) = session_cookie(headers) else {
+        return false;
+    };
+    state.sessions.lock().map(|set| set.contains(&session)).unwrap_or(false)
+}
+
+/// 从 `Cookie` 头里取出会话标识。
+fn session_cookie(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    raw.split(';').find_map(|part| {
+        let part = part.trim();
+        part.strip_prefix(&format!("{SESSION_COOKIE}="))
+            .map(|value| value.to_string())
+    })
+}
+
+/// 给浏览器发一个会话（已存在就复用）。
+fn ensure_session(state: &ServerState, headers: &HeaderMap) -> Option<String> {
+    if let Some(existing) = session_cookie(headers) {
+        if state
+            .sessions
+            .lock()
+            .map(|set| set.contains(&existing))
+            .unwrap_or(false)
+        {
+            return None;
+        }
+    }
+    let mut bytes = [0u8; 16];
+    if getrandom::fill(&mut bytes).is_err() {
+        return None;
+    }
+    let session: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    if let Ok(mut set) = state.sessions.lock() {
+        set.insert(session.clone());
+    }
+    Some(session)
 }
 
 async fn rpc_handler(
@@ -66,7 +120,7 @@ async fn rpc_handler(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    if !authorized(&headers, &query, &state.token) {
+    if !authorized(&state, &headers, &query) {
         return RpcError::Unauthorized.into_response();
     }
     let args: Value = if body.is_empty() {
@@ -111,7 +165,7 @@ async fn events_handler(
     Query(query): Query<TokenQuery>,
     headers: HeaderMap,
 ) -> Response {
-    if !authorized(&headers, &query, &state.token) {
+    if !authorized(&state, &headers, &query) {
         return RpcError::Unauthorized.into_response();
     }
     let rx = crate::bus::subscribe();
@@ -150,7 +204,7 @@ async fn audio_handler(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if !authorized(&headers, &query, &state.token) {
+    if !authorized(&state, &headers, &query) {
         return RpcError::Unauthorized.into_response();
     }
     let tap = state.daemon.state().audio.web_tap();
@@ -198,6 +252,7 @@ async fn stream_tap(mut socket: WebSocket, tap: Arc<ai_daw_engine::tap::AudioTap
 async fn static_handler(
     State(state): State<Arc<ServerState>>,
     uri: axum::http::Uri,
+    headers: HeaderMap,
 ) -> Response {
     let Some(dir) = &state.static_dir else {
         return (
@@ -224,7 +279,15 @@ async fn static_handler(
         },
     };
     let mime = guess_mime(relative);
-    ([(axum::http::header::CONTENT_TYPE, mime)], bytes).into_response()
+    let mut response = ([(axum::http::header::CONTENT_TYPE, mime)], bytes).into_response();
+    // 打开界面就发一个会话：地址栏不必带 token，后续请求靠 cookie。
+    if let Some(session) = ensure_session(&state, &headers) {
+        let cookie = format!("{SESSION_COOKIE}={session}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000");
+        if let Ok(value) = cookie.parse() {
+            response.headers_mut().insert(axum::http::header::SET_COOKIE, value);
+        }
+    }
+    response
 }
 
 /// 够用就行的 MIME 表：前端产物只有这几类文件。
@@ -267,7 +330,12 @@ mod tests {
         let host = Arc::new(FakeHost::default());
         let state = Arc::new(AppState::bootstrap_with_host(None, Vec::new(), host.clone()));
         let daemon = Daemon::new(state, host.clone(), Config::default());
-        (router(Arc::new(ServerState { daemon, token: "t0ken".into(), static_dir: None })), host)
+        (router(Arc::new(ServerState {
+            daemon,
+            token: "t0ken".into(),
+            static_dir: None,
+            sessions: Default::default(),
+        })), host)
     }
 
     async fn call(

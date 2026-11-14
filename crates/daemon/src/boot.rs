@@ -86,6 +86,7 @@ pub async fn serve(
         daemon,
         token,
         static_dir,
+        sessions: Default::default(),
     }));
     Ok((addr, async move {
         let _ = axum::serve(listener, app).await;

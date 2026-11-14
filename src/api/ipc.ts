@@ -24,7 +24,14 @@ export type UnlistenFn = () => void;
 /** SSE 上的事件名（与后端 `Event::default().event("engine")` 对应）。 */
 const SSE_EVENT = "engine";
 
-/** 当前浏览器客户端使用的访问令牌。 */
+/**
+ * 访问令牌（可选）。
+ *
+ * 正常用法是**不需要**的：打开界面时后端会种一个会话 cookie，之后的请求靠它。
+ * 这里只处理两种例外：
+ * - 地址里显式给了 `#token=...`（脚本 / 跨域调试），存下来并抹掉；
+ * - 之前存过（localStorage）。
+ */
 export function webToken(): string {
   try {
     const hash = window.location.hash.startsWith("#")
@@ -47,6 +54,8 @@ export function webToken(): string {
 async function httpInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
   const token = webToken();
   const response = await fetch(`/rpc/${encodeURIComponent(cmd)}`, {
+    // 会话靠 cookie：同源请求默认带上；显式写出来，避免以后有人改成跨域时踩坑。
+    credentials: "same-origin",
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -90,7 +99,9 @@ function ensureSource(): EventSource | null {
   if (source) return source;
   if (typeof window === "undefined" || typeof EventSource === "undefined") return null;
   const token = webToken();
-  source = new EventSource(`/events?token=${encodeURIComponent(token)}`);
+  source = new EventSource(token ? `/events?token=${encodeURIComponent(token)}` : "/events", {
+    withCredentials: true,
+  });
   source.addEventListener(SSE_EVENT, (event) => {
     try {
       const frame = JSON.parse((event as MessageEvent<string>).data) as {

@@ -81,8 +81,8 @@ pub fn token(app: &AppHandle) -> Result<String, String> {
     Ok(ai_daw_daemon::boot::web_token(&dir))
 }
 
-fn url(host: &str, port: u16, token: &str) -> String {
-    format!("http://{host}:{port}/#token={token}")
+fn url(host: &str, port: u16) -> String {
+    format!("http://{host}:{port}/")
 }
 
 /// 本机在局域网里的 IPv4；拿不到（离线 / 只有回环）返回 None。
@@ -104,8 +104,8 @@ pub fn info_for(config: &WebConfig, token: &str) -> WebInfo {
         lan: config.lan,
         port: config.port,
         token: token.to_string(),
-        loopback_url: url("127.0.0.1", config.port, token),
-        lan_url: lan_ip().map(|ip| url(&ip.to_string(), config.port, token)),
+        loopback_url: url("127.0.0.1", config.port),
+        lan_url: lan_ip().map(|ip| url(&ip.to_string(), config.port)),
         running: false,
         restart_required: false,
     }
@@ -114,7 +114,7 @@ pub fn info_for(config: &WebConfig, token: &str) -> WebInfo {
 /// 配置（期望值）+ 运行状态（实际值）合并出设置页要显示的信息。
 fn merged_info(app: &AppHandle, state: &WebState) -> Result<WebInfo, String> {
     let config = load_config(app);
-    let token = token(app)?;
+    let token = token(app)?;  // 仍然要拿：设置页展示 / 脚本使用
     let mut info = info_for(&config, &token);
     if let Some(running) = state.running.lock().ok().and_then(|guard| guard.clone()) {
         info.running = running.running;
@@ -162,7 +162,7 @@ mod tests {
             port: 28430,
         };
         let info = info_for(&config, "abc");
-        assert_eq!(info.loopback_url, "http://127.0.0.1:28430/#token=abc");
+        assert_eq!(info.loopback_url, "http://127.0.0.1:28430/");
         assert_eq!(info.port, 28430);
         assert!(!info.lan);
         assert!(!info.running);

@@ -181,6 +181,70 @@ pnpm build:aidaw      # 构建 aidaw CLI（见 tools/build-aidaw.sh）
 > **暂不支持 Intel Mac。** ONNX Runtime 不提供 `x86_64-apple-darwin` 的预编译二进制，
 > 本地 AI 模型无法为 Intel macOS 链接。
 
+## 浏览器访问与无头运行
+
+AI DAW 可以**不开窗口**运行，把同一套界面提供给局域网里的任意浏览器。桌面端和浏览器端
+驱动的是**同一个会话** —— 同一份工程、同一条撤销历史、同一个音频引擎。
+
+### Docker（预构建镜像）
+
+```bash
+docker run -d --name ai-daw -p 28430:28430 -v ai-daw-data:/data ailm32442/ai-daw
+```
+
+浏览器打开 <http://localhost:28430> 即可，**地址栏不需要 token**：首次加载时服务端会种
+一个会话 cookie。脚本仍然可以用容器日志里的令牌（`docker logs ai-daw | grep token`），
+以 `Authorization: Bearer <token>` 调用接口。
+
+### Docker（自己构建）
+
+```bash
+git clone https://github.com/heshengtao/ai-daw.git
+cd ai-daw
+docker build -t ai-daw .
+docker run -d -p 28430:28430 -v ai-daw-data:/data ai-daw
+```
+
+### 无头二进制
+
+```bash
+npm run build
+cargo run -p ai-daw-daemon --no-default-features --bin aidawd -- --data-dir ~/.ai-daw --port 28430 --web-dir dist
+```
+
+### 环境变量
+
+| 变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `AIDAW_DATA_DIR` | 镜像内 `/data` | 会话、预设、模型与访问令牌 |
+| `AIDAW_WEB_DIR` | 镜像内 `/web` | 要托管的前端产物 |
+| `AIDAW_TOKEN` | 自动生成 | 脚本 / CI 用的固定令牌（浏览器不需要） |
+| `AIDAW_NO_AUDIO` | 未设置 | 跳过打开音频设备（没有声卡的容器） |
+| `AIDAW_MCP_URL` | 自动发现 | `aidaw` 命令行去哪里找正在运行的应用 |
+
+### HTTP 接口
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `POST` | `/rpc/{command}` | 96 条命令，名字与参数和应用内 IPC 完全一致 |
+| `GET` | `/events` | SSE：编辑事件与传输状态 |
+| `GET` | `/audio` | WebSocket：实时 PCM（48 kHz 立体声 float32，约 10 ms 一块） |
+| `GET` | `/health` | 存活状态 + 是否有可用音频设备 |
+| `GET` | `/commands` | 服务端支持的全部命令名 |
+
+## 架构
+
+```
+src-tauri/          Tauri 外壳：窗口、插件原生界面、自动更新
+crates/daemon/      整个后端：工程引擎、音频宿主、MCP、HTTP
+crates/engine/      DSP + 调度 + 渲染（不依赖 Tauri）
+crates/ipc/         应用 / CLI / MCP 共用的命令与事件 schema
+src/                Vue 3 前端 —— 桌面与浏览器是同一份
+```
+
+前端从不直接和 Rust 通信：`src/api/ipc.ts` 在 `Tauri IPC` 与 `HTTP + SSE + WebSocket`
+之间切换传输层。所以浏览器版不是"移植"，而是同一个应用通过网络访问同一个后端。
+
 ## 常见问题
 
 ### AI DAW 是免费的吗？
@@ -208,6 +272,21 @@ Windows / macOS / Linux 上支持 VST3 与 CLAP；macOS 上另外支持 **Audio 
 ### 让代理驱动 DAW，需要软件一直开着吗？
 
 需要。Skill 与 `aidaw` 命令行是通过 MCP 与**正在运行**的 AI DAW 通信的，所以先启动软件（用 `aidaw status` 可以确认是否已启动）。
+
+## 支持
+
+### 点个 Star
+
+如果 AI DAW 对你有用，点一颗 Star 能让更多人看到它 —— 这也是这件事值得继续做下去最直接的信号。
+
+### 关注
+
+- GitHub：<https://github.com/heshengtao>
+- 问题与想法：<https://github.com/heshengtao/ai-daw/issues>
+
+### 参与
+
+使用问题、工作流分享、没写完的歌，都欢迎提到 issue 里。
 
 ## 许可
 

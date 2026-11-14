@@ -95,7 +95,9 @@ export class WebMonitor {
     const url = new URL(window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.pathname = "/audio";
-    url.search = `?token=${encodeURIComponent(webToken())}`;
+    // 会话靠 cookie（WebSocket 握手会带上）；只有显式提供了 token 才走 query。
+    const token = webToken();
+    url.search = token ? `?token=${encodeURIComponent(token)}` : "";
     url.hash = "";
     const socket = new WebSocket(url.toString());
     socket.binaryType = "arraybuffer";
