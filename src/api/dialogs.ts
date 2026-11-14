@@ -101,9 +101,47 @@ export async function pickMidiToSave(defaultPath: string): Promise<string | null
   return selected ?? null;
 }
 
-/** 选择要导入的音频文件；取消返回 null。 */
+/**
+ * 浏览器端选文件：把用户选中的文件上传到 daemon，拿回服务端路径。
+ *
+ * 浏览器的文件输入只给 `File` 对象，拿不到真实路径；所以先 POST 到 `/upload`，
+ * 由服务端落到 `<数据目录>/imports/`，再把路径交给 `import_audio`。
+ */
+export function pickAndUpload(kind: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = kind === "audio" ? "audio/*" : kind === "midi" ? ".mid,.midi,.smf" : "*";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) {
+        resolve(null);
+        return;
+      }
+      try {
+        const response = await fetch(`/upload?name=${encodeURIComponent(file.name)}`, {
+          method: "POST",
+          body: file,
+        });
+        if (!response.ok) {
+          resolve(null);
+          return;
+        }
+        const body = (await response.json()) as { path?: string };
+        resolve(body.path ?? null);
+      } catch {
+        resolve(null);
+      }
+    };
+    // 用户在对话框里点取消时不会有 change 事件；靠 focus 回来兜一次，避免 Promise 永挂。
+    input.oncancel = () => resolve(null);
+    input.click();
+  });
+}
+
+/** 选择要导入的音频文件；取消返回 null。浏览器里走上传。 */
 export async function pickAudioToOpen(): Promise<string | null> {
-  if (!isTauri()) return "mock://kick.wav";
+  if (!isTauri()) return pickAndUpload("audio");
   const selected = await openDialog({
     multiple: false,
     directory: false,
@@ -112,9 +150,9 @@ export async function pickAudioToOpen(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
-/** 选择要导入的 MIDI 文件；取消返回 null。 */
+/** 选择要导入的 MIDI 文件；取消返回 null。浏览器里走上传。 */
 export async function pickMidiToOpen(): Promise<string | null> {
-  if (!isTauri()) return "mock://song.mid";
+  if (!isTauri()) return pickAndUpload("midi");
   const selected = await openDialog({
     multiple: false,
     directory: false,

@@ -5,6 +5,7 @@
  * 在浏览器里（非 Tauri）开发时回退到 `mock.ts`，方便无后端预览界面。
  */
 import { invoke, listen, type UnlistenFn } from "./ipc";
+import { isTauri } from "@/utils/platform";
 import { mockApi, mockEnabled } from "./mock";
 import type {
   HfTokenStatus,
@@ -935,6 +936,18 @@ export function exportMidi(path: string, tracks?: number[]): Promise<string> {
  */
 export async function readImportFile(path: string): Promise<Uint8Array> {
   if (mockEnabled()) return mockApi.readImportFile();
+  if (!isTauri()) {
+    // 浏览器里没有 IPC 的二进制通道：走 HTTP，拿原始字节。
+    const response = await fetch(`/rpc/read_import_file`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  }
   const buffer = await invoke<ArrayBuffer>("read_import_file", { path });
   return new Uint8Array(buffer);
 }

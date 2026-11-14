@@ -200,6 +200,15 @@ struct LoopRangeArgs {
     end: u64,
 }
 
+/// `import_audio` 的参数：解码是异步的，由 HTTP 处理器单独 await（见 `server::rpc_handler`）。
+#[derive(Deserialize)]
+pub struct ImportAudioArgs {
+    pub path: String,
+    pub track: u64,
+    #[serde(default)]
+    pub start: f64,
+}
+
 #[derive(Deserialize)]
 struct ClipRefArgs {
     track: u64,
@@ -474,6 +483,8 @@ pub const COMMANDS: &[&str] = &[
     "history_depths",
     "transport_status",
     "mixer_meters",
+    "read_import_file",
+    "import_audio",
     "current_project_path",
     "session_restored",
     "list_plugins",

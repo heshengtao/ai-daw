@@ -11,12 +11,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use serde::Deserialize;
 use serde_json::Value;
 
 use rpc::RpcError;
@@ -40,6 +41,7 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .route("/audio", get(audio_handler))
         .route("/health", get(health))
         .route("/commands", get(commands))
+        .route("/upload", post(upload_handler))
         // 其余路径交给前端产物（hash 路由，不需要 SPA 兜底规则，但仍兜一下更稳）。
         .fallback(get(static_handler))
         .with_state(state)
@@ -58,7 +60,45 @@ async fn rpc_handler(
             Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
         }
     };
-    // 命令实现里有渲染、读盘、加锁：绝不能放在 async 任务的 poll 里。
+    // 读文件字节（MIDI / MusicXML 导入）：返回原始二进制，不是 JSON。
+    if cmd == "read_import_file" {
+        #[derive(serde::Deserialize)]
+        struct Args {
+            path: String,
+        }
+        let parsed: Args = match serde_json::from_value(args) {
+            Ok(value) => value,
+            Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
+        };
+        return match tokio::fs::read(&parsed.path).await {
+            Ok(bytes) => (
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                bytes,
+            )
+                .into_response(),
+            Err(err) => RpcError::Failed(format!("读取失败：{err}")).into_response(),
+        };
+    }
+    // 导入音频是异步的（解码要几秒），单独 await，不能塞进 spawn_blocking。
+    if cmd == "import_audio" {
+        let parsed: rpc::ImportAudioArgs = match serde_json::from_value(args) {
+            Ok(value) => value,
+            Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
+        };
+        let daemon = Arc::clone(&state.daemon);
+        return match crate::commands::import_audio_impl(
+            daemon.state(),
+            parsed.path,
+            parsed.track,
+            parsed.start,
+        )
+        .await
+        {
+            Ok(project) => axum::Json(project).into_response(),
+            Err(err) => RpcError::Failed(err).into_response(),
+        };
+    }
+    // 其余命令实现里有渲染、读盘、加锁：绝不能放在 async 任务的 poll 里。
     let daemon = Arc::clone(&state.daemon);
     let result = tokio::task::spawn_blocking(move || {
         rpc::dispatch(daemon.state(), &cmd, args)
@@ -163,6 +203,49 @@ async fn stream_tap(mut socket: WebSocket, tap: Arc<ai_daw_engine::tap::AudioTap
             break;
         }
     }
+}
+
+#[derive(Deserialize)]
+struct UploadQuery {
+    /// 原始文件名（用来决定落盘名与扩展名）。
+    name: String,
+}
+
+/// `POST /upload?name=foo.wav`：把浏览器选中的文件落到数据目录，返回可导入的绝对路径。
+///
+/// 浏览器的文件选择拿不到真实路径（安全限制），所以只能把字节传上来，
+/// 由服务端写进 `<data_dir>/imports/`，再交给 `import_audio` 解码。
+async fn upload_handler(
+    State(state): State<Arc<ServerState>>,
+    Query(query): Query<UploadQuery>,
+    body: axum::body::Bytes,
+) -> Response {
+    upload_to_data_dir(&state, &query.name, &body).await
+}
+
+async fn upload_to_data_dir(state: &ServerState, name: &str, body: &[u8]) -> Response {
+    // 只留最后一段文件名，挡掉 `../` 之类的路径注入。
+    let safe: String = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("upload.bin")
+        .chars()
+        .filter(|c| !matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .collect();
+    let safe = if safe.is_empty() { "upload.bin".to_string() } else { safe };
+    let dir = state.daemon.config().data_dir.join("imports");
+    if let Err(err) = tokio::fs::create_dir_all(&dir).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("创建目录失败：{err}")).into_response();
+    }
+    let path = dir.join(&safe);
+    if let Err(err) = tokio::fs::write(&path, body).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("写入失败：{err}")).into_response();
+    }
+    axum::Json(serde_json::json!({
+        "path": path.to_string_lossy(),
+        "bytes": body.len(),
+    }))
+    .into_response()
 }
 
 /// 前端产物：`dist/` 下的静态文件。

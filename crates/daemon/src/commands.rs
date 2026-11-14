@@ -3277,16 +3277,17 @@ pub struct ImportProgress {
 
 /// 广播一次导入解码进度。
 fn emit_import(
-    app: &crate::tauri_api::AppHandle,
+    host: &dyn crate::host::Host,
     path: &str,
     state: &str,
     frames: u64,
     total_frames: Option<u64>,
     message: Option<String>,
 ) {
-    let _ = app.emit(
+    crate::host::emit(
+        host,
         EVENT_IMPORT,
-        ImportProgress {
+        &ImportProgress {
             path: path.to_string(),
             state: state.to_string(),
             frames,
@@ -3300,25 +3301,23 @@ fn emit_import(
 ///
 /// 解码放到阻塞线程池：它既慢又可能失败，绝不能占住命令线程。解码途中经 `engine://import`
 /// 推送进度（顶栏下边缘的进度条据此绘制）；解码完成后才落片段。
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn import_audio(
-    app: crate::tauri_api::AppHandle,
-    state: State<'_, Arc<AppState>>,
+pub async fn import_audio_impl(
+    state: &AppState,
     path: String,
     track: u64,
     start: f64,
 ) -> Result<Project, String> {
     // 立刻发一条「开始解码」：总帧数还没探测出来，界面先画一条不确定态进度条。
-    emit_import(&app, &path, "decoding", 0, None, None);
+    emit_import(&**state.host(), &path, "decoding", 0, None, None);
 
     let assets = Arc::clone(&state.assets);
     let path_for_load = path.clone();
-    let progress_app = app.clone();
+    let host = Arc::clone(state.host());
     let progress_path = path.clone();
     let loaded = crate::tauri_api::async_runtime::spawn_blocking(move || {
         assets.load_with_progress(&path_for_load, |p| {
             emit_import(
-                &progress_app,
+                &*host,
                 &progress_path,
                 "decoding",
                 p.frames,
@@ -3333,7 +3332,7 @@ pub async fn import_audio(
     let audio = match loaded {
         Ok(audio) => audio,
         Err(err) => {
-            emit_import(&app, &path, "error", 0, None, Some(err.clone()));
+            emit_import(&**state.host(), &path, "error", 0, None, Some(err.clone()));
             return Err(err);
         }
     };
@@ -3342,7 +3341,7 @@ pub async fn import_audio(
     let seconds = audio.frames() as f64 / audio.sample_rate;
     if !(seconds.is_finite() && seconds > 0.0) {
         let err = format!("音频素材没有可用长度：{path}");
-        emit_import(&app, &path, "error", 0, None, Some(err.clone()));
+        emit_import(&**state.host(), &path, "error", 0, None, Some(err.clone()));
         return Err(err);
     }
     let start = ai_daw_engine::model::Clip::normalize_start(start);
@@ -3350,11 +3349,11 @@ pub async fn import_audio(
         let engine = state.engine.lock().unwrap();
         natural_length_beats(engine.project(), start, seconds)
     };
-    emit_import(&app, &path, "done", frames, Some(frames), None);
-    Ok(run(
-        &app,
-        &state,
-        Command::AddAudioClip {
+    emit_import(&**state.host(), &path, "done", frames, Some(frames), None);
+    Ok(run_daemon(
+        state,
+        Actor::Human,
+        vec![Command::AddAudioClip {
             track: TrackId(track),
             start,
             length,
@@ -3366,8 +3365,20 @@ pub async fn import_audio(
                 rate: 1.0,
                 pitch_semitones: 0.0,
             },
-        },
-    ))
+        }],
+    )
+    .0)
+}
+
+/// 导入一段音频到轨道（Tauri 入口）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn import_audio(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+    track: u64,
+    start: f64,
+) -> Result<Project, String> {
+    import_audio_impl(&state, path, track, start).await
 }
 
 /// 把一个**已导入**的音频素材再放一份到轨道上（复制粘贴音频片段走它）。
