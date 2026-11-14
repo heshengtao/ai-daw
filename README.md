@@ -210,6 +210,14 @@ normally, and the PCM goes out through `/audio` — **the web page becomes the s
 A "Virtual clock" pill in the status bar says so (click it to retry the device). To force
 this path on a machine that does have audio, set `AIDAW_AUDIO=virtual`.
 
+**Plugin editors work too.** The container has no window system, but the image ships Xvfb:
+a VST3 / CLAP plugin still draws its own editor on a virtual display, the daemon encodes that
+screen as a frame stream, and the page renders it on a canvas while forwarding mouse and
+keyboard back. So the editor becomes an in-page window — the same editor you would get in a
+native window on the desktop. (On the desktop build, "Open editor" still pops the real native
+window: better fidelity, lower latency.) Set `AIDAW_GUI_STREAM=0` to skip the virtual display
+and save memory — you can still edit parameters, just not see the editor.
+
 ### Docker (build from source)
 
 ```bash

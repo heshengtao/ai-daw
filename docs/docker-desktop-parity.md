@@ -1310,3 +1310,84 @@ ai-daw:1.8.0   /health → {"version":"1.8.0","audio":true}
 `--gpus all` 之后 ORT 的 CUDA EP 在容器里可用；`image_gen` / `video_gen` / `sdcpp` 之所以
 还是 `unsupported`，是因为本地生成器（sd.cpp）只有桌面实现。macOS 的 Docker Desktop
 不透传 Apple GPU，这台机器上验证不了 GPU 路径，但那是宿主平台限制。
+
+## 27. 插件原生界面：桌面弹真窗口，容器进网页（B + C，2026-11-15 第十三轮）
+
+上一轮把「原生插件 GUI」列成物理限制。用户指出更好的拆法：**桌面折中、容器把原生界面
+放网页里**，两端体验就一致了。这轮按这个思路实现。
+
+### 27.1 桌面：C 方案（浏览器点按钮 → 宿主弹真窗口）
+
+`/rpc/open_plugin_window` / `open_effect_plugin_window` 之前直接回 `501 桌面专属`。
+现在它们接到真正的 Tauri 命令上：浏览器里点「打开插件界面」，**桌面进程在自己屏幕上
+弹出插件原生窗口**（对着正在发声的实例），保真度 100%、零延迟。
+
+- 状态查询 `plugin_window_open` / `effect_plugin_window_open` 同理接通，界面上按钮的
+  开合状态跟着变。
+- 仍然只有桌面能做到的两条：`install_cli` / `cli_status`（命令行安装），保持 501。
+
+### 27.2 容器：B 方案（原生界面进网页）
+
+链路：
+
+```
+Xvfb :99                       ← docker-entrypoint.sh 启动，导出 DISPLAY/AIDAW_GUI_SIZE
+  ↓
+插件在自己的 X11 窗口里画界面    ← vst3-host / CLAP 本来就会开窗（xcb 连 DISPLAY）
+  ↓
+plugin_gui::start_capture      ← x11rb 读根窗口 GetImage → RGB → JPEG（纯 Rust，不依赖 ffmpeg）
+  ↓
+WS /plugin-gui/{id}            ← 二进制帧下行；JSON 输入上行
+  ↓
+RemotePluginView.vue           ← canvas 画帧；鼠标/键盘/滚轮换算坐标后回传
+  ↓
+xdotool                        ← 注入到同一个 X 显示（move / click / key / type）
+```
+
+设计取舍：
+
+- **捕获整块虚拟屏而不是精确到插件窗口**：没有窗口管理器时插件窗口的位置/尺寸由插件
+  自己决定，抓全屏最稳；页面按 1440×900 等比缩放，坐标换算在 canvas 上做。
+- **不需要 ffmpeg**：ai-daw 本来就没有 ffmpeg 依赖，`x11rb` + `jpeg-encoder` 解决，
+  少一个几 MB 的运行时。
+- **嵌入型插件（`host_window_size()` 非空）明确拒绝**：无头没有宿主窗口可嵌，
+  直接告诉用户"换浮动窗口插件 / 回桌面"。不开空窗假装成功。
+- **`AIDAW_GUI_STREAM=0`** 可关掉虚拟显示省内存（此时只能改参数）。
+
+镜像改动（`ai-daw:1.8.0`）：`xvfb`、`xdotool`、`libxext6`、Qt 系 GUI 需要的
+`libxcb-cursor0 / -icccm4 / -keysyms1 / -render-util0 / -xkb1 / libxkbcommon-x11-0`、
+`libgl1`、`libglx-mesa0`、`fontconfig` + `fonts-dejavu-core`；入口改为
+`docker-entrypoint.sh`（先起 Xvfb，等 `xdotool getdisplaygeometry` 通了再拉 daemon）。
+
+### 27.3 实测（容器里，`ai-daw:1.8.0`）
+
+没有可用的 Linux 插件做端到端，所以加了 `plugin_gui_selftest`（**只有
+`AIDAW_GUI_SELFTEST=1` 时才允许调用**）——不碰插件，直接把虚拟屏做成一条帧流，
+用来验证"Xvfb → 捕获 → WebSocket → 输入回传"这条链路：
+
+```
+health            → {"version":"1.8.0","audio":true}
+/proc/1/environ   → DISPLAY=:99, AIDAW_GUI_SIZE=1440x900
+/tmp/.X11-unix    → X99
+rpc/plugin_gui_selftest → {streamId, width:1440, height:900, url:"/plugin-gui/…"}
+WS 连入           → 8 帧 / 491ms（≈16fps），每帧 21,147 字节，魔数 FF D8（真 JPEG）
+WS 发 move(400,300) → 容器内 `xdotool getmouselocation` = x:400 y:300   ← 输入链路通
+open_plugin_window(无插件) → {"error":"这个槽位没有可打开的插件界面"}（不是 501）
+无 DISPLAY 时      → 501，提示"需要虚拟显示，镜像自带 Xvfb，用默认入口启动"
+```
+
+**没验到的部分（诚实标注）**：
+
+1. **真实插件的界面**：这台机器只有 macOS 版（Ultramaster KR-106），Linux 容器里加载不了；
+   容器里的插件路径与自检差"谁画窗口"这一步，其余完全相同。挂一个 Linux CLAP/VST3
+   目录（`~/.clap`、`/usr/lib/clap`、`/usr/lib/vst3`）就能验。
+2. **桌面 C 的运行时行为**：需要开 GUI 点按钮，本环境只做了编译与代码路径核对。
+3. **插件 GUI 的性能**：15fps 全屏 JPEG 在 CPU 上约 6-8ms/帧（1440×900），
+   单核占用可接受；4K 或更高帧率需要再调。
+
+### 27.4 ai-cut 的情况
+
+ai-cut 的 OFX host 明确 `kOfxParamHostPropSupportsCustomInteract = 0`，且没有交互式 UI——
+OFX 插件在 ai-cut 里**本来就只有参数面板**（`ofx_probe` → 检查器表单），三形态一致，
+不存在"原生窗口进网页"的问题。哪天要支持 OFX Custom Interact，那是另一套离屏交互
+（OpenGL/Metal 纹理 + 事件转发），不在 B 的范围内。
