@@ -151,7 +151,8 @@ pub fn selftest() -> Result<Value, RpcError> {
     let stop = Arc::new(AtomicBool::new(false));
     start_capture(&display, width, height, frames.clone(), Arc::clone(&stop))
         .map_err(|error| RpcError::Failed(error))?;
-    let (input_tx, _input_rx) = std::sync::mpsc::channel::<InputEvent>();
+    let (input_tx, input_rx) = std::sync::mpsc::channel::<InputEvent>();
+    spawn_input(display.clone(), input_rx, Arc::clone(&stop));
     let session = Arc::new(Session {
         id: id.clone(),
         width,
@@ -239,20 +240,7 @@ pub fn open(
         .map_err(|error| RpcError::Failed(format!("虚拟显示抓帧失败：{error}")))?;
 
     // 3) 输入注入线程。
-    let input_stop = Arc::clone(&stop);
-    let input_display = display.clone();
-    std::thread::Builder::new()
-        .name("aidaw-plugin-input".into())
-        .spawn(move || {
-            while !input_stop.load(Ordering::Relaxed) {
-                match input_rx.recv_timeout(std::time::Duration::from_millis(200)) {
-                    Ok(event) => inject(&input_display, event),
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                }
-            }
-        })
-        .ok();
+    spawn_input(display.clone(), input_rx, Arc::clone(&stop));
 
     let session = Arc::new(Session {
         id: id.clone(),
@@ -314,6 +302,26 @@ fn resolve_effect_index(
         .track(TrackId(track))
         .and_then(|track| track.effects.iter().position(|fx| fx.plugin_id == plugin_id))
         .ok_or_else(|| RpcError::Failed(format!("效果器不在链上：{plugin_id}")))
+}
+
+/// 输入注入线程：把页面事件翻译成 xdotool 调用。
+fn spawn_input(
+    display: String,
+    input_rx: std::sync::mpsc::Receiver<InputEvent>,
+    stop: Arc<AtomicBool>,
+) {
+    std::thread::Builder::new()
+        .name("aidaw-plugin-input".into())
+        .spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                match input_rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                    Ok(event) => inject(&display, event),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        })
+        .ok();
 }
 
 /// 编辑器线程主体：开窗、泵事件、直到 `stop`。
