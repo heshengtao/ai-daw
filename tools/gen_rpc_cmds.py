@@ -61,7 +61,8 @@ use crate::manager::{
 use crate::singing::SingArgs;
 use crate::svc::SwapArgs;
 use crate::state::AppState;
-use crate::tauri_api::AppHandle;
+#[allow(unused_imports)] // 桌面端需要 `Manager` 才有 `app.state()`；无头端是固有方法
+use crate::tauri_api::{AppHandle, Manager};
 use crate::voices::VoiceSaveArgs;
 use crate::yue_engine::ComposeArgs;
 use crate::yue_lyrics::LyricsArgs;

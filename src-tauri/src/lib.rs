@@ -379,7 +379,8 @@ pub fn run() {
                     lan: web_config.lan,
                     port: Some(web_config.port),
                     // 桌面端托管的是同一份 `dist/`：浏览器打开端口就是同一个界面。
-                    web_dir: Some(app.path().resource_dir().unwrap_or_default().join("web")),
+                    // 打包后是资源目录里的 `web/`，开发期没有那个目录，回落到仓库的 `dist/`。
+                    web_dir: resolve_web_dir(app.handle()),
                 },
             );
             app.manage(Arc::clone(&daemon));
