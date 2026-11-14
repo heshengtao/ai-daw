@@ -44,6 +44,8 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .route("/upload", post(upload_handler))
         // 其余路径交给前端产物（hash 路由，不需要 SPA 兜底规则，但仍兜一下更稳）。
         .fallback(get(static_handler))
+        // axum 默认请求体上限是 2 MB，真实的音频/视频素材随便就超了。
+        .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))
         .with_state(state)
 }
 
@@ -60,6 +62,22 @@ async fn rpc_handler(
             Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
         }
     };
+    // 整体替换工程（MIDI / MusicXML / 工程 JSON 导入的最后一步）。
+    if cmd == "import_project" {
+        #[derive(serde::Deserialize)]
+        struct Args {
+            project: ai_daw_engine::model::Project,
+        }
+        let parsed: Args = match serde_json::from_value(args) {
+            Ok(value) => value,
+            Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
+        };
+        let daemon = Arc::clone(&state.daemon);
+        return match crate::commands::import_project_state(daemon.state(), parsed.project) {
+            Ok(project) => axum::Json(project).into_response(),
+            Err(err) => RpcError::Failed(err).into_response(),
+        };
+    }
     // 读文件字节（MIDI / MusicXML 导入）：返回原始二进制，不是 JSON。
     if cmd == "read_import_file" {
         #[derive(serde::Deserialize)]

@@ -484,6 +484,7 @@ pub const COMMANDS: &[&str] = &[
     "transport_status",
     "mixer_meters",
     "read_import_file",
+    "import_project",
     "import_audio",
     "current_project_path",
     "session_restored",

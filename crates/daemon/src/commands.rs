@@ -2781,6 +2781,20 @@ pub async fn import_project(app: crate::tauri_api::AppHandle, project: Project) 
     import_project_impl(&app, project)
 }
 
+/// 无窗口也能用的导入：替换工程状态，不碰插件窗口（无头进程没有窗口）。
+pub fn import_project_state(state: &AppState, project: Project) -> Result<Project, String> {
+    capture_plugin_states(state);
+    let imported = normalize_project(project);
+    let saved = { state.engine.lock().unwrap().saved().clone() };
+    {
+        let mut engine = state.engine.lock().unwrap();
+        *engine = Engine::restore(imported.clone(), saved);
+    }
+    state.audio.load(&imported);
+    state.set_session_path(None);
+    Ok(imported)
+}
+
 /// 导入工程的同步实现。
 pub(crate) fn import_project_impl(
     app: &crate::tauri_api::AppHandle,

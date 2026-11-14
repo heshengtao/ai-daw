@@ -51,7 +51,7 @@ function scoreOpenFilter() {
 
 /** 选择要导入的工程文件；取消返回 null。 */
 export async function pickProjectToOpen(): Promise<string | null> {
-  if (!isTauri()) return "mock://demo.json";
+  if (!isTauri()) return pickAndUpload("project");
   const selected = await openDialog({
     multiple: false,
     directory: false,
@@ -111,7 +111,16 @@ export function pickAndUpload(kind: string): Promise<string | null> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = kind === "audio" ? "audio/*" : kind === "midi" ? ".mid,.midi,.smf" : "*";
+    input.accept =
+      kind === "audio"
+        ? "audio/*"
+        : kind === "midi"
+          ? ".mid,.midi,.smf"
+          : kind === "score"
+            ? ".musicxml,.xml,.mxl"
+            : kind === "project"
+              ? ".json,application/json"
+              : "*";
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) {
@@ -163,7 +172,7 @@ export async function pickMidiToOpen(): Promise<string | null> {
 
 /** 选择要导入的谱面（MusicXML）；取消返回 null。 */
 export async function pickScoreToOpen(): Promise<string | null> {
-  if (!isTauri()) return "mock://score.musicxml";
+  if (!isTauri()) return pickAndUpload("score");
   const selected = await openDialog({
     multiple: false,
     directory: false,
