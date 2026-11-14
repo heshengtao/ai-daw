@@ -676,6 +676,8 @@ pub fn call(app: &AppHandle, cmd: &str, args: Value) -> Option<Result<Value, Rpc
         window_open(app, track, None, title)
     },
     "open_synth_window" => |_app, _args| unsupported("open_synth_window", "原生合成器窗口"),
+    // 容器画面链路的自检（需要 AIDAW_GUI_SELFTEST=1）：不碰插件，直接扫虚拟屏。
+    "plugin_gui_selftest" => |_app, _args| crate::plugin_gui::selftest(),
     "plugin_manager_open" => |_app, _args| unsupported("plugin_manager_open", "打开外部浏览器"),
     "uninstall_cli" => |_app, _args| unsupported("uninstall_cli", "命令行安装"),
     "web_access_info" => |_app, _args| unsupported("web_access_info", "桌面端网络设置"),

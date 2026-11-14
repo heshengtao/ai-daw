@@ -125,6 +125,46 @@ fn display() -> Option<String> {
     std::env::var("DISPLAY").ok().filter(|value| !value.trim().is_empty())
 }
 
+/// 自检：不碰插件，直接把虚拟屏做成一条帧流。
+///
+/// 只用来看"Xvfb + 抓帧 + WebSocket"这条链路通不通（容器里没有插件时排查用）。
+/// 需要 `AIDAW_GUI_SELFTEST=1` 才允许调用，避免变成常开的后门。
+pub fn selftest() -> Result<Value, RpcError> {
+    if std::env::var("AIDAW_GUI_SELFTEST").ok().as_deref() != Some("1") {
+        return Err(RpcError::Unsupported(
+            "自检需要 AIDAW_GUI_SELFTEST=1（只在排查容器画面链路时打开）".into(),
+        ));
+    }
+    let Some(display) = display() else {
+        return Err(RpcError::Unsupported("没有 DISPLAY：请用镜像默认入口启动".into()));
+    };
+    let (width, height) = screen_size();
+    let id = random_id();
+    let (frames, _) = tokio::sync::broadcast::channel(4);
+    let stop = Arc::new(AtomicBool::new(false));
+    start_capture(&display, width, height, frames.clone(), Arc::clone(&stop))
+        .map_err(|error| RpcError::Failed(error))?;
+    let (input_tx, _input_rx) = std::sync::mpsc::channel::<InputEvent>();
+    let session = Arc::new(Session {
+        id: id.clone(),
+        width,
+        height,
+        frames,
+        stop,
+        capture: Mutex::new(None),
+        input: input_tx,
+    });
+    if let Ok(mut map) = sessions().lock() {
+        map.insert("selftest".to_string(), Arc::clone(&session));
+    }
+    Ok(json!(OpenResult {
+        stream_id: id.clone(),
+        width,
+        height,
+        url: format!("/plugin-gui/{id}"),
+    }))
+}
+
 /// 打开（或复用）某条轨道的插件原生界面。
 ///
 /// 返回 `{streamId, width, height, url}`；页面拿 `url` 连 WebSocket 取帧。
