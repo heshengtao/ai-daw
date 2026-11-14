@@ -1,6 +1,9 @@
 /**
  * 系统文件对话框（打开 / 保存）。
- * 浏览器预览（非 Tauri）没有原生对话框，返回一个假路径让流程可以走通。
+ *
+ * 浏览器模式下**没有**原生对话框：能走"上传"的（工程 / 音频 / MIDI / 乐谱）走上传；
+ * 不能上传的（LoRA 适配器、插件包、扫描目录）一律抛明确错误——以前它们返回
+ * `mock://…` 假路径，用户会看到一个假的成功，然后后端报"不是绝对路径 / 未知插件"。
  */
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { isTauri } from "@/utils/platform";
@@ -110,6 +113,23 @@ export async function pickMidiToSave(defaultPath: string): Promise<string | null
 }
 
 /**
+ * 把一段浏览器内存里的数据上传到 daemon，拿回服务端路径（`<data>/imports/`）。
+ *
+ * 录音走这条：浏览器只拿得到 `Blob`，没有真实路径；服务端落盘之后
+ * `import_audio` / `add_audio_clip` 才有东西可读。
+ */
+export async function uploadBlob(name: string, blob: Blob): Promise<string> {
+  const response = await fetch(`/upload?name=${encodeURIComponent(name)}`, {
+    method: "POST",
+    body: blob,
+  });
+  if (!response.ok) throw new Error(await response.text());
+  const body = (await response.json()) as { path?: string };
+  if (!body.path) throw new Error("上传后没有拿到路径");
+  return body.path;
+}
+
+/**
  * 浏览器端选文件：把用户选中的文件上传到 daemon，拿回服务端路径。
  *
  * 浏览器的文件输入只给 `File` 对象，拿不到真实路径；所以先 POST 到 `/upload`，
@@ -189,9 +209,14 @@ export async function pickScoreToOpen(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+/** 浏览器模式下的"选不了东西"错误：统一一句话，由调用方 toast。 */
+function desktopOnly(what: string): Error {
+  return new Error(useI18n().t("dialog.desktopOnly", { what }));
+}
+
 /** 选择 YuE2 的 LoRA 适配器（`.safetensors`）；取消返回 null。 */
 export async function pickLoraFile(): Promise<string | null> {
-  if (!isTauri()) return "mock://style-lora.safetensors";
+  if (!isTauri()) throw desktopOnly(useI18n().t("dialog.lora"));
   const selected = await openDialog({
     multiple: false,
     directory: false,
@@ -200,8 +225,9 @@ export async function pickLoraFile(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
-/** 选择要导入的插件（`.vst3` bundle / 文件、`.clap` 文件，或 macOS 的 `.component`）；取消返回 null。 */export async function pickPluginToImport(): Promise<string | null> {
-  if (!isTauri()) return "mock://CoolSynth.vst3";
+/** 选择要导入的插件（`.vst3` bundle / 文件、`.clap` 文件，或 macOS 的 `.component`）；取消返回 null。 */
+export async function pickPluginToImport(): Promise<string | null> {
+  if (!isTauri()) throw desktopOnly(useI18n().t("dialog.pluginPackage"));
   const selected = await openDialog({
     multiple: false,
     directory: false,
@@ -212,7 +238,7 @@ export async function pickLoraFile(): Promise<string | null> {
 
 /** 选择一个目录（引擎归档离线安装、插件扫描目录等）；取消返回 null。 */
 export async function pickDirectory(): Promise<string | null> {
-  if (!isTauri()) return "mock://engine-archives";
+  if (!isTauri()) throw desktopOnly(useI18n().t("dialog.directory"));
   const selected = await openDialog({ multiple: false, directory: true });
   return typeof selected === "string" ? selected : null;
 }

@@ -211,7 +211,13 @@ async function saveScanDirs(paths: string[]): Promise<void> {
 /** 选一个文件夹加进扫描列表；重复选择由后端去重。 */
 async function addScanDir(): Promise<void> {
   if (scanDirsBusy.value) return;
-  const dir = await pickDirectory();
+  let dir: string | null = null;
+  try {
+    dir = await pickDirectory();
+  } catch (err) {
+    layout.notify(String(err));
+    return;
+  }
   if (!dir) return;
   await saveScanDirs([...scanDirs.value.map((d) => d.path), dir]);
 }
@@ -911,8 +917,12 @@ async function loadDataDir(): Promise<void> {
 }
 
 async function chooseDataDir(): Promise<void> {
-  const dir = await pickDirectory();
-  if (dir) dataDirPending.value = dir;
+  try {
+    const dir = await pickDirectory();
+    if (dir) dataDirPending.value = dir;
+  } catch (err) {
+    layout.notify(String(err));
+  }
 }
 
 function onDataDirConfirmOpen(open: boolean): void {

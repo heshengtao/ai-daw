@@ -549,7 +549,13 @@ async function doOpen(url: string): Promise<void> {
 }
 
 async function doImport(): Promise<void> {
-  const path = await pickPluginToImport();
+  let path: string | null = null;
+  try {
+    path = await pickPluginToImport();
+  } catch (err) {
+    layout.notify(String(err));
+    return;
+  }
   if (!path) return;
   try {
     await manager.importFile(path);

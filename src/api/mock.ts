@@ -1263,6 +1263,8 @@ const transport: TransportSnapshot = {
   loop_start_frames: 0,
   loop_end_frames: 0,
   error: null,
+  // 浏览器 mock 没有真实设备概念：按「实时可用」模拟，不声称虚拟时钟。
+  virtual_output: false,
 };
 
 let transportTimer: number | null = null;

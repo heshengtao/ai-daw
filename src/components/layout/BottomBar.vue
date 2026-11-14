@@ -290,6 +290,8 @@ const timeHint = computed(() =>
 const isPlaying = computed(() => transport.playing);
 const isAiActive = computed(() => props.aiActive);
 const isPreview = computed(() => transport.mode === "preview");
+/** 无声卡（虚拟时钟）：播放照常，只是本机不出声、声音走网页。 */
+const isVirtualOutput = computed(() => !isPreview.value && transport.virtualOutput);
 
 /** 取消循环范围（回到整首循环）。给一句提示，免得用户以为「循环被关掉了」。 */
 async function clearLoopRange(): Promise<void> {
@@ -607,13 +609,21 @@ function onRetryAudio(): void {
         平时整块不存在，底栏右端就是空的；代理在写 / 音频离线时，提示才落在最右角，
         不会挤动中间的传输与读数。
       -->
-      <span v-if="isAiActive || isPreview" class="status">
+      <span v-if="isAiActive || isPreview || isVirtualOutput" class="status">
         <!-- 代理在写时才出现；空闲态不占位、不发光，底栏不留常驻状态灯。 -->
         <Tooltip v-if="isAiActive" :text="aiHint" place="above" align="end">
           <span class="ai-pill">
             <span class="dot" />
             <span class="ai-text">{{ aiText }}</span>
           </span>
+        </Tooltip>
+
+        <!-- 没有声卡时说明「本机不出声、网页端能听」：位置照常走，但别让人以为设备坏了。 -->
+        <Tooltip v-if="isVirtualOutput" :text="i18n.t('bottom.virtualClockHint')" place="above" align="end">
+          <button class="audio-retry" :aria-label="i18n.t('bottom.retryAudio')" @click="onRetryAudio">
+            <SpeakerWaveIcon class="w-[13px] h-[13px]" />
+            {{ i18n.t("bottom.virtualClock") }}
+          </button>
         </Tooltip>
 
         <!-- 实时可用时这里什么都没有；离线才长出可点的重试按钮（原因在 tooltip 里）。 -->

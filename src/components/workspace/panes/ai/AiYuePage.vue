@@ -1088,13 +1088,21 @@ watch(
 );
 
 async function pickAr(): Promise<void> {
-  const path = await pickLoraFile();
-  if (path) loraDraft.value = { ...loraDraft.value, ar_path: path };
+  try {
+    const path = await pickLoraFile();
+    if (path) loraDraft.value = { ...loraDraft.value, ar_path: path };
+  } catch (err) {
+    layout.notify(String(err));
+  }
 }
 
 async function pickNar(): Promise<void> {
-  const path = await pickLoraFile();
-  if (path) loraDraft.value = { ...loraDraft.value, nar_path: path };
+  try {
+    const path = await pickLoraFile();
+    if (path) loraDraft.value = { ...loraDraft.value, nar_path: path };
+  } catch (err) {
+    layout.notify(String(err));
+  }
 }
 
 async function saveLora(): Promise<void> {

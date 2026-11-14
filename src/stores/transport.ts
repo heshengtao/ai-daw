@@ -16,6 +16,9 @@ import { useSelectionStore } from "@/stores/selection";
 import { useTimelineStore } from "@/stores/timeline";
 import { useI18n } from "@/i18n";
 import { beatsToSeconds, secondsToBeats } from "@/utils/tempo";
+import { isTauri } from "@/utils/platform";
+import { encodeWav } from "@/utils/wav";
+import { uploadBlob } from "@/api/dialogs";
 
 /** 离线试听的渲染采样率。 */
 const PREVIEW_SAMPLE_RATE = 44_100;
@@ -36,6 +39,16 @@ function initialRecordMode(): RecordMode {
   }
 }
 
+/** 浏览器录音的进行中状态（模块级：不需要进响应式系统）。 */
+let browserTake: {
+  track: number;
+  start: number;
+  recorder: MediaRecorder;
+  chunks: Blob[];
+  stream: MediaStream;
+  done: Promise<void>;
+} | null = null;
+
 export const useTransportStore = defineStore("transport", () => {
   const layout = useLayoutStore();
   const i18n = useI18n();
@@ -46,6 +59,13 @@ export const useTransportStore = defineStore("transport", () => {
   // 乐观初值：初始化完成前先按「实时可用」处理，失败后再降级并提示。
   const available = ref(true);
   const error = ref<string | null>(null);
+  /**
+   * 后端是否退到了「虚拟时钟」（没有声卡）。
+   *
+   * `available` 仍为 true —— 位置、循环、电平表都照常工作，声音由 `/audio` 送到浏览器。
+   * 界面据此说明「本机不出声、网页端能听」，而不是让用户以为设备坏了。
+   */
+  const virtualOutput = ref(false);
   const sampleRate = ref(0);
   const playing = ref(false);
   const positionFrames = ref(0);
@@ -153,6 +173,7 @@ export const useTransportStore = defineStore("transport", () => {
     const wasAvailable = available.value;
     available.value = snapshot.available;
     error.value = snapshot.error;
+    virtualOutput.value = snapshot.virtual_output === true;
     sampleRate.value = snapshot.sample_rate;
     // 实时不可用时快照里的 `playing` / 位置恒为 0：那是后端的兜底值，不是离线试听的
     // 真实状态。预览模式下这两个值归 `<audio>` 的 rAF 时钟管；照抄会把「正在试听」
@@ -776,9 +797,77 @@ export const useTransportStore = defineStore("transport", () => {
    * - **MIDI**：先把播放头吸到 `startBeat`，再走带；音符由 MIDI 输入侧实时记入本 store
    *   （见 `noteInput` / `captureMidiNoteOn`），停止时一次性落成「片段 + 音符」。
    */
+  /**
+   * 浏览器录音：`getUserMedia` + `MediaRecorder` 采集，停止时转 WAV 上传、再走 `import_audio`。
+   *
+   * 为什么不在服务端录：容器里的 daemon 没有声卡，麦克风只存在于用户那台浏览器上。
+   * 这条路径让"浏览器访问桌面/容器"也能录音，与桌面端产出物一致（WAV 素材 + 轨道片段）。
+   */
+  async function startBrowserRecording(track: number, startBeat: number): Promise<void> {
+    if (browserTake) return;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      layout.notify(i18n.t("error.record", { error: String(err) }));
+      return;
+    }
+    const recorder = new MediaRecorder(stream);
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    const done = new Promise<void>((resolve) => {
+      recorder.onstop = () => resolve();
+    });
+    recorder.start();
+    browserTake = { track, start: startBeat, recorder, chunks, stream, done };
+    recording.value = true;
+    recordingMode.value = "audio";
+    playing.value = true;
+    if (mode.value === "realtime") await play();
+  }
+
+  /** 收尾一次浏览器录音：停采集 → 解码 → WAV → 上传 → 作为音频片段落到轨道上。 */
+  async function stopBrowserRecording(): Promise<boolean> {
+    const take = browserTake;
+    if (!take) return false;
+    browserTake = null;
+    take.recorder.stop();
+    await take.done;
+    for (const track of take.stream.getTracks()) track.stop();
+    try {
+      const blob = new Blob(take.chunks, { type: take.recorder.mimeType || "audio/webm" });
+      if (blob.size === 0) {
+        layout.notify(i18n.t("bottom.recordEmpty"));
+        return true;
+      }
+      // 用浏览器自己的解码器转成 PCM：容器里的 ffmpeg 不一定认得 webm/opus。
+      const context = new AudioContext();
+      let buffer: AudioBuffer;
+      try {
+        buffer = await context.decodeAudioData(await blob.arrayBuffer());
+      } finally {
+        void context.close();
+      }
+      const wav = new Blob([encodeWav(buffer)], { type: "audio/wave" });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const path = await uploadBlob(`take-${stamp}.wav`, wav);
+      await project.importAudio(path, take.track, take.start);
+      playing.value = false;
+    } catch (err) {
+      layout.notify(i18n.t("error.record", { error: String(err) }));
+    }
+    return true;
+  }
+
   async function startRecording(track: number, startBeat: number): Promise<void> {
     if (recordMode.value === "midi") {
       await startMidiRecording(track, startBeat);
+      return;
+    }
+    if (!isTauri()) {
+      await startBrowserRecording(track, startBeat);
       return;
     }
     try {
@@ -830,6 +919,12 @@ export const useTransportStore = defineStore("transport", () => {
     if (!recording.value) return;
     if (recordingMode.value === "midi") {
       await stopMidiRecording();
+      return;
+    }
+    if (!isTauri() && browserTake) {
+      recording.value = false;
+      recordingMode.value = null;
+      await stopBrowserRecording();
       return;
     }
     recording.value = false;
@@ -936,6 +1031,7 @@ export const useTransportStore = defineStore("transport", () => {
   return {
     available,
     error,
+    virtualOutput,
     sampleRate,
     playing,
     positionFrames,

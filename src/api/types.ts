@@ -653,6 +653,11 @@ export interface TransportSnapshot {
   loop_end_frames: number;
   /** 不可用时的原因。 */
   error: string | null;
+  /**
+   * 当前是「虚拟时钟」输出：机器没有声卡（或用户强制），
+   * 播放照常按实时节奏走，声音通过 `/audio` 送到浏览器。
+   */
+  virtual_output: boolean;
 }
 
 /** 混音通道的四个参数（推子/声像/静音/独奏一次给全，避免多次往返）。 */
