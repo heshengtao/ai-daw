@@ -217,6 +217,10 @@ keyboard back. So the editor becomes an in-page window — the same editor you w
 native window on the desktop. (On the desktop build, "Open editor" still pops the real native
 window: better fidelity, lower latency.) Set `AIDAW_GUI_STREAM=0` to skip the virtual display
 and save memory — you can still edit parameters, just not see the editor.
+The image is now about **585 MB** (it was ~286 MB): the extra is Xvfb plus Mesa software
+OpenGL, which some plugin editors need — without `libgl1-mesa-dri` they render black. If none
+of your plugins use GL, drop the `libgl1` / `libglx-mesa0` lines and get ~150 MB back.
+
 
 ### Docker (build from source)
 

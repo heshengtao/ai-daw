@@ -211,6 +211,10 @@ docker run -d --name ai-daw -p 28430:28430 -v ai-daw-data:/data ailm32442/ai-daw
 编辑器在浏览器里就是一块"网页内窗口"，和桌面上弹出来的那扇是同一个界面。
 （桌面壳里点「打开界面」仍然直接弹原生窗口，保真度和延迟都更好。）
 用 `AIDAW_GUI_STREAM=0` 可以关掉虚拟显示省内存，这时只能改参数、看不到界面。
+镜像现在约 **585 MB**（比 1.8.0 之前大约 286 MB）：多出来的部分是 Xvfb 与 Mesa 软件
+OpenGL——有些插件界面要用 OpenGL 画，没有 `libgl1-mesa-dri` 会直接黑屏。如果你的插件都不吃
+GL，去掉 `libgl1` / `libglx-mesa0` 两行可以省回约 150 MB。
+
 
 ### Docker（自己构建）
 

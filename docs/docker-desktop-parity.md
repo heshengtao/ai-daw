@@ -1354,6 +1354,10 @@ xdotool                        ← 注入到同一个 X 显示（move / click / 
   直接告诉用户"换浮动窗口插件 / 回桌面"。不开空窗假装成功。
 - **`AIDAW_GUI_STREAM=0`** 可关掉虚拟显示省内存（此时只能改参数）。
 
+镜像体积从 **286 MB 涨到 585 MB**：Xvfb 只有 ~5 MB，真正的大头是 Mesa 软件 OpenGL
+（`libgl1-mesa-dri` 拉进 `libllvm15` 约 117 MB）——有些插件界面用 OpenGL 画，没有它会黑屏。
+不吃 GL 的插件可以把 `libgl1` / `libglx-mesa0` 去掉，省回约 150 MB。
+
 镜像改动（`ai-daw:1.8.0`）：`xvfb`、`xdotool`、`libxext6`、Qt 系 GUI 需要的
 `libxcb-cursor0 / -icccm4 / -keysyms1 / -render-util0 / -xkb1 / libxkbcommon-x11-0`、
 `libgl1`、`libglx-mesa0`、`fontconfig` + `fonts-dejavu-core`；入口改为
