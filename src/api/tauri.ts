@@ -1736,9 +1736,29 @@ export function onPluginsEvent(handler: (plugins: CatalogPlugin[]) => void): Pro
  * `title` 是插件展示名（按当前语言）；后端会拼成「轨道名 - 插件名」作为窗口标题。
  * 已经开着就把它带到最前面，不再开新窗。
  */
-export function openPluginWindow(track: number, title: string): Promise<void> {
-  if (mockEnabled()) return mockApi.openPluginWindow();
-  return invoke<void>("open_plugin_window", { track, title });
+/**
+ * 打开插件原生界面。
+ *
+ * - 桌面壳：真的弹出插件自己的窗口，返回 `null`。
+ * - 容器 / 无头：没有窗口系统，插件在虚拟显示上开窗，后端把整块屏编码成帧流，
+ *   返回 `{streamId, width, height, url}`，页面用 canvas 显示（见 `RemotePluginView`）。
+ */
+export function openPluginWindow(track: number, title: string): Promise<PluginGuiStream | null> {
+  if (mockEnabled()) {
+    return mockApi.openPluginWindow().then(() => null);
+  }
+  return invoke<PluginGuiStream | null>("open_plugin_window", { track, title }).then(
+    (value) => value ?? null,
+  );
+}
+
+/** 远程插件界面的帧流信息（只有无头后端才会给）。 */
+export interface PluginGuiStream {
+  streamId: string;
+  width: number;
+  height: number;
+  /** 同源 WebSocket 路径，例如 `/plugin-gui/ab12…`。 */
+  url: string;
 }
 
 /** 关闭某条轨道的插件窗口。 */
@@ -1780,9 +1800,15 @@ export function openEffectPluginWindow(
   track: number,
   pluginId: string,
   title: string,
-): Promise<void> {
-  if (mockEnabled()) return mockApi.openEffectPluginWindow();
-  return invoke<void>("open_effect_plugin_window", { track, pluginId, title });
+): Promise<PluginGuiStream | null> {
+  if (mockEnabled()) {
+    return mockApi.openEffectPluginWindow().then(() => null);
+  }
+  return invoke<PluginGuiStream | null>("open_effect_plugin_window", {
+    track,
+    pluginId,
+    title,
+  }).then((value) => value ?? null);
 }
 
 /** 关闭某条轨道上某个外部效果器的原生界面。 */

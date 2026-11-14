@@ -53,6 +53,8 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .route("/rpc/{cmd}", post(rpc_handler))
         .route("/events", get(events_handler))
         .route("/audio", get(audio_handler))
+        // 插件原生界面的帧流（容器里"原生界面进网页"）：帧走二进制，输入走文本。
+        .route("/plugin-gui/{id}", get(plugin_gui_handler))
         .route("/health", get(health))
         .route("/commands", get(commands))
         .route("/upload", post(upload_handler))
@@ -347,6 +349,47 @@ async fn audio_handler(
 ) -> Response {
     let tap = state.daemon.state().audio.web_tap();
     ws.on_upgrade(move |socket| stream_tap(socket, tap))
+}
+
+/// 插件原生界面的 WebSocket：`id` 是 `open_plugin_window` 返回的 streamId。
+async fn plugin_gui_handler(
+    State(_state): State<Arc<ServerState>>,
+    Path(id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let Some(session) = crate::plugin_gui::session(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    ws.on_upgrade(move |socket| stream_plugin_gui(socket, session))
+}
+
+/// 帧下行（二进制 JPEG）+ 输入上行（JSON 文本）。
+async fn stream_plugin_gui(mut socket: WebSocket, session: Arc<crate::plugin_gui::Session>) {
+    let mut frames = session.subscribe();
+    loop {
+        tokio::select! {
+            frame = frames.recv() => match frame {
+                Ok(bytes) => {
+                    if socket.send(Message::Binary((*bytes).clone().into())).await.is_err() {
+                        break;
+                    }
+                }
+                // 落后太多（标签页被挂起过）：跳过这批，等下一帧——界面要的是最新画面。
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            },
+            message = socket.recv() => match message {
+                Some(Ok(Message::Text(text))) => {
+                    if let Ok(event) = serde_json::from_str::<crate::plugin_gui::InputEvent>(&text) {
+                        session.send_input(event);
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Ok(_)) => {}
+                Some(Err(_)) => break,
+            },
+        }
+    }
 }
 
 /// 一块 PCM 的线上编码。
@@ -707,9 +750,21 @@ mod tests {
     #[tokio::test]
     async fn desktop_only_command_is_501_with_reason() {
         let (app, _) = server();
-        let (status, body) = call(app, "/rpc/open_plugin_window", r#"{"track":1}"#).await;
+        let (status, body) = call(app, "/rpc/install_cli", r#"{}"#).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
         assert!(body.contains("桌面端"), "{body}");
+    }
+
+    /// 插件原生界面在无头环境里不是"不支持"，而是需要虚拟显示：没有 `DISPLAY` 时
+    /// 必须把原因说清楚（容器镜像自带 Xvfb，入口脚本会导出 DISPLAY）。
+    #[tokio::test]
+    async fn plugin_window_explains_missing_display() {
+        let (app, _) = server();
+        std::env::remove_var("DISPLAY");
+        let (status, body) =
+            call(app, "/rpc/open_plugin_window", r#"{"track":1,"title":"X"}"#).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert!(body.contains("Xvfb") || body.contains("虚拟显示"), "{body}");
     }
 
     /// 离线试听回的是 WAV 原始字节（没有声卡的容器里，这是唯一的播放路径）。

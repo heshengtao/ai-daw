@@ -105,6 +105,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxcb1 \
         libxcb-shm0 \
         libx11-6 \
+        libxext6 \
+        # 插件界面进网页（`plugin_gui`）：虚拟显示 + 输入注入。
+        # Xvfb 是"没有屏幕的屏幕"；插件照常在自己的窗口里画界面，
+        # daemon 用 x11rb 读根窗口像素编码成 JPEG 推给浏览器，鼠标键盘用 xdotool 注回去。
+        xvfb \
+        xdotool \
+        # 插件 GUI 常见的运行期依赖：Qt 系要 xcb-cursor / xkb，多数要 GL 与字体。
+        libxcb-cursor0 \
+        libxcb-icccm4 \
+        libxcb-keysyms1 \
+        libxcb-render-util0 \
+        libxcb-xkb1 \
+        libxkbcommon-x11-0 \
+        libgl1 \
+        libglx-mesa0 \
+        fontconfig \
+        fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/* \
     && find /usr/share/doc /usr/share/man /usr/share/locale -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
 
@@ -135,10 +152,15 @@ ENV AIDAW_MODELS_EXTRA=/opt/models
 ENV AIDAW_ORT_BUNDLED=/opt/ort
 ENV AIDAW_ARTICULATION_MAPS=/opt/articulation-maps
 
+# 启动脚本：有 Xvfb 就先起虚拟显示，再拉起 daemon。
+# `DISPLAY` 只在同一进程树里可见——插件界面那条链路（`plugin_gui`）靠它。
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 EXPOSE 28430
 
 # `--lan` 在容器里是**必须**的：容器内的 127.0.0.1 从外面到不了。
-ENTRYPOINT ["aidawd", "--data-dir", "/data", "--lan", "--port", "28430"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:28430/health || exit 1

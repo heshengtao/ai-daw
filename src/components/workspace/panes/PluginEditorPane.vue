@@ -12,6 +12,7 @@
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import PluginParamList from "@/components/common/PluginParamList.vue";
+import RemotePluginView from "@/components/common/RemotePluginView.vue";
 import PresetBar from "@/components/common/PresetBar.vue";
 import SynthPanel from "@/components/workspace/panes/SynthPanel.vue";
 import { canonicalPluginId, EFFECT_DEFAULTS, effectiveParams, SYNTH_ID } from "@/data/plugins";
@@ -21,6 +22,7 @@ import { useLayoutStore } from "@/stores/layout";
 import { usePluginsStore } from "@/stores/plugins";
 import { useI18n } from "@/i18n";
 import { usePluginInterface } from "@/composables/usePluginInterface";
+import type { PluginGuiStream } from "@/api/tauri";
 import {
   closeEffectPluginWindow,
   closePluginWindow,
@@ -51,6 +53,23 @@ const instrumentParams = computed(() =>
 
 /** 该插件的原生界面是否开着（独立窗口）。 */
 const editorOpen = ref(false);
+
+/**
+ * 容器里的"远程界面"：没有窗口系统时后端会把插件界面编码成帧流，
+ * 这里拿到 `{streamId,url,...}` 就在面板里画一块 canvas（见 `RemotePluginView`）。
+ * 桌面壳打开的是真窗口，这里保持 `null`。
+ */
+const editorStream = ref<PluginGuiStream | null>(null);
+const effectStreams = ref<Record<number, PluginGuiStream | null>>({});
+
+function onRemoteClose(): void {
+  editorStream.value = null;
+  editorOpen.value = false;
+}
+
+function onRemoteError(message: string): void {
+  layout.notify(`插件界面：${message}`);
+}
 let statusTimer: number | null = null;
 
 async function refreshEditorOpen(): Promise<void> {
@@ -70,11 +89,19 @@ async function toggleEditorWindow(): Promise<void> {
   const t = track.value;
   if (!t) return;
   try {
-    if (editorOpen.value) {
+    if (editorOpen.value || editorStream.value) {
       await closePluginWindow(t.id);
       editorOpen.value = false;
+      editorStream.value = null;
+      return;
+    }
+    const stream = await openPluginWindow(t.id, plugins.name(t.instrument?.plugin_id));
+    if (stream) {
+      // 容器：界面上这块 canvas 就是插件原生界面。
+      editorStream.value = stream;
+      editorOpen.value = true;
     } else {
-      await openPluginWindow(t.id, plugins.name(t.instrument?.plugin_id));
+      // 桌面：真的弹出一扇原生窗口。
       editorOpen.value = true;
     }
   } catch (err) {
@@ -114,9 +141,15 @@ async function toggleEffectWindow(fx: { plugin_id: string }, i: number): Promise
     if (effectOpen.value[i]) {
       await closeEffectPluginWindow(t.id, fx.plugin_id);
       effectOpen.value[i] = false;
+      delete effectStreams.value[i];
       return;
     }
-    await pluginInterface.openEffect(t.id, fx.plugin_id);
+    const stream = await pluginInterface.openEffect(t.id, fx.plugin_id);
+    if (stream) {
+      effectStreams.value = { ...effectStreams.value, [i]: stream };
+      effectOpen.value[i] = true;
+      return;
+    }
     // 原生窗口是异步打开的，稍后再对齐状态；参数窗口没有可查的开合状态，保持 false 即可。
     await refreshEffectOpen(fx, i);
   } catch (err) {
@@ -241,7 +274,16 @@ async function commitEffectMany(index: number, params: Record<string, number>): 
           </span>
         </div>
 
-        <div class="card">
+        <!-- 容器里的插件界面：后端把插件原生窗口编码成帧流，这里就是那扇"窗口"。 -->
+        <RemotePluginView
+          v-if="editorStream"
+          :stream="editorStream"
+          :title="plugins.name(track.instrument.plugin_id)"
+          @close="onRemoteClose"
+          @error="onRemoteError"
+        />
+
+        <div v-else class="card">
           <div class="name-row">
             <span class="plugin-name">{{ plugins.name(track.instrument.plugin_id) }}</span>
             <button
@@ -295,6 +337,14 @@ async function commitEffectMany(index: number, params: Record<string, number>): 
               {{ effectOpen[i] ? i18n.t("editor.closeWindow") : i18n.t("editor.openWindow") }}
             </button>
           </div>
+          <!-- 容器里的效果器界面：与乐器一样，后端把插件窗口编码成帧流显示在这里。 -->
+          <RemotePluginView
+            v-if="effectStreams[i]"
+            :stream="effectStreams[i]!"
+            :title="plugins.name(fx.plugin_id)"
+            @close="() => { effectStreams = { ...effectStreams }; delete effectStreams[i]; effectOpen[i] = false; }"
+            @error="onRemoteError"
+          />
           <PresetBar
             :plugin-id="fx.plugin_id"
             :params="fxParams(fx)"

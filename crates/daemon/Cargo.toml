@@ -74,6 +74,8 @@ base64 = "0.22"
 
 # 无窗口入口的参数解析。
 clap = { version = "4", features = ["derive"] }
+x11rb = "0.13"
+jpeg-encoder = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"

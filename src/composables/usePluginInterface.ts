@@ -14,7 +14,7 @@ import { useLayoutStore } from "@/stores/layout";
 import { useI18n } from "@/i18n";
 import { canonicalPluginId, CHORUS_ID, DELAY_ID, DRIVE_ID, EQ_ID, REVERB_ID, SYNTH_ID } from "@/data/plugins";
 import { openEffectPluginWindow, openEffectWindow, openPluginWindow, openSynthWindow } from "@/api/tauri";
-import { isTauri } from "@/utils/platform";
+import type { PluginGuiStream } from "@/api/tauri";
 
 /** 有独立面板的内置效果器（点「界面」开我们自己的窗口，而不是原生窗口）。 */
 const BUILTIN_EFFECT_IDS = [DELAY_ID, REVERB_ID, CHORUS_ID, DRIVE_ID, EQ_ID];
@@ -92,27 +92,30 @@ export function usePluginInterface() {
    *
    * 浏览器预览里没有独立窗口，一律退回侧边栏。
    */
-  async function openEffect(trackId: number, pluginId: string): Promise<void> {
-    // 浏览器预览里没有独立窗口：退回侧边栏面板。
-    if (!isTauri()) {
-      layout.openTab("editor");
-      return;
-    }
-
-    // 自带原生界面的**外部**效果器：开它自己的窗口（复用与乐器一致的「等引擎装载」重试）。
+  /**
+   * 打开效果器的原生界面。
+   *
+   * 返回 `null` 表示"在宿主上开了窗口"（桌面壳），返回流信息表示"容器里把界面
+   * 投到页面上"（调用方会显示 canvas）。浏览器预览里没有引擎，退回侧边栏。
+   */
+  async function openEffect(
+    trackId: number,
+    pluginId: string,
+  ): Promise<PluginGuiStream | null> {
+    // 自带原生界面的**外部**效果器：开它自己的窗口 / 远程界面（复用「等引擎装载」重试）。
     if (!isBuiltinEffect(pluginId) && plugins.info(pluginId)?.hasEditor) {
       let lastError = "";
       for (let attempt = 0; attempt < OPEN_ATTEMPTS; attempt += 1) {
         try {
-          await openEffectPluginWindow(trackId, pluginId, plugins.name(pluginId));
-          return;
+          return await openEffectPluginWindow(trackId, pluginId, plugins.name(pluginId));
         } catch (err) {
           lastError = String(err);
           await new Promise((resolve) => setTimeout(resolve, OPEN_RETRY_MS));
         }
       }
+      // 浏览器预览（没有引擎）里没有独立窗口：退回侧边栏面板。
       layout.notify(t("panel.editorUnavailable", { error: lastError }));
-      return;
+      return null;
     }
 
     // 内置效果器，以及没有自带界面的外部效果器：开我们自己的参数窗口。
@@ -122,6 +125,7 @@ export function usePluginInterface() {
       // 后端只会在「这个效果器已经不在链上」时失败——明说，而不是开一扇空窗。
       layout.notify(String(err));
     }
+    return null;
   }
 
   return { open, openEffect };

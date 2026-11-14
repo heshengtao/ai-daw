@@ -34,6 +34,7 @@ pub mod models;
 pub mod paths;
 pub mod pick;
 pub mod plugin_dirs;
+pub mod plugin_gui;
 pub mod plugin_info;
 pub mod plugins;
 pub mod presets;

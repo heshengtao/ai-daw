@@ -86,6 +86,57 @@ fn unsupported(name: &str, why: &str) -> Result<Value, RpcError> {
 }
 
 
+
+/// 打开插件原生界面。
+///
+/// - 桌面构建（有真实窗口系统）：直接开在宿主上——浏览器里点「打开界面」就是桌面弹窗，
+///   保真度 100%，零延迟。
+/// - 无头构建（容器）：走 `plugin_gui` 的远程界面（虚拟显示 + 帧流 + 输入回传），
+///   页面上是一块 canvas，看起来就是"插件窗口在网页里"。
+fn window_open(
+    app: &AppHandle,
+    track: u64,
+    plugin_id: Option<String>,
+    title: String,
+) -> Result<Value, RpcError> {
+    #[cfg(feature = "desktop")]
+    {
+        let state = app.state::<Arc<AppState>>();
+        let out = match plugin_id {
+            Some(plugin_id) => {
+                crate::commands::open_effect_plugin_window(app.clone(), state, track, plugin_id, title)
+            }
+            None => crate::commands::open_plugin_window(app.clone(), state, track, title),
+        };
+        return value(out);
+    }
+    #[cfg(not(feature = "desktop"))]
+    {
+        let state = app.state::<Arc<AppState>>();
+        crate::plugin_gui::open(app.clone(), state, track, plugin_id, title)
+    }
+}
+
+/// 关闭插件原生界面（桌面关窗口、容器停帧流）。
+fn window_close(app: &AppHandle, track: u64, plugin_id: Option<String>) -> Result<Value, RpcError> {
+    #[cfg(feature = "desktop")]
+    {
+        let state = app.state::<Arc<AppState>>();
+        let out = match plugin_id {
+            Some(plugin_id) => {
+                crate::commands::close_effect_plugin_window(app.clone(), state, track, plugin_id)
+            }
+            None => crate::commands::close_plugin_window(app.clone(), track),
+        };
+        return value(out);
+    }
+    #[cfg(not(feature = "desktop"))]
+    {
+        let state = app.state::<Arc<AppState>>();
+        crate::plugin_gui::close(app.clone(), state, track, plugin_id)
+    }
+}
+
 /// 同步命令表；`None` = 这条命令不在这里。
 pub fn call(app: &AppHandle, cmd: &str, args: Value) -> Option<Result<Value, RpcError>> {
     let handler: fn(&AppHandle, Value) -> Result<Value, RpcError> = match cmd {
@@ -210,13 +261,33 @@ pub fn call(app: &AppHandle, cmd: &str, args: Value) -> Option<Result<Value, Rpc
         plain(out)
     },
     "plugin_window_open" => |app, args| {
-        let track: u64 = take(&args, "track")?;        let out = crate::commands::plugin_window_open(app.state::<Arc<AppState>>(), track);
-        plain(out)
+        let track: u64 = take(&args, "track")?;
+        #[cfg(feature = "desktop")]
+        {
+            let out = crate::commands::plugin_window_open(app.state::<Arc<AppState>>(), track);
+            plain(out)
+        }
+        #[cfg(not(feature = "desktop"))]
+        {
+            plain(crate::plugin_gui::is_open(track, &None))
+        }
     },
     "effect_plugin_window_open" => |app, args| {
         let track: u64 = take(&args, "track")?;
-        let plugin_id: String = take(&args, "plugin_id")?;        let out = crate::commands::effect_plugin_window_open(app.state::<Arc<AppState>>(), track, plugin_id);
-        plain(out)
+        let plugin_id: String = take(&args, "plugin_id")?;
+        #[cfg(feature = "desktop")]
+        {
+            let out = crate::commands::effect_plugin_window_open(
+                app.state::<Arc<AppState>>(),
+                track,
+                plugin_id,
+            );
+            plain(out)
+        }
+        #[cfg(not(feature = "desktop"))]
+        {
+            plain(crate::plugin_gui::is_open(track, &Some(plugin_id)))
+        }
     },
     "audition_note" => |app, args| {
         let track: u64 = take(&args, "track")?;
@@ -580,12 +651,30 @@ pub fn call(app: &AppHandle, cmd: &str, args: Value) -> Option<Result<Value, Rpc
         plain(out)
     },
     "cli_status" => |_app, _args| unsupported("cli_status", "命令行安装"),
-    "close_effect_plugin_window" => |_app, _args| unsupported("close_effect_plugin_window", "原生插件窗口"),
-    "close_plugin_window" => |_app, _args| unsupported("close_plugin_window", "原生插件窗口"),
+    // 插件原生窗口：桌面壳有真实窗口，直接开在宿主上（浏览器里点「打开界面」= 桌面弹窗）。
+    // 无头（容器）没有窗口系统，走 `plugin_gui` 的远程界面（Xvfb + 帧流），见下。
+    "close_effect_plugin_window" => |app, args| {
+        let track: u64 = take(&args, "track")?;
+        let plugin_id: String = take(&args, "plugin_id")?;
+        window_close(app, track, Some(plugin_id))
+    },
+    "close_plugin_window" => |app, args| {
+        let track: u64 = take(&args, "track")?;
+        window_close(app, track, None)
+    },
     "install_cli" => |_app, _args| unsupported("install_cli", "命令行安装"),
-    "open_effect_plugin_window" => |_app, _args| unsupported("open_effect_plugin_window", "原生插件窗口"),
+    "open_effect_plugin_window" => |app, args| {
+        let track: u64 = take(&args, "track")?;
+        let plugin_id: String = take(&args, "plugin_id")?;
+        let title: String = take(&args, "title")?;
+        window_open(app, track, Some(plugin_id), title)
+    },
     "open_effect_window" => |_app, _args| unsupported("open_effect_window", "原生效果器窗口"),
-    "open_plugin_window" => |_app, _args| unsupported("open_plugin_window", "原生插件窗口"),
+    "open_plugin_window" => |app, args| {
+        let track: u64 = take(&args, "track")?;
+        let title: String = take(&args, "title")?;
+        window_open(app, track, None, title)
+    },
     "open_synth_window" => |_app, _args| unsupported("open_synth_window", "原生合成器窗口"),
     "plugin_manager_open" => |_app, _args| unsupported("plugin_manager_open", "打开外部浏览器"),
     "uninstall_cli" => |_app, _args| unsupported("uninstall_cli", "命令行安装"),
