@@ -1198,7 +1198,7 @@ ofx_bake_clip_encodes_video    OpenFX Invert       ok（首帧亮度 255-x，真
 （不再有需要解释的降级）。现在能力表里剩下的 `degraded` / `desktop_only` / `unsupported`：
 
 - `desktop_only`：`plugin.reveal` / `plugin.open`、`cli`、`data_dir`（文件管理器 / 浏览器 / 路径类）
-- `unsupported`：`image_gen`、`video_gen`（GPU）
+- `unsupported`：`image_gen`、`video_gen`、`sdcpp`（**本地生成器只在桌面实现**，不是"容器没有 GPU"，见 §25.7）
 
 ### 25.5 绿点（本轮实跑）
 
@@ -1239,3 +1239,25 @@ aicut_help        → 返回 render 域全文（skills/aicut/references/render.m
 每个工具都回 `project not loaded`（桌面前端总会先 `doc_load`，容器里没人做这件事）。
 现在 `aicutd` 启动时先载入一份空白工程——用领域层同一个 `newProject()`，规格与桌面「新建」
 逐字段一致。
+
+### 25.7 更正：容器可以有 GPU，"GPU 生成"不是物理限制
+
+之前把「GPU 生成」归到"物理上不可对齐"是**说错了**，这里更正并记下来。
+
+- **容器本身可以有 GPU**：Linux 宿主装 NVIDIA 容器运行时（或 CDI）后 `docker run --gpus all`
+  就能直通；Windows 宿主走 WSL2 也有同样的路径；Intel / AMD 可以用 `/dev/dri` 直通做 VA-API。
+  "容器没有 GPU"是个错误的一般化——这轮在 macOS 上构建，Docker Desktop 的 Linux 虚拟机确实
+  不透传 Apple GPU，但那是**宿主平台**的限制，不是 Docker 的结构限制。
+- **ai-cut 的 ONNX Runtime CUDA 路径在容器里是支持的代码**：`runtime_catalog` 里就有
+  `microsoft.ml.onnxruntime.gpu.linux` 的 CUDA 12 / CUDA 13 运行库包
+  （`libonnxruntime_providers_cuda.so` + cudart / cuBLAS / cuFFT / cuDNN），装到配置目录后
+  `backend::preload_cuda` 会按裸文件名加载。默认镜像是 **CPU 版**，但这条路没有关。
+- **真正的缺口是"生成器没下沉"**：本地出图 / 出视频走 `src-tauri/src/sdcpp.rs`
+  （Windows 的 CPU / Vulkan / CUDA 构建 + macOS 的 Metal 构建），daemon 里没有对应实现。
+  所以 `image_gen` / `video_gen` / `sdcpp` 三个能力现在标 `unsupported`，理由是
+  **本地生成器只有桌面版**（云端出图 `cloud_gen_*` 三形态都可用），而不是"物理上没有 GPU"。
+- 真的要做的量：把 sd.cpp 的二进制与权重打包路径搬进 daemon（`ai_backend::SdcppBackend`
+  已经有类型），镜像里按 CPU 基线随包、CUDA / Vulkan 后端按需下载——和 `runtime_ort` 同一套思路。
+  做完之后，**有 GPU 的 Linux 容器**就能跑；macOS 的 Docker Desktop 里仍然只能 CPU（极慢）。
+
+顺带把 README 的能力表也改成了两行：插件 GUI / 系统级操作是物理限制；本地生成是"未下沉"。
