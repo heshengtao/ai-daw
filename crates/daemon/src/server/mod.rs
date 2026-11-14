@@ -42,6 +42,7 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .route("/health", get(health))
         .route("/commands", get(commands))
         .route("/upload", post(upload_handler))
+        .route("/download", get(download_handler))
         // 其余路径交给前端产物（hash 路由，不需要 SPA 兜底规则，但仍兜一下更稳）。
         .fallback(get(static_handler))
         // axum 默认请求体上限是 2 MB，真实的音频/视频素材随便就超了。
@@ -62,6 +63,114 @@ async fn rpc_handler(
             Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
         }
     };
+    // 导出：渲染 + 编码要几秒到几十秒，单独 await。路径留空时由服务端生成暂存文件。
+    if cmd == "export_audio" {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Args {
+            #[serde(default)]
+            path: String,
+            #[serde(default = "default_rate")]
+            sample_rate: u32,
+            format: crate::commands::ExportFormat,
+            #[serde(default)]
+            bitrate_kbps: Option<u32>,
+        }
+        fn default_rate() -> u32 {
+            44_100
+        }
+        let parsed: Args = match serde_json::from_value(args) {
+            Ok(value) => value,
+            Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
+        };
+        let path = if parsed.path.trim().is_empty() {
+            let ext = match parsed.format {
+                crate::commands::ExportFormat::Wav => "wav",
+                crate::commands::ExportFormat::Mp3 => "mp3",
+            };
+            export_staging_path(&state, ext).to_string_lossy().to_string()
+        } else {
+            parsed.path
+        };
+        let daemon = Arc::clone(&state.daemon);
+        return match crate::commands::export_audio_impl(
+            daemon.state(),
+            path,
+            parsed.sample_rate,
+            parsed.format,
+            parsed.bitrate_kbps,
+        )
+        .await
+        {
+            Ok(path) => axum::Json(serde_json::json!({ "path": path })).into_response(),
+            Err(err) => RpcError::Failed(err).into_response(),
+        };
+    }
+    if cmd == "save_project" {
+        #[derive(serde::Deserialize)]
+        struct Args {
+            #[serde(default)]
+            path: String,
+        }
+        let parsed: Args = match serde_json::from_value(args) {
+            Ok(value) => value,
+            Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
+        };
+        let path = if parsed.path.trim().is_empty() {
+            project_staging_path(&state)
+        } else {
+            parsed.path
+        };
+        let daemon = Arc::clone(&state.daemon);
+        return match crate::commands::save_project_state(daemon.state(), &path) {
+            Ok(path) => axum::Json(serde_json::json!({ "path": path })).into_response(),
+            Err(err) => RpcError::Failed(err).into_response(),
+        };
+    }
+    if cmd == "export_midi" {
+        #[derive(serde::Deserialize)]
+        struct Args {
+            #[serde(default)]
+            path: String,
+            #[serde(default)]
+            tracks: Option<Vec<u64>>,
+        }
+        let parsed: Args = match serde_json::from_value(args) {
+            Ok(value) => value,
+            Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
+        };
+        let path = if parsed.path.trim().is_empty() {
+            export_staging_path(&state, "mid").to_string_lossy().to_string()
+        } else {
+            parsed.path
+        };
+        let daemon = Arc::clone(&state.daemon);
+        return match crate::commands::export_midi_impl(daemon.state(), path, parsed.tracks).await {
+            Ok(path) => axum::Json(serde_json::json!({ "path": path })).into_response(),
+            Err(err) => RpcError::Failed(err).into_response(),
+        };
+    }
+    if cmd == "export_score" {
+        #[derive(serde::Deserialize)]
+        struct Args {
+            #[serde(default)]
+            path: String,
+            xml: String,
+        }
+        let parsed: Args = match serde_json::from_value(args) {
+            Ok(value) => value,
+            Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
+        };
+        let path = if parsed.path.trim().is_empty() {
+            export_staging_path(&state, "musicxml").to_string_lossy().to_string()
+        } else {
+            parsed.path
+        };
+        return match crate::commands::export_score(path, parsed.xml).await {
+            Ok(path) => axum::Json(serde_json::json!({ "path": path })).into_response(),
+            Err(err) => RpcError::Failed(err).into_response(),
+        };
+    }
     // 整体替换工程（MIDI / MusicXML / 工程 JSON 导入的最后一步）。
     if cmd == "import_project" {
         #[derive(serde::Deserialize)]
@@ -224,6 +333,50 @@ async fn stream_tap(mut socket: WebSocket, tap: Arc<ai_daw_engine::tap::AudioTap
 }
 
 #[derive(Deserialize)]
+struct DownloadQuery {
+    path: String,
+}
+
+/// `GET /download?path=…`：把服务端生成的导出文件发给浏览器。
+///
+/// 只允许数据目录内的文件（导出暂存与导入素材都落在那里），避免变成任意文件读取。
+async fn download_handler(
+    State(state): State<Arc<ServerState>>,
+    Query(query): Query<DownloadQuery>,
+) -> Response {
+    let root = state.daemon.config().data_dir.clone();
+    let path = std::path::PathBuf::from(&query.path);
+    let resolved = match path.canonicalize() {
+        Ok(path) => path,
+        Err(err) => return (StatusCode::NOT_FOUND, format!("找不到文件：{err}")).into_response(),
+    };
+    let root = root.canonicalize().unwrap_or(root);
+    if !resolved.starts_with(&root) {
+        return (StatusCode::FORBIDDEN, "只能下载数据目录内的文件").into_response();
+    }
+    match tokio::fs::read(&resolved).await {
+        Ok(bytes) => {
+            let name = resolved
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "download".into());
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"{name}\""),
+                    ),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("读取失败：{err}")).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
 struct UploadQuery {
     /// 原始文件名（用来决定落盘名与扩展名）。
     name: String,
@@ -239,6 +392,28 @@ async fn upload_handler(
     body: axum::body::Bytes,
 ) -> Response {
     upload_to_data_dir(&state, &query.name, &body).await
+}
+
+/// 工程文件的暂存位置：`<数据目录>/projects/<时间戳>.json`。
+fn project_staging_path(state: &ServerState) -> String {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dir = state.daemon.config().data_dir.join("projects");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(format!("project-{stamp}.json")).to_string_lossy().to_string()
+}
+
+/// 导出文件的暂存位置：`<数据目录>/exports/<时间戳>.<ext>`。
+fn export_staging_path(state: &ServerState, ext: &str) -> std::path::PathBuf {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dir = state.daemon.config().data_dir.join("exports");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(format!("export-{stamp}.{ext}"))
 }
 
 async fn upload_to_data_dir(state: &ServerState, name: &str, body: &[u8]) -> Response {

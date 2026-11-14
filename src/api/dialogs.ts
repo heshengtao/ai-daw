@@ -62,7 +62,9 @@ export async function pickProjectToOpen(): Promise<string | null> {
 
 /** 选择工程保存路径；取消返回 null。 */
 export async function pickProjectToSave(defaultPath: string): Promise<string | null> {
-  if (!isTauri()) return `mock://${defaultPath}`;
+  // 浏览器里没有保存对话框：让服务端把导出文件写进数据目录的 exports/，
+  // 拿回真实路径后前端触发下载（见 utils/download.ts）。
+  if (!isTauri()) return "";
   const selected = await saveDialog({ defaultPath, filters: projectFilter() });
   return selected ?? null;
 }
@@ -75,14 +77,18 @@ export async function pickProjectToSave(defaultPath: string): Promise<string | n
  * 哪个编码器——所以「文件名写 .mp3」永远会得到 MP3。
  */
 export async function pickAudioToSave(defaultPath: string): Promise<string | null> {
-  if (!isTauri()) return `mock://${defaultPath}`;
+  // 浏览器里没有保存对话框：让服务端把导出文件写进数据目录的 exports/，
+  // 拿回真实路径后前端触发下载（见 utils/download.ts）。
+  if (!isTauri()) return "";
   const selected = await saveDialog({ defaultPath, filters: exportFilter() });
   return selected ?? null;
 }
 
 /** 选择乐谱（MusicXML）保存路径；取消返回 null。 */
 export async function pickScoreToSave(defaultPath: string): Promise<string | null> {
-  if (!isTauri()) return `mock://${defaultPath}`;
+  // 浏览器里没有保存对话框：让服务端把导出文件写进数据目录的 exports/，
+  // 拿回真实路径后前端触发下载（见 utils/download.ts）。
+  if (!isTauri()) return "";
   const selected = await saveDialog({ defaultPath, filters: scoreFilter() });
   return selected ?? null;
 }
@@ -93,7 +99,9 @@ export async function pickScoreToSave(defaultPath: string): Promise<string | nul
  * 只给 `.mid` / `.midi`：SMF 的容器扩展名就这两种（`.smf` 只作为导入的兼容写法）。
  */
 export async function pickMidiToSave(defaultPath: string): Promise<string | null> {
-  if (!isTauri()) return `mock://${defaultPath}`;
+  // 浏览器里没有保存对话框：让服务端把导出文件写进数据目录的 exports/，
+  // 拿回真实路径后前端触发下载（见 utils/download.ts）。
+  if (!isTauri()) return "";
   const selected = await saveDialog({
     defaultPath,
     filters: [{ name: useI18n().t("dialog.midiFilter"), extensions: ["mid", "midi"] }],

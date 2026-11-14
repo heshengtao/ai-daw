@@ -23,6 +23,7 @@ import GuidedTour from "@/components/onboarding/GuidedTour.vue";
 import type { WelcomeStart } from "@/types/onboarding";
 import { useProjectSync } from "@/composables/useProjectSync";
 import { useWebMonitor } from "@/composables/useWebMonitor";
+import { downloadFromServer } from "@/utils/download";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
 import { useEngineEventsStore } from "@/stores/engineEvents";
@@ -431,10 +432,11 @@ async function exportScoreFile(grid: number, keyFifths: number): Promise<void> {
   }
 
   const path = await pickScoreToSave(`${fileBase.value}.musicxml`);
-  if (!path) return;
+  if (path === null) return;
 
   try {
     const written = await exportScore(path, result.xml);
+    if (!isTauri()) await downloadFromServer(written);
     // 提示条只有一个槽位：把「路径」和「有几条排版提示」拼成一条，否则后一条会顶掉前一条。
     const warnSuffix =
       result.warnings.length > 0 ? i18n.t("export.scoreWarnSuffix", { n: result.warnings.length }) : "";
@@ -464,9 +466,10 @@ async function onExportConfirm(choice: ExportChoice): Promise<void> {
       return;
     }
     const path = await pickMidiToSave(`${fileBase.value}.mid`);
-    if (!path) return;
+    if (path === null) return;
     try {
       const written = await exportMidi(path);
+      if (!isTauri()) await downloadFromServer(written);
       layout.notify(i18n.t("export.midiDone", { tracks, path: written }));
     } catch (err) {
       layout.notify(i18n.t("error.export", { error: String(err) }));
@@ -478,13 +481,14 @@ async function onExportConfirm(choice: ExportChoice): Promise<void> {
   try {
     const ext = choice.format === "mp3" ? "mp3" : "wav";
     const path = await pickAudioToSave(`${fileBase.value}.${ext}`);
-    if (!path) return;
+    if (path === null) return;
     // **以返回的路径为准**：用户可能在保存对话框里换了过滤器、也可能手打了别的扩展名
     // （见 `dialogs.ts` 的 `pickAudioToSave`）。文件名写 `.mp3` 就一定得到 MP3；路径没有
     // 认识的扩展名时才退回对话框里选的那个格式。
     const lower = path.toLowerCase();
     const format: ExportFormat = lower.endsWith(".mp3") ? "mp3" : lower.endsWith(".wav") ? "wav" : choice.format;
     const written = await exportAudio(path, format, choice.sampleRate, choice.bitrateKbps);
+    if (!isTauri()) await downloadFromServer(written);
     layout.notify(i18n.t("app.exported", { path: written }));
   } catch (err) {
     layout.notify(i18n.t("error.export", { error: String(err) }));

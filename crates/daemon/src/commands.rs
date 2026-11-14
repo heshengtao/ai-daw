@@ -2707,6 +2707,22 @@ pub async fn save_project(app: crate::tauri_api::AppHandle, path: String) -> Res
         .map_err(|e| e.to_string())?
 }
 
+/// 无窗口也能保存：写盘、标记已保存、记下路径（历史留档由桌面端负责）。
+pub fn save_project_state(state: &AppState, path: &str) -> Result<String, String> {
+    capture_plugin_states(state);
+    let project = { state.engine.lock().unwrap().project().clone() };
+    let json = serde_json::to_string_pretty(&project).map_err(|e| e.to_string())?;
+    if let Some(dir) = std::path::Path::new(path).parent() {
+        if !dir.as_os_str().is_empty() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+    }
+    std::fs::write(path, json).map_err(|e| e.to_string())?;
+    state.engine.lock().unwrap().mark_saved();
+    state.set_session_path(Some(path.to_string()));
+    Ok(path.to_string())
+}
+
 /// 保存工程的同步实现（界面命令与 MCP 工具共用）。
 pub(crate) fn save_project_impl(app: &crate::tauri_api::AppHandle, path: &str) -> Result<String, String> {
     let state = app.state::<Arc<AppState>>();
@@ -2753,6 +2769,15 @@ pub async fn export_score(path: String, xml: String) -> Result<String, String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn export_midi(
     state: State<'_, Arc<AppState>>,
+    path: String,
+    tracks: Option<Vec<u64>>,
+) -> Result<String, String> {
+    export_midi_impl(&state, path, tracks).await
+}
+
+/// 导出 MIDI 的无窗口实现。
+pub async fn export_midi_impl(
+    state: &AppState,
     path: String,
     tracks: Option<Vec<u64>>,
 ) -> Result<String, String> {
@@ -3102,16 +3127,17 @@ pub struct ExportProgress {
 
 /// 发一条导出进度事件（发后即忘；界面没在听也无所谓）。
 fn emit_export(
-    app: &crate::tauri_api::AppHandle,
+    host: &dyn crate::host::Host,
     path: &str,
     phase: &'static str,
     frames: u64,
     total_frames: Option<u64>,
     message: Option<String>,
 ) {
-    let _ = app.emit(
+    crate::host::emit(
+        host,
         EVENT_EXPORT,
-        ExportProgress {
+        &ExportProgress {
             path: path.to_string(),
             phase,
             frames,
@@ -3137,18 +3163,28 @@ pub async fn export_audio(
     format: ExportFormat,
     bitrate_kbps: Option<u32>,
 ) -> Result<String, String> {
+    let _ = app;
+    export_audio_impl(&state, path, sample_rate, format, bitrate_kbps).await
+}
+
+/// 导出音频的无窗口实现：进度走 `Host`，桌面与浏览器一致。
+pub async fn export_audio_impl(
+    state: &AppState,
+    path: String,
+    sample_rate: u32,
+    format: ExportFormat,
+    bitrate_kbps: Option<u32>,
+) -> Result<String, String> {
     validate_sample_rate(sample_rate)?;
     // 同样只在锁内克隆，渲染与写盘都放到阻塞线程池，避免卡住主线程。
-    let inputs = render_inputs(&state);
-    let progress_app = app.clone();
+    let inputs = render_inputs(state);
+    let host = Arc::clone(state.host());
     let progress_path = path.clone();
     crate::tauri_api::async_runtime::spawn_blocking(move || {
-        // 阶段一：建实例 +（引用了外部插件时）等它把素材装载完。这一段没有可细分的进度，
-        // 就是「准备中」——但它是真实存在的等待（最长 EXTERNAL_PLUGIN_SETTLE_SECONDS）。
-        emit_export(&progress_app, &progress_path, "preparing", 0, None, None);
+        emit_export(&*host, &progress_path, "preparing", 0, None, None);
         let buffer = render_offline_with_progress(inputs, sample_rate, 0.5, |done, total| {
             emit_export(
-                &progress_app,
+                &*host,
                 &progress_path,
                 "rendering",
                 done as u64,
@@ -3157,7 +3193,7 @@ pub async fn export_audio(
             );
         });
 
-        emit_export(&progress_app, &progress_path, "encoding", 0, None, None);
+        emit_export(&*host, &progress_path, "encoding", 0, None, None);
         let written = match format {
             ExportFormat::Wav => ai_daw_engine::wav::write_wav(&path, &buffer, sample_rate)
                 .map_err(|e| e.to_string()),
@@ -3169,9 +3205,9 @@ pub async fn export_audio(
         };
 
         match &written {
-            Ok(()) => emit_export(&progress_app, &progress_path, "done", 0, None, None),
+            Ok(()) => emit_export(&*host, &progress_path, "done", 0, None, None),
             Err(err) => emit_export(
-                &progress_app,
+                &*host,
                 &progress_path,
                 "error",
                 0,
@@ -3514,6 +3550,27 @@ pub struct WaveformSlice {
 ///
 /// `offset_frames` / `frames` 用来只取素材的一个**窗口**（片段引用的是窗口而不是整段素材）；
 /// 缺省表示整段。
+pub fn audio_waveform_impl(
+    state: &AppState,
+    path: &str,
+    buckets: usize,
+    offset_frames: Option<u64>,
+    frames: Option<u64>,
+) -> Result<WaveformSlice, String> {
+    let audio = state.assets.load(path)?;
+    let total = audio.frames() as u64;
+    let offset = offset_frames.unwrap_or(0).min(total);
+    let window = frames.unwrap_or(total - offset).min(total - offset);
+    let peaks = state.assets.waveform_range(path, buckets, offset, Some(window))?;
+    Ok(WaveformSlice {
+        peaks,
+        sample_rate: audio.sample_rate,
+        frames: window,
+        offset_frames: offset,
+    })
+}
+
+/// 取音频文件的波形包络（Tauri 入口）。
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn audio_waveform(
     state: State<'_, Arc<AppState>>,
@@ -3522,19 +3579,9 @@ pub async fn audio_waveform(
     offset_frames: Option<u64>,
     frames: Option<u64>,
 ) -> Result<WaveformSlice, String> {
-    let assets = Arc::clone(&state.assets);
+    let assets_state = state.inner().clone();
     crate::tauri_api::async_runtime::spawn_blocking(move || {
-        let audio = assets.load(&path)?;
-        let total = audio.frames() as u64;
-        let offset = offset_frames.unwrap_or(0).min(total);
-        let window = frames.unwrap_or(total - offset).min(total - offset);
-        let peaks = assets.waveform_range(&path, buckets, offset, Some(window))?;
-        Ok(WaveformSlice {
-            peaks,
-            sample_rate: audio.sample_rate,
-            frames: window,
-            offset_frames: offset,
-        })
+        audio_waveform_impl(&assets_state, &path, buckets, offset_frames, frames)
     })
     .await
     .map_err(|e| e.to_string())?

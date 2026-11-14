@@ -872,6 +872,7 @@ export function retryAudio(): Promise<void> {
 /** 把工程保存为 JSON 文件，返回写入路径。 */
 export function saveProject(path: string): Promise<string> {
   if (mockEnabled()) return Promise.resolve(mockApi.saveProject(path));
+  // 浏览器里没有保存对话框：传空路径，服务端写进 <数据目录>/projects/ 并返回真实路径。
   return invoke<string>("save_project", { path });
 }
 

@@ -200,6 +200,22 @@ struct LoopRangeArgs {
     end: u64,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WaveformArgs {
+    path: String,
+    #[serde(default = "default_buckets")]
+    buckets: usize,
+    #[serde(default)]
+    offset_frames: Option<u64>,
+    #[serde(default)]
+    frames: Option<u64>,
+}
+
+fn default_buckets() -> usize {
+    512
+}
+
 /// `import_audio` 的参数：解码是异步的，由 HTTP 处理器单独 await（见 `server::rpc_handler`）。
 #[derive(Deserialize)]
 pub struct ImportAudioArgs {
@@ -246,6 +262,13 @@ pub fn dispatch(state: &AppState, cmd: &str, args: Value) -> Result<Value, RpcEr
         "history_depths" => json(crate::commands::history_depths_impl(state)),
         "transport_status" => json(crate::commands::transport_status_impl(state)),
         "mixer_meters" => json(crate::commands::mixer_meters_impl(state)),
+        "audio_waveform" => {
+            let a: WaveformArgs = parse(args)?;
+            let slice =
+                crate::commands::audio_waveform_impl(state, &a.path, a.buckets, a.offset_frames, a.frames)
+                    .map_err(RpcError::Failed)?;
+            json(slice)
+        }
         "current_project_path" => json(crate::commands::current_project_path_impl(state)),
         "session_restored" => json(crate::commands::session_restored_impl(state)),
         "list_plugins" => json(crate::commands::list_plugins_impl(state)),
@@ -485,6 +508,11 @@ pub const COMMANDS: &[&str] = &[
     "mixer_meters",
     "read_import_file",
     "import_project",
+    "audio_waveform",
+    "export_audio",
+    "export_midi",
+    "export_score",
+    "save_project",
     "import_audio",
     "current_project_path",
     "session_restored",
