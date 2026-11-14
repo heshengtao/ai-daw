@@ -3,14 +3,20 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.7.0-1A6CFF?style=flat-square" alt="版本 1.7.0">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-1A6CFF?style=flat-square" alt="许可：Apache-2.0"></a>
-  <img src="https://img.shields.io/badge/platforms-Windows%20/%20macOS%20/%20Linux-1A6CFF?style=flat-square" alt="平台：Windows、macOS、Linux">
+  <a href="https://github.com/heshengtao/ai-daw/releases"><img src="https://img.shields.io/github/v/release/heshengtao/ai-daw?style=flat-square&color=1A6CFF" alt="GitHub release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-1A6CFF?style=flat-square" alt="License: Apache-2.0"></a>
+  <img src="https://img.shields.io/badge/platforms-Windows%20/%20macOS%20/%20Linux%20/%20Web-1A6CFF?style=flat-square" alt="Platforms: Windows, macOS, Linux, Web">
+  <a href="https://hub.docker.com/r/ailm32442/ai-daw"><img src="https://img.shields.io/docker/pulls/ailm32442/ai-daw?style=flat-square&color=1A6CFF" alt="Docker pulls"></a>
 </p>
 
 <p align="center">
   <a href="README_zh.md"><b>简体中文</b></a> ·
   <a href="README.md"><b>English</b></a>
+</p>
+
+<p align="center">
+  <a href="https://hub.docker.com/r/ailm32442/ai-daw"><b>Docker Hub</b></a> ·
+  <a href="https://github.com/heshengtao/ai-daw/releases">Download</a>
 </p>
 
 ## 什么是 AI DAW？
@@ -263,28 +269,41 @@ src/                Vue 3 前端 —— 桌面与浏览器是同一份
 
 模型权重从不进入仓库或安装包，各自沿用发布方的许可：见 [MODELS.md](MODELS.md)。其中包含可选的 CC BY-NC 4.0（非商用）模型——写歌用的 **YuE2** 与录音转谱用的 **SheetSage2**。
 
-### 支持哪些插件格式？
+### 支持我们
 
-Windows / macOS / Linux 上支持 VST3 与 CLAP；macOS 上另外支持 **Audio Units（AU / AUv3）**。
+### 请给我们点个 Star！
+⭐ 你的支持是我们前进的动力！
 
-### 让代理驱动 DAW，需要软件一直开着吗？
+### 欢迎打赏！
+<div align="center" style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
 
-需要。Skill 与 `aidaw` 命令行是通过 MCP 与**正在运行**的 AI DAW 通信的，所以先启动软件（用 `aidaw status` 可以确认是否已启动）。
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/agentparty)
+[![爱发电](https://img.shields.io/badge/爱发电-支持我们-946ce6?style=for-the-badge&logo=affine&logoColor=white)](https://afdian.com/a/agentparty)
 
-## 支持
+</div>
 
-### 点个 Star
+### 关注我们
+<div align="center">
+  <a href="https://space.bilibili.com/26978344">
+    <img src="screenshots/B.png" width="100" height="100" style="border-radius: 80%; overflow: hidden;" alt="bilibili"/>
+  </a>
+  <a href="https://www.youtube.com/@agentParty">
+    <img src="screenshots/YT.png" width="100" height="100" style="border-radius: 80%; overflow: hidden;" alt="youtube"/>
+  </a>
+</div>
 
-如果 AI DAW 对你有用，点一颗 Star 能让更多人看到它 —— 这也是这件事值得继续做下去最直接的信号。
+### 加入社区
+如果你在使用过程中遇到任何问题，欢迎加入我们的社区交流。
 
-### 关注
+1. QQ 群：`931057213`（1群已满） `902882342`（2群）
 
-- GitHub：<https://github.com/heshengtao>
-- 问题与想法：<https://github.com/heshengtao/ai-daw/issues>
+2. Discord: [Discord 链接](https://discord.gg/f2dsAKKr2V)
 
-### 参与
+## 贡献者
 
-使用问题、工作流分享、没写完的歌，都欢迎提到 issue 里。
+<a href="https://github.com/heshengtao/ai-daw/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=heshengtao/ai-daw" alt="heshengtao/ai-daw 的贡献者" />
+</a>
 
 ## 许可
 

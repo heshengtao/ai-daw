@@ -840,3 +840,25 @@ pub fn run() {
         }
     });
 }
+
+/// 桌面端要从哪里托管前端产物。
+///
+/// 两种来源，按优先级：
+/// 1. **打包后**：资源目录里的 `web/`（`tauri.conf.json` 把 `../dist` 映射到它）；
+/// 2. **开发期**：仓库根目录的 `dist/`（`pnpm build` 的产物）。
+///
+/// 都找不到就返回 `None`——服务只提供 `/rpc`，浏览器打开会明确提示没有界面，
+/// 而不是给一个 404。
+fn resolve_web_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    if let Ok(dir) = app.path().resource_dir() {
+        let bundled = dir.join("web");
+        if bundled.join("index.html").is_file() {
+            return Some(bundled);
+        }
+    }
+    let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist");
+    if dev.join("index.html").is_file() {
+        return Some(dev);
+    }
+    None
+}
