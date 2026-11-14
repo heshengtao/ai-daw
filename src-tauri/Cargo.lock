@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ai-daw-daemon",
  "ai-daw-engine",
@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-analysis"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ebur128",
  "rustfft",
@@ -46,7 +46,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-asset"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ai-daw-engine",
  "symphonia",
@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-daemon"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ai-daw-analysis",
  "ai-daw-asset",
@@ -91,14 +91,14 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-effects"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ai-daw-plugin-api",
 ]
 
 [[package]]
 name = "ai-daw-engine"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ai-daw-effects",
  "ai-daw-instruments",
@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-host-vst3"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ai-daw-plugin-api",
  "block2",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-instruments"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ai-daw-plugin-api",
  "rustysynth-ext",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-ipc"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ai-daw-plugin-api",
  "serde",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-local-ai"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "beat-this",
  "half",
@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-mastering"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ai-daw-analysis",
  "serde",
@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-plugin-api"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "ai-daw-synth"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ai-daw-plugin-api",
 ]

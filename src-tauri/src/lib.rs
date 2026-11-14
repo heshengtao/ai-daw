@@ -435,7 +435,12 @@ pub fn run() {
                     .spawn(move || ai_daw_daemon::manager::warm_registry_cache(&handle));
             }
             // 内嵌 MCP 服务器：把 DAW 能力暴露给 AI 代理（只监听回环）。按设置启动。
-            let mcp = ai_daw_daemon::mcp::McpRuntime::load(app.handle().clone(), mcp_file(app.handle()));
+            // 桌面壳只给本机用，保持回环绑定。
+            let mcp = ai_daw_daemon::mcp::McpRuntime::load(
+                app.handle().clone(),
+                mcp_file(app.handle()),
+                false,
+            );
             mcp.autostart();
             app.manage(mcp);
             // 写歌智能体：OpenAI 兼容端点配置（`ai.json`）+ 会话运行时（`agent/sessions/`）。

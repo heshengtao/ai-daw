@@ -119,6 +119,8 @@ COPY --from=builder /src/target/release/clap-scan-probe /usr/local/bin/clap-scan
 COPY --from=builder /src/src-tauri/resources/onnx/ /opt/models/
 COPY --from=builder /src/src-tauri/resources/articulation-maps /opt/articulation-maps
 COPY --from=builder /opt/ort-bundle/lib/libonnxruntime.so.1.30.0 /opt/ort/
+# 兼容裸名：Linux 官方包只有带版本号的那份，某些加载路径仍按 `libonnxruntime.so` 找。
+RUN ln -sf /opt/ort/libonnxruntime.so.1.30.0 /opt/ort/libonnxruntime.so
 
 # 前端产物：浏览器打开根路径就是它。
 COPY --from=web /web/dist /web

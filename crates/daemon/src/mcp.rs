@@ -8216,12 +8216,15 @@ pub struct McpRuntime {
     app: AppHandle,
     /// 配置文件位置；拿不到配置目录时为 `None`（配置只活在内存里）。
     path: Option<PathBuf>,
+    /// 是否监听所有网卡：容器 / 无头部署时外部 MCP 客户端要连得进来。
+    /// 桌面与「同机浏览器」只需要回环。
+    bind_lan: bool,
     inner: Mutex<Inner>,
 }
 
 impl McpRuntime {
     /// 读取配置目录里的 `mcp.json`（缺失或损坏时退回默认值）。
-    pub fn load(app: AppHandle, path: Option<PathBuf>) -> Self {
+    pub fn load(app: AppHandle, path: Option<PathBuf>, bind_lan: bool) -> Self {
         let config = path
             .as_ref()
             .and_then(|p| std::fs::read_to_string(p).ok())
@@ -8230,6 +8233,7 @@ impl McpRuntime {
         Self {
             app,
             path,
+            bind_lan,
             inner: Mutex::new(Inner {
                 config,
                 running: None,
@@ -8319,7 +8323,7 @@ impl McpRuntime {
             let _ = std::fs::remove_file(path);
         }
         // 首选配置端口；被占用 / 被系统保留时才退回系统临时端口（0），并记下原因给界面。
-        let (listener, conflict) = bind_preferred(port).map_err(|err| err.message())?;
+        let (listener, conflict) = bind_preferred(port, self.bind_lan).map_err(|err| err.message(self.bind_lan))?;
         let addr = listener.local_addr().map_err(|e| e.to_string())?;
 
         let cancel = CancellationToken::new();
@@ -8438,9 +8442,10 @@ struct BindError {
 }
 
 impl BindError {
-    fn message(&self) -> String {
+    fn message(&self, lan: bool) -> String {
         format!(
-            "监听 127.0.0.1:{} 失败：{}（{}）",
+            "监听 {}:{} 失败：{}（{}）",
+            if lan { "0.0.0.0" } else { "127.0.0.1" },
             self.port,
             self.detail,
             self.failure.hint()
@@ -8451,19 +8456,23 @@ impl BindError {
 /// 先试配置端口；被占用 / 被系统保留时退回系统临时端口，并把原因带回给界面。
 ///
 /// 退回只是**本次运行**的行为：`mcp.json` 里仍保留用户填的端口，下次启动会再试一次。
-fn bind_preferred(port: u16) -> Result<(TcpListener, Option<PortConflict>), BindError> {
-    bind_preferred_with(port, BUSY_RETRIES, BUSY_INTERVAL)
+fn bind_preferred(
+    port: u16,
+    bind_lan: bool,
+) -> Result<(TcpListener, Option<PortConflict>), BindError> {
+    bind_preferred_with(port, bind_lan, BUSY_RETRIES, BUSY_INTERVAL)
 }
 
 fn bind_preferred_with(
     port: u16,
+    bind_lan: bool,
     attempts: u32,
     interval: Duration,
 ) -> Result<(TcpListener, Option<PortConflict>), BindError> {
-    match bind_loopback_with(port, attempts, interval) {
+    match bind_loopback_with(port, bind_lan, attempts, interval) {
         Ok(listener) => Ok((listener, None)),
         Err(err) if port != 0 && err.failure != BindFailure::Failed => {
-            let listener = bind_loopback_with(0, 1, interval).map_err(|fallback| BindError {
+            let listener = bind_loopback_with(0, bind_lan, 1, interval).map_err(|fallback| BindError {
                 failure: fallback.failure,
                 port: 0,
                 detail: format!(
@@ -8479,13 +8488,15 @@ fn bind_preferred_with(
 
 fn bind_loopback_with(
     port: u16,
+    bind_lan: bool,
     attempts: u32,
     interval: Duration,
 ) -> Result<TcpListener, BindError> {
     let attempts = attempts.max(1);
+    let addr = if bind_lan { "0.0.0.0" } else { "127.0.0.1" };
     let mut last: Option<std::io::Error> = None;
     for attempt in 0..attempts {
-        match TcpListener::bind(("127.0.0.1", port)) {
+        match TcpListener::bind((addr, port)) {
             Ok(listener) => {
                 listener.set_nonblocking(true).map_err(|err| BindError {
                     failure: BindFailure::Failed,
@@ -9085,11 +9096,11 @@ mod tests {
         let port = held.local_addr().unwrap().port();
 
         let started = std::time::Instant::now();
-        let err = bind_loopback_with(port, 3, Duration::from_millis(5)).unwrap_err();
+        let err = bind_loopback_with(port, false, 3, Duration::from_millis(5)).unwrap_err();
 
         assert_eq!(err.failure, BindFailure::Busy);
         assert!(started.elapsed() < Duration::from_secs(1));
-        assert!(err.message().contains("占用"), "{}", err.message());
+        assert!(err.message(false).contains("占用"), "{}", err.message(false));
     }
 
     /// 配置端口被占用时仍然起得来：退回临时端口，并把原因标出来。
@@ -9099,7 +9110,7 @@ mod tests {
         let port = held.local_addr().unwrap().port();
 
         let (listener, conflict) =
-            bind_preferred_with(port, 2, Duration::from_millis(5)).expect("占用时应退回临时端口");
+            bind_preferred_with(port, false, 2, Duration::from_millis(5)).expect("占用时应退回临时端口");
 
         assert_eq!(conflict, Some(PortConflict::Busy));
         let bound = listener.local_addr().unwrap().port();
@@ -9110,7 +9121,7 @@ mod tests {
     /// 端口填 0（自动分配）不算冲突：界面不该弹「端口被占用」。
     #[test]
     fn ephemeral_config_is_not_a_conflict() {
-        let (listener, conflict) = bind_preferred_with(0, 1, Duration::from_millis(1)).unwrap();
+        let (listener, conflict) = bind_preferred_with(0, false, 1, Duration::from_millis(1)).unwrap();
         assert_eq!(conflict, None);
         assert_ne!(listener.local_addr().unwrap().port(), 0);
     }
@@ -9228,7 +9239,7 @@ mod tests {
     #[test]
     fn binding_an_ephemeral_port_picks_a_real_one() {
         let listener =
-            bind_loopback_with(0, 1, Duration::from_millis(1)).expect("应当能绑到回环临时端口");
+            bind_loopback_with(0, false, 1, Duration::from_millis(1)).expect("应当能绑到回环临时端口");
         assert_ne!(listener.local_addr().unwrap().port(), 0);
     }
 

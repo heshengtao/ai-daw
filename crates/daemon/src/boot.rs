@@ -121,7 +121,12 @@ pub async fn serve(
 fn init_headless_services(daemon: &Daemon) {
     let app = crate::tauri_api::rpc_app_handle();
     let data_dir = daemon.config().data_dir.clone();
-    let mcp = crate::mcp::McpRuntime::load(app.clone(), Some(data_dir.join("mcp.json")));
+    // `--lan` 时 MCP 也绑 0.0.0.0：容器里发布端口后外部 MCP 客户端才连得进来。
+    let mcp = crate::mcp::McpRuntime::load(
+        app.clone(),
+        Some(data_dir.join("mcp.json")),
+        daemon.config().lan,
+    );
     // 先启动、再登记：HTTP 服务还没起来，中间不会有命令看到"半个服务器"。
     mcp.autostart();
     crate::tauri_api::install_state(mcp);
