@@ -1261,3 +1261,52 @@ aicut_help        → 返回 render 域全文（skills/aicut/references/render.m
   做完之后，**有 GPU 的 Linux 容器**就能跑；macOS 的 Docker Desktop 里仍然只能 CPU（极慢）。
 
 顺带把 README 的能力表也改成了两行：插件 GUI / 系统级操作是物理限制；本地生成是"未下沉"。
+
+## 26. 版本号 1.1.0 / 1.8.0 + 按版本重建镜像并实测（2026-11-15 第十二轮）
+
+### 26.1 版本号
+
+- ai-cut：`1.0.0 → 1.1.0`（`package.json`、`tauri.conf.json`、`src-tauri/Cargo.toml`、
+  `crates/aicut`、`crates/daemon` —— 最后这个原先是 `0.1.0`，容器 `/health` 报的就是它，
+  跟着一起对齐，否则镜像里会自称 0.1.0）
+- ai-daw：`1.7.0 → 1.8.0`（`package.json`、`tauri.conf.json`、`src-tauri/Cargo.toml`、workspace 版本）
+
+两个镜像按版本号重建：`ai-cut:1.1.0`（434 MB）、`ai-daw:1.8.0`（286 MB）。
+
+### 26.2 这轮实测抓到的三个真问题
+
+1. **镜像里的本地推理是坏的**：容器里 `/opt/aicut/ort/libonnxruntime.so.1.30.0` 是带版本号的
+   文件名，而加载器只按裸名 `libonnxruntime.so` 找 → `找不到随包的 ONNX Runtime`，
+   任何模型一建会话就 panic（`Failed to load ONNX Runtime dylib`）。
+   修法两层：`ai_session::ort_library_in` 先认裸名、再扫 `libonnxruntime.so*`（多版本取名字最大的），
+   Dockerfile 再补一个符号链接。修完实测容器里 `upscale_video`（随包 Real-ESRGAN）通过。
+2. **容器里的 MCP 外部客户端连不上**：MCP 只绑 `127.0.0.1`，Docker 发布端口也到不了。
+   现在 `--lan` 时 MCP 一起绑 `0.0.0.0`（桌面壳保持回环）。两仓都改了。
+3. **镜像里的旧工具面**：验证时先看到 `tools/list` = 15，一度以为构建缓存没刷新——实际是
+   宿主上还留着一个旧的 `aicutd` 占着 50563，curl 打到了它。教训写在这里：
+   容器验证前先 `pkill -f aicutd` 并给 MCP 换一个不同宿主端口（这次用 `15063:50563`）。
+
+### 26.3 容器实测结果
+
+```
+ai-cut:1.1.0   /health → {"version":"1.1.0"}            ✔ 版本与镜像标签一致
+               /rpc/capabilities → 26 项，除物理项外全 ok
+               MCP tools/list → 62 个（从宿主 127.0.0.1:15063 连入）
+               new_project / import_asset（真 ffprobe）/ append_clip
+               upscale_video（随包 Real-ESRGAN，ORT 修复验证）→ OK，duration 2.0
+               export_video → /data/out.mp4，147 KB，ffprobe 2.000s，warnings []
+               undo → revision 5
+
+ai-daw:1.8.0   /health → {"version":"1.8.0","audio":true}
+               MCP tools/list → 140 个（从宿主 127.0.0.1:15064 连入）
+               transport_status → virtual_output: true（容器无声卡，虚拟时钟顶替）
+               transport_play → playing: true，位置 505856 → 604160 帧（≈2s，48kHz 实时）
+```
+
+### 26.4 关于 GPU 的更正（承接 §25.7）
+
+「GPU 生成」不在物理限制清单里，它的真实状态是：**容器可以有 GPU，缺的是把生成器下沉**。
+`runtime_catalog` 里已经有 `onnxruntime.gpu.linux` 的 CUDA 12 / 13 运行库包，宿主编排
+`--gpus all` 之后 ORT 的 CUDA EP 在容器里可用；`image_gen` / `video_gen` / `sdcpp` 之所以
+还是 `unsupported`，是因为本地生成器（sd.cpp）只有桌面实现。macOS 的 Docker Desktop
+不透传 Apple GPU，这台机器上验证不了 GPU 路径，但那是宿主平台限制。
