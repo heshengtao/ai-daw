@@ -204,6 +204,12 @@ Open <http://localhost:28430> and start working — **no login, no token, no coo
 The headless build is meant for machines without a display; access control is the
 deployment's job (LAN, container network, or a reverse proxy in front of it).
 
+Containers usually have **no sound card**. In that case the audio engine switches to a
+**virtual clock**: rendering still runs in real time, the playhead / loop / meters behave
+normally, and the PCM goes out through `/audio` — **the web page becomes the sound card**.
+A "Virtual clock" pill in the status bar says so (click it to retry the device). To force
+this path on a machine that does have audio, set `AIDAW_AUDIO=virtual`.
+
 ### Docker (build from source)
 
 ```bash
@@ -228,13 +234,21 @@ cargo run -p ai-daw-daemon --no-default-features --bin aidawd -- \
 | `AIDAW_DATA_DIR` | `/data` in the image | sessions, presets, models |
 | `AIDAW_WEB_DIR` | `/web` in the image | built frontend to serve |
 | `AIDAW_NO_AUDIO` | unset | skip opening an audio device (containers without ALSA) |
+| `AIDAW_AUDIO` | unset | `virtual` = never touch a sound card, use the virtual clock only |
+| `AIDAW_MODELS_EXTRA` | `/opt/models` in the image | extra model search dirs (`:` separated, ranked after the download dir) |
+| `AIDAW_ORT_BUNDLED` | `/opt/ort` in the image | bundled ONNX Runtime directory |
+| `AIDAW_ARTICULATION_MAPS` | `/opt/articulation-maps` in the image | bundled articulation-map library |
 | `AIDAW_MCP_URL` | auto-discovered | where the `aidaw` CLI looks for the running app |
+
+
+> The headless build also starts the embedded MCP server (config at `<data dir>/mcp.json`, off by default),
+> so an AI can drive the same project over MCP inside the container.
 
 ### HTTP API
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/rpc/{command}` | 96 commands, same names and arguments as the app's IPC |
+| `POST` | `/rpc/{command}` | every command, same names and arguments as the app's IPC (`GET /commands` lists what this build serves) |
 | `GET` | `/events` | Server-Sent Events: engine edits and transport state |
 | `GET` | `/audio` | WebSocket: live PCM (48 kHz stereo float32, ~10 ms blocks) |
 | `GET` | `/health` | liveness + whether an audio device is available |

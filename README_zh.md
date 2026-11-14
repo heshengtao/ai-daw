@@ -201,6 +201,11 @@ docker run -d --name ai-daw -p 28430:28430 -v ai-daw-data:/data ailm32442/ai-daw
 浏览器打开 <http://localhost:28430> 就能直接用 —— **没有登录、没有令牌、也没有 cookie 校验**。
 无头版是给没有显示器的机器准备的，访问控制交给部署侧（局域网 / 容器网络 / 反向代理）。
 
+容器里通常**没有声卡**：这时音频引擎会切到**虚拟时钟**，按实时节奏照常渲染，
+播放位置 / 循环 / 电平表全部正常，声音通过 `/audio` 送到浏览器——**网页就是声卡**。
+底栏会出现「虚拟时钟」胶囊说明这件事（点它可以重试音频设备）。想在有声卡的机器上
+也强制走这条路，设 `AIDAW_AUDIO=virtual`。
+
 ### Docker（自己构建）
 
 ```bash
@@ -224,13 +229,21 @@ cargo run -p ai-daw-daemon --no-default-features --bin aidawd -- --data-dir ~/.a
 | `AIDAW_DATA_DIR` | 镜像内 `/data` | 会话、预设、模型 |
 | `AIDAW_WEB_DIR` | 镜像内 `/web` | 要托管的前端产物 |
 | `AIDAW_NO_AUDIO` | 未设置 | 跳过打开音频设备（没有声卡的容器） |
+| `AIDAW_AUDIO` | 未设置 | `virtual` = 不碰声卡，强制虚拟时钟（声音只走 `/audio`） |
+| `AIDAW_MODELS_EXTRA` | 镜像内 `/opt/models` | 随包模型的额外搜索目录（`:` 分隔，排在下载落点之后） |
+| `AIDAW_ORT_BUNDLED` | 镜像内 `/opt/ort` | 随包 ONNX Runtime 目录 |
+| `AIDAW_ARTICULATION_MAPS` | 镜像内 `/opt/articulation-maps` | 随包奏法映射库目录 |
 | `AIDAW_MCP_URL` | 自动发现 | `aidaw` 命令行去哪里找正在运行的应用 |
+
+
+> 无头模式也会启动内嵌 MCP server（配置在 `<数据目录>/mcp.json`，默认关闭），
+> 打开后可在容器里让 AI 通过 MCP 直接操作同一份工程。
 
 ### HTTP 接口
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| `POST` | `/rpc/{command}` | 96 条命令，名字与参数和应用内 IPC 完全一致 |
+| `POST` | `/rpc/{command}` | 全部命令，名字与参数和应用内 IPC 完全一致（`GET /commands` 可列出当前可用项） |
 | `GET` | `/events` | SSE：编辑事件与传输状态 |
 | `GET` | `/audio` | WebSocket：实时 PCM（48 kHz 立体声 float32，约 10 ms 一块） |
 | `GET` | `/health` | 存活状态 + 是否有可用音频设备 |
