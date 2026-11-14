@@ -8377,7 +8377,10 @@ impl McpRuntime {
             // 走到这里监听 socket 已经关闭；停服 / 换端口重启可以安全地重绑同一端口了。
             let _ = done_tx.send(());
         });
-        eprintln!("[mcp] 已启动：http://{addr}/mcp（仅本机）");
+        eprintln!(
+            "[mcp] 已启动：http://{addr}/mcp{}",
+            if self.bind_lan { "（局域网）" } else { "（仅本机）" }
+        );
         Ok(())
     }
 
