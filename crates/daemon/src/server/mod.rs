@@ -1,8 +1,9 @@
 //! HTTP 服务：`/rpc/<cmd>`、`/health` 与（M3 的）`/events`、`/audio`。
 //!
 //! axum 0.8 的路径参数语法是 `{name}`（不是旧版的 `:name`）。
-//! 鉴权：`Authorization: Bearer <token>`；`EventSource` / `WebSocket` 带不了 header，
-//! 所以 query 参数 `?token=` 同样有效。
+//!
+//! **不鉴权**：这个服务的定位是"无头版本"——给没有显示器的机器用，打开端口就是界面。
+//! 访问控制交给部署侧（局域网、容器网络、反向代理/网关）。要对外暴露就自己加一层。
 
 pub mod rpc;
 
@@ -10,13 +11,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
-use serde::Deserialize;
 use serde_json::Value;
 
 use rpc::RpcError;
@@ -27,19 +27,10 @@ use crate::daemon::Daemon;
 pub struct ServerState {
     /// 后端实例。
     pub daemon: Arc<Daemon>,
-    /// 访问令牌。
-    pub token: String,
     /// 前端构建产物目录；`None` = 只提供 API，不托管界面。
     pub static_dir: Option<PathBuf>,
-    /// 浏览器会话：打开过界面就发一个，之后 `/rpc`、`/events`、`/audio` 认它。
-    ///
-    /// 这样浏览器地址栏里**不需要带 token**（与 ExamBot 的体验一致）；
-    /// 命令行 / 脚本仍然可以用 `Authorization: Bearer <token>`。
-    pub sessions: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
-/// 浏览器会话 cookie 名。
-const SESSION_COOKIE: &str = "ai-daw-session";
 
 /// 组装路由。
 pub fn router(state: Arc<ServerState>) -> Router {
@@ -54,75 +45,11 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .with_state(state)
 }
 
-#[derive(Deserialize)]
-struct TokenQuery {
-    token: Option<String>,
-}
-
-/// 请求是否被授权。
-///
-/// 三条通道，任一成立即可：
-/// 1. `Authorization: Bearer <token>`（命令行、脚本）；
-/// 2. `?token=<token>`（`EventSource` / `WebSocket` 带不了 header 时的兜底）；
-/// 3. 浏览器会话 cookie（打开过界面就有，地址栏不必带 token）。
-fn authorized(state: &ServerState, headers: &HeaderMap, query: &TokenQuery) -> bool {
-    let token = state.token.as_str();
-    let bearer = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "));
-    if bearer == Some(token) || query.token.as_deref() == Some(token) {
-        return true;
-    }
-    let Some(session) = session_cookie(headers) else {
-        return false;
-    };
-    state.sessions.lock().map(|set| set.contains(&session)).unwrap_or(false)
-}
-
-/// 从 `Cookie` 头里取出会话标识。
-fn session_cookie(headers: &HeaderMap) -> Option<String> {
-    let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
-    raw.split(';').find_map(|part| {
-        let part = part.trim();
-        part.strip_prefix(&format!("{SESSION_COOKIE}="))
-            .map(|value| value.to_string())
-    })
-}
-
-/// 给浏览器发一个会话（已存在就复用）。
-fn ensure_session(state: &ServerState, headers: &HeaderMap) -> Option<String> {
-    if let Some(existing) = session_cookie(headers) {
-        if state
-            .sessions
-            .lock()
-            .map(|set| set.contains(&existing))
-            .unwrap_or(false)
-        {
-            return None;
-        }
-    }
-    let mut bytes = [0u8; 16];
-    if getrandom::fill(&mut bytes).is_err() {
-        return None;
-    }
-    let session: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    if let Ok(mut set) = state.sessions.lock() {
-        set.insert(session.clone());
-    }
-    Some(session)
-}
-
 async fn rpc_handler(
     State(state): State<Arc<ServerState>>,
     Path(cmd): Path<String>,
-    Query(query): Query<TokenQuery>,
-    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    if !authorized(&state, &headers, &query) {
-        return RpcError::Unauthorized.into_response();
-    }
     let args: Value = if body.is_empty() {
         Value::Object(Default::default())
     } else {
@@ -158,16 +85,11 @@ async fn health(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
 
 /// 事件流（Server-Sent Events）。
 ///
-/// `EventSource` 带不了自定义 header，所以 token 走 query。每条事件都带着原始通道名
+/// 每条事件都带着原始通道名
 /// （`engine://event` 之类），前端按名字过滤即可——与桌面端的 `listen` 用法一致。
 async fn events_handler(
     State(state): State<Arc<ServerState>>,
-    Query(query): Query<TokenQuery>,
-    headers: HeaderMap,
 ) -> Response {
-    if !authorized(&state, &headers, &query) {
-        return RpcError::Unauthorized.into_response();
-    }
     let rx = crate::bus::subscribe();
     let stream = futures_util::stream::unfold(rx, |mut rx| async move {
         loop {
@@ -200,13 +122,8 @@ async fn events_handler(
 /// 推算播放头，不依赖服务器时间戳。
 async fn audio_handler(
     State(state): State<Arc<ServerState>>,
-    Query(query): Query<TokenQuery>,
-    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if !authorized(&state, &headers, &query) {
-        return RpcError::Unauthorized.into_response();
-    }
     let tap = state.daemon.state().audio.web_tap();
     ws.on_upgrade(move |socket| stream_tap(socket, tap))
 }
@@ -252,7 +169,6 @@ async fn stream_tap(mut socket: WebSocket, tap: Arc<ai_daw_engine::tap::AudioTap
 async fn static_handler(
     State(state): State<Arc<ServerState>>,
     uri: axum::http::Uri,
-    headers: HeaderMap,
 ) -> Response {
     let Some(dir) = &state.static_dir else {
         return (
@@ -280,13 +196,6 @@ async fn static_handler(
     };
     let mime = guess_mime(relative);
     let mut response = ([(axum::http::header::CONTENT_TYPE, mime)], bytes).into_response();
-    // 打开界面就发一个会话：地址栏不必带 token，后续请求靠 cookie。
-    if let Some(session) = ensure_session(&state, &headers) {
-        let cookie = format!("{SESSION_COOKIE}={session}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000");
-        if let Ok(value) = cookie.parse() {
-            response.headers_mut().insert(axum::http::header::SET_COOKIE, value);
-        }
-    }
     response
 }
 
@@ -332,25 +241,15 @@ mod tests {
         let daemon = Daemon::new(state, host.clone(), Config::default());
         (router(Arc::new(ServerState {
             daemon,
-            token: "t0ken".into(),
             static_dir: None,
-            sessions: Default::default(),
         })), host)
     }
 
-    async fn call(
-        app: Router,
-        uri: &str,
-        auth: Option<&str>,
-        body: &str,
-    ) -> (StatusCode, String) {
-        let mut builder = Request::builder()
+    async fn call(app: Router, uri: &str, body: &str) -> (StatusCode, String) {
+        let builder = Request::builder()
             .method("POST")
             .uri(uri)
             .header("content-type", "application/json");
-        if let Some(auth) = auth {
-            builder = builder.header("authorization", format!("Bearer {auth}"));
-        }
         let response = app
             .oneshot(builder.body(Body::from(body.to_string())).unwrap())
             .await
@@ -361,16 +260,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_project_requires_token() {
-        let (app, _) = server();
-        let (status, _) = call(app, "/rpc/get_project", None, "{}").await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
     async fn get_project_returns_project_json() {
         let (app, _) = server();
-        let (status, body) = call(app, "/rpc/get_project", Some("t0ken"), "{}").await;
+        let (status, body) = call(app, "/rpc/get_project", "{}").await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("\"tracks\""));
     }
@@ -379,26 +271,10 @@ mod tests {
     async fn add_track_returns_updated_project_and_emits_event() {
         let (app, host) = server();
         let before = host.event_count();
-        let (status, body) = call(app, "/rpc/add_track", Some("t0ken"), r#"{"name":"Lead"}"#).await;
+        let (status, body) = call(app, "/rpc/add_track", r#"{"name":"Lead"}"#).await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("Lead"));
         assert!(host.event_count() > before, "编辑必须广播事件");
-    }
-
-    #[tokio::test]
-    async fn query_token_also_works() {
-        let (app, _) = server();
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/health?token=t0ken")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[test]
@@ -415,7 +291,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_command_is_400() {
         let (app, _) = server();
-        let (status, body) = call(app, "/rpc/no_such_cmd", Some("t0ken"), "{}").await;
+        let (status, body) = call(app, "/rpc/no_such_cmd", "{}").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(body.contains("unknown command"));
     }
@@ -423,7 +299,7 @@ mod tests {
     #[tokio::test]
     async fn bad_args_is_400() {
         let (app, _) = server();
-        let (status, _) = call(app, "/rpc/add_track", Some("t0ken"), "{}").await;
+        let (status, _) = call(app, "/rpc/add_track", "{}").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }

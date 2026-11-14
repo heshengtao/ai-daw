@@ -8,12 +8,9 @@
  * 之所以做成"同名同签名的两个函数"而不是给 237 个调用点各加分支：命令名与参数名
  * 本来就与 Rust 一一对应（见 `src/api/tauri.ts` 的文件头约定），换传输层不该改动调用方。
  *
- * 令牌：浏览器端第一次打开时带 `#token=<...>`，这里存进 localStorage 之后不再要求。
- * 桌面端不需要令牌（webview 直连，不过网络）。
+ * 服务端**不鉴权**：浏览器打开端口就能用；访问控制由部署侧（局域网 / 网关）负责。
  */
 import { isTauri } from "@/utils/platform";
-
-const TOKEN_KEY = "ai-daw-web-token";
 
 /** `invoke` 允许的参数形状（与 Tauri 的约定一致）。 */
 export type InvokeArgs = Record<string, unknown>;
@@ -24,42 +21,11 @@ export type UnlistenFn = () => void;
 /** SSE 上的事件名（与后端 `Event::default().event("engine")` 对应）。 */
 const SSE_EVENT = "engine";
 
-/**
- * 访问令牌（可选）。
- *
- * 正常用法是**不需要**的：打开界面时后端会种一个会话 cookie，之后的请求靠它。
- * 这里只处理两种例外：
- * - 地址里显式给了 `#token=...`（脚本 / 跨域调试），存下来并抹掉；
- * - 之前存过（localStorage）。
- */
-export function webToken(): string {
-  try {
-    const hash = window.location.hash.startsWith("#")
-      ? window.location.hash.slice(1)
-      : window.location.hash;
-    const params = new URLSearchParams(hash.includes("=") ? hash : "");
-    const fromUrl = params.get("token");
-    if (fromUrl) {
-      localStorage.setItem(TOKEN_KEY, fromUrl);
-      // 把 token 从地址栏抹掉，避免被截图 / 分享链接带出去。
-      history.replaceState(null, "", window.location.pathname + window.location.search);
-      return fromUrl;
-    }
-    return localStorage.getItem(TOKEN_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
 async function httpInvoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
-  const token = webToken();
   const response = await fetch(`/rpc/${encodeURIComponent(cmd)}`, {
-    // 会话靠 cookie：同源请求默认带上；显式写出来，避免以后有人改成跨域时踩坑。
-    credentials: "same-origin",
     method: "POST",
     headers: {
       "content-type": "application/json",
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(args ?? {}),
   });
@@ -98,10 +64,8 @@ let source: EventSource | null = null;
 function ensureSource(): EventSource | null {
   if (source) return source;
   if (typeof window === "undefined" || typeof EventSource === "undefined") return null;
-  const token = webToken();
-  source = new EventSource(token ? `/events?token=${encodeURIComponent(token)}` : "/events", {
-    withCredentials: true,
-  });
+  // 服务不鉴权：直接连事件流。
+  source = new EventSource("/events");
   source.addEventListener(SSE_EVENT, (event) => {
     try {
       const frame = JSON.parse((event as MessageEvent<string>).data) as {

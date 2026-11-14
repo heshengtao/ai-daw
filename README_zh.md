@@ -192,9 +192,8 @@ AI DAW 可以**不开窗口**运行，把同一套界面提供给局域网里的
 docker run -d --name ai-daw -p 28430:28430 -v ai-daw-data:/data ailm32442/ai-daw
 ```
 
-浏览器打开 <http://localhost:28430> 即可，**地址栏不需要 token**：首次加载时服务端会种
-一个会话 cookie。脚本仍然可以用容器日志里的令牌（`docker logs ai-daw | grep token`），
-以 `Authorization: Bearer <token>` 调用接口。
+浏览器打开 <http://localhost:28430> 就能直接用 —— **没有登录、没有令牌、也没有 cookie 校验**。
+无头版是给没有显示器的机器准备的，访问控制交给部署侧（局域网 / 容器网络 / 反向代理）。
 
 ### Docker（自己构建）
 
@@ -216,9 +215,8 @@ cargo run -p ai-daw-daemon --no-default-features --bin aidawd -- --data-dir ~/.a
 
 | 变量 | 默认值 | 作用 |
 | --- | --- | --- |
-| `AIDAW_DATA_DIR` | 镜像内 `/data` | 会话、预设、模型与访问令牌 |
+| `AIDAW_DATA_DIR` | 镜像内 `/data` | 会话、预设、模型 |
 | `AIDAW_WEB_DIR` | 镜像内 `/web` | 要托管的前端产物 |
-| `AIDAW_TOKEN` | 自动生成 | 脚本 / CI 用的固定令牌（浏览器不需要） |
 | `AIDAW_NO_AUDIO` | 未设置 | 跳过打开音频设备（没有声卡的容器） |
 | `AIDAW_MCP_URL` | 自动发现 | `aidaw` 命令行去哪里找正在运行的应用 |
 

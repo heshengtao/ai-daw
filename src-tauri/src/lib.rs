@@ -364,11 +364,8 @@ pub fn run() {
             let session = ai_daw_daemon::paths::session_file(app.handle()).and_then(|file| ai_daw_daemon::session::read_session(&file));
             let cached = ai_daw_daemon::manager::cached_catalog(app.handle());
             // Web 访问配置：设置页可切换局域网绑定；端口默认 28430。
-            // 配置与 token 都落在数据目录，和 `aidawd` 共用。
+            // 与 `aidawd` 共用同一份配置；服务本身不鉴权（取决于部署侧的网关/网络）。
             let web_config = crate::web::load_config(app.handle());
-            let web_token = ai_daw_daemon::boot::web_token(
-                &ai_daw_daemon::paths::data_dir(app.handle()).unwrap_or_default(),
-            );
             app.manage(crate::web::WebState::default());
             // 后端从此刻起就是"daemon"：状态 + 宿主（Tauri 实现）+ 配置。
             // 网页客户端连的是同一个 `Daemon`，所以两边看到的是同一份工程、同一个音频宿主。
@@ -554,18 +551,15 @@ pub fn run() {
                 boot_ms()
             ));
             // 浏览器客户端：与桌面共用同一个 Daemon（同一份工程、同一个音频宿主）。
-            // 绑定默认只回环；`--lan` 才对外开放，且必须带令牌。
+            // 绑定默认只回环；设置页允许局域网访问时才对内网开放。
             {
                 let daemon_for_web = std::sync::Arc::clone(&daemon);
                 let handle = app.handle().clone();
-                let token = web_token.clone();
                 tauri::async_runtime::spawn(async move {
-                    match ai_daw_daemon::boot::serve(daemon_for_web, token.clone()).await {
+                    match ai_daw_daemon::boot::serve(daemon_for_web).await {
                         Ok((addr, fut)) => {
-                            let mut running = crate::web::info_for(
-                                &crate::web::load_config(&handle),
-                                &token,
-                            );
+                            let mut running =
+                                crate::web::info_for(&crate::web::load_config(&handle));
                             running.port = addr.port();
                             running.running = true;
                             crate::web::mark_running(&handle, running);

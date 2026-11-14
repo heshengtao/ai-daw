@@ -49,7 +49,7 @@ pub static BACKEND_CATALOG: &[BackendEntry] = &[
         // 只 macOS + aarch64：Intel Mac 只能 CPU。
         platforms: &["macos"],
         arches: &["aarch64"],
-        note: "Apple 神经引擎 / GPU（在这套小模型上实测不一定更快）",
+        note: "Apple 神经引擎 / GPU",
     },
     BackendEntry {
         id: "directml",
@@ -67,7 +67,7 @@ pub static BACKEND_CATALOG: &[BackendEntry] = &[
         // CUDA 运行时只发布 Windows / Linux x86_64（macOS 走 Metal / CoreML）。
         platforms: &["windows", "linux"],
         arches: &["x86_64"],
-        note: "NVIDIA 显卡加速（CUDA 12；老卡 / 驱动 < 580，兼容性最好）",
+        note: "NVIDIA 老卡 / 驱动 < 580",
     },
     BackendEntry {
         id: "cuda13",
@@ -75,7 +75,7 @@ pub static BACKEND_CATALOG: &[BackendEntry] = &[
         kind: BackendKind::Cuda13,
         platforms: &["windows", "linux"],
         arches: &["x86_64"],
-        note: "NVIDIA 新卡加速（CUDA 13；Turing 起且驱动 580+，更快）",
+        note: "NVIDIA 新卡 / 驱动 580+",
     },
 ];
 

@@ -323,7 +323,7 @@ static WINDOWS: &[RuntimeAsset] = &[
         // 而我们给用户下载的是 CUDA 12 的 cudart / cuBLAS / cuDNN；对不上就 `LoadLibrary`
         // 失败、ORT 静默回落 CPU。1.26 是 CUDA **12** 构建（依赖 `cublas64_12` / `cudart64_12`
         // / `cufft64_11` / `cudnn64_9`），与组件完全匹配，且 CUDA 12.8 覆盖 Turing…Blackwell。
-        note: "NVIDIA 显卡加速（CUDA 12，匹配随包组件）；缺的 cudart / cuBLAS / cuFFT / cuDNN 9 会自动补齐。与 audio.cpp 引擎的 CUDA 13 互不影响（不同进程、各自一套 DLL）",
+        note: "CUDA 12 加速；组件自动补齐。",
         // 逐文件判定：三个 dll 缺一个都不算装好（半截的 CUDA 目录会静默回落 CPU）。
         required: &[],
         bundled: false,
@@ -367,7 +367,7 @@ static WINDOWS: &[RuntimeAsset] = &[
         // 1.30 起 ORT 的 Windows GPU 包换成 CUDA 13 构建（provider 硬依赖 `cublas64_13` /
         // `cudart64_13` / `cufft64_12` / `cudnn64_9`）。CUDA 13 不再支持 Maxwell / Pascal /
         // Volta，且驱动要 580+——所以只在检测到新卡时推荐它（`cuda13_preferred`）。
-        note: "NVIDIA 新卡加速（CUDA 13，ORT 1.31 构建）；配套 cudart 13 / cuBLAS 13 / cuFFT 12 / cuDNN 9 会一起装",
+        note: "CUDA 13 加速；组件自动补齐。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -407,7 +407,7 @@ static WINDOWS: &[RuntimeAsset] = &[
         os: "windows",
         arch: "x86_64",
         label: "CUDA Runtime 12 (cudart)",
-        note: "CUDA 12 运行时；ORT 的 CUDA 版需要它，切换 CUDA 时自动补齐",
+        note: "CUDA 12 运行时组件。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -437,7 +437,7 @@ static WINDOWS: &[RuntimeAsset] = &[
         os: "windows",
         arch: "x86_64",
         label: "cuBLAS 12",
-        note: "CUDA 12 的矩阵运算库；ORT 的 CUDA 版需要它，切换 CUDA 时自动补齐",
+        note: "CUDA 12 矩阵运算库。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -545,7 +545,7 @@ static WINDOWS: &[RuntimeAsset] = &[
         os: "windows",
         arch: "x86_64",
         label: "cuFFT 11（CUDA 12）",
-        note: "CUDA 12 的 FFT 库；ORT 的 CUDA provider 用它做频谱类算子，切换 CUDA 时自动补齐",
+        note: "CUDA 12 FFT 库。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -576,7 +576,7 @@ static WINDOWS: &[RuntimeAsset] = &[
         os: "windows",
         arch: "x86_64",
         label: "CUDA Runtime 13 (cudart)",
-        note: "CUDA 13 运行时；选 CUDA 13 后端时自动安装",
+        note: "CUDA 13 运行时组件。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -606,7 +606,7 @@ static WINDOWS: &[RuntimeAsset] = &[
         os: "windows",
         arch: "x86_64",
         label: "cuBLAS 13",
-        note: "CUDA 13 的矩阵运算库；选 CUDA 13 后端时自动安装",
+        note: "CUDA 13 矩阵运算库。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -642,7 +642,7 @@ static WINDOWS: &[RuntimeAsset] = &[
         os: "windows",
         arch: "x86_64",
         label: "cuFFT 12（CUDA 13）",
-        note: "CUDA 13 的 FFT 库（`cufft64_12.dll`）；选 CUDA 13 后端时自动安装",
+        note: "CUDA 13 FFT 库。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -672,7 +672,7 @@ static WINDOWS: &[RuntimeAsset] = &[
         os: "windows",
         arch: "x86_64",
         label: "cuDNN 9（CUDA 13）",
-        note: "CUDA 13 的深度神经网络库；选 CUDA 13 后端时自动安装",
+        note: "CUDA 13 神经网络库。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -902,7 +902,7 @@ static LINUX: &[RuntimeAsset] = &[
         os: "linux",
         arch: "x86_64",
         label: "CUDA Runtime 12 (cudart)",
-        note: "CUDA 12 运行时（Linux）；切换 CUDA 时自动补齐",
+        note: "CUDA 12 运行时组件。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -934,7 +934,7 @@ static LINUX: &[RuntimeAsset] = &[
         os: "linux",
         arch: "x86_64",
         label: "cuBLAS 12",
-        note: "CUDA 12 的矩阵运算库（Linux）；切换 CUDA 时自动补齐",
+        note: "CUDA 12 矩阵运算库。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -970,7 +970,7 @@ static LINUX: &[RuntimeAsset] = &[
         os: "linux",
         arch: "x86_64",
         label: "cuFFT 11（CUDA 12）",
-        note: "CUDA 12 的 FFT 库（Linux）；ORT 的 CUDA provider 用它做频谱类算子",
+        note: "CUDA 12 FFT 库。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -1074,7 +1074,7 @@ static LINUX: &[RuntimeAsset] = &[
         os: "linux",
         arch: "x86_64",
         label: "CUDA Runtime 13 (cudart)",
-        note: "CUDA 13 运行时（Linux）；选 CUDA 13 后端时自动安装",
+        note: "CUDA 13 运行时组件。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -1108,7 +1108,7 @@ static LINUX: &[RuntimeAsset] = &[
         os: "linux",
         arch: "x86_64",
         label: "cuBLAS 13",
-        note: "CUDA 13 的矩阵运算库（Linux）；选 CUDA 13 后端时自动安装",
+        note: "CUDA 13 矩阵运算库。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -1148,7 +1148,7 @@ static LINUX: &[RuntimeAsset] = &[
         os: "linux",
         arch: "x86_64",
         label: "cuFFT 12（CUDA 13）",
-        note: "CUDA 13 的 FFT 库（Linux，`libcufft.so.12`）；选 CUDA 13 后端时自动安装",
+        note: "CUDA 13 FFT 库。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {
@@ -1182,7 +1182,7 @@ static LINUX: &[RuntimeAsset] = &[
         os: "linux",
         arch: "x86_64",
         label: "cuDNN 9（CUDA 13）",
-        note: "CUDA 13 的深度神经网络库（Linux）；选 CUDA 13 后端时自动安装",
+        note: "CUDA 13 神经网络库。",
         required: &[],
         bundled: false,
         parts: &[RuntimePart {

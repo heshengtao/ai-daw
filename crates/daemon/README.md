@@ -10,7 +10,7 @@ webview，也服务浏览器客户端。
 crates/daemon/          ← 你在这里
 ├── src/host.rs         Host / UiHost trait、FakeHost、NoopHost
 ├── src/daemon.rs       Daemon 容器（Arc<AppState> + Host + Config）
-├── src/boot.rs         无窗口启动：bootstrap / serve / web_token
+├── src/boot.rs         无窗口启动：bootstrap / serve
 ├── src/server/         axum：/rpc/{cmd}、/health、/commands
 ├── src/bin/ai-daw.rs   无窗口入口
 └── src/ …              原有后端模块（commands / audio / state / mcp / manager …）
@@ -59,22 +59,23 @@ pub fn set_gain(state: State<'_, Arc<AppState>>, track: u64, gain_db: f32) -> Pr
 ## 无窗口运行
 
 ```bash
-cargo run -p ai-daw-daemon --bin aidawd -- --data-dir /tmp/aidawd --port 28430 --token devtoken
-curl -s -H "Authorization: Bearer devtoken" http://127.0.0.1:28430/rpc/get_project | head -c 200
-curl -s -H "Authorization: Bearer devtoken" -H "content-type: application/json" \
+cargo run -p ai-daw-daemon --bin aidawd -- --data-dir /tmp/aidawd --port 28430
+curl -s -X POST -H "content-type: application/json" -d '{}' \
+  http://127.0.0.1:28430/rpc/get_project | head -c 200
+curl -s -H "content-type: application/json" \
      -d '{"name":"Lead"}' http://127.0.0.1:28430/rpc/add_track | head -c 200
 ```
 
 - 默认只绑 `127.0.0.1`；`--lan` 才绑 `0.0.0.0`（容器里必须开）。
-- token 来源优先级：`--token` → `AIDAW_TOKEN` 环境变量 → 数据目录里的 `web-token` → 新生成并落盘。
+- **不鉴权**：打开端口即用；访问控制交给部署侧（局域网 / 容器网络 / 反向代理）。
 - 没有令牌时 `serve` 直接 panic：局域网内的裸 `/rpc` 等于把整台机器的文件读写交出去。
 
 ## 浏览器直接用
 
 ```bash
 npm run build                                    # 产出 dist/
-cargo run -p ai-daw-daemon --bin aidawd -- --token dev --port 28430 --web-dir dist
-# 打开 http://127.0.0.1:28430/#token=dev
+cargo run -p ai-daw-daemon --bin aidawd -- --port 28430 --web-dir dist
+# 打开 http://127.0.0.1:28430/
 ```
 
 前端只有一处改动：`src/api/tauri.ts` 的 `invoke` / `listen` 换成 `src/api/ipc.ts` 的同名实现，
@@ -90,7 +91,7 @@ docker run --rm -p 28430:28430 -v ai-daw-data:/data ai-daw
 docker compose up --build
 ```
 
-首次启动的日志里有 token；数据（会话、预设、音色记忆库、token）都在 `/data` 卷里。
+数据（会话、预设、音色记忆库）都在 `/data` 卷里。
 
 容器里没有声卡：`/health` 会显示 `"audio": false`，日志里有 ALSA 的探测报错，这是正常的
 ——`/rpc` 的工程编辑、撤销、导入导出都不依赖输出设备。

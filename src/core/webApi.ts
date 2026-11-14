@@ -6,7 +6,6 @@ import { openExternal } from "@/utils/external";
 export interface WebAccessInfo {
   lan: boolean;
   port: number;
-  token: string;
   loopbackUrl: string;
   lanUrl: string | null;
   running: boolean;

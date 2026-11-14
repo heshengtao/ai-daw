@@ -213,10 +213,8 @@ interface Channel {
 
 | 项 | 决定 |
 | --- | --- |
-| token | 启动时生成 256-bit，落在 `data_dir/web-token`；`/rpc`、`/events`、`/audio` 全部校验。`EventSource` / `WebSocket` 带不了 header，token 走 query 参数 |
+| 鉴权 | **无**：打开端口即用，访问控制交给部署侧（局域网 / 网关） |
 | 绑定 | 默认 `127.0.0.1`；`--lan` 才 `0.0.0.0`，启动时打印 `http://<ip>:<port>/#token=…` |
-| Origin | HTTP 与 WS 握手都校验白名单，防 DNS rebinding / CSWSH（复用 `mcp.rs` 已有判断） |
-| 危险操作 | 安装插件、扫描外部目录、迁移数据目录、删工程历史：web 端一律 403，提示"此操作需要桌面端" |
 | 文件 | 工程仍在服务端磁盘。新增 `GET /fs/projects` **只列** `projectsDir` 下的工程，不做任意路径浏览；导出走 `GET /export/<job>` 直接下发文件 |
 | 会话 | 多客户端共享同一个 `Engine`；后连的客户端靠 `get_project()` 拿全量快照。传输控制是全局的（谁都能按播放），不装多租户 |
 

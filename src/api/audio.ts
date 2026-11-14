@@ -8,7 +8,6 @@
  * 靠 `nextTime` 维持一条连续的播放队列（而不是每次 `currentTime`），这样块与块之间
  * 没有缝。欠载时把队列重置到「现在 + 一小段预滚」，宁可跳一下也不要卡住。
  */
-import { webToken } from "./ipc";
 
 /** 预滚：第一块开始播放前先攒这么久，吸收网络抖动。 */
 const PREROLL_SECONDS = 0.08;
@@ -95,9 +94,7 @@ export class WebMonitor {
     const url = new URL(window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.pathname = "/audio";
-    // 会话靠 cookie（WebSocket 握手会带上）；只有显式提供了 token 才走 query。
-    const token = webToken();
-    url.search = token ? `?token=${encodeURIComponent(token)}` : "";
+    url.search = "";
     url.hash = "";
     const socket = new WebSocket(url.toString());
     socket.binaryType = "arraybuffer";

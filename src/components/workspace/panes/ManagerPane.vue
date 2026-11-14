@@ -149,12 +149,14 @@ function applyFocus(): void {
   if (model) {
     tab.value = "available";
     kindFilter.value = "model";
+    query.value = "";
     void revealRow(model);
   }
   const runtime = runtimes.consumeFocus();
   if (runtime) {
     tab.value = "available";
     kindFilter.value = "runtime";
+    query.value = "";
     void revealRow(runtime);
   }
 }
@@ -163,10 +165,17 @@ function applyFocus(): void {
 async function revealRow(id: string): Promise<void> {
   if (!id || id === "*") return;
   await nextTick();
-  const element = document.querySelector<HTMLElement>(`[data-row-id="${id}"]`);
-  if (!element) return;
-  element.scrollIntoView({ block: "center", behavior: "smooth" });
   highlight.value = id;
+  // 清单可能还在加载 / 筛选刚切换：等目标行真正出现再滚（最多 2.5 秒）。
+  const started = performance.now();
+  while (performance.now() - started < 2500) {
+    const element = document.querySelector<HTMLElement>(`[data-row-id="${id}"]`);
+    if (element) {
+      element.scrollIntoView({ block: "center", behavior: "smooth" });
+      break;
+    }
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 60));
+  }
   if (highlightTimer !== null) window.clearTimeout(highlightTimer);
   highlightTimer = window.setTimeout(() => {
     if (highlight.value === id) highlight.value = null;

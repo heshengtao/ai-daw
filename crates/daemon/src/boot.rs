@@ -69,9 +69,7 @@ pub fn bootstrap(host: Arc<dyn Host>, cfg: Config) -> Arc<Daemon> {
 /// `token` 为空串时**拒绝启动**：局域网内的裸 `/rpc` 等于把整台机器的文件读写交出去。
 pub async fn serve(
     daemon: Arc<Daemon>,
-    token: String,
 ) -> std::io::Result<(SocketAddr, impl std::future::Future<Output = ()>)> {
-    assert!(!token.is_empty(), "拒绝在没有访问令牌的情况下启动 HTTP 服务");
     let cfg = daemon.config().clone();
     let port = cfg.port.unwrap_or(28430);
     let ip = if cfg.lan {
@@ -84,51 +82,11 @@ pub async fn serve(
     let static_dir = daemon.config().web_dir.clone();
     let app = crate::server::router(Arc::new(crate::server::ServerState {
         daemon,
-        token,
         static_dir,
-        sessions: Default::default(),
     }));
     Ok((addr, async move {
         let _ = axum::serve(listener, app).await;
     }))
-}
-
-/// 访问令牌：读 `<data_dir>/web-token`，没有就生成一份并落盘。
-///
-/// 桌面端与 `ai-daw` 共用同一个文件，所以浏览器在两种模式下填的是同一串 token。
-pub fn web_token(data_dir: &Path) -> String {
-    let path = data_dir.join("web-token");
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        let trimmed = text.trim();
-        if trimmed.len() == 64 {
-            return trimmed.to_string();
-        }
-    }
-    let token = fresh_token();
-    let _ = std::fs::create_dir_all(data_dir);
-    let _ = std::fs::write(&path, &token);
-    token
-}
-
-/// 生成一个新的 32 字节令牌（十六进制）。
-///
-/// 用系统 CSPRNG；拿不到时退回「时间 + pid 的哈希」——那是明显弱一档的兜底，
-/// 但至少不会让服务起不来。
-fn fresh_token() -> String {
-    let mut bytes = [0u8; 32];
-    if getrandom::fill(&mut bytes).is_err() {
-        use sha2::{Digest, Sha256};
-        let seed = format!(
-            "{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        );
-        bytes.copy_from_slice(&Sha256::digest(seed.as_bytes()));
-    }
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -150,16 +108,6 @@ mod tests {
         assert!(daemon.host().ui().is_none());
     }
 
-    #[test]
-    fn web_token_is_stable_and_persisted() {
-        let dir = tempfile::tempdir().unwrap();
-        let first = web_token(dir.path());
-        let second = web_token(dir.path());
-        assert_eq!(first, second);
-        assert_eq!(first.len(), 64);
-        assert!(dir.path().join("web-token").exists());
-    }
-
     #[tokio::test]
     async fn serve_returns_bound_address_and_answers_health() {
         let dir = tempfile::tempdir().unwrap();
@@ -171,7 +119,7 @@ mod tests {
             web_dir: None,
         };
         let daemon = bootstrap(host, cfg);
-        let (addr, fut) = serve(daemon, "t".into()).await.unwrap();
+        let (addr, fut) = serve(daemon).await.unwrap();
         assert!(addr.port() > 0);
         tokio::spawn(fut);
         let body = reqwest::get(format!("http://{addr}/health"))

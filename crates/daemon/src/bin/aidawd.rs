@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use ai_daw_daemon::boot::{bootstrap, serve, web_token, HeadlessHost};
+use ai_daw_daemon::boot::{bootstrap, serve, HeadlessHost};
 use ai_daw_daemon::daemon::Config;
 use clap::Parser;
 
@@ -20,9 +20,6 @@ struct Args {
     /// HTTP 端口。
     #[arg(long, default_value_t = 28430)]
     port: u16,
-    /// 访问令牌；不给就用数据目录里已有的（没有则生成）。
-    #[arg(long)]
-    token: Option<String>,
     /// 前端构建产物目录（`dist/`）。给了就能直接用浏览器打开 `http://<host>:<port>/`。
     /// 也可以走环境变量 `AIDAW_WEB_DIR`（容器里更顺手）。
     #[arg(long)]
@@ -38,11 +35,6 @@ async fn main() -> std::io::Result<()> {
         .unwrap_or_else(|| std::env::temp_dir().join("ai-daw-headless"));
     std::fs::create_dir_all(&data_dir)?;
 
-    // 优先 `--token`，其次 `AIDAW_TOKEN`（容器里用环境变量最方便），最后用数据目录里那份。
-    let token = args
-        .token
-        .or_else(|| std::env::var("AIDAW_TOKEN").ok().filter(|v| !v.is_empty()))
-        .unwrap_or_else(|| web_token(&data_dir));
     let host = Arc::new(HeadlessHost::new(&data_dir));
     let cfg = Config {
         data_dir: data_dir.clone(),
@@ -53,12 +45,11 @@ async fn main() -> std::io::Result<()> {
         }),
     };
     let daemon = bootstrap(host, cfg);
-    let (addr, fut) = serve(daemon, token.clone()).await?;
+    let (addr, fut) = serve(daemon).await?;
 
     println!("aidawd 已启动：http://{addr}");
     println!("数据目录：{}", data_dir.display());
-    println!("token：{token}");
-    println!("试一下：curl -H 'Authorization: Bearer {token}' http://{addr}/rpc/get_project | head -c 200");
+    println!("打开 http://{addr}/ 即可使用（无登录、无令牌）");
     fut.await;
     Ok(())
 }

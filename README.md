@@ -194,10 +194,9 @@ same undo history, same audio engine.
 docker run -d --name ai-daw -p 28430:28430 -v ai-daw-data:/data ailm32442/ai-daw
 ```
 
-Open <http://localhost:28430>. **No token in the URL** — the server issues a session cookie
-on first load, so the browser just works. Scripts can still call the API with the token
-printed in the container log (`docker logs ai-daw | grep token`) as
-`Authorization: Bearer <token>`.
+Open <http://localhost:28430> and start working — **no login, no token, no cookie check**.
+The headless build is meant for machines without a display; access control is the
+deployment's job (LAN, container network, or a reverse proxy in front of it).
 
 ### Docker (build from source)
 
@@ -220,9 +219,8 @@ cargo run -p ai-daw-daemon --no-default-features --bin aidawd -- \
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AIDAW_DATA_DIR` | `/data` in the image | sessions, presets, models, access token |
+| `AIDAW_DATA_DIR` | `/data` in the image | sessions, presets, models |
 | `AIDAW_WEB_DIR` | `/web` in the image | built frontend to serve |
-| `AIDAW_TOKEN` | generated once | fixed token for scripts/CI (browsers don't need it) |
 | `AIDAW_NO_AUDIO` | unset | skip opening an audio device (containers without ALSA) |
 | `AIDAW_MCP_URL` | auto-discovered | where the `aidaw` CLI looks for the running app |
 

@@ -10,9 +10,6 @@ services:
       - "28430:28430"
     volumes:
       - ai-daw-data:/data
-    environment:
-      # 想固定 token 就设它；不设则用数据卷里已生成的，没有就新建并打印到日志。
-      AIDAW_TOKEN: ${AIDAW_TOKEN:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:28430/health"]
