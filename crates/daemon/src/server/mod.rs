@@ -240,6 +240,13 @@ async fn rpc_handler(
             Ok(value) => value,
             Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
         };
+        // **只读数据目录里的文件**：`read_import_file` 原本会把任意绝对路径读出来还给你
+        // （`--lan` + 端口映射下等于把整台机器的可读文件交出去）。浏览器的导入流程本来就
+        // 是「先 `POST /upload` 落进 `<data>/imports`，再读回来」，所以这条限制不影响任何
+        // 现有功能；桌面壳走原生对话框，不经过这里。
+        if let Err(reason) = ensure_data_scoped(&state, &parsed.path) {
+            return RpcError::Failed(reason).into_response();
+        }
         return match tokio::fs::read(&parsed.path).await {
             Ok(bytes) => (
                 [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
@@ -439,6 +446,22 @@ async fn upload_handler(
     body: axum::body::Bytes,
 ) -> Response {
     upload_to_data_dir(&state, &query.name, &body).await
+}
+
+
+/// 把路径限制在数据目录里（`read_import_file` 用）。
+///
+/// 用 `canonicalize` 而不是字符串前缀比较：`/data/../etc/passwd` 这类绕过必须挡住。
+/// 目标不存在时直接报错——调用方本来也会拿到「读取失败」。
+fn ensure_data_scoped(state: &ServerState, path: &str) -> Result<(), String> {
+    let root = std::fs::canonicalize(&state.daemon.config().data_dir)
+        .map_err(|error| format!("数据目录不可用：{error}"))?;
+    let target = std::fs::canonicalize(path).map_err(|error| format!("读取失败：{error}"))?;
+    if target.starts_with(&root) {
+        Ok(())
+    } else {
+        Err("只能读取数据目录内的文件；浏览器请先上传".to_string())
+    }
 }
 
 /// 工程文件的暂存位置：`<数据目录>/projects/<时间戳>.json`。

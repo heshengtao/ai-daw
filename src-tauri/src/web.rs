@@ -146,13 +146,17 @@ pub fn mark_running(app: &AppHandle, info: WebInfo) {
 mod tests {
     use super::{info_for, WebConfig};
 
+    /// 无令牌时代的 URL 生成：只验证「回环地址 + 端口 + 初始状态」。
+    ///
+    /// 名字保留旧名（`builds_tokenised_urls`）会让读者以为还有令牌——这里顺手说清楚：
+    /// 令牌已经删掉，接口是「打开端口就是界面」，访问控制交给部署侧。
     #[test]
-    fn builds_tokenised_urls() {
+    fn builds_loopback_urls() {
         let config = WebConfig {
             lan: false,
             port: 28430,
         };
-        let info = info_for(&config, "abc");
+        let info = info_for(&config);
         assert_eq!(info.loopback_url, "http://127.0.0.1:28430/");
         assert_eq!(info.port, 28430);
         assert!(!info.lan);

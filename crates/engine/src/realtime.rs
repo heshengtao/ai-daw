@@ -63,6 +63,9 @@ pub enum RealtimeError {
     /// 底层 cpal 流错误。
     #[error("cpal error: {0}")]
     Cpal(String),
+    /// 虚拟时钟（无声卡模式）启动失败。
+    #[error("virtual clock error: {0}")]
+    Virtual(String),
 }
 
 /// 我们关心的输出采样格式（把 cpal 的 `SampleFormat` 缩到支持面）。
@@ -536,9 +539,106 @@ fn supported_formats(device: &cpal::Device) -> Vec<OutputFormatRange> {
         .collect()
 }
 
+/// 输出「下沉端」：真设备，或**虚拟时钟**（机器没有声卡时按实时节奏渲染）。
+///
+/// 为什么需要虚拟时钟：容器 / 无声卡的机器上 cpal 打不开设备，界面就只能退回离线试听，
+/// 而浏览器那边其实完全可以当声卡用——`/audio` 已经把混音抽头推过去了。虚拟时钟让
+/// 渲染照常按实时节奏跑（位置、电平表、抽头、插件全部照常工作），只是不写声卡。
+enum Sink {
+    /// 真设备流：由 cpal 的回调驱动渲染。
+    Device(cpal::Stream),
+    /// 虚拟时钟：后台线程按「块时长」节拍驱动同一份渲染逻辑。
+    Virtual(VirtualClock),
+}
+
+struct VirtualClock {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for VirtualClock {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// 一段渲染逻辑的驱动端：真设备与虚拟时钟共用**同一份**实现。
+///
+/// 抽出来的原因：这块代码原本写在 cpal 的闭包里，虚拟时钟没法复用；两份实现迟早会漂移
+/// （例如只在设备路径里修了「播到边界暂停」的边界条件）。
+struct RenderCore {
+    player: Player,
+    rx: crate::command_queue::CommandReceiver,
+    staging: Vec<f32>,
+    channels: usize,
+    max_block: usize,
+    scope: Arc<ScopeBuffer>,
+    tap: Option<Arc<crate::tap::AudioTap>>,
+    status: Arc<SharedStatus>,
+    /// 与宿主共享的传输状态（同一模块内直接读写原子量，回调里不加锁）。
+    shared: SharedTransport,
+}
+
+impl RenderCore {
+    /// 渲染一块交错音频到 `data`（长度必须是 `channels` 的整数倍）。
+    fn render(&mut self, data: &mut [f32]) {
+        self.status.beat();
+        self.player.drain_commands(&mut self.rx);
+
+        let frames = data.len() / self.channels.max(1);
+        let need = frames * 2;
+        if self.staging.len() < need {
+            self.staging.resize(need, 0.0);
+        }
+        let mut offset = 0usize;
+        while offset < frames {
+            let n = (frames - offset).min(self.max_block);
+            self.player
+                .process_block(&mut self.staging[offset * 2..(offset + n) * 2], n);
+            offset += n;
+        }
+        write_interleaved(&self.staging[..need], data, frames, self.channels);
+        self.scope.push_interleaved(&self.staging[..need], frames);
+        if let Some(tap) = &self.tap {
+            tap.push_interleaved(&self.staging[..need]);
+        }
+
+        let boundary = self.player.playback_end_frame();
+        if boundary > 0 && self.player.position_frames() >= boundary {
+            self.player.apply_command(end_of_project_action(
+                self.player.is_looping(),
+                self.player.loop_range(),
+            ));
+        }
+        let shared = &self.shared;
+        shared
+            .position
+            .store(self.player.position_frames(), Ordering::Relaxed);
+        shared
+            .playing
+            .store(self.player.is_playing(), Ordering::Relaxed);
+        shared
+            .looping
+            .store(self.player.is_looping(), Ordering::Relaxed);
+        shared
+            .metronome
+            .store(self.player.is_metronome(), Ordering::Relaxed);
+        if let Some((start, end)) = self.player.loop_range() {
+            shared.loop_start.store(start, Ordering::Relaxed);
+            shared.loop_end.store(end, Ordering::Relaxed);
+        } else {
+            shared.loop_start.store(0, Ordering::Relaxed);
+            shared.loop_end.store(0, Ordering::Relaxed);
+        }
+    }
+}
+
 /// cpal 实时播放宿主：拥有输出流与控制侧命令发送端。
 pub struct AudioHost {
-    stream: cpal::Stream,
+    sink: Sink,
     commands: CommandSender,
     shared: SharedTransport,
     /// 重建前用来向音频回调**索取插件实例**的回收槽（见 [`AudioHost::take_instances`]）。
@@ -721,60 +821,29 @@ impl AudioHost {
             start: shared.loop_start_frames(),
             end: shared.loop_end_frames(),
         });
-        let mut staging: Vec<f32> = Vec::with_capacity(max_block * 2);
-        // 心跳：回调每跑一块就记一次，供控制侧判断「流还在、但已经不出声」。
-        let status_cb = Arc::clone(&options.status);
-
-        let on_data = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-            status_cb.beat();
-            player.drain_commands(&mut rx);
-
-            let frames = data.len() / channels.max(1);
-            let need = frames * 2;
-            // 一次性增长到设备块大小属可接受的预热；此后不再分配。
-            if staging.len() < need {
-                staging.resize(need, 0.0);
-            }
-
-            // 即便后端忽略固定块大小，也按 max_block 分块，确保 `Player` 及其
-            // scratch 不会在回调内 resize（分配）。
-            let mut offset = 0usize;
-            while offset < frames {
-                let n = (frames - offset).min(max_block);
-                player.process_block(&mut staging[offset * 2..(offset + n) * 2], n);
-                offset += n;
-            }
-
-            write_interleaved(&staging[..need], data, frames, channels);
-
-            // 给界面画波形：推入刚渲染好的这块（下混成单声道）。
-            scope.push_interleaved(&staging[..need], frames);
-
-            // 给浏览器监听：推入同一块交错立体声（无锁，写满一圈就覆盖）。
-            if let Some(tap) = &tap {
-                tap.push_interleaved(&staging[..need]);
-            }
-
-            // 宿主策略：播到播放边界。开循环 → 无缝回（范围起点 / 工程起点）继续；否则暂停。
-            let boundary = player.playback_end_frame();
-            if boundary > 0 && player.position_frames() >= boundary {
-                player.apply_command(end_of_project_action(
-                    player.is_looping(),
-                    player.loop_range(),
-                ));
-            }
-            position_cb.store(player.position_frames(), Ordering::Relaxed);
-            playing_cb.store(player.is_playing(), Ordering::Relaxed);
-            looping_cb.store(player.is_looping(), Ordering::Relaxed);
-            metronome_cb.store(player.is_metronome(), Ordering::Relaxed);
-            if let Some((start, end)) = player.loop_range() {
-                loop_start_cb.store(start, Ordering::Relaxed);
-                loop_end_cb.store(end, Ordering::Relaxed);
-            } else {
-                loop_start_cb.store(0, Ordering::Relaxed);
-                loop_end_cb.store(0, Ordering::Relaxed);
-            }
+        // 渲染逻辑抽到 `RenderCore`：真设备回调与「虚拟时钟」线程共用同一份。
+        let mut core = RenderCore {
+            player,
+            rx,
+            staging: Vec::with_capacity(max_block * 2),
+            channels,
+            max_block,
+            scope,
+            tap,
+            status: Arc::clone(&options.status),
+            shared: shared.clone(),
         };
+        // 这些 Arc 原本由闭包捕获；现在归 `RenderCore` 管，这里只保留给设备错误回调用的那份。
+        let _ = (
+            &position_cb,
+            &playing_cb,
+            &looping_cb,
+            &metronome_cb,
+            &loop_start_cb,
+            &loop_end_cb,
+        );
+
+        let on_data = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| core.render(data);
         // 状态只在 cpal 的**错误回调**里写：实时数据回调（`on_data`）依旧不加锁、不分配。
         // cpal 在独立线程上调用错误回调，因此这里的 `Mutex` 不在音频处理路径上。
         // 注：cpal 0.18 里该回调的参数是 `cpal::Error`（旧版叫 `StreamError`）。
@@ -806,7 +875,108 @@ impl AudioHost {
         }
 
         Ok(AudioHost {
-            stream,
+            sink: Sink::Device(stream),
+            commands: tx,
+            shared,
+            yield_sink,
+            recorder: None,
+            armed_device: None,
+        })
+    }
+
+    /// 以**虚拟时钟**启动播放器：没有声卡时按实时节奏渲染，声音走 `/audio` 送到浏览器。
+    ///
+    /// 与 [`AudioHost::start_on`] 的唯一差别是「谁来驱动 `RenderCore::render`」：
+    /// 那边是 cpal 的音频回调，这里是本进程的一个线程。播放位置、循环、节拍器、电平表、
+    /// 混音抽头、插件实例全部照常工作——容器里的用户因此在浏览器里**真的能听见**，
+    /// 而不是只能看波形。
+    ///
+    /// 节拍策略：按「一块的时长」对齐到绝对时间轴上睡（`next += step`），
+    /// 不用 `sleep(step)` 累加——后者会让时钟随调度抖动越走越慢，几分钟后就明显超前。
+    pub fn start_virtual(
+        schedule: ScheduledEvents,
+        registry: &PluginRegistry,
+        options: RealtimeOptions,
+        shared: SharedTransport,
+        carried: ReusableInstances,
+        rate: u32,
+        channels: usize,
+        block: usize,
+    ) -> Result<Self, RealtimeError> {
+        let rate = rate.max(8_000);
+        let channels = channels.clamp(1, 2);
+        let max_block = options.max_block.max(1);
+        let block = block.max(1);
+        if (schedule.sample_rate - rate as f64).abs() > f64::EPSILON {
+            return Err(RealtimeError::SampleRateMismatch {
+                schedule: schedule.sample_rate,
+                device: rate as f64,
+            });
+        }
+
+        let (tx, rx) = command_queue(options.command_capacity);
+        let yield_sink: YieldSink = Arc::new(Mutex::new(None));
+        let mut player = Player::with_carried(
+            schedule,
+            registry,
+            rate as f64,
+            max_block,
+            carried,
+            Arc::clone(&yield_sink),
+        );
+        player.set_meter(
+            options
+                .meter
+                .clone()
+                .unwrap_or_else(|| Arc::new(crate::meter::MeterBank::new())),
+        );
+        player.apply_command(TransportCommand::SetLoop(shared.is_looping()));
+        player.apply_command(TransportCommand::SetMetronome(shared.is_metronome()));
+        player.apply_command(TransportCommand::SetLoopRange {
+            start: shared.loop_start_frames(),
+            end: shared.loop_end_frames(),
+        });
+
+        let mut core = RenderCore {
+            player,
+            rx,
+            staging: Vec::with_capacity(max_block * 2),
+            channels,
+            max_block,
+            scope: Arc::clone(&options.scope),
+            tap: options.tap.clone(),
+            status: Arc::clone(&options.status),
+            shared: shared.clone(),
+        };
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop);
+        let step = std::time::Duration::from_secs_f64(block as f64 / rate as f64);
+        let thread = std::thread::Builder::new()
+            .name("ai-daw-virtual-audio".into())
+            .spawn(move || {
+                let mut buffer = vec![0.0f32; block * channels];
+                let mut next = std::time::Instant::now();
+                while !stop_thread.load(Ordering::Relaxed) {
+                    core.render(&mut buffer);
+                    next += step;
+                    let now = std::time::Instant::now();
+                    if next > now {
+                        std::thread::sleep(next - now);
+                    } else {
+                        // 落后了（机器卡了一下）：不要补渲染，直接把时间轴对齐到现在，
+                        // 否则会连着跑好几块、听感变成快进。
+                        next = now;
+                    }
+                }
+            })
+            .map_err(|error| RealtimeError::Virtual(error.to_string()))?;
+
+        Ok(AudioHost {
+            sink: Sink::Virtual(VirtualClock {
+                stop,
+                thread: Some(thread),
+            }),
             commands: tx,
             shared,
             yield_sink,
@@ -917,8 +1087,12 @@ impl AudioHost {
 
 impl Drop for AudioHost {
     /// 宿主析构时显式暂停底层输出流，确保设备在控制侧退出后立即静音。
+    ///
+    /// 虚拟时钟分支什么都不用做：`VirtualClock` 的 `Drop` 会置停止位并 join 线程。
     fn drop(&mut self) {
-        let _ = self.stream.pause();
+        if let Sink::Device(stream) = &self.sink {
+            let _ = stream.pause();
+        }
     }
 }
 
@@ -1139,6 +1313,7 @@ mod tests {
             scope: Arc::new(ScopeBuffer::new(crate::SCOPE_CAPACITY)),
             status: Arc::clone(&status),
             meter: None,
+            tap: None,
         };
         let Ok(host) = AudioHost::start(schedule(), &PluginRegistry::with_builtins(), options)
         else {

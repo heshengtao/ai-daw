@@ -1259,6 +1259,13 @@ pub fn for_platform(os: &str, arch: &str) -> Vec<&'static RuntimeAsset> {
     match (os, arch) {
         ("windows", "x86_64") => WINDOWS.iter().collect(),
         ("linux", "x86_64") => LINUX.iter().collect(),
+        // Linux arm64（Apple Silicon 上的 Docker、ARM 服务器）：官方同样发布
+        // `onnxruntime-linux-aarch64-*.tgz`，CPU 基线随包即可用；CUDA 只发 x86_64，
+        // 这里刻意只给 CPU，避免界面在 ARM 上推荐一个装不上的 CUDA。
+        ("linux", "aarch64") => LINUX
+            .iter()
+            .filter(|asset| asset.id == RuntimeId::Cpu)
+            .collect(),
         // macOS：静态链接，没有运行时可管理。
         _ => Vec::new(),
     }

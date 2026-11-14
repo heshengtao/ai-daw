@@ -24,6 +24,8 @@ use ai_daw_engine::model::HarmonyBar;
 use ai_daw_plugin_api::MidiEvent;
 
 use crate::ai::MasterArgs;
+use crate::agent::{AgentConfigRuntime, AgentRuntime};
+use crate::mcp::McpRuntime;
 use crate::manager::{
     BackendPreference, InstallRequest, ModelSourcePreference, ProxyMode, StoreRuntime,
 };
@@ -244,6 +246,14 @@ pub fn call(app: &AppHandle, cmd: &str, args: Value) -> Option<Result<Value, Rpc
         let id: String = take(&args, "id")?;        let out = crate::commands::delete_preset(app.state::<Arc<AppState>>(), id);
         value(out)
     },
+    "save_sound_memory" => |app, args| {
+        let track: u64 = take(&args, "track")?;
+        let name: String = take(&args, "name")?;
+        let description: Option<String> = take(&args, "description")?;
+        let tags: Option<Vec<String>> = take(&args, "tags")?;
+        let id: Option<String> = take(&args, "id")?;        let out = crate::commands::save_sound_memory(app.clone(), app.state::<Arc<AppState>>(), track, name, description, tags, id);
+        value(out)
+    },
     "update_sound_memory" => |app, args| {
         let id: String = take(&args, "id")?;
         let name: Option<String> = take(&args, "name")?;
@@ -259,6 +269,47 @@ pub fn call(app: &AppHandle, cmd: &str, args: Value) -> Option<Result<Value, Rpc
     "apply_sound_memory" => |app, args| {
         let id: String = take(&args, "id")?;
         let track: u64 = take(&args, "track")?;        let out = crate::commands::apply_sound_memory(app.clone(), app.state::<Arc<AppState>>(), id, track);
+        value(out)
+    },
+    "agent_config" => |app, _args| {
+        let out = crate::agent::agent_config(app.state::<AgentConfigRuntime>());
+        plain(out)
+    },
+    "agent_set_config" => |app, args| {
+        let base_url: String = take(&args, "base_url")?;
+        let api_key: String = take(&args, "api_key")?;
+        let model: String = take(&args, "model")?;        let out = crate::agent::agent_set_config(app.state::<AgentConfigRuntime>(), base_url, api_key, model);
+        plain(out)
+    },
+    "agent_sessions" => |app, _args| {
+        let out = crate::agent::agent_sessions(app.state::<AgentRuntime>());
+        plain(out)
+    },
+    "agent_session" => |app, args| {
+        let id: String = take(&args, "id")?;        let out = crate::agent::agent_session(app.state::<AgentRuntime>(), id);
+        value(out)
+    },
+    "agent_delete_session" => |app, args| {
+        let id: String = take(&args, "id")?;        let out = crate::agent::agent_delete_session(app.state::<AgentRuntime>(), id);
+        plain(out)
+    },
+    "agent_set_head" => |app, args| {
+        let id: String = take(&args, "id")?;
+        let node_id: String = take(&args, "node_id")?;        let out = crate::agent::agent_set_head(app.state::<AgentRuntime>(), id, node_id);
+        value(out)
+    },
+    "agent_cancel" => |app, _args| {
+        let out = crate::agent::agent_cancel(app.state::<AgentRuntime>());
+        plain(out)
+    },
+    "agent_running" => |app, _args| {
+        let out = crate::agent::agent_running(app.state::<AgentRuntime>());
+        plain(out)
+    },
+    "agent_send" => |app, args| {
+        let session_id: Option<String> = take(&args, "session_id")?;
+        let parent_id: Option<String> = take(&args, "parent_id")?;
+        let text: String = take(&args, "text")?;        let out = crate::agent::agent_send(app.clone(), app.state::<AgentRuntime>(), app.state::<AgentConfigRuntime>(), session_id, parent_id, text);
         value(out)
     },
     "ai_status" => |app, _args| {
@@ -329,6 +380,15 @@ pub fn call(app: &AppHandle, cmd: &str, args: Value) -> Option<Result<Value, Rpc
     "plugin_manager_proxy_status" => |app, _args| {
         let out = crate::manager::plugin_manager_proxy_status(app.state::<StoreRuntime>());
         plain(out)
+    },
+    "mcp_status" => |app, _args| {
+        let out = crate::mcp::mcp_status(app.state::<McpRuntime>());
+        plain(out)
+    },
+    "set_mcp_config" => |app, args| {
+        let enabled: bool = take(&args, "enabled")?;
+        let port: u16 = take(&args, "port")?;        let out = crate::mcp::set_mcp_config(app.state::<McpRuntime>(), enabled, port);
+        value(out)
     },
     "model_catalog" => |app, _args| {
         let out = crate::models::model_catalog(app.clone());
@@ -519,26 +579,15 @@ pub fn call(app: &AppHandle, cmd: &str, args: Value) -> Option<Result<Value, Rpc
         let out = crate::yue_transcribe::ai_yue_transcribe_cancel();
         plain(out)
     },
-    "agent_cancel" => |_app, _args| unsupported("agent_cancel", "后台运行时（浏览器/容器里没有启动）"),
-    "agent_config" => |_app, _args| unsupported("agent_config", "后台运行时（浏览器/容器里没有启动）"),
-    "agent_delete_session" => |_app, _args| unsupported("agent_delete_session", "后台运行时（浏览器/容器里没有启动）"),
-    "agent_running" => |_app, _args| unsupported("agent_running", "后台运行时（浏览器/容器里没有启动）"),
-    "agent_send" => |_app, _args| unsupported("agent_send", "后台运行时（浏览器/容器里没有启动）"),
-    "agent_session" => |_app, _args| unsupported("agent_session", "后台运行时（浏览器/容器里没有启动）"),
-    "agent_sessions" => |_app, _args| unsupported("agent_sessions", "后台运行时（浏览器/容器里没有启动）"),
-    "agent_set_config" => |_app, _args| unsupported("agent_set_config", "后台运行时（浏览器/容器里没有启动）"),
-    "agent_set_head" => |_app, _args| unsupported("agent_set_head", "后台运行时（浏览器/容器里没有启动）"),
     "cli_status" => |_app, _args| unsupported("cli_status", "命令行安装"),
     "close_effect_plugin_window" => |_app, _args| unsupported("close_effect_plugin_window", "原生插件窗口"),
     "close_plugin_window" => |_app, _args| unsupported("close_plugin_window", "原生插件窗口"),
     "install_cli" => |_app, _args| unsupported("install_cli", "命令行安装"),
-    "mcp_status" => |_app, _args| unsupported("mcp_status", "后台运行时（浏览器/容器里没有启动）"),
     "open_effect_plugin_window" => |_app, _args| unsupported("open_effect_plugin_window", "原生插件窗口"),
     "open_effect_window" => |_app, _args| unsupported("open_effect_window", "原生效果器窗口"),
     "open_plugin_window" => |_app, _args| unsupported("open_plugin_window", "原生插件窗口"),
     "open_synth_window" => |_app, _args| unsupported("open_synth_window", "原生合成器窗口"),
     "plugin_manager_open" => |_app, _args| unsupported("plugin_manager_open", "打开外部浏览器"),
-    "set_mcp_config" => |_app, _args| unsupported("set_mcp_config", "后台运行时（浏览器/容器里没有启动）"),
     "uninstall_cli" => |_app, _args| unsupported("uninstall_cli", "命令行安装"),
     "web_access_info" => |_app, _args| unsupported("web_access_info", "桌面端网络设置"),
     "web_access_set_lan" => |_app, _args| unsupported("web_access_set_lan", "桌面端网络设置"),
@@ -779,6 +828,7 @@ pub const NAMES: &[&str] = &[
     "rescan_plugins",
     "restore_project_history",
     "save_preset",
+    "save_sound_memory",
     "set_effect_params",
     "set_input_device",
     "set_mcp_config",

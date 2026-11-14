@@ -43,7 +43,7 @@ UNSUPPORTED = {
  'uninstall_cli': '命令行安装',
 }
 
-SKIP_STATE = {'AgentRuntime','AgentConfigRuntime','McpRuntime'}
+SKIP_STATE = set()
 
 IMPORTS = """use std::collections::HashMap;
 use std::sync::Arc;
@@ -55,6 +55,8 @@ use ai_daw_engine::model::HarmonyBar;
 use ai_daw_plugin_api::MidiEvent;
 
 use crate::ai::MasterArgs;
+use crate::agent::{AgentConfigRuntime, AgentRuntime};
+use crate::mcp::McpRuntime;
 use crate::manager::{
     BackendPreference, InstallRequest, ModelSourcePreference, ProxyMode, StoreRuntime,
 };

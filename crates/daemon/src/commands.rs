@@ -2142,11 +2142,31 @@ pub fn set_articulations(
 }
 
 /// 随包映射库在运行时 / 开发环境下的位置。
+///
+/// 候选顺序（与模型/运行时的取值口径一致）：
+/// 1. 安装包的资源目录（桌面端）；
+/// 2. `AIDAW_ARTICULATION_MAPS`（无头镜像把映射库放在 `/opt/...`，没有资源目录概念）；
+/// 3. 可执行文件旁的 `articulation-maps/`（解包即用的发行形态）；
+/// 4. 开发路径 `crates/daemon/resources/articulation-maps`。
 pub(crate) fn articulation_maps_root(app: &crate::tauri_api::AppHandle) -> std::path::PathBuf {
     if let Ok(dir) = app.path().resource_dir() {
         let candidate = dir.join("articulation-maps");
         if candidate.is_dir() {
             return candidate;
+        }
+    }
+    if let Some(dir) = std::env::var_os("AIDAW_ARTICULATION_MAPS") {
+        let candidate = std::path::PathBuf::from(dir);
+        if candidate.is_dir() {
+            return candidate;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let candidate = parent.join("articulation-maps");
+            if candidate.is_dir() {
+                return candidate;
+            }
         }
     }
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/articulation-maps")

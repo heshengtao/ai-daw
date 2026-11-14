@@ -53,6 +53,9 @@ pub fn bootstrap(host: Arc<dyn Host>, cfg: Config) -> Arc<Daemon> {
     // HTTP 命令层按 Tauri 签名写的，靠这张托管表取状态；桌面端由 `app.manage()` 填。
     crate::tauri_api::share_rpc_state(&state);
     crate::tauri_api::share_headless_runtimes();
+    // 桌面外壳在 `setup()` 里注册的目录，无头进程必须自己补一遍（见函数注释）。
+    #[cfg(not(feature = "desktop"))]
+    init_headless_dirs(&cfg.data_dir);
     // 用户的预设与音色记忆库是跨工程资产，按数据目录加载（拿不到就空着，不影响启动）。
     state.init_presets(Some(cfg.data_dir.join("presets.json")));
     state.init_sound_memories(Some(cfg.data_dir.join("sound-memories.json")));
@@ -67,13 +70,72 @@ pub fn bootstrap(host: Arc<dyn Host>, cfg: Config) -> Arc<Daemon> {
     daemon
 }
 
+/// 无头进程的资源目录注册。
+///
+/// 桌面外壳在 `src-tauri/src/lib.rs` 的 `setup()` 里做这三件事，无头进程没有外壳，
+/// 漏掉任何一件都会让"桌面能用的东西在浏览器/Docker 里悄悄失效"：
+///
+/// 1. **模型搜索目录**：`<data>/models` 是用户下载模型的落点。不注册的话，下载成功
+///    也永远显示"未安装"（`set_extra_dirs` 是进程级只写一次，`models::installed`
+///    只认注册过的目录）。
+/// 2. **ONNX Runtime 根目录**：不注册就落到 `$TMPDIR/ai-daw-runtime/ort`，
+///    容器重启即丢、`/data` 卷白白空着。
+/// 3. **audio.cpp（YuE）引擎根目录**：同上，落到 `$TMPDIR/ai-daw-audiocpp`。
+///
+/// 随包资源（镜像里的 `models/`、`ort/`、`articulation-maps/`）走环境变量
+/// `AIDAW_MODELS` / `AIDAW_ORT_BUNDLED` / `AIDAW_ARTICULATION_MAPS`，不需要这里注册。
+#[cfg(not(feature = "desktop"))]
+fn init_headless_dirs(data_dir: &Path) {
+    let app = crate::tauri_api::rpc_app_handle();
+    // 下载落点排最前：用户在应用内下的模型要能覆盖镜像自带的那一份。
+    // 随包目录由 `AIDAW_MODELS_EXTRA` 传入（`:` 分隔的路径表，可以直接挂多个卷）。
+    let mut dirs = vec![data_dir.join("models")];
+    if let Some(extra) = std::env::var_os("AIDAW_MODELS_EXTRA") {
+        dirs.extend(std::env::split_paths(&extra));
+    }
+    ai_daw_local_ai::models::set_extra_dirs(dirs);
+    // 运行时根目录 + 后端偏好 + YuE 引擎目录；必须在任何 dylib 被加载之前调用。
+    crate::backends::init_runtime(&app);
+
+}
+
 /// 起 HTTP 服务。返回实际绑定的地址与可被 `select!` 的前台 future。
 ///
 /// `token` 为空串时**拒绝启动**：局域网内的裸 `/rpc` 等于把整台机器的文件读写交出去。
 pub async fn serve(
     daemon: Arc<Daemon>,
 ) -> std::io::Result<(SocketAddr, impl std::future::Future<Output = ()>)> {
+    // 无头专属的"后台服务"：桌面壳在 `setup()` 里自己 manage + autostart。
+    // 放在 serve 而不是 bootstrap：autostart 要 `tokio::spawn`，而 `bootstrap` 可能被
+    // 同步调用（测试里就是），那时还没有运行时。
+    #[cfg(not(feature = "desktop"))]
+    init_headless_services(&daemon);
     serve_with_app(daemon, None).await
+}
+
+/// 无头进程要常驻的后台服务（目前只有内嵌 MCP server）。
+///
+/// 桌面壳用的是真实 `AppHandle` + `app.manage()`；无头进程用空壳句柄 + 托管表，
+/// 于是 `mcp_status` / `set_mcp_config` 这两条命令在容器里也能真跑。
+#[cfg(not(feature = "desktop"))]
+fn init_headless_services(daemon: &Daemon) {
+    let app = crate::tauri_api::rpc_app_handle();
+    let data_dir = daemon.config().data_dir.clone();
+    let mcp = crate::mcp::McpRuntime::load(app.clone(), Some(data_dir.join("mcp.json")));
+    // 先启动、再登记：HTTP 服务还没起来，中间不会有命令看到"半个服务器"。
+    mcp.autostart();
+    crate::tauri_api::install_state(mcp);
+
+    // 写歌智能体：配置（`ai.json`）+ 会话运行时（`agent/sessions/`）。
+    // 桌面壳在 `setup()` 里 `app.manage(...)`；无头进程要自己装进托管表，否则
+    // AI 面板在浏览器里永远显示"未配置"、发送后一直转圈。
+    // 工具调用走的是 `mcp::tools::dispatch`（与 MCP 同一份实现），不经过 webview。
+    crate::tauri_api::install_state(crate::agent::AgentConfigRuntime::load(Some(
+        data_dir.join("ai.json"),
+    )));
+    crate::tauri_api::install_state(crate::agent::AgentRuntime::new(Some(
+        data_dir.join("agent").join("sessions"),
+    )));
 }
 
 /// 起 HTTP 服务，并把宿主句柄交给命令层（桌面端用它替 web 客户端执行命令）。

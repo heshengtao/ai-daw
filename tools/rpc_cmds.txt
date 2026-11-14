@@ -112,6 +112,7 @@ render_preview
 rescan_plugins
 restore_project_history
 save_preset
+save_sound_memory
 set_effect_params
 set_input_device
 set_mcp_config

@@ -85,6 +85,10 @@ enum AudioMessage {
     StopRecording(Sender<Option<DecodedAudio>>),
 }
 
+/// 虚拟时钟的采样率与声道数（与网页播放器的偏好一致）。
+const VIRTUAL_RATE: u32 = 48_000;
+const VIRTUAL_CHANNELS: usize = 2;
+
 /// 传输状态快照：界面轮询与事件推送共用。
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct TransportSnapshot {
@@ -105,6 +109,11 @@ pub struct TransportSnapshot {
     pub loop_end_frames: u64,
     /// 不可用时的原因。
     pub error: Option<String>,
+    /// 当前是不是「虚拟时钟」输出（机器没有声卡）。
+    ///
+    /// `available` 仍是 `true`：位置、电平表、循环都照常工作，声音走 `/audio` 送到浏览器。
+    /// 界面据此说明「本机不出声、网页端能听」，而不是假装一切正常。
+    pub virtual_output: bool,
 }
 
 /// 音频引擎的控制侧句柄。
@@ -125,6 +134,8 @@ pub struct AudioEngine {
     meter: Arc<ai_daw_engine::meter::MeterBank>,
     /// 浏览器监听的 PCM 抽头（音频线程写、HTTP 侧读）。重建播放器时沿用同一个。
     web_tap: Arc<ai_daw_engine::tap::AudioTap>,
+    /// 是否退到了虚拟时钟（没有声卡）。
+    virtual_output: Arc<AtomicBool>,
 }
 
 impl AudioEngine {
@@ -160,6 +171,8 @@ impl AudioEngine {
         let meter = Arc::new(ai_daw_engine::meter::MeterBank::new());
         // 约 2 秒的抽头：浏览器那边慢一拍也够用，写满就覆盖最旧的。
         let web_tap = Arc::new(ai_daw_engine::tap::AudioTap::new(96_000, 48_000, 0));
+        // 无声卡时退到虚拟时钟：位置/电平/抽头照常跑，声音走浏览器。
+        let virtual_output = Arc::new(AtomicBool::new(false));
 
         let engine = AudioEngine {
             tx,
@@ -172,6 +185,7 @@ impl AudioEngine {
             input_scope: Arc::clone(&input_scope),
             meter: Arc::clone(&meter),
             web_tap: Arc::clone(&web_tap),
+            virtual_output: Arc::clone(&virtual_output),
         };
         thread::Builder::new()
             .name("ai-daw-audio".into())
@@ -190,6 +204,7 @@ impl AudioEngine {
                     meter,
                     web_tap,
                     assets,
+                    virtual_output,
                 )
             })
             .expect("failed to spawn audio thread");
@@ -397,6 +412,7 @@ impl AudioEngine {
             } else {
                 self.error.lock().unwrap().clone()
             },
+            virtual_output: available && self.virtual_output.load(Ordering::Relaxed),
         }
     }
 
@@ -599,12 +615,38 @@ fn start_host(
     meter: &Arc<ai_daw_engine::meter::MeterBank>,
     web_tap: &Arc<ai_daw_engine::tap::AudioTap>,
     carried: ReusableInstances,
+    virtual_output: &Arc<AtomicBool>,
 ) -> Option<AudioHost> {
     let started = std::time::Instant::now();
-    let rate = match resolve_sample_rate(sample_rate, output_device) {
-        Ok(rate) => rate,
+    // 没有输出设备（容器 / 无头服务器）时退到**虚拟时钟**：渲染照常按实时节奏跑，
+    // 位置 / 电平 / 抽取到的 PCM 都正常，声音由 `/audio` 送到浏览器。
+    // 「本机不出声」这件事由快照里的 `virtual_output` 说清楚，不靠假装。
+    // `AIDAW_AUDIO=virtual`：即使有设备也强制走虚拟时钟。
+    // 两种用途：无声卡的机器上手工验证；以及用户明确希望「只用网页听声音」时关掉本机输出。
+    let force_virtual = std::env::var("AIDAW_AUDIO")
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            value == "virtual" || value == "none" || value == "off"
+        })
+        .unwrap_or(false);
+    let (rate, virtual_clock) = match resolve_sample_rate(sample_rate, output_device) {
+        Ok(_) if force_virtual => {
+            sample_rate.store(VIRTUAL_RATE, Ordering::Relaxed);
+            (VIRTUAL_RATE, true)
+        }
+        Ok(rate) => (rate, false),
+        Err(_) if force_virtual => {
+            sample_rate.store(VIRTUAL_RATE, Ordering::Relaxed);
+            (VIRTUAL_RATE, true)
+        }
+        Err(_) if output_device.is_none() => {
+            // 采样率缓存是为了避免每次装载都重新探测设备；虚拟模式直接钉 48 kHz。
+            sample_rate.store(VIRTUAL_RATE, Ordering::Relaxed);
+            (VIRTUAL_RATE, true)
+        }
         Err(reason) => {
             available.store(false, Ordering::Relaxed);
+            virtual_output.store(false, Ordering::Relaxed);
             *error.lock().unwrap() = Some(reason);
             return None;
         }
@@ -629,14 +671,27 @@ fn start_host(
         tap: Some(Arc::clone(&web_tap)),
     };
     let at = std::time::Instant::now();
-    let built = AudioHost::start_on(
-        output_device,
-        schedule,
-        &registry,
-        options,
-        shared.clone(),
-        carried,
-    );
+    let built = if virtual_clock {
+        AudioHost::start_virtual(
+            schedule,
+            &registry,
+            options,
+            shared.clone(),
+            carried,
+            VIRTUAL_RATE,
+            VIRTUAL_CHANNELS,
+            MAX_BLOCK,
+        )
+    } else {
+        AudioHost::start_on(
+            output_device,
+            schedule,
+            &registry,
+            options,
+            shared.clone(),
+            carried,
+        )
+    };
     let host_ms = at.elapsed().as_millis();
     // 启动期的「界面已经出来、却要等好几秒才有声音 / 才能动插件」多半就花在这里。
     crate::logging::info(format!(
@@ -651,6 +706,13 @@ fn start_host(
     match built {
         Ok(host) => {
             available.store(true, Ordering::Relaxed);
+            virtual_output.store(virtual_clock, Ordering::Relaxed);
+            if virtual_clock {
+                // 同一原因只记一次：音频线程每秒都会重试，刷屏没有价值。
+                crate::logging::info(format!(
+                    "[audio] 未找到音频输出设备：已切换到虚拟时钟（{VIRTUAL_RATE} Hz），声音通过 /audio 送到浏览器"
+                ));
+            }
             let recovered = error.lock().unwrap().take().is_some();
             if recovered {
                 crate::logging::info(format!(
@@ -664,6 +726,7 @@ fn start_host(
             // 清空缓存的采样率：设备可能已切换，下次装载重新探测。
             sample_rate.store(0, Ordering::Relaxed);
             available.store(false, Ordering::Relaxed);
+            virtual_output.store(false, Ordering::Relaxed);
             let previous = error.lock().unwrap().replace(reason.clone());
             // 失败会每秒重试一次，只在原因变化时记一行，别把日志刷爆。
             if previous.as_deref() != Some(reason.as_str()) {
@@ -698,6 +761,7 @@ fn rebuild(
     web_tap: &Arc<ai_daw_engine::tap::AudioTap>,
     reset_rate: bool,
     carried: ReusableInstances,
+    virtual_output: &Arc<AtomicBool>,
 ) -> Option<AudioHost> {
     let project = current.clone()?;
     if reset_rate {
@@ -720,6 +784,7 @@ fn rebuild(
         meter,
         web_tap,
         carried,
+        virtual_output,
     )
 }
 
@@ -755,6 +820,8 @@ fn run_audio_thread(
     meter: Arc<ai_daw_engine::meter::MeterBank>,
     web_tap: Arc<ai_daw_engine::tap::AudioTap>,
     assets: Arc<AssetCache>,
+    // 是否退到了虚拟时钟（没有声卡）：由 `start_host` 置位，快照读它。
+    virtual_output: Arc<AtomicBool>,
 ) {
     /// 设备轮询间隔：够快能跟上插拔耳机，又不至于每秒多次查询 CoreAudio 太过分。
     const POLL: std::time::Duration = std::time::Duration::from_millis(1000);
@@ -832,6 +899,7 @@ fn run_audio_thread(
                     &web_tap,
                     false,
                     carried,
+                    &virtual_output,
                 );
                 restore_transport(&mut host, frame, was_playing);
                 signature = output_signature(output_device.as_deref());
@@ -873,6 +941,7 @@ fn run_audio_thread(
                     // 工程变化不改采样率（采样率取决于设备），沿用缓存即可。
                     false,
                     carried,
+                    &virtual_output,
                 );
                 restore_transport(&mut host, frame, was_playing);
                 // 重建后记录当前设备身份，避免下一次轮询把同一设备误判为「变化」。
@@ -907,6 +976,7 @@ fn run_audio_thread(
                     &web_tap,
                     true,
                     carried,
+                    &virtual_output,
                 );
                 restore_transport(&mut host, frame, was_playing);
                 signature = output_signature(output_device.as_deref());
@@ -943,6 +1013,7 @@ fn run_audio_thread(
                     &web_tap,
                     true,
                     carried,
+                    &virtual_output,
                 );
                 restore_transport(&mut host, frame, was_playing);
                 signature = output_signature(output_device.as_deref());
@@ -1089,6 +1160,7 @@ fn run_audio_thread(
                     &web_tap,
                     true,
                     carried,
+                    &virtual_output,
                 );
                 restore_transport(&mut host, frame, was_playing);
                 // 记录本次探测到（并已据此重建）的设备身份，稳住下一轮判定。
