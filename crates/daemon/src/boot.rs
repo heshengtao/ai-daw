@@ -189,6 +189,30 @@ mod tests {
         assert!(daemon.host().ui().is_none());
     }
 
+    /// 传输推送线程必须真的往宿主发快照。
+    ///
+    /// 这条线程是播放头位置 / 播放态的**唯一**来源；它曾经从桌面壳搬进 daemon 时只接到
+    /// `bootstrap` 上，桌面端（直接构造 `Daemon`）于是拿不到任何传输事件：有声音、播放头
+    /// 不动，停止后的状态也回不到界面。这里钉住「线程一起来第一拍就会广播」这件事，
+    /// 免得以后挪动启动点时又悄悄断掉。
+    #[test]
+    fn transport_ticker_broadcasts_to_host() {
+        use crate::host::FakeHost;
+        use crate::state::EVENT_TRANSPORT;
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(FakeHost::with_dir(dir.path()));
+        let state = Arc::new(AppState::bootstrap_with_host(None, Vec::new(), host.clone()));
+        let daemon = Daemon::new(Arc::clone(&state), host.clone(), Config::default());
+        spawn_transport_ticker(Arc::clone(&daemon));
+        // 第一拍要 16 ms；给足余量，但远小于「卡住就会失败」的量级。
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            !host.events_on(EVENT_TRANSPORT).is_empty(),
+            "传输推送线程没有广播任何快照（播放头会停住、播放态也不会回传）"
+        );
+    }
+
     #[tokio::test]
     async fn serve_returns_bound_address_and_answers_health() {
         let dir = tempfile::tempdir().unwrap();

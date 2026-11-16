@@ -8,22 +8,13 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 use ai_daw_engine::registry::PluginSlot;
 use ai_daw_host_vst3::EditorHandle;
 
-use ai_daw_daemon::audio::{AudioEngine, TransportSnapshot};
 use ai_daw_daemon::daemon::{Config as DaemonConfig, Daemon};
-use ai_daw_daemon::state::{AppState, EVENT_TRANSPORT};
-
-/// 传输位置的推送周期：跟屏幕刷新对齐（约 60 Hz）。
-///
-/// 原来是 33 ms（30 Hz），注释写着「看起来连续」——在 60 Hz 屏上并不成立：播放头每秒只走
-/// 30 步，放大后一步好几像素，滚起来能明显看出台阶。快照本身只是几个数字，一次
-/// `emit` 的开销远小于一帧，翻倍到 60 Hz 比「前端插值猜位置」简单，也不会漂。
-/// 暂停后位置不再变化，`last == snapshot` 会直接跳过，所以静止时没有任何额外推送。
-const TRANSPORT_TICK: Duration = Duration::from_millis(16);
+use ai_daw_daemon::state::AppState;
 
 /// 插件窗口的轮询周期：把插件发起的窗口事件送进去，并清理被用户关掉的窗口。
 const EDITOR_TICK: Duration = Duration::from_millis(80);
@@ -74,45 +65,6 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWind
     }
 
     builder.build()
-}
-
-/// 启动传输状态推送线程。
-///
-/// 只在状态真正变化时才发事件：播放中位置每帧都在变，因此约 30 Hz；暂停后位置不再
-/// 变化，于是**不会**有任何无谓的推送。
-fn spawn_transport_ticker(app: tauri::AppHandle, audio: Arc<AudioEngine>) {
-    thread::Builder::new()
-        .name("ai-daw-transport".into())
-        .spawn(move || {
-            let mut last: Option<TransportSnapshot> = None;
-            let mut warned = false;
-            loop {
-                thread::sleep(TRANSPORT_TICK);
-                let snapshot = audio.snapshot();
-                if last.as_ref() == Some(&snapshot) {
-                    continue;
-                }
-                if app.emit(EVENT_TRANSPORT, &snapshot).is_err() {
-                    // 建窗 / 关窗的那一瞬间，某个 webview 还没准备好，这一次广播会失败。
-                    // **一次失败绝不能退出**：线程一退，所有窗口的传输状态就永久冻结了——
-                    // 界面停在「正在播放」、播放头不动，实际早已没声，按播放键也没反应。
-                    if !warned {
-                        warned = true;
-                        eprintln!("[transport] 状态广播失败（窗口正在建/销毁？），下一拍重试");
-                    }
-                    // 真的一个窗口都不剩了才收工。
-                    if app.webview_windows().is_empty() {
-                        break;
-                    }
-                    // 清掉基线，保证下一拍**重发**同一份快照，而不是被「没变化」跳过。
-                    last = None;
-                    continue;
-                }
-                warned = false;
-                last = Some(snapshot);
-            }
-        })
-        .expect("failed to spawn transport thread");
 }
 
 /// 启动插件扫描线程：结果写入共享状态（音频线程据此重建注册表）并广播给界面。
@@ -385,6 +337,15 @@ pub fn run() {
             );
             app.manage(Arc::clone(&daemon));
             app.manage(Arc::clone(daemon.state_arc()));
+            // **传输状态推送必须在这里起**：播放头位置、播放/暂停/停止的真实状态全靠
+            // `engine://transport` 这一条事件流（前端 `applySnapshot` 是唯一的位置来源）。
+            //
+            // 这个线程原先住在本壳里，后来搬去 `daemon`（浏览器客户端也要收同一份 SSE），
+            // 但当时只改了 `boot::bootstrap`（无头进程走那条），桌面端**直接构造**
+            // `Daemon` 而不经过它——于是桌面端一条传输事件都没有：按播放有声音、播放头
+            // 却一直停在原地，停止/切设备后的状态也永远回不到界面（界面认为还在播）。
+            // 所以桌面端必须自己起一次，且只能从这里起（`bootstrap` 里已经起过另一条）。
+            ai_daw_daemon::boot::spawn_transport_ticker(Arc::clone(&daemon));
             ai_daw_daemon::logging::info(format!(
                 "[startup] 会话与插件缓存装载完成（进程入口 +{} ms）",
                 boot_ms()
