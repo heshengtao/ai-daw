@@ -1708,17 +1708,117 @@ export interface ProxyProbe extends ProxyStatus {
 }
 
 // ---------------------------------------------------------------------------
+// 云端音乐生成（与后端 `crates/daemon/src/cloud_music.rs` 一一对应）
+// ---------------------------------------------------------------------------
+
+/** 官方音乐生成服务类型。 */
+export type CloudMusicKind =
+  | "lyria"
+  | "elevenlabs"
+  | "mureka"
+  | "treblo"
+  | "alibaba"
+  | "volcengine"
+  | "tencent";
+
+/** 一家已经配置好的云端音乐服务。密钥明文保存在 `cloud-music.json`。 */
+export interface CloudMusicProvider {
+  id: string;
+  name: string;
+  kind: CloudMusicKind;
+  enabled: boolean;
+  /** 例如 `https://api.mureka.cn`（不带末尾斜杠）。 */
+  base_url: string;
+  api_key: string;
+  /** 火山（Secret Access Key）/ 腾讯云（SecretKey）等双密钥服务用。 */
+  api_secret: string;
+  /** 留空时用该类型的默认模型。 */
+  model: string;
+}
+
+export interface CloudMusicConfig {
+  providers: CloudMusicProvider[];
+}
+
+/** 新增服务时的预设（由后端下发，避免两端各写一份默认值）。 */
+export interface CloudMusicPreset {
+  kind: CloudMusicKind;
+  name: string;
+  group: "official" | "aggregator";
+  base_url: string;
+  model: string;
+  max_seconds: number;
+  docs_url: string;
+  note: string;
+}
+
+export interface CloudMusicRequest {
+  provider_id: string;
+  prompt: string;
+  lyrics: string;
+  duration_seconds: number;
+  instrumental: boolean;
+}
+
+export interface CloudMusicResult {
+  path: string;
+  duration: number;
+  provider: string;
+  model: string;
+  lyrics: string | null;
+}
+
+export interface CloudMusicProgress {
+  state: "preparing" | "running" | "done" | "error" | "cancelled";
+  message: string | null;
+  /** 0..1。 */
+  progress: number;
+  elapsed: number;
+}
+
+// ---------------------------------------------------------------------------
 // 写歌智能体（与后端 `src-tauri/src/agent/` 一一对应）
 // ---------------------------------------------------------------------------
 
+/** 「文本生成」里配置的一家供应商（与后端 `agent::config::TextProvider` 一一对应）。 */
+export interface TextProvider {
+  id: string;
+  /** 预设 id（`openai` / `deepseek` / `ollama` / `custom` …），见 `core/llmProviders`。 */
+  preset: string;
+  /** 显示名（用户可改）。 */
+  name: string;
+  /** OpenAI 兼容端点，形如 `https://api.openai.com/v1`。 */
+  base_url: string;
+  api_key: string;
+  /** 默认模型；智能体与设置页都用它。 */
+  model: string;
+  /** 可选的模型列表（「获取模型列表」拉到的），空 = 只有默认模型。 */
+  models: string[];
+  enabled: boolean;
+}
+
 /** OpenAI 兼容端点配置（与后端 `agent::AgentConfig` 一一对应）。 */
 export interface AgentConfig {
+  /**
+   * 供应商 id（`openai` / `deepseek` / `ollama` / `custom` …）。
+   *
+   * 只用于界面回显；请求永远走 OpenAI 兼容的 `/chat/completions`，
+   * 各家的兼容端点由前端预置表填进 `base_url`。老配置没有这个字段时后端会按地址反推。
+   */
+  provider: string;
   /** 形如 `https://api.openai.com/v1`。 */
   base_url: string;
   /** API Key。 */
   api_key: string;
   /** 模型名。 */
   model: string;
+  /**
+   * 完整供应商列表（设置 →「文本生成」管理）。
+   *
+   * `provider` / `base_url` / `api_key` / `model` 只是当前生效供应商（第一个启用的）
+   * 的镜像，真正的数据在这里。
+   */
+  providers: TextProvider[];
 }
 
 /** 连通性探测结果（与后端 `agent::openai::AgentProbe` 一一对应）。 */

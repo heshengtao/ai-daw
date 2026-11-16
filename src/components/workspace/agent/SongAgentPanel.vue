@@ -74,7 +74,8 @@ watch(
 );
 
 function goSettings(): void {
-  void router.push({ name: "settings", query: { section: "ai" } });
+  // 写歌智能体的模型配置在「文本生成」子页（可配多家供应商），不再放在 AI / MCP 里。
+  void router.push({ name: "settings", query: { section: "text" } });
 }
 
 function onEdit(nodeId: string, text: string): void {

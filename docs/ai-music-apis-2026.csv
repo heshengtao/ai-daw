@@ -1,0 +1,19 @@
+﻿分类,服务/模型,厂商,接入方式/模型ID,官方价格,价格备注,单曲时长,人声/歌词,编辑/分轨,商用授权,适合场景/风险
+官方 API,Lyria 3.5,Google DeepMind,Gemini API lyria-3.5；Vertex AI、OpenRouter、fal,$0.08/首,30 秒 Clip $0.04；Lyria 3 Pro 同价；无免费额度,≤ 3 分钟,有；可自带歌词与段落标签,单轮生成，生成后不可编辑；44.1 kHz 立体声,可商用；Google 不主张输出所有权；SynthID 水印；提示词过滤艺人名/版权歌词,最低成本整曲人声；批量草稿、短视频配歌
+官方 API,Eleven Music v2.5,ElevenLabs,REST music_v2_5,$0.15/分钟,3 分钟 ≈ $0.45,≤ 5 分钟,有；多语种，可纯音乐,分段/歌词编辑、30 秒音频参考、模型微调；无原生分轨,Starter+ 含商用；影视/广播等大范围用途按 Music Terms 确认,控制力与音质优先；广告、影视、播客
+官方 API,Stable Audio 3.0,Stability AI,REST API；Stable Audio 2.5 同价,$0.08/首,8 credits；新用户 25 免费 credits,≤ 6 分钟,无；官方定位纯音乐，不面向可懂人声,文本/音频参考、audio-to-audio、inpaint；无分轨,可商用；官方称训练数据全授权,配乐、BGM、音效、长循环
+官方 API,Mureka V9,昆仑万维,官方 API（platform.mureka.ai / .cn）,$0.045/首,V7.6 $0.03/首；最低充值 $10（1 并发）；V9.5 Beta 另计,约 5 分钟,有；中英日韩等 10 种语言,分轨（另付费）、续写、局部编辑、转谱、混音、音色克隆、识别/理解,付费 API 输出可商用；文件尾部带音频水印；余额 12 个月,DAW/后期集成；需要分轨、转谱、二次编辑
+官方 API,Treblo Melodia v3,"Sonauto, Inc.（原 Sonauto）",REST api.treblo.com/v1,$0.04–0.06/首,Starter $11/200 首；PAYG $0.06/首,≤ 4 分 45 秒,有；多语种，可纯音乐,续写、翻唱、换声、风格迁移、局部替换、流式输出,用户拥有输出，可用于商业产品；不用于训练,交互式生成；15 秒出首段，适合 C 端产品
+官方 API,Fun-Music,阿里云百炼,DashScope API fun-music-v1 / fun-music-preview,¥0.002–0.005/秒,3 分钟 ≈ ¥0.36–0.90；按音频时长计费,整首（按秒计费）,有；中英文，v1 支持男/女声,纯音乐模式；歌词/提示词；48 kHz；无分轨,按阿里云服务条款；需遵守生成式 AI 内容标识要求,国内合规、中文歌；目前邀测阶段
+官方 API,豆包音乐,火山引擎,AI 音乐生成 API（火山引擎控制台）,¥0.002/秒,3 分钟 ≈ ¥0.36；资源包 1.5 万元/1 万首,30–240 秒；纯音乐 ≤ 60 秒,有；人声歌曲/纯音乐,无分轨；QPS 2，公共资源池,按火山引擎条款；需遵守 AI 生成内容标识,国内低成本、合规；批量短视频配歌
+官方 API,MPS AI 音乐,腾讯云（聚合 MiniMax）,CreateAigcAudioTask（MPS AIGC 聚合）,¥1.00/首,聚合 MiniMax Music 2.6 / 3.0,约 5 分钟,有；歌曲/纯音乐,无分轨；结果 URL 仅 12 小时有效,按模型与腾讯云条款,已用腾讯云；MiniMax 直连关闭后的替代
+官方 API,Mubert API,Mubert,REST API；MCP / 技能,$49/月起,"原价 $99；100 首 + 100 分钟流；$199/5,000；$499/30,000",最长 25 分钟,无；纯音乐,生成/无限流/12k 曲库；按情绪、BPM、图像,API 套餐含商用授权,直播、长时 BGM、应用内音乐层
+官方 API,Soundraw API,Soundraw,REST API,$29.99/月,"100 首/月；$300/月 1,000 首（6 个月起）",约 5 分钟,无；纯音乐,按风格/情绪/主题生成；无分轨,免版税商用；无版权投诉,视频、游戏、应用 BGM
+官方 API,Beatoven API,Beatoven.ai,REST API（需申请）,按量/报价,非自助；需联系官方,未公开,无；配乐 + 音效,分轨、SFX,版权清洁，按合同,影视、播客、品牌配乐
+受限/关闭,Suno v6,Suno,platform.suno.com 邀请制 Beta；Suno MCP（2026-10-28）,订阅 $8–24/月（年付）,,,完整歌曲、人声、分轨（网页版）,,,非官方中转 $0.06–0.20/首，违反 ToS 且商用权不成立；MCP 仅适合个人在聊天工具里用
+受限/关闭,Udio,Udio,—,订阅,,,完整歌曲、人声,,,2025 年 10 月起关闭下载；无法交付商用音频，不建议集成
+受限/关闭,MiniMax Music 3,MiniMax,2026-08-20 起停止新用户；历史付费用户可用,原 ¥1/首,,,≤ 5 分钟、人声、纯音乐,,,新项目走腾讯云 MPS（¥1/首）或自托管开放权重
+受限/关闭,ACE Music,ACE Studio,仅第三方中转（useapi 等）,订阅/中转加价,,,榜单级完整歌曲,,,无公开文档与 SLA；生产环境慎用
+开源自托管,ACE-Step,ACE Studio / 社区,Apache-2.0,免费（自托管）,,,文本生歌、可带歌词；约 4 分钟；多语种,,可商用,自托管 GPU；fal/Replicate 有托管
+开源自托管,MusicGen,Meta,代码 MIT；权重 CC-BY-NC 4.0,免费（自托管）,,,30 秒、纯音乐、旋律条件,,权重非商用；仅研究/原型,单卡可跑；AudioCraft
+开源自托管,Stable Audio Open,Stability AI,代码 MIT；权重 Stability Community License,免费（自托管）,,,47 秒、纯音乐、音效/loop,,免费仅非商用；商用需向 Stability 授权,单卡可跑；stable-audio-tools

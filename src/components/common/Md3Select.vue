@@ -11,7 +11,12 @@
  * 插槽内容自己决定尺寸与动效；这里只负责定位、圆角裁切，并让文字压在它上面。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { ArrowRightIcon, CheckIcon, ChevronDownIcon } from "@heroicons/vue/24/outline";
+import {
+  ArrowRightIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  MagnifyingGlassIcon,
+} from "@heroicons/vue/24/outline";
 import { useI18n } from "@/i18n";
 
 export interface SelectOption {
@@ -21,6 +26,8 @@ export interface SelectOption {
   hint?: string;
   /** 分组标题（可选）：同 group 的选项渲染在同一个标题下。 */
   group?: string;
+  /** 操作项：点击只触发 `action`，不会改变当前选中值（例如「打开设置」）。 */
+  action?: boolean;
 }
 
 const props = withDefaults(
@@ -35,14 +42,16 @@ const props = withDefaults(
     disabled?: boolean;
     /** 菜单**顶部**的动作按钮（例如「浏览全部音色」）：放最上面，选项再多也不会被埋。 */
     action?: { label: string };
+    /** 菜单顶部带一个搜索框：长列表（模型 / 供应商）用。 */
+    searchable?: boolean;
   }>(),
-  { placeholder: "—" },
+  { placeholder: "—", searchable: false },
 );
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
   (e: "select", value: string): void;
-  (e: "action"): void;
+  (e: "action", id?: string): void;
 }>();
 
 const { t } = useI18n();
@@ -50,11 +59,26 @@ const { t } = useI18n();
 /** 没有候选项时展开菜单显示的空态文案（比如「一个效果器插件都没有」）。 */
 const emptyText = computed(() => props.empty ?? t("select.empty"));
 
+const query = ref("");
+const searchEl = ref<HTMLInputElement | null>(null);
+
+/** 搜索词过滤后的选项（按 label / hint / id 匹配）。 */
+const visibleOptions = computed<SelectOption[]>(() => {
+  const q = query.value.trim().toLowerCase();
+  if (!q) return props.options;
+  return props.options.filter(
+    (o) =>
+      o.label.toLowerCase().includes(q) ||
+      (o.hint ?? "").toLowerCase().includes(q) ||
+      o.id.toLowerCase().includes(q),
+  );
+});
+
 /** 选项按 group 折叠成区块（保持与传入顺序一致）。 */
 const groups = computed<{ title: string; items: SelectOption[] }[]>(() => {
   const out: { title: string; items: SelectOption[] }[] = [];
   const index = new Map<string, number>();
-  for (const o of props.options) {
+  for (const o of visibleOptions.value) {
     const key = o.group ?? "";
     let at = index.get(key);
     if (at === undefined) {
@@ -95,18 +119,29 @@ function place(): void {
 function toggle(): void {
   if (props.disabled) return;
   open.value = !open.value;
-  if (open.value) void nextTick(place);
+  if (open.value) {
+    query.value = "";
+    void nextTick(() => {
+      place();
+      if (props.searchable) searchEl.value?.focus();
+    });
+  }
 }
 
 function close(): void {
   open.value = false;
+  query.value = "";
 }
 
-function pick(id: string): void {
+function pick(option: SelectOption): void {
   close();
-  if (id === props.modelValue) return;
-  emit("update:modelValue", id);
-  emit("select", id);
+  if (option.action) {
+    emit("action", option.id);
+    return;
+  }
+  if (option.id === props.modelValue) return;
+  emit("update:modelValue", option.id);
+  emit("select", option.id);
 }
 
 /** 点击菜单顶部的动作行：先收起菜单，再通知父组件（例如打开「浏览全部音色」）。 */
@@ -186,7 +221,19 @@ onUnmounted(() => {
           <span class="menu-sep" aria-hidden="true" />
         </template>
 
-        <p v-if="options.length === 0" class="empty">{{ emptyText }}</p>
+        <label v-if="searchable" class="search">
+          <MagnifyingGlassIcon />
+          <input
+            ref="searchEl"
+            v-model="query"
+            type="text"
+            spellcheck="false"
+            :placeholder="t('common.search')"
+            :aria-label="t('common.search')"
+            @keydown.esc.stop="close"
+          />
+        </label>
+        <p v-if="visibleOptions.length === 0" class="empty">{{ emptyText }}</p>
         <template v-for="g in groups" :key="g.title">
           <!-- 分组标题：`listbox` 里合法子项只有 `option`，标题标记成 presentation 免得成为杂项节点。 -->
           <p v-if="g.title" class="group-title" role="presentation">{{ g.title }}</p>
@@ -194,16 +241,18 @@ onUnmounted(() => {
             v-for="o in g.items"
             :key="o.id"
             class="item"
+            :class="{ action: o.action }"
             type="button"
             role="option"
             :aria-selected="o.id === modelValue"
-            @click="pick(o.id)"
+            @click="pick(o)"
           >
             <span class="item-main">
               <span class="item-label">{{ o.label }}</span>
               <span v-if="o.hint" class="item-hint">{{ o.hint }}</span>
             </span>
-            <CheckIcon v-if="o.id === modelValue" class="item-check" />
+            <ArrowRightIcon v-if="o.action" class="item-arrow" />
+            <CheckIcon v-else-if="o.id === modelValue" class="item-check" />
           </button>
         </template>
       </div>
@@ -284,6 +333,34 @@ onUnmounted(() => {
   background-color: rgb(var(--md-surface-container-high));
   box-shadow: var(--md-elevation-3);
 }
+.md3-select-menu .search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 2px 4px;
+  padding: 0 9px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.6);
+  background-color: rgb(var(--md-surface-container-lowest) / 0.6);
+  color: rgb(var(--md-on-surface-variant));
+}
+.md3-select-menu .search svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+.md3-select-menu .search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: rgb(var(--md-on-surface));
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
 .md3-select-menu .group-title {
   margin: 4px 0 2px;
   padding: 2px 10px;
@@ -337,6 +414,12 @@ onUnmounted(() => {
   background-color: rgb(var(--md-outline-variant) / 0.5);
 }
 .md3-select-menu .item.action .item-label {
+  color: rgb(var(--md-primary));
+}
+.md3-select-menu .item-arrow {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
   color: rgb(var(--md-primary));
 }
 .md3-select-menu .empty {

@@ -95,13 +95,22 @@ import type {
   SoundMemorySummary,
   StoreNetwork,
   TrackMeta,
+  TextProvider,
   TrackOverlap,
   TransportSnapshot,
   VelocityShape,
 } from "./types";
 
 /** 写歌智能体：预览里没有真后端，配置与会话都只存在内存里。 */
-let agentConfigState: AgentConfig = { base_url: "", api_key: "", model: "" };
+let agentConfigState: AgentConfig = {
+  provider: "",
+  base_url: "",
+  api_key: "",
+  model: "",
+  providers: [],
+};
+/** 「文本生成」的供应商列表（预览里同样只存内存）。 */
+let textProviderState: TextProvider[] = [];
 const mockSessions = new Map<string, AgentSession>();
 
 /** MCP 服务器：浏览器预览里没有真服务器，配置只存在内存里。 */
@@ -3041,9 +3050,27 @@ export const mockApi = {
 
   // 写歌智能体：预览里配置存内存、会话为空、发送只回一个假 id（不模拟流式回答）。
   agentConfig: (): AgentConfig => agentConfigState,
-  agentSetConfig: (baseUrl: string, apiKey: string, model: string): AgentConfig => {
-    agentConfigState = { base_url: baseUrl, api_key: apiKey, model };
+  agentSetConfig: (provider: string, baseUrl: string, apiKey: string, model: string): AgentConfig => {
+    agentConfigState = { ...agentConfigState, provider, base_url: baseUrl, api_key: apiKey, model };
     return agentConfigState;
+  },
+  // 供应商列表：预览里原样存着，保存后设置页立刻能看到改动。
+  textProviders: (): TextProvider[] => textProviderState.map((item) => ({ ...item })),
+  textSetProviders: (providers: TextProvider[]): TextProvider[] => {
+    textProviderState = providers.map((item) => ({ ...item }));
+    // 与后端一致：镜像字段跟随第一家启用的供应商；空列表则一并清空。
+    const active = textProviderState.find((item) => item.enabled) ?? textProviderState[0];
+    agentConfigState = active
+      ? {
+          ...agentConfigState,
+          provider: active.preset,
+          base_url: active.base_url,
+          api_key: active.api_key,
+          model: active.model,
+          providers: textProviderState,
+        }
+      : { provider: "", base_url: "", api_key: "", model: "", providers: [] };
+    return textProviderState.map((item) => ({ ...item }));
   },
   agentModels: (): string[] => ["gpt-4o-mini", "gpt-4o", "deepseek-chat"],
   agentTest: (): AgentProbe => ({ ok: true, detail: "预览模式：假装连接成功", ms: 12 }),

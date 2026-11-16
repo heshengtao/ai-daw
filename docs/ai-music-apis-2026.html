@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 音乐生成 API 全景 · 2026-11</title>
+<style>
+:root{
+  --bg:#f5f2ea; --paper:#fffdf8; --ink:#1d1b16; --muted:#6f695d;
+  --line:#e4ddcf; --line-strong:#d5cbb8; --accent:#b4451f; --accent-soft:#f3ded4;
+  --green:#2f6b4f; --green-soft:#e6f2eb; --amber:#8a5a12; --amber-soft:#fbefd9;
+  --red:#9b2c2c; --red-soft:#f9e7e4; --blue:#2b4f7a; --blue-soft:#e7eef7;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;
+  font-size:15px; line-height:1.65; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:52px 26px 84px}
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(180,69,31,.25)}
+a:hover{border-bottom-color:var(--accent)}
+code{font-family:var(--mono);font-size:.86em;background:#f0ebe0;border:1px solid #e2d8c6;border-radius:5px;padding:1px 5px;white-space:nowrap}
+.hero{padding:10px 0 34px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:14px}
+h1{font-size:clamp(34px,5vw,58px);line-height:1.06;letter-spacing:-.03em;margin:0 0 16px;font-weight:750}
+.sub{max-width:760px;font-size:17px;color:#4d483e;margin:0 0 24px}
+.meta{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font-size:12px;color:#5d574b;background:#eee8dc;border:1px solid var(--line-strong);border-radius:999px;padding:4px 10px}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:30px 0 46px}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:20px 20px 18px;position:relative;overflow:hidden}
+.card:before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:var(--accent)}
+.card .k{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.card .v{font-size:20px;font-weight:700;line-height:1.3;margin-bottom:6px}
+.card .d{font-size:13px;color:#625c50;line-height:1.55}
+section{margin:0 0 52px}
+h2{font-size:26px;line-height:1.2;letter-spacing:-.02em;margin:0 0 8px;display:flex;align-items:baseline;gap:10px}
+h2 .num{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spacing:.08em}
+.lede{color:#5a5448;font-size:14px;max-width:900px;margin:0 0 16px}
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--paper)}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:980px}
+thead th{
+  text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#6b6457;
+  background:#f0ebdf;border-bottom:1px solid var(--line-strong);padding:11px 12px;white-space:nowrap;
+}
+tbody td{padding:13px 12px;border-bottom:1px solid #eee8db;vertical-align:top;line-height:1.5}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:nth-child(even){background:#fbf8f1}
+.svc-name{font-weight:700;font-size:13.5px;line-height:1.3}
+.svc-vendor{font-size:11.5px;color:var(--muted);margin:2px 0 6px}
+.pill{display:inline-block;padding:2px 7px;border-radius:999px;font-size:10.5px;font-weight:700;white-space:nowrap;letter-spacing:.02em}
+.official{background:var(--green-soft);color:var(--green)}
+.beta{background:var(--amber-soft);color:var(--amber)}
+.closed{background:var(--red-soft);color:var(--red)}
+.open{background:var(--blue-soft);color:var(--blue)}
+td.price{white-space:nowrap;font-weight:750;font-size:15px;color:var(--accent)}
+td.price small{font-weight:500;font-size:10.5px;color:var(--muted);margin-left:1px}
+.note{font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:3px;white-space:normal}
+td.fit{color:#4b463c}
+.callout{background:var(--paper);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:16px 18px;margin:18px 0 0;font-size:13.5px;color:#4f4940}
+.callout strong{color:var(--ink)}
+.chart{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:22px 22px 18px;margin-top:16px}
+.chart-title{font-size:13px;font-weight:700;margin-bottom:16px}
+.bar-grid{display:grid;grid-template-columns:170px 1fr 82px;gap:9px 14px;align-items:center}
+.bar-label{font-size:12.5px;color:#49443a;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar-track{height:11px;background:#eee7d9;border-radius:999px;overflow:hidden}
+.bar{height:100%;border-radius:999px;background:linear-gradient(90deg,#c25a30,#dd8a63)}
+.bar.high{background:linear-gradient(90deg,#9b2c2c,#c96a58)}
+.bar-val{font-family:var(--mono);font-size:12px;font-weight:700;color:#3d382f}
+.chart-foot{font-size:11.5px;color:var(--muted);margin-top:14px;line-height:1.55}
+.recs{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.rec{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:18px 18px 16px}
+.rec h3{font-size:14px;margin:0 0 6px}
+.rec p{font-size:13px;color:#5a5448;margin:0}
+.rec .tag{font-family:var(--mono);font-size:10.5px;color:var(--accent);letter-spacing:.06em;text-transform:uppercase;display:block;margin-bottom:7px}
+.checklist{background:#1f1d18;color:#f3eee2;border-radius:14px;padding:26px 28px;margin-top:16px}
+.checklist h2{color:#fff;margin-bottom:14px}
+.checklist ul{margin:0;padding:0;list-style:none}
+.checklist li{position:relative;padding-left:22px;margin:0 0 11px;font-size:13.5px;line-height:1.6;color:#d8d0bf}
+.checklist li:before{content:"→";position:absolute;left:0;color:#e08a5f;font-weight:700}
+.checklist strong{color:#fff}
+.sources{columns:2;column-gap:26px;font-size:12px;color:#5c564a}
+.sources li{break-inside:avoid;margin:0 0 7px;line-height:1.5}
+.footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-size:11.5px;color:#8a8375}
+@media (max-width:900px){
+  .cards,.recs{grid-template-columns:1fr}
+  .sources{columns:1}
+  .wrap{padding:34px 16px 60px}
+  .bar-grid{grid-template-columns:120px 1fr 70px}
+}
+@media print{
+  body{background:#fff}
+  .wrap{max-width:none;padding:20px}
+  .table-wrap{overflow:visible}
+  table{min-width:0;font-size:10px}
+  .card,.chart,.table-wrap{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">API Landscape / Music Generation</div>
+  <h1>AI 音乐生成 API 全景</h1>
+  <p class="sub">市面上真正能写进代码里的音乐生成服务，按“官方自助 API / 受限或关闭 / 开源自托管”三类整理。重点看四件事：单首成本、时长与人声、能不能分轨与二次编辑、商用授权是否成立。</p>
+  <div class="meta">
+    <span class="chip">数据截至 2026-11-15</span>
+    <span class="chip">价格均为官方公开价</span>
+    <span class="chip">11 个官方 API</span>
+    <span class="chip">4 个受限/关闭</span>
+    <span class="chip">3 个开源自托管</span>
+  </div>
+</header>
+
+<div class="cards">
+  <div class="card">
+    <div class="k">最低价 · 整曲人声</div>
+    <div class="v">$0.08 / 首</div>
+    <div class="d">Google Lyria 3.5，最长 3 分钟，自带歌词与段落标签，无免费额度。</div>
+  </div>
+  <div class="card">
+    <div class="k">最适合 DAW · 可编辑</div>
+    <div class="v">Mureka V9</div>
+    <div class="d">官方 API 同时提供分轨、续写、局部编辑、转谱、混音与音色克隆。</div>
+  </div>
+  <div class="card">
+    <div class="k">最大的坑 · 不要踩</div>
+    <div class="v">Suno / Udio</div>
+    <div class="d">都没有公开自助 API；第三方“Suno API”违反其条款，商用权也不成立。</div>
+  </div>
+</div>
+
+<section>
+  <h2><span class="num">01</span>官方 API：可以直接注册、写进产品</h2>
+  <p class="lede">这 11 家提供公开文档、API Key 与明确计价。价格按“一次生成”或“每分钟/每秒”计，不含分轨、超时重试等附加费用；“首”指一次生成请求，部分服务一次可出多首。</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th scope="col">服务 / 模型</th><th scope="col">接入方式</th><th scope="col">官方价格</th>
+        <th scope="col">单曲时长</th><th scope="col">人声 / 歌词</th><th scope="col">编辑 / 分轨</th>
+        <th scope="col">商用授权</th><th scope="col">适合场景</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+<td><div class="svc-name">Lyria 3.5</div><div class="svc-vendor">Google DeepMind</div><span class="pill official">官方 API</span></td>
+<td>Gemini API <code>lyria-3.5</code>；Vertex AI、OpenRouter、fal</td>
+<td class="price">$0.08<small>/首</small><div class="note">30 秒 Clip $0.04；Lyria 3 Pro 同价；无免费额度</div></td>
+<td>≤ 3 分钟</td>
+<td>有；可自带歌词与段落标签</td>
+<td>单轮生成，生成后不可编辑；44.1 kHz 立体声</td>
+<td>可商用；Google 不主张输出所有权；SynthID 水印；提示词过滤艺人名/版权歌词</td>
+<td class="fit">最低成本整曲人声；批量草稿、短视频配歌</td>
+</tr>
+<tr>
+<td><div class="svc-name">Eleven Music v2.5</div><div class="svc-vendor">ElevenLabs</div><span class="pill official">官方 API</span></td>
+<td>REST <code>music_v2_5</code></td>
+<td class="price">$0.15<small>/分钟</small><div class="note">3 分钟 ≈ $0.45</div></td>
+<td>≤ 5 分钟</td>
+<td>有；多语种，可纯音乐</td>
+<td>分段/歌词编辑、30 秒音频参考、模型微调；无原生分轨</td>
+<td>Starter+ 含商用；影视/广播等大范围用途按 Music Terms 确认</td>
+<td class="fit">控制力与音质优先；广告、影视、播客</td>
+</tr>
+<tr>
+<td><div class="svc-name">Stable Audio 3.0</div><div class="svc-vendor">Stability AI</div><span class="pill official">官方 API</span></td>
+<td>REST API；Stable Audio 2.5 同价</td>
+<td class="price">$0.08<small>/首</small><div class="note">8 credits；新用户 25 免费 credits</div></td>
+<td>≤ 6 分钟</td>
+<td>无；官方定位纯音乐，不面向可懂人声</td>
+<td>文本/音频参考、audio-to-audio、inpaint；无分轨</td>
+<td>可商用；官方称训练数据全授权</td>
+<td class="fit">配乐、BGM、音效、长循环</td>
+</tr>
+<tr>
+<td><div class="svc-name">Mureka V9</div><div class="svc-vendor">昆仑万维</div><span class="pill official">官方 API</span></td>
+<td>官方 API（platform.mureka.ai / .cn）</td>
+<td class="price">$0.045<small>/首</small><div class="note">V7.6 $0.03/首；最低充值 $10（1 并发）；V9.5 Beta 另计</div></td>
+<td>约 5 分钟</td>
+<td>有；中英日韩等 10 种语言</td>
+<td>分轨（另付费）、续写、局部编辑、转谱、混音、音色克隆、识别/理解</td>
+<td>付费 API 输出可商用；文件尾部带音频水印；余额 12 个月</td>
+<td class="fit">DAW/后期集成；需要分轨、转谱、二次编辑</td>
+</tr>
+<tr>
+<td><div class="svc-name">Treblo Melodia v3</div><div class="svc-vendor">Sonauto, Inc.（原 Sonauto）</div><span class="pill official">官方 API</span></td>
+<td>REST <code>api.treblo.com/v1</code></td>
+<td class="price">$0.04–0.06<small>/首</small><div class="note">Starter $11/200 首；PAYG $0.06/首</div></td>
+<td>≤ 4 分 45 秒</td>
+<td>有；多语种，可纯音乐</td>
+<td>续写、翻唱、换声、风格迁移、局部替换、流式输出</td>
+<td>用户拥有输出，可用于商业产品；不用于训练</td>
+<td class="fit">交互式生成；15 秒出首段，适合 C 端产品</td>
+</tr>
+<tr>
+<td><div class="svc-name">Fun-Music</div><div class="svc-vendor">阿里云百炼</div><span class="pill beta">官方 API · 邀测</span></td>
+<td>DashScope API <code>fun-music-v1</code> / <code>fun-music-preview</code></td>
+<td class="price">¥0.002–0.005<small>/秒</small><div class="note">3 分钟 ≈ ¥0.36–0.90；按音频时长计费</div></td>
+<td>整首（按秒计费）</td>
+<td>有；中英文，v1 支持男/女声</td>
+<td>纯音乐模式；歌词/提示词；48 kHz；无分轨</td>
+<td>按阿里云服务条款；需遵守生成式 AI 内容标识要求</td>
+<td class="fit">国内合规、中文歌；目前邀测阶段</td>
+</tr>
+<tr>
+<td><div class="svc-name">豆包音乐</div><div class="svc-vendor">火山引擎</div><span class="pill official">官方 API</span></td>
+<td>AI 音乐生成 API（火山引擎控制台）</td>
+<td class="price">¥0.002<small>/秒</small><div class="note">3 分钟 ≈ ¥0.36；资源包 1.5 万元/1 万首</div></td>
+<td>30–240 秒；纯音乐 ≤ 60 秒</td>
+<td>有；人声歌曲/纯音乐</td>
+<td>无分轨；QPS 2，公共资源池</td>
+<td>按火山引擎条款；需遵守 AI 生成内容标识</td>
+<td class="fit">国内低成本、合规；批量短视频配歌</td>
+</tr>
+<tr>
+<td><div class="svc-name">MPS AI 音乐</div><div class="svc-vendor">腾讯云（聚合 MiniMax）</div><span class="pill official">官方 API · 聚合</span></td>
+<td><code>CreateAigcAudioTask</code>（MPS AIGC 聚合）</td>
+<td class="price">¥1.00<small>/首</small><div class="note">聚合 MiniMax Music 2.6 / 3.0</div></td>
+<td>约 5 分钟</td>
+<td>有；歌曲/纯音乐</td>
+<td>无分轨；结果 URL 仅 12 小时有效</td>
+<td>按模型与腾讯云条款</td>
+<td class="fit">已用腾讯云；MiniMax 直连关闭后的替代</td>
+</tr>
+<tr>
+<td><div class="svc-name">Mubert API</div><div class="svc-vendor">Mubert</div><span class="pill official">官方 API</span></td>
+<td>REST API；MCP / 技能</td>
+<td class="price">$49<small>/月起</small><div class="note">原价 $99；100 首 + 100 分钟流；$199/5,000；$499/30,000</div></td>
+<td>最长 25 分钟</td>
+<td>无；纯音乐</td>
+<td>生成/无限流/12k 曲库；按情绪、BPM、图像</td>
+<td>API 套餐含商用授权</td>
+<td class="fit">直播、长时 BGM、应用内音乐层</td>
+</tr>
+<tr>
+<td><div class="svc-name">Soundraw API</div><div class="svc-vendor">Soundraw</div><span class="pill official">官方 API</span></td>
+<td>REST API</td>
+<td class="price">$29.99<small>/月</small><div class="note">100 首/月；$300/月 1,000 首（6 个月起）</div></td>
+<td>约 5 分钟</td>
+<td>无；纯音乐</td>
+<td>按风格/情绪/主题生成；无分轨</td>
+<td>免版税商用；无版权投诉</td>
+<td class="fit">视频、游戏、应用 BGM</td>
+</tr>
+<tr>
+<td><div class="svc-name">Beatoven API</div><div class="svc-vendor">Beatoven.ai</div><span class="pill beta">官方 API · 邀约</span></td>
+<td>REST API（需申请）</td>
+<td class="price">按量/报价<div class="note">非自助；需联系官方</div></td>
+<td>未公开</td>
+<td>无；配乐 + 音效</td>
+<td>分轨、SFX</td>
+<td>版权清洁，按合同</td>
+<td class="fit">影视、播客、品牌配乐</td>
+</tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><strong>读表提示：</strong>“首”与“分钟”不可直接比价。ElevenLabs 按分钟计，3 分钟歌约 $0.45；Lyria、Stable Audio、Mureka 按首计，3 分钟仍是 $0.08 / $0.045。若要批量做 3 分钟歌，成本差距会拉到 5–10 倍。</div>
+</section>
+
+<section>
+  <h2><span class="num">02</span>受限 / 关闭：名气很大，但不能当 API 用</h2>
+  <p class="lede">Suno、Udio 是消费级市场的头部，但开发者接口并不是“注册就能用”。这一组适合了解现状，不适合作为生产依赖。</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th scope="col">服务</th><th scope="col">现状</th><th scope="col">价格</th><th scope="col">能力</th><th scope="col">风险 / 建议</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+<td><div class="svc-name">Suno v6</div><div class="svc-vendor">Suno</div><span class="pill closed">无公开 API</span></td>
+<td>platform.suno.com 邀请制 Beta；Suno MCP（2026-10-28）</td>
+<td>订阅 $8–24/月（年付）</td>
+<td>完整歌曲、人声、分轨（网页版）</td>
+<td class="fit">非官方中转 $0.06–0.20/首，违反 ToS 且商用权不成立；MCP 仅适合个人在聊天工具里用</td>
+</tr>
+<tr>
+<td><div class="svc-name">Udio</div><div class="svc-vendor">Udio</div><span class="pill closed">无公开 API</span></td>
+<td>—</td>
+<td>订阅</td>
+<td>完整歌曲、人声</td>
+<td class="fit">2025 年 10 月起关闭下载；无法交付商用音频，不建议集成</td>
+</tr>
+<tr>
+<td><div class="svc-name">MiniMax Music 3</div><div class="svc-vendor">MiniMax</div><span class="pill closed">直连 API 关闭</span></td>
+<td>2026-08-20 起停止新用户；历史付费用户可用</td>
+<td>原 ¥1/首</td>
+<td>≤ 5 分钟、人声、纯音乐</td>
+<td class="fit">新项目走腾讯云 MPS（¥1/首）或自托管开放权重</td>
+</tr>
+<tr>
+<td><div class="svc-name">ACE Music</div><div class="svc-vendor">ACE Studio</div><span class="pill closed">无官方 API</span></td>
+<td>仅第三方中转（useapi 等）</td>
+<td>订阅/中转加价</td>
+<td>榜单级完整歌曲</td>
+<td class="fit">无公开文档与 SLA；生产环境慎用</td>
+</tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><strong>Suno 的例外：</strong>Suno 在 2026-10-28 上线了 MCP，可以让 Claude / ChatGPT / Cursor 用你自己的 Suno 账号和积分生成歌曲。它是“个人工作流连接器”，不是给后端产品用的 REST API，也没有公开的 SLA、限流和商用条款。</div>
+</section>
+
+<section>
+  <h2><span class="num">03</span>开源自托管：没有 API 账单，但有 GPU 账单</h2>
+  <p class="lede">如果目标是“把生成能力嵌进本地 DAW / 私有部署”，开源模型是另一条路。真正的门槛不在代码，而在显存、推理速度和许可证。</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th scope="col">项目</th><th scope="col">许可证</th><th scope="col">能力</th><th scope="col">商用</th><th scope="col">托管 / 硬件</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+<td><div class="svc-name">ACE-Step</div><div class="svc-vendor">ACE Studio / 社区</div><span class="pill open">Apache-2.0</span></td>
+<td>Apache-2.0</td>
+<td>文本生歌、可带歌词；约 4 分钟；多语种</td>
+<td>可商用</td>
+<td class="fit">自托管 GPU；fal/Replicate 有托管</td>
+</tr>
+<tr>
+<td><div class="svc-name">MusicGen</div><div class="svc-vendor">Meta</div><span class="pill beta">权重非商用</span></td>
+<td>代码 MIT；权重 CC-BY-NC 4.0</td>
+<td>30 秒、纯音乐、旋律条件</td>
+<td>权重非商用；仅研究/原型</td>
+<td class="fit">单卡可跑；AudioCraft</td>
+</tr>
+<tr>
+<td><div class="svc-name">Stable Audio Open</div><div class="svc-vendor">Stability AI</div><span class="pill beta">权重需授权</span></td>
+<td>代码 MIT；权重 Stability Community License</td>
+<td>47 秒、纯音乐、音效/loop</td>
+<td>免费仅非商用；商用需向 Stability 授权</td>
+<td class="fit">单卡可跑；stable-audio-tools</td>
+</tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><strong>注意：</strong>MusicGen 的代码是 MIT，但权重是 CC-BY-NC 4.0，只能非商用；Stable Audio Open 的权重走 Stability 社区许可证，商用要单独授权。ACE-Step 是三者里最适合商用的（Apache-2.0）。</div>
+</section>
+
+<section>
+  <h2><span class="num">04</span>成本对照：100 首 3 分钟歌曲</h2>
+  <p class="lede">按官方公开价粗算，统一折算成美元（汇率 7.1），只算生成费，不含分轨、转谱、重试与存储。</p>
+  <div class="chart">
+    <div class="chart-title">100 首歌的生成成本（USD，越低越好）</div>
+    <div class="bar-grid">
+      <div class="bar-label">Mureka V9</div>
+<div class="bar-track"><div class="bar " style="width:10.0%"></div></div>
+<div class="bar-val">$4.50</div>
+<div class="bar-label">豆包音乐</div>
+<div class="bar-track"><div class="bar " style="width:11.3%"></div></div>
+<div class="bar-val">$5.07</div>
+<div class="bar-label">百炼 Fun-Music</div>
+<div class="bar-track"><div class="bar " style="width:11.3%"></div></div>
+<div class="bar-val">$5.07</div>
+<div class="bar-label">Treblo</div>
+<div class="bar-track"><div class="bar " style="width:13.3%"></div></div>
+<div class="bar-val">$6.00</div>
+<div class="bar-label">Lyria 3.5</div>
+<div class="bar-track"><div class="bar " style="width:17.8%"></div></div>
+<div class="bar-val">$8.00</div>
+<div class="bar-label">Stable Audio 3.0</div>
+<div class="bar-track"><div class="bar " style="width:17.8%"></div></div>
+<div class="bar-val">$8.00</div>
+<div class="bar-label">腾讯云 MPS</div>
+<div class="bar-track"><div class="bar high" style="width:31.3%"></div></div>
+<div class="bar-val">$14.08</div>
+<div class="bar-label">ElevenLabs</div>
+<div class="bar-track"><div class="bar high" style="width:100.0%"></div></div>
+<div class="bar-val">$45.00</div>
+    </div>
+    <div class="chart-foot">Mureka $4.50 · 豆包/百炼约 $5.07（¥0.36/首）· Treblo $6.00 · Lyria/Stable $8.00 · 腾讯云 $14.08（¥1/首）· ElevenLabs $45.00（$0.15/分钟 × 3 分钟）。单价不等于性价比：ElevenLabs 的分段编辑、Stable 的 6 分钟长音频、Mureka 的分轨与转谱，都会改变“可用产出”的成本。</div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">05</span>怎么选：按你的产品形态对号入座</h2>
+  <div class="recs">
+    <div class="rec">
+      <span class="tag">Batch / Demo</span>
+      <h3>批量草稿、短视频配歌</h3>
+      <p>优先 Lyria 3.5（$0.08/首）或国内豆包 / 百炼（约 ¥0.36/首）。要中文歌、要合规，选国内云；要全球化、要英文歌，选 Lyria。</p>
+    </div>
+    <div class="rec">
+      <span class="tag">DAW / Editing</span>
+      <h3>要分轨、要改段落、要转谱</h3>
+      <p>Mureka 的能力最全：分轨、续写、局部编辑、转谱、混音、音色克隆都在官方 API 里。Treblo 的局部替换与流式输出更适合 C 端交互。</p>
+    </div>
+    <div class="rec">
+      <span class="tag">BGM / Licensing</span>
+      <h3>纯音乐、广告、影视配乐</h3>
+      <p>Stable Audio 3.0 用 $0.08 换 6 分钟纯音乐，训练数据全授权；Mubert / Soundraw 按订阅给商用授权，适合长时 BGM 与直播。</p>
+    </div>
+    <div class="rec">
+      <span class="tag">China / Compliance</span>
+      <h3>国内产品、需要发票与合规</h3>
+      <p>火山引擎、阿里百炼、腾讯云三选一。腾讯云直接聚合 MiniMax Music，¥1/首；火山与百炼按秒计费，约 ¥0.36/首，但要注意 AI 生成内容标识。</p>
+    </div>
+  </div>
+</section>
+
+<section class="checklist">
+  <h2><span class="num">06</span>接入前先确认这 6 件事</h2>
+  <ul>
+    <li><strong>输出格式与采样率：</strong>优先要求 WAV 44.1/48 kHz。ElevenLabs 主要是 MP3；腾讯云结果 URL 只有 12 小时，必须立刻转存。</li>
+    <li><strong>“首”到底给几首：</strong>Mureka、Lyria 一次请求可能返回多个候选；按“可用成品”而不是“请求数”做预算。</li>
+    <li><strong>分轨与转谱是否另收费：</strong>Mureka 的下载不另收费，但分轨单独计费；Stable Audio 与 ElevenLabs 没有原生分轨。</li>
+    <li><strong>商用授权链：</strong>订阅站点的“商用”不等于 API 输出的商用；Suno 只对“付费计划内合规下载”给商用权，非官方中转拿不到。</li>
+    <li><strong>内容标识：</strong>Lyria 全量加 SynthID；Mureka 在文件尾部加音频水印；国内云需遵守生成式 AI 标识办法。</li>
+    <li><strong>失败与并发：</strong>国内云常见 QPS 2 的公共资源池；批量任务要自己做队列、重试与幂等。</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="num">07</span>来源</h2>
+  <ol class="sources">
+    <li><a href="https://elevenlabs.io/pricing/api">ElevenLabs API Pricing</a>（读取于 2026-11-15）</li>
+    <li><a href="https://elevenlabs.io/docs/capabilities/music">ElevenLabs Eleven Music 文档</a></li>
+    <li><a href="https://elevenlabs.io/music-terms">ElevenLabs Music Terms</a></li>
+    <li><a href="https://platform.stability.ai/pricing">Stability AI API Pricing</a></li>
+    <li><a href="https://ai.google.dev/gemini-api/docs/pricing">Gemini Developer API Pricing</a></li>
+    <li><a href="https://deepmind.google/models/lyria/">Google DeepMind · Lyria</a></li>
+    <li><a href="https://platform.mureka.ai/pricing">Mureka API Pricing</a></li>
+    <li><a href="https://platform.mureka.cn/docs/cn/faq.html">Mureka API 常见问题（计费/水印/商用）</a></li>
+    <li><a href="https://treblo.com/developers/pricing">Treblo API Pricing（原 Sonauto）</a></li>
+    <li><a href="https://treblo.com/api-terms">Treblo API Terms</a></li>
+    <li><a href="https://help.aliyun.com/zh/model-studio/fun-music">阿里云百炼 Fun-Music 文档</a></li>
+    <li><a href="https://help.aliyun.com/zh/model-studio/model-pricing">阿里云百炼模型价格</a></li>
+    <li><a href="https://docs.volcengine.com/docs/audio-video-understanding-and-processing/product-billing-1">火山引擎 AI 音乐生成计费</a></li>
+    <li><a href="https://cloud.tencent.com/document/product/862/133520">腾讯云 MPS AI 音乐生成</a></li>
+    <li><a href="https://cloud.tencent.com/document/product/862/36180">腾讯云 MPS 按量计费</a></li>
+    <li><a href="https://mubert.com/api">Mubert API</a></li>
+    <li><a href="https://soundraw.io/api">Soundraw API</a></li>
+    <li><a href="https://help.udio.com/en/articles/10756277-udio-public-api">Udio Help · Public API</a></li>
+    <li><a href="https://platform.minimaxi.com/document/Price">MiniMax 定价（音乐模型已下线）</a></li>
+    <li><a href="https://genmagic.co/blog/suno-api">GenMagic · Suno API in 2026</a>（二手整理，Suno 条款与价格）</li>
+    <li><a href="https://github.com/ace-step/ACE-Step">ACE-Step（Apache-2.0）</a></li>
+    <li><a href="https://huggingface.co/MiniMaxAI/MiniMax-Music3">MiniMax Music 3 开放权重</a></li>
+  </ol>
+</section>
+
+<div class="footer">
+  <p>说明：本文是技术选型参考，不构成法律意见。价格、模型名称与授权条款以各厂商官网为准；“商用”最终取决于你的使用场景、订阅计划与当地法律。美元/人民币按 7.1 粗算，仅用于量级对比。</p>
+  <p>整理：2026-11-15 · 适用于 AI DAW / 音乐生成产品选型</p>
+</div>
+
+</div>
+</body>
+</html>

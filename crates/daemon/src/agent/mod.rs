@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 use ai_daw_engine::event::Actor;
 
-pub use config::{AgentConfig, AgentConfigRuntime};
+pub use config::{AgentConfig, AgentConfigRuntime, TextProvider};
 pub use store::{Node, Session, SessionSummary};
 
 use openai::{StreamEvent, ToolCall};
@@ -130,25 +130,99 @@ impl AgentRuntime {
 // 命令
 // ---------------------------------------------------------------------------
 
-/// 读取智能体配置。
+/// 读取智能体配置（镜像字段已与当前生效的供应商对齐）。
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_config(runtime: State<'_, AgentConfigRuntime>) -> AgentConfig {
-    runtime.get()
+    // 镜像字段（provider / base_url / api_key / model）永远跟当前生效的供应商一致，
+    // 智能体面板只认这几个字段；老的单端点配置顺带在这里升级成一条供应商。
+    let mut config = runtime.get();
+    config.sync_mirror();
+    if config.provider.trim().is_empty() {
+        config.provider = config.provider_or_inferred();
+    }
+    config
 }
 
-/// 保存智能体配置。
+/// 「文本生成」的供应商列表（与镜像字段同步过）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn text_providers(runtime: State<'_, AgentConfigRuntime>) -> Vec<TextProvider> {
+    let mut config = runtime.get();
+    config.sync_mirror();
+    config.providers
+}
+
+/// 保存供应商列表：空列表会把镜像字段一并清空，避免下次启动又「复活」被删掉的端点。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn text_set_providers(
+    runtime: State<'_, AgentConfigRuntime>,
+    providers: Vec<TextProvider>,
+) -> Vec<TextProvider> {
+    let mut config = runtime.get();
+    config.providers = providers;
+    if config.providers.is_empty() {
+        config.provider.clear();
+        config.base_url.clear();
+        config.api_key.clear();
+        config.model.clear();
+    } else {
+        config.sync_mirror();
+    }
+    runtime.set(config).providers
+}
+
+/// 保存智能体配置：写进当前生效的供应商（还没有就建一条）。
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_set_config(
     runtime: State<'_, AgentConfigRuntime>,
+    provider: String,
     base_url: String,
     api_key: String,
     model: String,
 ) -> AgentConfig {
-    runtime.set(AgentConfig {
-        base_url,
-        api_key,
-        model,
-    })
+    // 老接口保留：设置页的供应商列表是新的写入口，智能体面板仍走这里。
+    // 没有供应商时先建一条，仍然保持「列表是唯一数据源」。
+    let mut config = runtime.get();
+    config.sync_mirror();
+    let index = config
+        .providers
+        .iter()
+        .position(|item| item.enabled)
+        .or(if config.providers.is_empty() { None } else { Some(0) });
+    match index {
+        Some(index) => {
+            let active = &mut config.providers[index];
+            active.preset = provider;
+            active.base_url = base_url;
+            active.api_key = api_key;
+            active.model = model.clone();
+            if !model.trim().is_empty() && !active.models.contains(&model) {
+                active.models.insert(0, model);
+            }
+        }
+        None => {
+            let name = if provider.trim().is_empty() {
+                "默认端点".to_string()
+            } else {
+                provider.clone()
+            };
+            config.providers.push(TextProvider {
+                id: "default".into(),
+                preset: provider,
+                name,
+                base_url,
+                api_key,
+                model: model.clone(),
+                models: if model.trim().is_empty() {
+                    Vec::new()
+                } else {
+                    vec![model]
+                },
+                enabled: true,
+            });
+        }
+    }
+    config.sync_mirror();
+    runtime.set(config)
 }
 
 /// 拉取模型的 id 列表（用**传入的**配置，不写盘——便于测试尚未保存的值）。
@@ -159,9 +233,11 @@ pub async fn agent_models(
     model: String,
 ) -> Result<Vec<String>, String> {
     openai::list_models(&AgentConfig {
+        provider: String::new(),
         base_url,
         api_key,
         model,
+        providers: Vec::new(),
     })
     .await
 }
@@ -174,9 +250,11 @@ pub async fn agent_test(
     model: String,
 ) -> Result<openai::AgentProbe, String> {
     Ok(openai::test_connection(&AgentConfig {
+        provider: String::new(),
         base_url,
         api_key,
         model,
+        providers: Vec::new(),
     })
     .await)
 }
@@ -254,10 +332,12 @@ pub fn agent_send(
     if runtime.running.swap(true, Ordering::SeqCst) {
         return Err("智能体正在回答，请先停止".into());
     }
-    let cfg = config.get();
+    // 流式对话只读镜像字段，这里同步一次，保证用的是当前生效供应商的端点与模型。
+    let mut cfg = config.get();
+    cfg.sync_mirror();
     if !cfg.is_configured() {
         runtime.running.store(false, Ordering::SeqCst);
-        return Err("尚未配置 OpenAI 兼容端点（基础 URL / API Key / 模型）".into());
+        return Err("尚未配置写歌智能体的端点地址或模型（设置 → 文本生成）".into());
     }
 
     let session = match session_id {

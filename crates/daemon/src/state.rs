@@ -77,6 +77,9 @@ pub struct AppState {
     pub presets: Mutex<PresetStore>,
     /// 音色记忆库（跨工程；文件位置由 `init_sound_memories` 装上）。
     pub sound_memories: Mutex<SoundMemoryStore>,
+    /// 云端音乐生成（Lyria / ElevenLabs / Mureka / Treblo）的供应商配置。
+    /// 文件位置由 `init_cloud_music` 装上；密钥明文，与 `ai.json` 同一套惯例。
+    pub cloud_music: crate::cloud_music::CloudMusicRuntime,
     /// 音频素材缓存（路径 → 已解码 PCM）。音频线程与离线渲染共用。
     pub assets: Arc<AssetCache>,
     /// 当前工程最后保存/打开的**文件路径**（尚未落盘时为 `None`）。
@@ -217,6 +220,7 @@ impl AppState {
             editor_windows: Arc::new(Mutex::new(HashMap::new())),
             presets: Mutex::new(PresetStore::load(None)),
             sound_memories: Mutex::new(SoundMemoryStore::load(None)),
+            cloud_music: crate::cloud_music::CloudMusicRuntime::new(),
             assets,
             session_path: Mutex::new(None),
             project_key: Mutex::new(crate::history::new_key()),
@@ -292,6 +296,11 @@ impl AppState {
             ));
         }
         *self.sound_memories.lock().unwrap() = store;
+    }
+
+    /// 装上云端音乐生成的供应商配置（启动时由 `setup` 调用）。
+    pub fn init_cloud_music(&self, path: Option<PathBuf>) {
+        self.cloud_music.load(path);
     }
 
     /// 安装（或更新）插件目录：写入共享状态，内容真的变了才让音频线程重建注册表。

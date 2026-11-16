@@ -268,6 +268,13 @@ fn agent_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
         .map(|dir| dir.join("ai.json"))
 }
 
+/// 云端音乐生成配置文件的位置：应用配置目录下的 `cloud-music.json`。
+fn cloud_music_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    ai_daw_daemon::paths::config_dir(app)
+        .ok()
+        .map(|dir| dir.join("cloud-music.json"))
+}
+
 /// 写歌智能体会话目录：应用配置目录下的 `agent/sessions/`。
 fn agent_sessions_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     ai_daw_daemon::paths::config_dir(app)
@@ -360,6 +367,7 @@ pub fn run() {
             let state = app.state::<Arc<AppState>>();
             state.init_presets(preset_file(app.handle()));
             state.init_sound_memories(sound_memory_file(app.handle()));
+            state.init_cloud_music(cloud_music_file(app.handle()));
             drop(state);
             // 插件源的网络配置（镜像 / 下载代理）：要在预热线程之前装上。
             app.manage(ai_daw_daemon::manager::StoreRuntime::load(app.handle()));
@@ -706,6 +714,8 @@ pub fn run() {
             ai_daw_daemon::mcp::set_mcp_config,
             ai_daw_daemon::agent::agent_config,
             ai_daw_daemon::agent::agent_set_config,
+            ai_daw_daemon::agent::text_providers,
+            ai_daw_daemon::agent::text_set_providers,
             ai_daw_daemon::agent::agent_models,
             ai_daw_daemon::agent::agent_test,
             ai_daw_daemon::agent::agent_sessions,
@@ -715,6 +725,13 @@ pub fn run() {
             ai_daw_daemon::agent::agent_send,
             ai_daw_daemon::agent::agent_cancel,
             ai_daw_daemon::agent::agent_running,
+            ai_daw_daemon::cloud_music::cloud_music_config,
+            ai_daw_daemon::cloud_music::cloud_music_presets,
+            ai_daw_daemon::cloud_music::cloud_music_set_config,
+            ai_daw_daemon::cloud_music::cloud_music_generate,
+            ai_daw_daemon::cloud_music::cloud_music_test,
+            ai_daw_daemon::cloud_music::cloud_music_busy,
+            ai_daw_daemon::cloud_music::cloud_music_cancel,
             ai_daw_daemon::cli::cli_status,
             ai_daw_daemon::cli::install_cli,
             ai_daw_daemon::cli::uninstall_cli,

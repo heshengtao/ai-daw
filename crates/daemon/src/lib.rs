@@ -17,6 +17,7 @@ pub mod boot;
 pub mod bus;
 pub mod capabilities;
 pub mod cli;
+pub mod cloud_music;
 pub mod commands;
 pub mod cue_sheet;
 pub mod daemon;

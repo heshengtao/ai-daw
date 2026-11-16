@@ -29,6 +29,7 @@ import type {
   ContinuableTrack,
   LyricsArgs,
   LyricsOutcome,
+  TextProvider,
   TranscribeArgs,
   TranscribeOutcome,
   MidiScore,
@@ -1002,9 +1003,32 @@ export function agentConfig(): Promise<AgentConfig> {
 }
 
 /** 保存写歌智能体配置。 */
-export function agentSetConfig(baseUrl: string, apiKey: string, model: string): Promise<AgentConfig> {
-  if (mockEnabled()) return Promise.resolve(mockApi.agentSetConfig(baseUrl, apiKey, model));
-  return invoke<AgentConfig>("agent_set_config", { baseUrl, apiKey, model });
+export function agentSetConfig(
+  provider: string,
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+): Promise<AgentConfig> {
+  if (mockEnabled()) return Promise.resolve(mockApi.agentSetConfig(provider, baseUrl, apiKey, model));
+  return invoke<AgentConfig>("agent_set_config", { provider, baseUrl, apiKey, model });
+}
+
+/**
+ * 文本模型的供应商列表（设置 →「文本生成」）。
+ *
+ * 无头端也实现了这条命令，所以浏览器里同样要真的发请求（不能像只读兜底那样返回空
+ * 数组，否则设置页的供应商列表永远是空的）。智能体与它共用同一份配置：第一家启用的
+ * 就是写歌智能体在用的那家。
+ */
+export function textProviders(): Promise<TextProvider[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.textProviders());
+  return invoke<TextProvider[]>("text_providers");
+}
+
+/** 保存供应商列表；返回后端同步过镜像字段后的最新列表。 */
+export function textSetProviders(providers: TextProvider[]): Promise<TextProvider[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.textSetProviders(providers));
+  return invoke<TextProvider[]>("text_set_providers", { providers });
 }
 
 /** 拉取端点上的模型 id 列表（用传入的配置，不写盘）。 */

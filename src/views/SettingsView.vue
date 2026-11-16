@@ -17,14 +17,17 @@ import { useLayoutStore } from "@/stores/layout";
 import { useProjectStore } from "@/stores/project";
 import { useSettingsStore, MAX_DEFAULT_TEMPO, MIN_DEFAULT_TEMPO } from "@/stores/settings";
 import { useOnboardingStore } from "@/stores/onboarding";
+import { useAgentStore } from "@/stores/agent";
 import Md3Slider from "@/components/common/Md3Slider.vue";
 import NumberField from "@/components/common/NumberField.vue";
 import ComboField from "@/components/common/ComboField.vue";
+import Md3Select, { type SelectOption } from "@/components/common/Md3Select.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import { usePluginsStore } from "@/stores/plugins";
 import { useRuntimesStore } from "@/stores/runtimes";
 import EngineBackendPicker from "@/components/common/EngineBackendPicker.vue";
 import Md3Segmented from "@/components/common/Md3Segmented.vue";
+import MusicApiSettings from "@/components/settings/MusicApiSettings.vue";
 import type { SegmentedOption } from "@/components/common/segmented";
 import { useUpdaterStore } from "@/stores/updater";
 import { useI18n, type Locale } from "@/i18n";
@@ -37,11 +40,18 @@ import {
   webAccessSetLan,
   type WebAccessInfo,
 } from "@/core/webApi";
+import {
+  findLlmProvider,
+  inferProviderId,
+  llmProvidersByGroup,
+  providerAllowsEmptyKey,
+  providerGroupKey,
+  providerLabel,
+  providerNote,
+} from "@/core/llmProviders";
 import { lastWorkspace } from "@/router";
 import {
-  agentConfig,
   agentModels,
-  agentSetConfig,
   agentTest,
   aiBackendInfo,
   aiSetBackend,
@@ -61,11 +71,15 @@ import {
   pluginScanDirs,
   setMcpConfig,
   setPluginScanDirs,
+  textProviders,
+  textSetProviders,
   uninstallCli,
 } from "@/api/tauri";
 import { pickDirectory } from "@/api/dialogs";
 import { humanSize } from "@/utils/models";
 import type {
+  AgentProbe,
+  TextProvider,
   BackendInfo,
   BackendPreference,
   CliStatus,
@@ -85,6 +99,8 @@ type Section =
   | "storage"
   | "plugins"
   | "network"
+  | "music"
+  | "text"
   | "ai"
   | "cli"
   | "about";
@@ -96,6 +112,8 @@ const SECTIONS: { id: Section; labelKey: string; captionKey: string }[] = [
   { id: "storage", labelKey: "settings.section.storage", captionKey: "settings.section.storage.caption" },
   { id: "plugins", labelKey: "settings.section.plugins", captionKey: "settings.section.plugins.caption" },
   { id: "network", labelKey: "settings.section.network", captionKey: "settings.section.network.caption" },
+  { id: "music", labelKey: "settings.section.music", captionKey: "settings.section.music.caption" },
+  { id: "text", labelKey: "settings.section.text", captionKey: "settings.section.text.caption" },
   { id: "ai", labelKey: "settings.section.ai", captionKey: "settings.section.ai.caption" },
   { id: "cli", labelKey: "settings.section.cli", captionKey: "settings.section.cli.caption" },
   { id: "about", labelKey: "settings.section.about", captionKey: "settings.section.about.caption" },
@@ -126,6 +144,8 @@ const settings = useSettingsStore();
 const onboarding = useOnboardingStore();
 const plugins = usePluginsStore();
 const updater = useUpdaterStore();
+/** 写歌智能体的配置镜像：供应商列表存完要让它重新读一次。 */
+const agentStore = useAgentStore();
 const i18n = useI18n();
 
 const activeMeta = computed(() => SECTIONS.find((s) => s.id === active.value) ?? SECTIONS[0]);
@@ -766,65 +786,277 @@ async function testProxy(): Promise<void> {
   }
 }
 
-// ---- 写歌智能体（OpenAI 兼容端点）----
+// ---- 文本生成（供应商列表：写歌智能体用第一家启用的）----
+/** 编辑器里的草稿：保存前只动它，取消就整份丢弃。 */
+interface TextDraft {
+  id: string;
+  preset: string;
+  name: string;
+  base_url: string;
+  api_key: string;
+  model: string;
+  /** 一行一个；保存时拆成数组。 */
+  models: string;
+  enabled: boolean;
+}
 
-const agentBaseUrl = ref("");
-const agentApiKey = ref("");
-const agentModel = ref("");
-const agentModelList = ref<string[]>([]);
-const agentSaving = ref(false);
-const agentFetchingModels = ref(false);
-const agentTesting = ref(false);
-const agentProbe = ref("");
+const textList = ref<TextProvider[]>([]);
+const textLoading = ref(false);
+const textDraft = ref<TextDraft | null>(null);
+const editingTextId = ref<string | null>(null);
+const textBusy = ref<"models" | "test" | "save" | "delete" | null>(null);
+const textProbe = ref<AgentProbe | null>(null);
+/** 删除确认框（与「音乐 API」同一套 ConfirmDialog，不用原生 confirm）。 */
+const textDeleteOpen = ref(false);
+const textDeleteTarget = ref<TextProvider | null>(null);
 
-async function loadAgent(): Promise<void> {
+const textDraftPreset = computed(() => findLlmProvider(textDraft.value?.preset ?? ""));
+/** 分组 + 中文名的供应商下拉（Md3Select 的 group 会渲染成小标题）。 */
+const textPresetOptions = computed<SelectOption[]>(() => {
+  const out: SelectOption[] = [];
+  for (const entry of llmProvidersByGroup()) {
+    const group = i18n.t(providerGroupKey(entry.group));
+    for (const preset of entry.items) {
+      out.push({
+        id: preset.id,
+        label: providerLabel(preset, i18n.locale.value),
+        group,
+        hint: preset.keyOptional ? i18n.t("settings.text.localKey") : undefined,
+      });
+    }
+  }
+  return out;
+});
+/** 本地自建端点允许留空 Key。 */
+const textKeyOptional = computed(() => providerAllowsEmptyKey(textDraftPreset.value));
+
+function presetName(id: string): string {
+  const preset = findLlmProvider(id);
+  return providerLabel(preset, i18n.locale.value) || id || i18n.t("settings.text.customPreset");
+}
+
+/** 一家供应商的显示名：用户改过就用它，否则回退到预设名。 */
+function providerName(provider: TextProvider): string {
+  return provider.name.trim() || presetName(provider.preset);
+}
+
+/** 一家供应商可选的模型：拉到的列表 + 默认模型。 */
+function modelsOfProvider(provider: TextProvider): string[] {
+  const list = provider.models.length ? [...provider.models] : [];
+  if (provider.model && !list.includes(provider.model)) list.unshift(provider.model);
+  return list;
+}
+
+function toTextDraft(provider: TextProvider): TextDraft {
+  return {
+    id: provider.id,
+    preset: provider.preset || inferProviderId(provider.base_url),
+    name: provider.name,
+    base_url: provider.base_url,
+    api_key: provider.api_key,
+    model: provider.model,
+    models: provider.models.join("\n"),
+    enabled: provider.enabled,
+  };
+}
+
+/** 草稿里的模型列表（一行一个，也容忍逗号）。 */
+function draftModels(): string[] {
+  return (textDraft.value?.models ?? "")
+    .split(/[\n,，]/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+/** 新供应商的 id：优先进安全上下文的 UUID，老 webview 退回时间戳 + 随机串。 */
+function newProviderId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return uuid ?? `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function blankTextDraft(presetId = "openai"): TextDraft {
+  const preset = findLlmProvider(presetId);
+  return {
+    id: "",
+    preset: preset?.id ?? "custom",
+    name: preset ? providerLabel(preset, i18n.locale.value) : "",
+    base_url: preset?.baseUrl ?? "",
+    api_key: "",
+    model: preset?.defaultModel ?? "",
+    models: "",
+    enabled: true,
+  };
+}
+
+/** 换预设：只在「当前值还是上一个预设的默认值」时覆盖地址 / 模型 / 名称。 */
+function pickTextPreset(id: string): void {
+  const draft = textDraft.value;
+  if (!draft) return;
+  const previous = findLlmProvider(draft.preset);
+  const preset = findLlmProvider(id);
+  draft.preset = id;
+  if (!draft.name.trim() || draft.name === providerLabel(previous, i18n.locale.value)) {
+    draft.name = providerLabel(preset, i18n.locale.value);
+  }
+  const baseUrl = draft.base_url.trim();
+  if (!baseUrl || baseUrl === previous?.baseUrl) draft.base_url = preset?.baseUrl ?? draft.base_url;
+  const model = draft.model.trim();
+  if (!model || model === previous?.defaultModel) draft.model = preset?.defaultModel ?? draft.model;
+  textProbe.value = null;
+}
+
+function newTextProvider(): void {
+  editingTextId.value = null;
+  textDraft.value = blankTextDraft();
+  textProbe.value = null;
+}
+
+function editTextProvider(provider: TextProvider): void {
+  editingTextId.value = provider.id;
+  textDraft.value = toTextDraft(provider);
+  textProbe.value = null;
+}
+
+function discardTextDraft(): void {
+  editingTextId.value = null;
+  textDraft.value = null;
+  textProbe.value = null;
+}
+
+async function loadTextProviders(): Promise<void> {
+  textLoading.value = true;
   try {
-    const cfg = await agentConfig();
-    agentBaseUrl.value = cfg.base_url;
-    agentApiKey.value = cfg.api_key;
-    agentModel.value = cfg.model;
+    textList.value = await textProviders();
   } catch {
-    // 读取失败就保持空白，用户照常可以填。
+    // 读不到就当作空列表，用户仍然可以新添一家。
+    textList.value = [];
+  } finally {
+    textLoading.value = false;
+  }
+}
+
+async function persistTextProviders(next: TextProvider[], message: string): Promise<boolean> {
+  try {
+    textList.value = await textSetProviders(next);
+    // 智能体面板读的是同一份配置的镜像字段，存完让它重新加载一次。
+    void agentStore.loadConfig();
+    layout.notify(message);
+    return true;
+  } catch (err) {
+    layout.notify(String(err));
+    return false;
+  }
+}
+
+async function saveTextProvider(): Promise<void> {
+  const draft = textDraft.value;
+  if (!draft || textBusy.value === "save") return;
+  const baseUrl = draft.base_url.trim();
+  const model = draft.model.trim();
+  if (!baseUrl) {
+    layout.notify(i18n.t("settings.text.baseUrlRequired"));
+    return;
+  }
+  if (!model) {
+    layout.notify(i18n.t("settings.text.modelRequired"));
+    return;
+  }
+  if (!draft.api_key.trim() && !providerAllowsEmptyKey(findLlmProvider(draft.preset))) {
+    layout.notify(i18n.t("settings.text.keyRequired"));
+    return;
+  }
+  textBusy.value = "save";
+  textProbe.value = null;
+  try {
+    const provider: TextProvider = {
+      id: draft.id || newProviderId(),
+      preset: draft.preset,
+      name: draft.name.trim() || presetName(draft.preset),
+      base_url: baseUrl,
+      api_key: draft.api_key.trim(),
+      model,
+      // 默认模型永远在可选项里，免得界面上选不到它。
+      models: Array.from(new Set([model, ...draftModels()])),
+      enabled: draft.enabled,
+    };
+    const next = [...textList.value];
+    const index = next.findIndex((item) => item.id === provider.id);
+    if (index >= 0) next[index] = provider;
+    else next.push(provider);
+    if (await persistTextProviders(next, i18n.t("settings.text.saved"))) {
+      const saved = textList.value.find((item) => item.id === provider.id) ?? provider;
+      editingTextId.value = saved.id;
+      textDraft.value = toTextDraft(saved);
+    }
+  } finally {
+    textBusy.value = null;
+  }
+}
+
+/** 打开删除确认（真正的删除在 confirmRemoveTextProvider）。 */
+function askRemoveTextProvider(provider: TextProvider): void {
+  if (textBusy.value) return;
+  textDeleteTarget.value = provider;
+  textDeleteOpen.value = true;
+}
+
+async function confirmRemoveTextProvider(): Promise<void> {
+  // 不清空 `textDeleteTarget`：确认框淡出前还要用它渲染文案（下一次打开时覆盖）。
+  const provider = textDeleteTarget.value;
+  if (!provider) return;
+  textBusy.value = "delete";
+  try {
+    const next = textList.value.filter((item) => item.id !== provider.id);
+    if (await persistTextProviders(next, i18n.t("settings.text.deleted"))) {
+      if (editingTextId.value === provider.id) discardTextDraft();
+    }
+  } finally {
+    textBusy.value = null;
   }
 }
 
 /** 用输入框里的值拉模型列表（不写盘）。 */
-async function fetchAgentModels(): Promise<void> {
-  agentFetchingModels.value = true;
-  agentProbe.value = "";
+async function fetchTextModels(): Promise<void> {
+  const draft = textDraft.value;
+  if (!draft || textBusy.value) return;
+  if (findLlmProvider(draft.preset)?.noModelList) {
+    layout.notify(i18n.t("settings.text.noModelList"));
+    return;
+  }
+  textBusy.value = "models";
+  textProbe.value = null;
   try {
-    agentModelList.value = await agentModels(agentBaseUrl.value.trim(), agentApiKey.value.trim(), agentModel.value.trim());
-    if (!agentModel.value.trim() && agentModelList.value.length) agentModel.value = agentModelList.value[0];
+    const list = await agentModels(
+      draft.base_url.trim(),
+      draft.api_key.trim(),
+      draft.model.trim(),
+    );
+    draft.models = list.join("\n");
+    if (!draft.model.trim() && list.length > 0) draft.model = list[0]!;
+    layout.notify(i18n.t("settings.text.modelsFound", { count: list.length }));
   } catch (err) {
-    agentProbe.value = String(err);
+    layout.notify(String(err));
   } finally {
-    agentFetchingModels.value = false;
+    textBusy.value = null;
   }
 }
 
 /** 用输入框里的值测连通性（不写盘）。 */
-async function testAgent(): Promise<void> {
-  agentTesting.value = true;
-  agentProbe.value = "";
+async function testTextProvider(): Promise<void> {
+  const draft = textDraft.value;
+  if (!draft || textBusy.value) return;
+  textBusy.value = "test";
+  textProbe.value = null;
   try {
-    const probe = await agentTest(agentBaseUrl.value.trim(), agentApiKey.value.trim(), agentModel.value.trim());
-    agentProbe.value = probe.ok ? `${probe.detail}（${probe.ms} ms）` : probe.detail;
+    textProbe.value = await agentTest(
+      draft.base_url.trim(),
+      draft.api_key.trim(),
+      draft.model.trim(),
+    );
   } catch (err) {
-    agentProbe.value = String(err);
+    textProbe.value = { ok: false, detail: String(err), ms: 0 };
   } finally {
-    agentTesting.value = false;
-  }
-}
-
-async function saveAgent(): Promise<void> {
-  agentSaving.value = true;
-  try {
-    await agentSetConfig(agentBaseUrl.value.trim(), agentApiKey.value.trim(), agentModel.value.trim());
-    layout.notify(i18n.t("settings.ai.openai.saved"));
-  } catch (err) {
-    layout.notify(String(err));
-  } finally {
-    agentSaving.value = false;
+    textBusy.value = null;
   }
 }
 
@@ -1027,9 +1259,9 @@ onMounted(() => {
   void loadScanDirs();
   // 子组件（EngineBackendPicker）的 onMounted 比这里先跑；别重复拉同一张清单。
   if (runtimes.items.length === 0 && !runtimes.loading) void runtimes.load();
-  void loadAgent();
+  void loadTextProviders();
   void updater.loadVersion();
-  // 深链：`/settings?section=ai` 直接落到 AI / MCP 子页（写歌智能体的「去配置」会这么跳）。
+  // 深链：`/settings?section=text` 直接落到「文本生成」（写歌智能体的「去配置」会这么跳）。
   const section = router.currentRoute.value.query.section;
   if (typeof section === "string" && SECTIONS.some((s) => s.id === section)) {
     active.value = section as Section;
@@ -1703,65 +1935,234 @@ onUnmounted(() => {
           </div>
         </template>
 
-        <!-- AI / MCP：OpenAI 兼容端点（写歌智能体）+ 本地模型执行后端 + MCP 代理接入 -->
-        <template v-else-if="active === 'ai'">
-          <!-- OpenAI 兼容端点：右侧「写歌智能体」面板直连它 -->
+        <!-- 音乐 API：云端音乐生成服务（Lyria / ElevenLabs / Mureka / Treblo） -->
+        <MusicApiSettings v-else-if="active === 'music'" />
+
+        <!-- 文本生成：写歌智能体的文本模型供应商（可配多家，第一家启用的给智能体用） -->
+        <template v-else-if="active === 'text'">
           <div class="group">
-            <div class="group-title">{{ i18n.t("settings.ai.openai.title") }}</div>
+            <div class="group-title">{{ i18n.t("settings.text.providers") }}</div>
             <div class="card">
-              <div class="col-row">
-                <span class="row-title">{{ i18n.t("settings.ai.openai.baseUrl") }}</span>
-                <span class="row-sub">{{ i18n.t("settings.ai.openai.baseUrlHint") }}</span>
-                <input
-                  v-model="agentBaseUrl"
-                  class="net-input"
-                  type="text"
-                  spellcheck="false"
-                  placeholder="https://api.openai.com/v1"
-                />
-              </div>
-              <div class="col-row">
-                <span class="row-title">{{ i18n.t("settings.ai.openai.apiKey") }}</span>
-                <span class="row-sub">{{ i18n.t("settings.ai.openai.apiKeyHint") }}</span>
-                <input
-                  v-model="agentApiKey"
-                  class="net-input"
-                  type="password"
-                  spellcheck="false"
-                  placeholder="sk-…"
-                />
-              </div>
-              <div class="col-row">
-                <span class="row-title">{{ i18n.t("settings.ai.openai.model") }}</span>
-                <span class="row-sub">{{ i18n.t("settings.ai.openai.modelHint") }}</span>
-                <ComboField
-                  :model-value="agentModel"
-                  :options="agentModelList"
-                  :label="i18n.t('settings.ai.openai.model')"
-                  :placeholder="i18n.t('settings.ai.openai.modelPlaceholder')"
-                  :empty="i18n.t('settings.ai.openai.modelEmpty')"
-                  @update:model-value="agentModel = $event"
-                />
-              </div>
-              <div class="row">
+              <p v-if="textLoading" class="probe">{{ i18n.t("common.loading") }}</p>
+              <p v-else-if="textList.length === 0" class="probe">
+                {{ i18n.t("settings.text.empty") }}
+              </p>
+              <div
+                v-for="provider in textList"
+                :key="provider.id"
+                class="row provider-row"
+                :class="{ on: editingTextId === provider.id }"
+                @click="editTextProvider(provider)"
+              >
                 <div class="row-text">
-                  <span class="row-sub">{{ agentProbe || i18n.t("settings.ai.openai.probeHint") }}</span>
+                  <span class="row-title">
+                    {{ providerName(provider) }}
+                    <span class="row-pill" :class="{ off: !provider.enabled }">
+                      {{
+                        i18n.t(
+                          provider.enabled
+                            ? "settings.text.enabledOn"
+                            : "settings.text.enabledOff",
+                        )
+                      }}
+                    </span>
+                  </span>
+                  <span class="row-sub">
+                    {{ presetName(provider.preset) }} ·
+                    {{ provider.model || i18n.t("settings.text.noModel") }} ·
+                    {{
+                      i18n.t("settings.text.modelCount", {
+                        count: modelsOfProvider(provider).length,
+                      })
+                    }}
+                  </span>
                 </div>
-                <div class="row-actions">
-                  <button class="scan-btn" :disabled="agentFetchingModels" @click="fetchAgentModels">
-                    {{ i18n.t("settings.ai.openai.fetchModels") }}
-                  </button>
-                  <button class="scan-btn" :disabled="agentTesting" @click="testAgent">
-                    {{ i18n.t("settings.ai.openai.test") }}
-                  </button>
-                  <button class="scan-btn" :disabled="agentSaving" @click="saveAgent">
-                    {{ i18n.t("settings.ai.openai.save") }}
-                  </button>
-                </div>
+                <span class="row-value mono">{{ provider.base_url }}</span>
+                <button
+                  class="scan-btn danger"
+                  :disabled="textBusy !== null"
+                  @click.stop="askRemoveTextProvider(provider)"
+                >
+                  {{ i18n.t("common.delete") }}
+                </button>
+              </div>
+              <div class="row actions-row">
+                <button class="scan-btn primary" @click="newTextProvider">
+                  {{ i18n.t("settings.text.add") }}
+                </button>
               </div>
             </div>
           </div>
 
+          <div v-if="textDraft" class="group">
+            <div class="group-title">
+              {{ i18n.t(editingTextId ? "settings.text.edit" : "settings.text.new") }}
+            </div>
+            <div class="card">
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.text.provider") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.text.providerHint") }}</span>
+                <Md3Select
+                  class="compute-select"
+                  :model-value="textDraft.preset"
+                  :options="textPresetOptions"
+                  :label="i18n.t('settings.text.provider')"
+                  :placeholder="i18n.t('settings.text.providerPlaceholder')"
+                  searchable
+                  @select="pickTextPreset"
+                />
+                <span v-if="textDraftPreset" class="row-sub">
+                  {{
+                    providerNote(textDraftPreset, i18n.locale.value) ||
+                    i18n.t("settings.text.providerNoteFallback")
+                  }}
+                </span>
+              </div>
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.text.name") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.text.nameHint") }}</span>
+                <input
+                  v-model="textDraft.name"
+                  class="net-input"
+                  type="text"
+                  spellcheck="false"
+                  :placeholder="presetName(textDraft.preset)"
+                />
+              </div>
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.text.baseUrl") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.text.baseUrlHint") }}</span>
+                <input
+                  v-model="textDraft.base_url"
+                  class="net-input"
+                  type="text"
+                  spellcheck="false"
+                  :placeholder="i18n.t('settings.text.baseUrlPlaceholder')"
+                />
+              </div>
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.text.apiKey") }}</span>
+                <span class="row-sub">
+                  {{
+                    textKeyOptional
+                      ? i18n.t("settings.text.apiKeyLocalHint")
+                      : i18n.t("settings.text.apiKeyHint")
+                  }}
+                </span>
+                <input
+                  v-model="textDraft.api_key"
+                  class="net-input"
+                  type="password"
+                  autocomplete="off"
+                  spellcheck="false"
+                  :placeholder="
+                    textKeyOptional
+                      ? i18n.t('settings.text.apiKeyOptional')
+                      : i18n.t('settings.text.apiKeyPlaceholder')
+                  "
+                />
+              </div>
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.text.model") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.text.modelHint") }}</span>
+                <ComboField
+                  :model-value="textDraft.model"
+                  :options="draftModels()"
+                  :label="i18n.t('settings.text.model')"
+                  :placeholder="i18n.t('settings.text.modelPlaceholder')"
+                  :empty="i18n.t('settings.text.modelEmpty')"
+                  @update:model-value="textDraft.model = $event"
+                />
+              </div>
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.text.models") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.text.modelsHint") }}</span>
+                <textarea
+                  v-model="textDraft.models"
+                  class="net-input models-area"
+                  rows="4"
+                  spellcheck="false"
+                  :placeholder="i18n.t('settings.text.modelsPlaceholder')"
+                />
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">{{ i18n.t("settings.text.enabled") }}</span>
+                  <span class="row-sub">{{ i18n.t("settings.text.enabledHint") }}</span>
+                </div>
+                <button
+                  class="m3-switch"
+                  :class="{ on: textDraft.enabled }"
+                  type="button"
+                  role="switch"
+                  :aria-checked="textDraft.enabled"
+                  :aria-label="i18n.t('settings.text.enabled')"
+                  @click="textDraft.enabled = !textDraft.enabled"
+                />
+              </div>
+              <div class="row actions-row">
+                <!-- 只是丢弃草稿（删除供应商在列表行里），所以永远叫「取消」。 -->
+                <button
+                  class="scan-btn danger"
+                  :disabled="textBusy !== null"
+                  @click="discardTextDraft"
+                >
+                  {{ i18n.t("common.cancel") }}
+                </button>
+                <button class="scan-btn" :disabled="textBusy !== null" @click="fetchTextModels">
+                  {{
+                    textBusy === "models"
+                      ? i18n.t("settings.text.fetching")
+                      : i18n.t("settings.text.fetchModels")
+                  }}
+                </button>
+                <button class="scan-btn" :disabled="textBusy !== null" @click="testTextProvider">
+                  {{
+                    textBusy === "test"
+                      ? i18n.t("settings.text.testing")
+                      : i18n.t("settings.text.test")
+                  }}
+                </button>
+                <button
+                  class="scan-btn primary"
+                  :disabled="textBusy !== null"
+                  @click="saveTextProvider"
+                >
+                  {{ i18n.t("settings.text.save") }}
+                </button>
+              </div>
+              <p
+                v-if="textProbe"
+                class="probe"
+                :class="{ ok: textProbe.ok, error: !textProbe.ok }"
+              >
+                {{
+                  i18n.t(
+                    textProbe.ok ? "settings.text.probeOk" : "settings.text.probeFail",
+                    { detail: textProbe.detail, ms: textProbe.ms },
+                  )
+                }}
+              </p>
+            </div>
+          </div>
+          <p class="compute-tip">{{ i18n.t("settings.text.tip") }}</p>
+
+          <ConfirmDialog
+            v-model:open="textDeleteOpen"
+            :title="i18n.t('settings.text.deleteTitle')"
+            :message="
+              i18n.t('settings.text.deleteMessage', {
+                name: textDeleteTarget ? providerName(textDeleteTarget) : '',
+              })
+            "
+            :confirm-label="i18n.t('common.delete')"
+            danger
+            @confirm="confirmRemoveTextProvider"
+          />
+        </template>
+
+        <!-- AI / MCP：本地模型执行后端 + MCP 接入 -->
+        <template v-else-if="active === 'ai'">
           <div class="group">
             <div class="group-title">{{ i18n.t("settings.ai.title") }}</div>
             <div class="card">
@@ -2483,13 +2884,91 @@ onUnmounted(() => {
   opacity: 0.5;
 }
 
-/* ---- 写歌智能体（OpenAI 兼容端点） ---- */
+/* ---- 文本生成（写歌智能体的文本模型供应商） ---- */
 .row-actions {
   display: flex;
   gap: 6px;
   flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+.actions-row {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+/* 删除 / 取消放最左边，和右边的获取 / 测试 / 保存拉开距离，避免误点。 */
+.actions-row .scan-btn.danger {
+  margin-right: auto;
+}
+.compute-select {
+  width: 100%;
+}
+.compute-tip {
+  margin: 10px 4px 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: rgb(var(--md-on-surface-muted));
+}
+/* 已配置的供应商：整行可点开编辑，当前编辑的那条高亮。 */
+.provider-row {
+  cursor: pointer;
+  padding-left: 8px;
+  padding-right: 8px;
+  border-radius: 12px;
+  transition: background-color 0.14s ease;
+}
+.provider-row:hover {
+  background-color: rgb(var(--md-on-surface-variant) / var(--md-state-hover-alpha));
+}
+.provider-row.on {
+  background-color: rgb(var(--md-secondary-container) / 0.55);
+}
+/* 端点地址：等宽字体，长地址允许在任意位置换行。 */
+.row-value.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* 启用状态小药丸：停用的降成灰底，不抢主色。 */
+.row-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  margin-left: 6px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background-color: rgb(var(--md-primary) / 0.14);
+  color: rgb(var(--md-primary));
+  font-size: 10px;
+  font-weight: 500;
+}
+.row-pill.off {
+  background-color: rgb(var(--md-on-surface) / 0.08);
+  color: rgb(var(--md-on-surface-muted));
+}
+/* 模型列表：一行一个，等宽字体更好数。 */
+.models-area {
+  min-height: 96px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.probe {
+  margin: 0;
+  padding: 4px 0 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: rgb(var(--md-on-surface-muted));
+  word-break: break-word;
+}
+.probe.ok {
+  color: rgb(var(--md-primary));
+}
+.probe.error {
+  color: rgb(var(--md-error));
 }
 
 /* ---- 自动更新 ---- */

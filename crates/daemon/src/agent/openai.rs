@@ -59,6 +59,17 @@ fn client(timeout: Duration) -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
+/// 有 Key 才发 `Authorization`：本地端点（Ollama / vLLM）不需要，
+/// 空的 `Bearer ` 反而会被一些网关当成非法头直接 401。
+fn authorize(request: reqwest::RequestBuilder, api_key: &str) -> reqwest::RequestBuilder {
+    let key = api_key.trim();
+    if key.is_empty() {
+        request
+    } else {
+        request.bearer_auth(key)
+    }
+}
+
 /// 截断过长的响应体，避免把整页 HTML 塞进错误信息。
 fn brief(text: &str) -> String {
     let t = text.trim();
@@ -75,10 +86,11 @@ pub async fn list_models(cfg: &AgentConfig) -> Result<Vec<String>, String> {
         return Err("尚未填写基础 URL".into());
     }
     let url = format!("{root}/models");
-    let resp = client(Duration::from_secs(30))?
-        .get(&url)
-        .bearer_auth(&cfg.api_key)
-        .send()
+    let resp = authorize(
+        client(Duration::from_secs(30))?.get(&url),
+        &cfg.api_key,
+    )
+    .send()
         .await
         .map_err(|e| format!("请求失败：{e}"))?;
     let status = resp.status();
@@ -146,11 +158,12 @@ async fn ping_chat(cfg: &AgentConfig) -> Result<String, String> {
         "max_tokens": 1,
         "stream": false,
     });
-    let resp = client(Duration::from_secs(30))?
-        .post(&url)
-        .bearer_auth(&cfg.api_key)
-        .json(&body)
-        .send()
+    let resp = authorize(
+        client(Duration::from_secs(30))?.post(&url),
+        &cfg.api_key,
+    )
+    .json(&body)
+    .send()
         .await
         .map_err(|e| format!("请求失败：{e}"))?;
     let status = resp.status();
@@ -351,11 +364,12 @@ where
 
     // 模型排队 / 网关慢的时候响应头可能几十秒才回来；这一段也必须能被停止，
     // 否则界面会在「思考中」卡到超时（300 秒）才响应。
-    let send = client(Duration::from_secs(300))?
-        .post(&url)
-        .bearer_auth(&cfg.api_key)
-        .json(&body)
-        .send();
+    let send = authorize(
+        client(Duration::from_secs(300))?.post(&url),
+        &cfg.api_key,
+    )
+    .json(&body)
+    .send();
     let resp = tokio::select! {
         _ = cancel.cancelled() => return Ok(Vec::new()),
         resp = send => resp.map_err(|e| format!("请求失败：{e}"))?,

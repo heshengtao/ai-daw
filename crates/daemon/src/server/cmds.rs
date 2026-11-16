@@ -25,6 +25,7 @@ use ai_daw_plugin_api::MidiEvent;
 
 use crate::ai::MasterArgs;
 use crate::agent::{AgentConfigRuntime, AgentRuntime};
+use crate::cloud_music::{CloudMusicProvider, CloudMusicRequest};
 use crate::mcp::McpRuntime;
 use crate::manager::{
     BackendPreference, InstallRequest, ModelSourcePreference, ProxyMode, StoreRuntime,
@@ -347,9 +348,24 @@ pub fn call(app: &AppHandle, cmd: &str, args: Value) -> Option<Result<Value, Rpc
         plain(out)
     },
     "agent_set_config" => |app, args| {
+        // `take` 同时认 snake_case 与 camelCase：桌面 webview 传 camelCase，
+        // 脚本 / 无头客户端习惯传 snake_case，两条路都要能存进去。
+        let provider: String = take(&args, "provider")?;
         let base_url: String = take(&args, "base_url")?;
         let api_key: String = take(&args, "api_key")?;
-        let model: String = take(&args, "model")?;        let out = crate::agent::agent_set_config(app.state::<AgentConfigRuntime>(), base_url, api_key, model);
+        let model: String = take(&args, "model")?;
+        let out = crate::agent::agent_set_config(app.state::<AgentConfigRuntime>(), provider, base_url, api_key, model);
+        plain(out)
+    },
+    "text_providers" => |app, _args| {
+        let out = crate::agent::text_providers(app.state::<AgentConfigRuntime>());
+        plain(out)
+    },
+    "text_set_providers" => |app, args| {
+        // `take` 同时认 `providers` 与前端的 camelCase 写法；列表为空时后端会把
+        // 镜像字段一并清空，删掉的供应商不会在重启后复活。
+        let providers: Vec<crate::agent::TextProvider> = take(&args, "providers")?;
+        let out = crate::agent::text_set_providers(app.state::<AgentConfigRuntime>(), providers);
         plain(out)
     },
     "agent_sessions" => |app, _args| {
@@ -405,6 +421,27 @@ pub fn call(app: &AppHandle, cmd: &str, args: Value) -> Option<Result<Value, Rpc
     },
     "ai_backend_info" => |app, _args| {
         let out = crate::backends::ai_backend_info(app.clone());
+        plain(out)
+    },
+    "cloud_music_config" => |app, _args| {
+        let out = crate::cloud_music::cloud_music_config(app.state::<std::sync::Arc<AppState>>());
+        plain(out)
+    },
+    "cloud_music_presets" => |_app, _args| {
+        let out = crate::cloud_music::cloud_music_presets();
+        plain(out)
+    },
+    "cloud_music_set_config" => |app, args| {
+        let providers: Vec<CloudMusicProvider> = take(&args, "providers")?;
+        let out = crate::cloud_music::cloud_music_set_config(app.state::<std::sync::Arc<AppState>>(), providers);
+        plain(out)
+    },
+    "cloud_music_busy" => |_app, _args| {
+        let out = crate::cloud_music::cloud_music_busy();
+        plain(out)
+    },
+    "cloud_music_cancel" => |_app, _args| {
+        let out = crate::cloud_music::cloud_music_cancel();
         plain(out)
     },
     "ai_set_backend" => |app, args| {
@@ -697,6 +734,8 @@ const ASYNC_CMDS: &[&str] = &[
     "plugin_params",
     "agent_models",
     "agent_test",
+    "cloud_music_generate",
+    "cloud_music_test",
     "plugin_manager_registry",
     "plugin_manager_install",
     "plugin_manager_import",
@@ -748,6 +787,16 @@ async fn run_async(app: &AppHandle, cmd: &str, args: Value) -> Result<Value, Rpc
         let base_url: String = take(&args, "base_url")?;
         let api_key: String = take(&args, "api_key")?;
         let model: String = take(&args, "model")?;        let out = crate::agent::agent_test(base_url, api_key, model).await;
+        value(out)
+    },
+    "cloud_music_generate" => {
+        let request: CloudMusicRequest = take(&args, "request")?;
+        let out = crate::cloud_music::cloud_music_generate(app.clone(), app.state::<std::sync::Arc<AppState>>(), request).await;
+        value(out)
+    },
+    "cloud_music_test" => {
+        let provider: CloudMusicProvider = take(&args, "provider")?;
+        let out = crate::cloud_music::cloud_music_test(provider).await;
         value(out)
     },
     "plugin_manager_registry" => {
@@ -816,6 +865,8 @@ pub const NAMES: &[&str] = &[
     "agent_set_config",
     "agent_set_head",
     "agent_test",
+    "text_providers",
+    "text_set_providers",
     "ai_backend_info",
     "ai_cancel",
     "ai_models",
@@ -862,6 +913,13 @@ pub const NAMES: &[&str] = &[
     "clear_meter_clip",
     "cli_status",
     "close_effect_plugin_window",
+    "cloud_music_busy",
+    "cloud_music_cancel",
+    "cloud_music_config",
+    "cloud_music_generate",
+    "cloud_music_presets",
+    "cloud_music_set_config",
+    "cloud_music_test",
     "close_plugin_window",
     "data_dir_cleanup_previous",
     "data_dir_info",

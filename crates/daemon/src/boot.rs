@@ -59,6 +59,7 @@ pub fn bootstrap(host: Arc<dyn Host>, cfg: Config) -> Arc<Daemon> {
     // 用户的预设与音色记忆库是跨工程资产，按数据目录加载（拿不到就空着，不影响启动）。
     state.init_presets(Some(cfg.data_dir.join("presets.json")));
     state.init_sound_memories(Some(cfg.data_dir.join("sound-memories.json")));
+    state.init_cloud_music(Some(cfg.data_dir.join("cloud-music.json")));
     // 无窗口进程也要出声：浏览器监听（/audio）与导出都依赖实时宿主。
     // 容器里没有声卡时 `start_audio` 会自己降级为 idle，不会 panic；
     // 想彻底跳过可以用 `AIDAW_NO_AUDIO=1`。

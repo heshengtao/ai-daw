@@ -18,10 +18,11 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { BoltIcon, ClipboardDocumentIcon } from "@heroicons/vue/24/outline";
-import Md3Select from "@/components/common/Md3Select.vue";
+import Md3Select, { type SelectOption } from "@/components/common/Md3Select.vue";
 import AiYuePage from "@/components/workspace/panes/ai/AiYuePage.vue";
 import AiSingingPage from "@/components/workspace/panes/ai/AiSingingPage.vue";
 import AiSvcPage from "@/components/workspace/panes/ai/AiSvcPage.vue";
+import AiCloudMusicPage from "@/components/workspace/panes/ai/AiCloudMusicPage.vue";
 import AiBackendBadge from "@/components/workspace/panes/ai/AiBackendBadge.vue";
 import "@/components/workspace/panes/ai/aiPage.css";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
@@ -65,6 +66,7 @@ import { useModelChoice } from "@/composables/useModelChoice";
 import { useModelDownloadPrompt } from "@/composables/useModelDownloadPrompt";
 import { useAiIntentStore } from "@/stores/aiIntent";
 import { useYueStore } from "@/stores/yue";
+import { useCloudMusicStore } from "@/stores/cloudMusic";
 import { useI18n } from "@/i18n";
 import { copyText } from "@/utils/clipboard";
 import { restartApp } from "@/utils/restart";
@@ -89,10 +91,10 @@ const i18n = useI18n();
 /**
  * 面板里正在显示的子页（`null` = 卡片列表）。
  *
- * 三个 AI 功能（写歌 / 歌声合成 / 音色替换）的表单都**占满侧栏**，而不是跳到工作区中间：
+ * 四个 AI 功能（写歌 / 云端音乐 / 歌声合成 / 音色替换）的表单都**占满侧栏**，而不是跳到工作区中间：
  * 它们是右栏的延续，左边的时间线要一直看得见。
  */
-const aiPage = ref<null | "yue" | "singing" | "svc">(null);
+const aiPage = ref<null | "yue" | "singing" | "svc" | "cloud">(null);
 /** 子页里自己会弹完成通知，列表这边让路（两边都在挂载状态）。 */
 const inAiPage = computed(() => aiPage.value !== null);
 
@@ -113,6 +115,63 @@ watch(
 function onAiBack(): void {
   aiPage.value = null;
   aiIntent.clear();
+}
+
+// ---- 音乐来源：本地 YuE2 / 云端官方 API，共用「AI 写歌」的一个下拉 ----
+const CLOUD_SOURCE = "cloud:";
+const MUSIC_CONFIG_ACTION = "__configure_music__";
+
+const cloudMusic = useCloudMusicStore();
+/** 子页打开时锁定的服务：进页之后改列表不应该把正在生成的服务换掉。 */
+const cloudPageProviderId = ref("");
+const cloudProvider = computed(
+  () => cloudMusic.enabledProviders.find((provider) => provider.id === cloudMusic.selectedId) ?? null,
+);
+
+/** 下拉统一值：本地模型直接用 id，云端加 `cloud:` 前缀。 */
+const musicSourceId = computed<string | null>(() =>
+  cloudProvider.value ? `${CLOUD_SOURCE}${cloudProvider.value.id}` : yueDraftModel.value,
+);
+
+/** 下拉列表：第一项是设置入口，然后本地模型、云端服务两组。 */
+const musicOptions = computed<SelectOption[]>(() => {
+  const list: SelectOption[] = [
+    {
+      id: MUSIC_CONFIG_ACTION,
+      label: i18n.t("ai.musicApiConfigure"),
+      hint: i18n.t("ai.musicApiConfigureHint"),
+      action: true,
+    },
+  ];
+  for (const option of yueModelOptions.value) {
+    list.push({ ...option, group: i18n.t("ai.musicGroupLocal") });
+  }
+  for (const provider of cloudMusic.enabledProviders) {
+    list.push({
+      id: `${CLOUD_SOURCE}${provider.id}`,
+      label: provider.name,
+      hint: provider.model || i18n.t("settings.music.defaultModel"),
+      group: i18n.t("ai.musicGroupCloud"),
+    });
+  }
+  return list;
+});
+
+function openMusicSettings(): void {
+  void router.push({ name: "settings", query: { section: "music" } });
+}
+
+function onMusicAction(id?: string): void {
+  if (id === MUSIC_CONFIG_ACTION) openMusicSettings();
+}
+
+function onMusicSourcePick(value: string): void {
+  if (value.startsWith(CLOUD_SOURCE)) {
+    cloudMusic.select(value.slice(CLOUD_SOURCE.length));
+    return;
+  }
+  cloudMusic.select("");
+  yueDraftModel.value = value;
 }
 
 // ---- 顶部标签：全部 / 生成 / 转换（「全部」里用分隔标题分组）----
@@ -265,6 +324,12 @@ const yueFeatureReady = computed(
 function startYue(): void {
   // 从卡片进来是「没有上下文」的正常入口：先清掉右键菜单留下的意图。
   aiIntent.clear();
+  // 云端服务有独立表单（描述 / 歌词 / 时长），不进本地引擎页。
+  if (cloudProvider.value) {
+    cloudPageProviderId.value = cloudProvider.value.id;
+    aiPage.value = "cloud";
+    return;
+  }
   // 安装包默认不带引擎：先让写歌页的安装向导处理，别先去下几 GB 权重。
   if (!engineInstalled.value) {
     aiPage.value = "yue";
@@ -666,6 +731,9 @@ onMounted(async () => {
   // YuE2：引擎状态 + 任务状态（写歌卡片的徽标 / 进度都靠它）。
   void yue.load();
   stopYueEvent = yue.watch();
+  // 云端音乐：供应商列表 + 进度事件（设置页保存后回到本面板会直接看到新列表）。
+  void cloudMusic.load();
+  cloudMusic.watch();
 });
 onUnmounted(() => {
   unlisten?.();
@@ -673,6 +741,7 @@ onUnmounted(() => {
   stopSingingEvent?.();
   stopSvcEvent?.();
   stopYueEvent?.();
+  cloudMusic.unwatch();
   // 标签被关掉 / 切走：右键菜单的意图只对这一次打开有效，别带到下次。
   aiIntent.clear();
 });
@@ -722,6 +791,11 @@ watch(
     <AiYuePage v-if="aiPage === 'yue'" :intent="aiIntent.request" @back="onAiBack" />
     <AiSingingPage v-else-if="aiPage === 'singing'" :intent="aiIntent.request" @back="onAiBack" />
     <AiSvcPage v-else-if="aiPage === 'svc'" :intent="aiIntent.request" @back="onAiBack" />
+    <AiCloudMusicPage
+      v-else-if="aiPage === 'cloud'"
+      :provider-id="cloudPageProviderId"
+      @back="onAiBack"
+    />
 
     <template v-else>
     <!-- 顶部标签：全部 / 生成 / 转换（全部里用分隔标题分组） -->
@@ -751,34 +825,53 @@ watch(
         </div>
       </li>
 
-      <!-- YuE2 本地写歌：引擎 + 一次生成（表单在模态框里，条目只留入口与状态） -->
+      <!-- AI 写歌：本地 YuE2 与云端官方 API 共用一个下拉；第一项是设置入口 -->
       <li
         class="item"
         v-if="aiTab !== 'convert'"
         :style="{ order: 50 }"
-        :class="{ busy: yue.busy }"
+        :class="{ busy: yue.busy || cloudMusic.running }"
       >
         <div class="item-row">
           <div class="item-main">
             <span class="item-name">
               {{ i18n.t("ai.yueTitle") }}
-              <AiBackendBadge backend="audiocpp" :ready="yueFeatureReady" />
+              <AiBackendBadge v-if="!cloudProvider" backend="audiocpp" :ready="yueFeatureReady" />
+              <span v-else class="cloud-badge">{{ i18n.t("ai.musicCloudBadge") }}</span>
             </span>
-            <span class="item-note">{{ yueStatusLine }}</span>
+            <span class="item-note">
+              {{
+                cloudProvider
+                  ? i18n.t("ai.cloudMusicSelected", { name: cloudProvider.name })
+                  : yueStatusLine
+              }}
+            </span>
           </div>
         </div>
         <div class="item-row">
           <Md3Select
-            v-model="yueDraftModel"
+            :model-value="musicSourceId"
             class="model-select"
-            :options="yueModelOptions"
+            :options="musicOptions"
             :label="i18n.t('ai.yueModel')"
+            @update:model-value="onMusicSourcePick"
+            @action="onMusicAction"
           />
-          <button class="run-btn" :disabled="yue.starting" @click="startYue">
-            {{ chosenYueModel?.installed ? i18n.t("ai.yueOpen") : i18n.t("ai.yueDownloadAndWrite") }}
+          <button
+            class="run-btn"
+            :disabled="yue.starting || cloudMusic.running"
+            @click="startYue"
+          >
+            {{
+              cloudProvider
+                ? i18n.t("ai.cloudMusicGenerate")
+                : chosenYueModel?.installed
+                  ? i18n.t("ai.yueOpen")
+                  : i18n.t("ai.yueDownloadAndWrite")
+            }}
           </button>
         </div>
-        <div v-if="yue.busy" class="progress">
+        <div v-if="yue.busy || cloudMusic.running" class="progress">
           <div class="progress-fill indeterminate" />
         </div>
       </li>
@@ -1251,6 +1344,15 @@ watch(
   font-size: 13px;
   font-weight: 500;
   color: rgb(var(--md-on-surface));
+}
+.cloud-badge {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: rgb(var(--md-primary));
+  background-color: rgb(var(--md-primary) / 0.14);
 }
 .item-note {
   font-size: 11px;

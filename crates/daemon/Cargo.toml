@@ -47,7 +47,7 @@ rmcp = { version = "3", features = [
 ] }
 # Web 客户端：`/rpc`（POST）+ 静态资源 + `/health`。与 MCP 共用一条 axum 树。
 axum = { version = "0.8", features = ["ws"] }
-tokio = { version = "1", features = ["net", "rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time"] }
 tokio-util = "0.7"
 schemars = "1"
 
