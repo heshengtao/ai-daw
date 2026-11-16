@@ -1,6 +1,6 @@
 [package]
 name = "ai-daw"
-version = "1.8.0"
+version = "1.9.0"
 description = "AI DAW 桌面外壳：窗口、原生插件编辑器与自动更新"
 authors = ["you"]
 edition = "2021"
