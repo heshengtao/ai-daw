@@ -730,6 +730,9 @@ const ASYNC_CMDS: &[&str] = &[
     "analyze_project",
     "record_stop",
     "rescan_plugins",
+    "soundfont_import",
+    "soundfont_remove",
+    "soundfonts_list",
     "track_midi_capabilities",
     "plugin_params",
     "agent_models",
@@ -767,6 +770,16 @@ async fn run_async(app: &AppHandle, cmd: &str, args: Value) -> Result<Value, Rpc
     },
     "rescan_plugins" => {
         let out = crate::commands::rescan_plugins(app.clone()).await;
+        value(out)
+    },
+    "soundfont_import" => {
+        let path: String = take(&args, "path")?;
+        let name: Option<String> = take(&args, "name").ok();
+        let source: Option<String> = take(&args, "source").ok();        let out = crate::commands::soundfont_import(app.clone(), app.state::<Arc<AppState>>(), path, name, source).await;
+        value(out)
+    },
+    "soundfont_remove" => {
+        let id: String = take(&args, "id")?;        let out = crate::commands::soundfont_remove(app.clone(), app.state::<Arc<AppState>>(), id).await;
         value(out)
     },
     "track_midi_capabilities" => {
@@ -976,6 +989,9 @@ pub const NAMES: &[&str] = &[
     "render_preview",
     "rescan_plugins",
     "restore_project_history",
+    "soundfont_import",
+    "soundfont_remove",
+    "soundfonts_list",
     "save_preset",
     "save_sound_memory",
     "set_effect_params",

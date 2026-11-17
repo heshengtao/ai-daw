@@ -3856,6 +3856,65 @@ pub async fn rescan_plugins(app: crate::tauri_api::AppHandle) -> Result<Vec<Cata
         .map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// 用户 SoundFont（上传的 .sf2 / .sf3）
+// ---------------------------------------------------------------------------
+
+/// 已导入的 SoundFont 音色库。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn soundfonts_list() -> Vec<crate::soundfonts::SoundFontEntry> {
+    crate::soundfonts::catalog()
+}
+
+/// 导入一个 `.sf2` / `.sf3`。
+///
+/// 复制进托管目录 + 算 sha256 + 枚举预设，几百 MB 的库要几秒，所以放阻塞线程；完成后让音频
+/// 线程重建一次注册表，新音色立刻能挂到轨道上。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn soundfont_import(
+    app: crate::tauri_api::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    path: String,
+    name: Option<String>,
+    source: Option<String>,
+) -> Result<crate::soundfonts::SoundFontEntry, String> {
+    let entry = crate::tauri_api::async_runtime::spawn_blocking(move || {
+        crate::soundfonts::import(std::path::Path::new(&path), name, source)
+    })
+    .await
+    .map_err(|err| err.to_string())??;
+    refresh_soundfont_registry(&state);
+    let _ = app.emit(
+        crate::state::EVENT_SOUNDFONTS,
+        crate::soundfonts::catalog(),
+    );
+    Ok(entry)
+}
+
+/// 删除一件已导入的库（文件 + 清单 + 注册表）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn soundfont_remove(
+    app: crate::tauri_api::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<Vec<crate::soundfonts::SoundFontEntry>, String> {
+    crate::tauri_api::async_runtime::spawn_blocking(move || crate::soundfonts::remove(&id))
+        .await
+        .map_err(|err| err.to_string())??;
+    refresh_soundfont_registry(&state);
+    let catalog = crate::soundfonts::catalog();
+    let _ = app.emit(crate::state::EVENT_SOUNDFONTS, catalog.clone());
+    Ok(catalog)
+}
+
+/// 让音频线程重建插件注册表。
+///
+/// 用户音色是**运行期**加进来的，扫描目录（catalog）没变，所以要走 `set_catalog` 才触发重建；
+/// 工程本身不用动，重建会保留播放位置与已打开的插件窗口。
+fn refresh_soundfont_registry(state: &AppState) {
+    state.audio.set_catalog(state.catalog_snapshot());
+}
+
 /// 取某个插件的参数表（内置插件从注册表拿，外部插件按目录加载）。
 ///
 /// **会加载插件**（外部插件要 dlopen），只能在阻塞线程上调用。抽成普通函数是为了让
@@ -3864,9 +3923,7 @@ pub(crate) fn plugin_params_with(
     catalog: &[CatalogPlugin],
     plugin_id: &str,
 ) -> Result<Vec<ParamInfo>, String> {
-    if let Some(plugin) =
-        PluginRegistry::with_builtins().create(plugin_id, TrackId(0), PluginSlot::Instrument)
-    {
+    if let Some(plugin) = crate::plugins::builtin_instance(plugin_id) {
         return Ok(plugin.params());
     }
     let entry = catalog
@@ -3895,9 +3952,7 @@ pub(crate) fn plugin_descriptor_with(
     catalog: &[CatalogPlugin],
     plugin_id: &str,
 ) -> Result<PluginDescriptor, String> {
-    if let Some(plugin) =
-        PluginRegistry::with_builtins().create(plugin_id, TrackId(0), PluginSlot::Instrument)
-    {
+    if let Some(plugin) = crate::plugins::builtin_instance(plugin_id) {
         return Ok(plugin.descriptor());
     }
     let entry = catalog

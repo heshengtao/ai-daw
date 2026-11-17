@@ -38,7 +38,7 @@ import { useTimelineStore } from "@/stores/timeline";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { useSettingsStore } from "@/stores/settings";
 import { useI18n } from "@/i18n";
-import { exportAudio, exportMidi, exportScore, importProject, onPluginsEvent, readImportFile, type ExportFormat } from "@/api/tauri";
+import { exportAudio, exportMidi, exportScore, importProject, onPluginsEvent, onSoundfontsEvent, readImportFile, type ExportFormat } from "@/api/tauri";
 import type { ProjectHistoryEntry } from "@/api/types";
 import {
   pickAudioToOpen,
@@ -113,6 +113,7 @@ const exportOpen = ref(false);
 const importOpen = ref(false);
 let pollTimer: number | null = null;
 let unlistenPlugins: (() => void) | null = null;
+let unlistenSoundfonts: (() => void) | null = null;
 let unlistenImport: (() => void) | null = null;
 let unlistenExport: (() => void) | null = null;
 let unlistenClose: (() => void) | null = null;
@@ -697,6 +698,8 @@ onMounted(async () => {
   // 插件目录：先取一次当前值，再等后端的后台扫描完成推送。
   await plugins.refresh().catch(() => {});
   unlistenPlugins = await onPluginsEvent(() => void plugins.refresh());
+  // 用户 SoundFont 库：导入 / 删除后后端会推送一次，音色清单随之刷新。
+  unlistenSoundfonts = await onSoundfontsEvent(() => void plugins.refreshSoundfonts());
   // 音频导入解码进度：顶栏下边缘的进度条据此更新。
   unlistenImport = importing.watchProgress();
   // 导出（渲染 + 编码）进度：同一条进度条。
@@ -730,6 +733,7 @@ onUnmounted(() => {
   if (autosaveTimer !== null) window.clearInterval(autosaveTimer);
   unlistenClose?.();
   unlistenPlugins?.();
+  unlistenSoundfonts?.();
   unlistenImport?.();
   unlistenExport?.();
   events.stop();

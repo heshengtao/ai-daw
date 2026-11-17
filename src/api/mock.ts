@@ -40,6 +40,7 @@ import type {
   RuntimeStatus,
   DiscoveredRuntime,
   CatalogPlugin,
+  SoundFontEntry,
   Clip,
   ClipPlacement,
   ClipRef,
@@ -1418,6 +1419,15 @@ export const mockApi = {
   // ---- 插件目录 ----
 
   listPlugins: (): CatalogPlugin[] => [...MOCK_PLUGINS],
+
+  // ---- 用户 SoundFont（浏览器里没有文件对话框，只给出空清单与明确的错误）----
+  listSoundfonts: (): SoundFontEntry[] => [],
+
+  importSoundfont: (_path: string, _name?: string): SoundFontEntry => {
+    throw new Error("浏览器预览模式不能导入 SoundFont：请用桌面版打开 .sf2 / .sf3");
+  },
+
+  removeSoundfont: (_id: string): SoundFontEntry[] => [],
 
   rescanPlugins: (): CatalogPlugin[] => [...MOCK_PLUGINS],
 

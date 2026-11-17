@@ -18,6 +18,16 @@ use ai_daw_plugin_api::{
 };
 use rustysynth_ext::{SoundFont, Synthesizer, SynthesizerSettings};
 
+pub mod user;
+
+pub use user::{inspect_bytes, plugin_id, BankPreset};
+
+/// 用户导入音色的默认增益。
+///
+/// 社区 SF2 的电平差异极大（从几乎听不见的采样集到 +12 dB 的鼓组），没有一个能覆盖全部的
+/// 校准值；起步给 1.0，界面上的音量推子/参数由用户自己拧。
+pub const USER_DEFAULT_GAIN: f32 = 1.0;
+
 pub const PIANO_ID: &str = "builtin.piano";
 pub const NYLON_GUITAR_ID: &str = "builtin.nylon_guitar";
 pub const ELECTRIC_GUITAR_ID: &str = "builtin.electric_guitar";
@@ -314,9 +324,28 @@ fn font(kind: Kind) -> Option<Arc<SoundFont>> {
     kind.asset().cache().get_or_init(|| load_font(kind)).clone()
 }
 
+/// 音源：内置资产（按 `Kind` 惰性解码、同类共享）或用户导入的 SoundFont（共享 `Arc`）。
+enum FontSource {
+    Builtin(Kind),
+    User(Arc<SoundFont>),
+}
+
+/// 内置资产的字节（只在测试里用：`user` 模块拿真实的 SF2/SF3 验证解析）。
+#[cfg(test)]
+pub(crate) fn asset_bytes(kind: Kind) -> &'static [u8] {
+    kind.asset().bytes()
+}
+
 /// 一个采样乐器实例。
 pub struct SoundFontPlugin {
-    kind: Kind,
+    font: FontSource,
+    /// 预设坐标（bank, program）。内置乐器的坐标来自 [`Kind::preset`]。
+    bank: i32,
+    program: i32,
+    /// 插件 id 与显示名：内置是 `builtin.*`，用户导入的是 `sf2.user.*`。
+    id: String,
+    name: String,
+    default_gain: f32,
     synth: Option<Synthesizer>,
     sample_rate: f64,
     /// 通道弯音范围（半音）；由 `Plugin::set_pitch_bend_range` 设置。
@@ -329,12 +358,46 @@ pub struct SoundFontPlugin {
 
 impl SoundFontPlugin {
     pub fn new(kind: Kind) -> Self {
+        let (bank, program) = kind.preset();
         Self {
-            kind,
+            font: FontSource::Builtin(kind),
+            bank,
+            program,
+            id: kind.id().to_string(),
+            name: kind.name().to_string(),
+            default_gain: kind.default_gain(),
             synth: None,
             sample_rate: 48_000.0,
             pitch_bend_range: 2.0,
             gain: kind.default_gain(),
+            tone: 1.0,
+            tone_l: 0.0,
+            tone_r: 0.0,
+        }
+    }
+
+    /// 用户导入的 SoundFont 里的一个预设。
+    ///
+    /// 字体由调用方加载并共享（导入时已经解析过一次，见 [`user::load_font`]），这里不碰磁盘，
+    /// 也就不存在「音频线程上解码几百 MB SF3」的问题。
+    pub fn user(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        font: Arc<SoundFont>,
+        bank: i32,
+        program: i32,
+    ) -> Self {
+        Self {
+            font: FontSource::User(font),
+            bank,
+            program,
+            id: id.into(),
+            name: name.into(),
+            default_gain: USER_DEFAULT_GAIN,
+            synth: None,
+            sample_rate: 48_000.0,
+            pitch_bend_range: 2.0,
+            gain: USER_DEFAULT_GAIN,
             tone: 1.0,
             tone_l: 0.0,
             tone_r: 0.0,
@@ -432,8 +495,8 @@ fn tone_alpha(tone: f32, sample_rate: f64) -> f32 {
 impl Plugin for SoundFontPlugin {
     fn descriptor(&self) -> PluginDescriptor {
         PluginDescriptor {
-            id: self.kind.id().into(),
-            name: self.kind.name().into(),
+            id: self.id.clone(),
+            name: self.name.clone(),
             kind: PluginKind::Instrument,
             io: IoLayout {
                 inputs: 0,
@@ -460,7 +523,7 @@ impl Plugin for SoundFontPlugin {
                 name: "音量".into(),
                 min: 0.0,
                 max: 4.0,
-                default: self.kind.default_gain(),
+                default: self.default_gain,
                 automatable: true,
             },
             ParamInfo {
@@ -497,7 +560,12 @@ impl Plugin for SoundFontPlugin {
         self.sample_rate = sample_rate.max(1.0);
         self.tone_l = 0.0;
         self.tone_r = 0.0;
-        let Some(font) = font(self.kind) else {
+        let font = match &self.font {
+            FontSource::Builtin(kind) => font(*kind),
+            // 用户音色在创建实例时就拿到了 `Arc`，这里只克隆指针。
+            FontSource::User(font) => Some(Arc::clone(font)),
+        };
+        let Some(font) = font else {
             self.synth = None;
             return;
         };
@@ -507,11 +575,12 @@ impl Plugin for SoundFontPlugin {
         settings.enable_reverb_and_chorus = false;
         self.synth = Synthesizer::new(&font, &settings).ok();
         if let Some(synth) = self.synth.as_mut() {
-            let (bank, patch) = self.kind.preset();
-            if bank != 0 {
-                synth.process_midi_message(0, 0xB0, 0x00, bank);
+            // bank 用 CC0（低位）/ CC32（高位）两个 7-bit 消息拼出来，与 SF2 的 rpg 编号一致。
+            if self.bank != 0 {
+                synth.process_midi_message(0, 0xB0, 0x00, self.bank & 0x7F);
+                synth.process_midi_message(0, 0xB0, 0x20, (self.bank >> 7) & 0x7F);
             }
-            synth.process_midi_message(0, 0xC0, patch, 0);
+            synth.process_midi_message(0, 0xC0, self.program, 0);
         }
     }
 

@@ -57,6 +57,8 @@ pub fn bootstrap(host: Arc<dyn Host>, cfg: Config) -> Arc<Daemon> {
     #[cfg(not(feature = "desktop"))]
     init_headless_dirs(&cfg.data_dir);
     // 用户的预设与音色记忆库是跨工程资产，按数据目录加载（拿不到就空着，不影响启动）。
+    // 用户导入的 SoundFont：清单与库文件都挂在数据目录下，插件注册表在音频线程重建时读它。
+    crate::soundfonts::init(cfg.data_dir.join("soundfonts"));
     state.init_presets(Some(cfg.data_dir.join("presets.json")));
     state.init_sound_memories(Some(cfg.data_dir.join("sound-memories.json")));
     state.init_cloud_music(Some(cfg.data_dir.join("cloud-music.json")));

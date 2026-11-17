@@ -100,6 +100,7 @@ import type {
   Send,
   PluginScanDir,
   PluginScanStatus,
+  SoundFontEntry,
   SoundMemorySummary,
   StoreNetwork,
   TransportSnapshot,
@@ -1689,6 +1690,38 @@ export function listPlugins(): Promise<CatalogPlugin[]> {
 export function rescanPlugins(): Promise<CatalogPlugin[]> {
   if (mockEnabled()) return Promise.resolve(mockApi.rescanPlugins());
   return invoke<CatalogPlugin[]>("rescan_plugins");
+}
+
+/** 用户 SoundFont 库变化广播通道名，与后端 `state::EVENT_SOUNDFONTS` 保持一致。 */
+export const EVENT_SOUNDFONTS = "engine://soundfonts";
+
+/** 已导入的用户 SoundFont（SF2 / SF3）库。 */
+export function listSoundfonts(): Promise<SoundFontEntry[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.listSoundfonts());
+  return invoke<SoundFontEntry[]>("soundfonts_list");
+}
+
+/**
+ * 导入一个 `.sf2` / `.sf3`。
+ *
+ * 后端会把它复制进托管目录、算 sha256、枚举预设，几百 MB 的库要几秒——所以这条命令是异步的，
+ * 期间界面不要禁用整块面板。
+ */
+export function importSoundfont(path: string, name?: string, source?: string): Promise<SoundFontEntry> {
+  if (mockEnabled()) return Promise.resolve(mockApi.importSoundfont(path, name));
+  return invoke<SoundFontEntry>("soundfont_import", { path, name: name ?? null, source: source ?? null });
+}
+
+/** 删除一件已导入的库，返回删除后的清单。 */
+export function removeSoundfont(id: string): Promise<SoundFontEntry[]> {
+  if (mockEnabled()) return Promise.resolve(mockApi.removeSoundfont(id));
+  return invoke<SoundFontEntry[]>("soundfont_remove", { id });
+}
+
+/** 订阅用户 SoundFont 库变化事件（导入 / 删除后推送一次）。 */
+export function onSoundfontsEvent(handler: (fonts: SoundFontEntry[]) => void): Promise<UnlistenFn> {
+  if (mockEnabled()) return Promise.resolve(() => {});
+  return listen<SoundFontEntry[]>(EVENT_SOUNDFONTS, (event) => handler(event.payload));
 }
 
 /** 最近一次插件扫描的结果摘要（被跳过的插件 + 扫描器错误）。 */

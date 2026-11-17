@@ -682,6 +682,40 @@ export interface CatalogPlugin {
   path: string;
 }
 
+/** 用户导入的 SoundFont 里的一个预设（与后端 `soundfonts::SoundFontPreset` 对应）。 */
+export interface SoundFontPreset {
+  /** SF2 的 bank 编号。 */
+  bank: number;
+  /** SF2 的 preset 编号。 */
+  program: number;
+  /** 预设名（取自 SF2 的 phdr，可能为空串）。 */
+  name: string;
+}
+
+/**
+ * 一件已导入的 SoundFont 库（与后端 `soundfonts::SoundFontEntry` 对应）。
+ *
+ * 一个库会展开成**多条**可选音色：插件 id 形如 `sf2.user.<id>.<bank>.<program>`，
+ * 与后端的 `soundfonts::plugin_id` 必须一致。
+ */
+export interface SoundFontEntry {
+  /** 内容哈希前 8 位。 */
+  id: string;
+  /** 显示名（默认文件名）。 */
+  name: string;
+  /** 托管目录里的绝对路径。 */
+  file: string;
+  /** `sf2` / `sf3`。 */
+  format: string;
+  size: number;
+  sha256: string;
+  presets: SoundFontPreset[];
+  /** 导入时间（Unix 秒）。 */
+  imported_at: number;
+  /** 来源（注册表 slug / 原路径）；本地导入时为空。 */
+  source?: string;
+}
+
 /** 扫描时被跳过的插件（崩溃 / 超时 / 读取失败）。 */
 export interface SkippedPlugin {
   path: string;

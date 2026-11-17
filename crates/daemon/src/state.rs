@@ -365,6 +365,9 @@ pub const EVENT_PLUGINS: &str = "engine://plugins";
 /// 音色记忆库变更的前端事件名。
 pub const EVENT_SOUND_MEMORIES: &str = "engine://sound-memories";
 
+/// 用户 SoundFont 库有变化（导入 / 删除）：界面据此刷新音色清单。
+pub const EVENT_SOUNDFONTS: &str = "engine://soundfonts";
+
 /// 音频导入解码进度的前端事件名。
 pub const EVENT_IMPORT: &str = "engine://import";
 

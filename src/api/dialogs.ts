@@ -236,6 +236,23 @@ export async function pickPluginToImport(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+/**
+ * 选择要导入的 SoundFont 音色库（`.sf2` / `.sf3`，可多选）；取消返回空数组。
+ *
+ * 浏览器模式直接抛错：上传一个几百 MB 的 `.sf2` 没有意义（后端要的是本地路径），
+ * 与其让用户等完上传再失败，不如说清楚。
+ */
+export async function pickSoundfontsToImport(): Promise<string[]> {
+  if (!isTauri()) throw desktopOnly(useI18n().t("dialog.soundfont"));
+  const selected = await openDialog({
+    multiple: true,
+    directory: false,
+    filters: [{ name: useI18n().t("dialog.soundfontFilter"), extensions: ["sf2", "sf3"] }],
+  });
+  if (Array.isArray(selected)) return selected;
+  return typeof selected === "string" ? [selected] : [];
+}
+
 /** 选择一个目录（引擎归档离线安装、插件扫描目录等）；取消返回 null。 */
 export async function pickDirectory(): Promise<string | null> {
   if (!isTauri()) throw desktopOnly(useI18n().t("dialog.directory"));

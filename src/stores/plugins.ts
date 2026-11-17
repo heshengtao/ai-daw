@@ -17,9 +17,23 @@ import {
   type ParamSpec,
   type PluginInfo,
 } from "@/data/plugins";
-import { listPlugins, pluginParams, pluginScanStatus, rescanPlugins } from "@/api/tauri";
+import {
+  importSoundfont,
+  listPlugins,
+  listSoundfonts,
+  pluginParams,
+  pluginScanStatus,
+  removeSoundfont,
+  rescanPlugins,
+} from "@/api/tauri";
 import { useI18n } from "@/i18n";
-import type { BackendParam, CatalogPlugin, PluginScanStatus, SkippedPlugin } from "@/api/types";
+import type {
+  BackendParam,
+  CatalogPlugin,
+  PluginScanStatus,
+  SkippedPlugin,
+  SoundFontEntry,
+} from "@/api/types";
 
 /**
  * 内置条目的名字 / 说明 / 分类存的是 **i18n key**（外部插件的名字后端给，不翻译）。
@@ -33,6 +47,33 @@ function localize(p: PluginInfo): PluginInfo {
 /** 外部插件条目的展示分类（i18n key）。 */
 const EXTERNAL_INSTRUMENT_CATEGORY = "pluginCategory.externalInstrument";
 const EXTERNAL_EFFECT_CATEGORY = "pluginCategory.externalEffect";
+
+/** 用户音色的插件 id：`sf2.user.<库 id>.<bank>.<program>`，与后端 `soundfonts::plugin_id` 一致。 */
+export function soundfontPluginId(entryId: string, bank: number, program: number): string {
+  return `sf2.user.${entryId}.${bank}.${program}`;
+}
+
+/** 已导入的库展开成界面条目：一个库几十个预设，就是几十条可选音色。 */
+function soundfontsToInfo(entries: SoundFontEntry[], text: (key: string) => string): PluginInfo[] {
+  const out: PluginInfo[] = [];
+  for (const entry of entries) {
+    for (const preset of entry.presets) {
+      out.push({
+        id: soundfontPluginId(entry.id, preset.bank, preset.program),
+        name: preset.name ? `${entry.name} · ${preset.name}` : entry.name,
+        kind: "instrument",
+        category: text("pluginCategory.soundfont"),
+        builtin: false,
+        loadable: true,
+        tags: ["soundfont", entry.format, entry.name, preset.name].filter(Boolean),
+        note: `${entry.format.toUpperCase()} · ${preset.bank}/${preset.program}`,
+        format: entry.format,
+        hasEditor: false,
+      });
+    }
+  }
+  return out;
+}
 
 /** 后端参数 → 界面参数（补上步长/小数位的界面默认值）。 */
 function toSpec(raw: BackendParam): ParamSpec {
@@ -77,11 +118,20 @@ export const usePluginsStore = defineStore("plugins", () => {
   const scanError = ref<string | null>(null);
   /** 是否正在扫描。 */
   const loading = ref(false);
+  /** 已导入的用户 SoundFont 库（一件库展开成多条音色条目）。 */
+  const soundfonts = ref<SoundFontEntry[]>([]);
   /** 参数表缓存（内置预填 + 外部懒加载）。 */
   const params = reactive<Record<string, ParamSpec[]>>({ ...BUILTIN_PARAMS });
 
   const external = computed<PluginInfo[]>(() => scanned.value.map(toInfo));
-  const all = computed<PluginInfo[]>(() => [...BUILTIN_PLUGINS.map(localize), ...external.value]);
+  const soundfontPlugins = computed<PluginInfo[]>(() =>
+    soundfontsToInfo(soundfonts.value, (key) => useI18n().t(key)),
+  );
+  const all = computed<PluginInfo[]>(() => [
+    ...BUILTIN_PLUGINS.map(localize),
+    ...external.value,
+    ...soundfontPlugins.value,
+  ]);
   const instruments = computed<PluginInfo[]>(() => all.value.filter((p) => p.kind === "instrument"));
   const effects = computed<PluginInfo[]>(() => all.value.filter((p) => p.kind === "effect"));
   const categories = computed<string[]>(() => [...new Set(all.value.map((p) => p.category))]);
@@ -129,11 +179,14 @@ export const usePluginsStore = defineStore("plugins", () => {
     try {
       // 跳过名单是附加信息；它取不到不该让整份插件清单也失败。
       const empty: PluginScanStatus = { skipped: [], error: null };
-      const [list, status] = await Promise.all([
+      const [list, status, fonts] = await Promise.all([
         listPlugins(),
         pluginScanStatus().catch(() => empty),
+        // 用户音色取不到不该让整份插件清单也失败。
+        listSoundfonts().catch(() => [] as SoundFontEntry[]),
       ]);
       scanned.value = list;
+      soundfonts.value = fonts;
       skipped.value = status.skipped;
       scanError.value = status.error;
     } finally {
@@ -157,8 +210,38 @@ export const usePluginsStore = defineStore("plugins", () => {
     }
   }
 
+  /** 只刷新用户 SoundFont 清单（导入 / 删除后调用，不必重扫 VST）。 */
+  async function refreshSoundfonts(): Promise<void> {
+    soundfonts.value = await listSoundfonts().catch(() => []);
+  }
+
+  /** 导入若干个 `.sf2` / `.sf3`；返回成功导入的库，失败的逐条收集原因。 */
+  async function importFonts(paths: string[]): Promise<{ imported: SoundFontEntry[]; failed: string[] }> {
+    const imported: SoundFontEntry[] = [];
+    const failed: string[] = [];
+    for (const path of paths) {
+      try {
+        imported.push(await importSoundfont(path));
+      } catch (err) {
+        failed.push(`${path}: ${String(err)}`);
+      }
+    }
+    await refreshSoundfonts();
+    return { imported, failed };
+  }
+
+  /** 删除一件库（后端连文件一起删）。 */
+  async function removeFont(id: string): Promise<void> {
+    soundfonts.value = await removeSoundfont(id);
+  }
+
   return {
     scanned,
+    soundfonts,
+    soundfontPlugins,
+    refreshSoundfonts,
+    importFonts,
+    removeFont,
     skipped,
     scanError,
     loading,

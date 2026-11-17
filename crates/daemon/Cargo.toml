@@ -32,6 +32,7 @@ serde_yaml = "0.9"
 ai-daw-engine = { path = "../engine", features = ["realtime"] }
 ai-daw-plugin-api = { path = "../plugin-api" }
 ai-daw-host-vst3 = { path = "../host-vst3" }
+ai-daw-instruments = { path = "../instruments" }
 ai-daw-analysis = { path = "../analysis" }
 ai-daw-asset = { path = "../asset" }
 # 本地 AI（音频转 MIDI / 降噪）：内置 DSP，不依赖外部模型。

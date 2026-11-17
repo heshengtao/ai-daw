@@ -9,7 +9,9 @@
  * 清单按分类分组；音色多起来之后要精挑细选，请走检查器里的「浏览全部音色…」。
  */
 import { computed, ref } from "vue";
-import { CheckIcon, PlusIcon } from "@heroicons/vue/24/outline";
+import { CheckIcon, PlusIcon, TrashIcon } from "@heroicons/vue/24/outline";
+import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
+import { pickSoundfontsToImport } from "@/api/dialogs";
 import { usePluginsStore } from "@/stores/plugins";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
@@ -26,6 +28,49 @@ const i18n = useI18n();
 const pluginInterface = usePluginInterface();
 
 const track = computed(() => selection.track);
+
+/** 正在导入 SoundFont（复制 + 解析要几秒，按钮期间显示「导入中」）。 */
+const importing = ref(false);
+/** 待确认删除的库（null = 没开确认框）。 */
+const pendingRemove = ref<{ id: string; name: string } | null>(null);
+const removeOpen = computed(() => pendingRemove.value !== null);
+
+/** 导入 SF2/SF3：可多选，逐个导入；失败的第一条原因直接提示。 */
+async function importSoundfonts(): Promise<void> {
+  try {
+    const paths = await pickSoundfontsToImport();
+    if (paths.length === 0) return;
+    importing.value = true;
+    const { imported, failed } = await plugins.importFonts(paths);
+    if (imported.length > 0) {
+      layout.notify(i18n.t("plugins.soundfontImported", { count: imported.length }));
+    }
+    if (failed.length > 0) {
+      layout.notify(i18n.t("error.load", { error: failed[0] }));
+    }
+  } catch (err) {
+    layout.notify(i18n.t("error.load", { error: String(err) }));
+  } finally {
+    importing.value = false;
+  }
+}
+
+/** 删除库要先确认：文件是**真的从磁盘删掉**的。 */
+function askRemoveFont(entry: { id: string; name: string }): void {
+  pendingRemove.value = { id: entry.id, name: entry.name };
+}
+
+async function confirmRemoveFont(): Promise<void> {
+  const target = pendingRemove.value;
+  pendingRemove.value = null;
+  if (!target) return;
+  try {
+    await plugins.removeFont(target.id);
+    layout.notify(i18n.t("plugins.soundfontRemoved", { name: target.name }));
+  } catch (err) {
+    layout.notify(i18n.t("error.load", { error: String(err) }));
+  }
+}
 
 /** 来源筛选：全部 / 内置 / 外部。 */
 type SourceFilter = "all" | "builtin" | "external";
@@ -180,6 +225,39 @@ async function retryScan(): Promise<void> {
       </div>
     </div>
 
+    <!-- 用户 SoundFont：一个库展开成多条音色，下面的清单按分类平铺 -->
+    <div class="sf-box">
+      <div class="sf-head">
+        <span class="sf-title">{{ i18n.t("plugins.soundfontTitle") }}</span>
+        <button class="sf-import" :disabled="importing" @click="importSoundfonts">
+          <PlusIcon class="w-[14px] h-[14px]" />
+          {{ importing ? i18n.t("plugins.soundfontImporting") : i18n.t("plugins.soundfontImport") }}
+        </button>
+      </div>
+      <p v-if="!plugins.soundfonts.length" class="sf-empty">
+        {{ i18n.t("plugins.soundfontEmpty") }}
+      </p>
+      <ul v-else class="sf-list">
+        <li v-for="f in plugins.soundfonts" :key="f.id" class="sf-item">
+          <div class="sf-main">
+            <span class="sf-name" :title="f.file">{{ f.name }}</span>
+            <span class="sf-note">
+              {{ f.format.toUpperCase() }} ·
+              {{ i18n.t("plugins.soundfontPresets", { count: f.presets.length }) }}
+            </span>
+          </div>
+          <button
+            class="sf-remove"
+            :title="i18n.t('plugins.soundfontRemove', { name: f.name })"
+            :aria-label="i18n.t('plugins.soundfontRemove', { name: f.name })"
+            @click="askRemoveFont(f)"
+          >
+            <TrashIcon class="w-[14px] h-[14px]" />
+          </button>
+        </li>
+      </ul>
+    </div>
+
     <!-- 扫描器整体没跑起来（探针缺失等）：说清楚原因，而不是静默显示「没有插件」 -->
     <div v-if="plugins.scanError" class="scan-warn" role="alert">
       <div class="scan-warn-main">
@@ -248,6 +326,17 @@ async function retryScan(): Promise<void> {
         </li>
       </ul>
     </div>
+
+    <ConfirmDialog
+      :open="removeOpen"
+      :title="i18n.t('plugins.soundfontRemoveTitle')"
+      :message="i18n.t('plugins.soundfontRemoveMessage', { name: pendingRemove?.name ?? '' })"
+      :confirm-label="i18n.t('common.delete')"
+      danger
+      @confirm="confirmRemoveFont"
+      @cancel="pendingRemove = null"
+      @update:open="(open: boolean) => { if (!open) pendingRemove = null }"
+    />
   </div>
 </template>
 
@@ -477,5 +566,102 @@ async function retryScan(): Promise<void> {
   flex: 0 0 auto;
   font-size: 10px;
   color: rgb(var(--md-on-surface-muted));
+}
+
+/* ---- 用户 SoundFont：导入入口 + 已导入的库 ---- */
+.sf-box {
+  margin: 10px 12px 0;
+  padding: 8px 10px 10px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
+  border-radius: 12px;
+  background-color: rgb(var(--md-surface-container));
+}
+.sf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sf-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: rgb(var(--md-on-surface-variant));
+}
+.sf-import {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.9);
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--md-primary));
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sf-import:hover:not(:disabled) {
+  background-color: rgb(var(--md-primary) / 0.08);
+}
+.sf-import:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.sf-empty {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgb(var(--md-on-surface-muted));
+}
+.sf-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sf-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sf-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.sf-name {
+  font-size: 12px;
+  color: rgb(var(--md-on-surface));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sf-note {
+  font-size: 10.5px;
+  color: rgb(var(--md-on-surface-muted));
+}
+.sf-remove {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: rgb(var(--md-on-surface-variant));
+  cursor: pointer;
+}
+.sf-remove:hover {
+  background-color: rgb(var(--md-error) / 0.12);
+  color: rgb(var(--md-error));
 }
 </style>

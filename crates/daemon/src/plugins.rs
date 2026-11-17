@@ -177,6 +177,36 @@ fn build_registry_with(
         });
     }
 
+    // 用户导入的 SoundFont：每个预设都是一条独立插件。
+    //
+    // 内置的 18 件采样乐器是编译期固定的；用户库是运行期加进来的，所以放在这里而不是
+    // `with_builtins`。字体在工厂里加载（工程装载线程，不是音频回调），导入时已经解析过
+    // 一次并进了进程内缓存，所以这里通常是命中缓存。
+    for reg in crate::soundfonts::registrations() {
+        let key = reg.id.clone();
+        let plugin_id = reg.id;
+        let display_name = reg.name;
+        let file = reg.file;
+        let (bank, program) = (reg.bank, reg.program);
+        let missing_id = plugin_id.clone();
+        registry.register(&key, move |_track, _slot| {
+            match ai_daw_instruments::user::load_font(&file) {
+                Ok(font) => Box::new(ai_daw_instruments::SoundFontPlugin::user(
+                    plugin_id.clone(),
+                    display_name.clone(),
+                    font,
+                    bank,
+                    program,
+                )),
+                Err(err) => {
+                    // 库文件被删/损坏：这条轨道静音，工程照常打开。
+                    crate::logging::info(format!("SoundFont「{display_name}」加载失败：{err}"));
+                    missing_plugin(&missing_id)
+                }
+            }
+        });
+    }
+
     // 工程引用了、但本机目录里没有的插件 → 静音占位（否则该轨会被静默跳过）。
     let known: HashSet<String> = registry.ids().into_iter().collect();
     for id in referenced_plugin_ids(project) {
@@ -186,6 +216,25 @@ fn build_registry_with(
     }
 
     registry
+}
+
+/// 就地创建「不需要插件目录」的实例：内置插件与用户导入的 SoundFont。
+///
+/// 参数表 / 描述符查询走这里——用户音色不在 [`PluginRegistry::with_builtins`] 里，也不在
+/// 扫描目录里，直接用注册表或目录查都会得到「未知插件」。
+pub fn builtin_instance(plugin_id: &str) -> Option<Box<dyn ai_daw_plugin_api::Plugin>> {
+    if let Some(plugin) =
+        PluginRegistry::with_builtins().create(plugin_id, ai_daw_engine::model::TrackId(0), PluginSlot::Instrument)
+    {
+        return Some(plugin);
+    }
+    let reg = crate::soundfonts::registrations()
+        .into_iter()
+        .find(|reg| reg.id == plugin_id)?;
+    let font = ai_daw_instruments::user::load_font(&reg.file).ok()?;
+    Some(Box::new(ai_daw_instruments::SoundFontPlugin::user(
+        reg.id, reg.name, font, reg.bank, reg.program,
+    )))
 }
 
 /// 工程里被引用到的插件 id（乐器 + 效果链），去重升序。

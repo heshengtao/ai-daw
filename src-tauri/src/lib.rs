@@ -329,6 +329,11 @@ pub fn run() {
             // 后端从此刻起就是"daemon"：状态 + 宿主（Tauri 实现）+ 配置。
             // 网页客户端连的是同一个 `Daemon`，所以两边看到的是同一份工程、同一个音频宿主。
             let host = Arc::new(crate::tauri_host::TauriHost::new(app.handle().clone()));
+            // 用户导入的 SoundFont 清单要在**音频线程装载工程之前**读出来，否则第一次建
+            // 注册表时看不到它们（桌面端直接构造 AppState，不走 `boot::bootstrap`）。
+            if let Ok(dir) = ai_daw_daemon::paths::data_dir(app.handle()) {
+                ai_daw_daemon::soundfonts::init(dir.join("soundfonts"));
+            }
             let state = AppState::bootstrap_with_host(session, cached, host.clone());
             let daemon = Daemon::new(
                 Arc::new(state),
@@ -674,6 +679,9 @@ pub fn run() {
             ai_daw_daemon::plugin_dirs::plugin_scan_dirs,
             ai_daw_daemon::plugin_dirs::plugin_set_scan_dirs,
             ai_daw_daemon::commands::rescan_plugins,
+            ai_daw_daemon::commands::soundfonts_list,
+            ai_daw_daemon::commands::soundfont_import,
+            ai_daw_daemon::commands::soundfont_remove,
             ai_daw_daemon::commands::plugin_params,
             ai_daw_daemon::commands::add_effect,
             ai_daw_daemon::commands::remove_effect,
