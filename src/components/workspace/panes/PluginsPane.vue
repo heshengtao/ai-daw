@@ -12,10 +12,7 @@ import { computed, ref } from "vue";
 import { CheckIcon, PlusIcon, TrashIcon } from "@heroicons/vue/24/outline";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import { pickSoundfontsToImport } from "@/api/dialogs";
-import { installSoundfontFromStore, searchSoundfontStore } from "@/api/tauri";
-import { humanSize } from "@/utils/models";
-import { openExternal } from "@/utils/external";
-import type { SoundfontStoreMatch } from "@/api/types";
+import SoundFontStorePanel from "@/components/workspace/SoundFontStorePanel.vue";
 import { usePluginsStore } from "@/stores/plugins";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
@@ -35,52 +32,8 @@ const track = computed(() => selection.track);
 
 /** 正在导入 SoundFont（复制 + 解析要几秒，按钮期间显示「导入中」）。 */
 const importing = ref(false);
-/** 在线音色库面板是否展开；结果列表与安装状态。 */
+/** 在线音色库面板是否展开（列表本身由共享组件渲染）。 */
 const storeOpen = ref(false);
-const storeQuery = ref("");
-const storeLoading = ref(false);
-const storeResults = ref<SoundfontStoreMatch[]>([]);
-const storeError = ref<string | null>(null);
-const installingSlug = ref<string | null>(null);
-
-/** 展开/收起在线音色库；第一次展开时拉一次索引。 */
-async function toggleStore(): Promise<void> {
-  storeOpen.value = !storeOpen.value;
-  if (storeOpen.value && storeResults.value.length === 0) await searchStore();
-}
-
-/** 搜索引（后端带 6 小时缓存，重复搜索不会反复请求 GitHub）。 */
-async function searchStore(): Promise<void> {
-  storeLoading.value = true;
-  storeError.value = null;
-  try {
-    storeResults.value = await searchSoundfontStore(storeQuery.value.trim());
-  } catch (err) {
-    storeError.value = String(err);
-    storeResults.value = [];
-  } finally {
-    storeLoading.value = false;
-  }
-}
-
-/** 一键安装：下载/校验/解压都在后端，完成后刷新本机清单。 */
-async function installFromStore(bank: SoundfontStoreMatch): Promise<void> {
-  if (!bank.installable || installingSlug.value) return;
-  installingSlug.value = bank.slug;
-  try {
-    const result = await installSoundfontFromStore(bank.slug);
-    await plugins.refreshSoundfonts();
-    const count = result.imported.length;
-    layout.notify(i18n.t("plugins.soundfontStoreInstalled", { name: bank.name, count }));
-    // 装过的条目要立刻显示「已装」，否则用户会连点两次。
-    const row = storeResults.value.find((item) => item.slug === bank.slug);
-    if (row) row.installed = true;
-  } catch (err) {
-    layout.notify(i18n.t("error.load", { error: String(err) }));
-  } finally {
-    installingSlug.value = null;
-  }
-}
 
 /** 待确认删除的库（null = 没开确认框）。 */
 const pendingRemove = ref<{ id: string; name: string } | null>(null);
@@ -308,66 +261,12 @@ async function retryScan(): Promise<void> {
         </li>
       </ul>
 
-      <!-- 在线索引：折叠着，展开才联网 -->
+      <!-- 在线索引：折叠着，展开才联网；列表本身与下载管理器共用同一个组件 -->
       <div class="sf-store">
-        <button class="sf-store-toggle" @click="toggleStore">
+        <button class="sf-store-toggle" @click="storeOpen = !storeOpen">
           {{ storeOpen ? i18n.t("plugins.soundfontStoreHide") : i18n.t("plugins.soundfontStoreBrowse") }}
         </button>
-        <template v-if="storeOpen">
-          <div class="sf-store-search">
-            <input
-              v-model="storeQuery"
-              type="search"
-              :placeholder="i18n.t('plugins.soundfontStoreSearchPlaceholder')"
-              @keyup.enter="searchStore"
-            />
-            <button :disabled="storeLoading" @click="searchStore">
-              {{ i18n.t("common.search") }}
-            </button>
-          </div>
-          <p v-if="storeLoading" class="sf-empty">{{ i18n.t("common.loading") }}</p>
-          <p v-else-if="storeError" class="sf-empty sf-store-error">{{ storeError }}</p>
-          <p v-else-if="storeResults.length === 0" class="sf-empty">
-            {{ i18n.t("plugins.soundfontStoreEmpty") }}
-          </p>
-          <ul v-else class="sf-list">
-            <li v-for="bank in storeResults" :key="bank.slug" class="sf-item">
-              <div class="sf-main">
-                <span class="sf-name" :title="bank.description">{{ bank.name }}</span>
-                <span class="sf-note">
-                  {{ bank.license }}
-                  <template v-if="bank.size"> · {{ humanSize(bank.size) }}</template>
-                  <template v-if="bank.format"> · {{ bank.format.toUpperCase() }}</template>
-                </span>
-              </div>
-              <span v-if="bank.installed" class="sf-badge">
-                {{ i18n.t("plugins.soundfontStoreInstalledBadge") }}
-              </span>
-              <!-- 不能一键装的（7z / 只给下载页）：把用户送到作者页面，而不是发一个灰按钮 -->
-              <button
-                v-else-if="!bank.installable && bank.homepage"
-                class="sf-install"
-                :title="bank.blocked ?? ''"
-                @click="openExternal(bank.homepage)"
-              >
-                {{ i18n.t("plugins.soundfontStoreOpen") }}
-              </button>
-              <button
-                v-else
-                class="sf-install"
-                :disabled="!bank.installable || installingSlug !== null"
-                :title="bank.blocked ?? ''"
-                @click="installFromStore(bank)"
-              >
-                {{
-                  installingSlug === bank.slug
-                    ? i18n.t("plugins.soundfontStoreInstalling")
-                    : i18n.t("plugins.soundfontStoreInstall")
-                }}
-              </button>
-            </li>
-          </ul>
-        </template>
+        <SoundFontStorePanel v-if="storeOpen" />
       </div>
     </div>
 
@@ -797,66 +696,5 @@ async function retryScan(): Promise<void> {
 .sf-store-toggle:hover {
   color: rgb(var(--md-primary));
   border-color: rgb(var(--md-primary) / 0.6);
-}
-.sf-store-search {
-  display: flex;
-  gap: 6px;
-  margin-top: 8px;
-}
-.sf-store-search input {
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 26px;
-  padding: 0 8px;
-  border: 1px solid rgb(var(--md-outline-variant) / 0.8);
-  border-radius: 8px;
-  background: transparent;
-  color: rgb(var(--md-on-surface));
-  font-size: 11.5px;
-}
-.sf-store-search input:focus {
-  outline: 2px solid rgb(var(--md-primary) / 0.4);
-  outline-offset: 0;
-}
-.sf-store-search button {
-  flex: 0 0 auto;
-  height: 26px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 8px;
-  background-color: rgb(var(--md-primary) / 0.12);
-  color: rgb(var(--md-primary));
-  font-size: 11px;
-  cursor: pointer;
-}
-.sf-store-search button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.sf-store-error {
-  color: rgb(var(--md-error));
-}
-.sf-badge {
-  flex: 0 0 auto;
-  font-size: 10.5px;
-  color: rgb(var(--md-on-surface-muted));
-}
-.sf-install {
-  flex: 0 0 auto;
-  height: 24px;
-  padding: 0 10px;
-  border: 1px solid rgb(var(--md-primary) / 0.5);
-  border-radius: 999px;
-  background: transparent;
-  color: rgb(var(--md-primary));
-  font-size: 11px;
-  cursor: pointer;
-}
-.sf-install:hover:not(:disabled) {
-  background-color: rgb(var(--md-primary) / 0.1);
-}
-.sf-install:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 </style>

@@ -2260,6 +2260,7 @@ const en: Record<string, string> = {
   "manager.tabForeign": "External",
   "manager.tabAvailable": "Available",
   // ---- Models (local AI weights) ----
+  "manager.kindSoundfont": "SoundFonts",
   "manager.kindModel": "Models",
   "manager.installedSearchPlaceholder": "Search installed plugins or models…",
   "manager.emptyInstalledFiltered": "No matching installed items",

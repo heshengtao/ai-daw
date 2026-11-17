@@ -121,6 +121,23 @@ pub struct StoreInstall {
     pub skipped: Vec<String>,
 }
 
+/// 要尝试的索引地址：环境变量 `AIDAW_SOUNDFONT_REGISTRY` 优先（自建镜像 / 本地调试），
+/// 然后是内置的两个源。
+///
+/// **没有自动发现**：索引地址是写死的，不会去扫 GitHub 上的随机仓库——那样既慢又不可控。
+/// 想换成自己的索引，设一个环境变量即可。
+fn sources() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(url) = std::env::var("AIDAW_SOUNDFONT_REGISTRY") {
+        let trimmed = url.trim();
+        if !trimmed.is_empty() {
+            out.push(trimmed.to_string());
+        }
+    }
+    out.extend(SOURCES.iter().map(|url| url.to_string()));
+    out
+}
+
 /// 一次拉取的结果：索引 + 它该缓存多久。
 ///
 /// 正常命中是 6 小时；退回**随包快照**时只缓存 60 秒——网络恢复了要能很快重试，
@@ -165,7 +182,7 @@ pub fn catalog(app: &crate::tauri_api::AppHandle, force: bool) -> Result<Vec<Sto
     let network = manager::StoreRuntime::load(app).network();
     let proxy = manager::resolve_proxy(&network).proxy;
     let mut errors = Vec::new();
-    for url in SOURCES {
+    for url in &sources() {
         match fetch(url, proxy.as_ref()) {
             Ok(text) => match parse_registry(&text) {
                 Ok(banks) => {

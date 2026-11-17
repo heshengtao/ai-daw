@@ -2257,6 +2257,7 @@ const zh: Record<string, string> = {
   "manager.tabForeign": "外部",
   "manager.tabAvailable": "可下载",
   // ---- 模型（本地 AI 权重）----
+  "manager.kindSoundfont": "音色库",
   "manager.kindModel": "模型",
   "manager.installedSearchPlaceholder": "搜索已安装的插件或模型…",
   "manager.emptyInstalledFiltered": "没有匹配的已安装项",

@@ -23,6 +23,7 @@ import {
 import { useRouter } from "vue-router";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import DownloadStrip from "@/components/common/DownloadStrip.vue";
+import SoundFontStorePanel from "@/components/workspace/SoundFontStorePanel.vue";
 import { managerResolveUrl, modelResolveUrl } from "@/api/tauri";
 import { useManagerStore } from "@/stores/manager";
 import { useModelsStore } from "@/stores/models";
@@ -93,7 +94,7 @@ const tab = ref<Tab>("installed");
 const query = ref("");
 /** 只看当前系统能装的（默认开：注册表很大，先给能用的）。 */
 const compatibleOnly = ref(true);
-const kindFilter = ref<"all" | "instrument" | "effect" | "model" | "runtime">("all");
+const kindFilter = ref<"all" | "instrument" | "effect" | "model" | "runtime" | "soundfont">("all");
 /** 待确认删除的记录 key。 */
 const confirming = ref<string | null>(null);
 /** 待确认删除的模型 id。 */
@@ -466,12 +467,13 @@ const installedRows = computed(() =>
 
 // ---- 「已安装」的搜索 + 快捷筛选（乐器 / 效果 / 模型）----
 /** 可选的快捷筛选。 */
-const INSTALLED_FILTERS = ["all", "instrument", "effect", "model", "runtime"] as const;
+const INSTALLED_FILTERS = ["all", "instrument", "effect", "model", "runtime", "soundfont"] as const;
 type InstalledFilter = (typeof INSTALLED_FILTERS)[number];
 const installedFilter = ref<InstalledFilter>("all");
 const installedQuery = ref("");
 
 function installedFilterLabel(k: InstalledFilter): string {
+  if (k === "soundfont") return i18n.t("manager.kindSoundfont");
   if (k === "instrument") return i18n.t("manager.kindInstrument");
   if (k === "effect") return i18n.t("manager.kindEffect");
   if (k === "model") return i18n.t("manager.kindModel");
@@ -504,12 +506,40 @@ const visibleInstalledPlugins = computed(() => {
   });
 });
 
+/** 已导入的 SoundFont 音色库（按筛选与搜索过滤）。 */
+const visibleInstalledSoundfonts = computed(() => {
+  if (
+    installedFilter.value === "instrument" ||
+    installedFilter.value === "effect" ||
+    installedFilter.value === "model" ||
+    installedFilter.value === "runtime"
+  ) {
+    return [];
+  }
+  const q = installedQuery.value.trim().toLowerCase();
+  return plugins.soundfonts.filter((font) => !q || font.name.toLowerCase().includes(q));
+});
+
+/** 待确认删除的音色库 id。 */
+const confirmingFont = ref<string | null>(null);
+
+async function removeSoundfont(id: string, name: string): Promise<void> {
+  confirmingFont.value = null;
+  try {
+    await plugins.removeFont(id);
+    layout.notify(i18n.t("plugins.soundfontRemoved", { name }));
+  } catch (err) {
+    layout.notify(i18n.t("error.load", { error: String(err) }));
+  }
+}
+
 /** 「已安装」标签上的角标：插件 + 模型。 */
 const installedTotal = computed(
   () =>
     manager.installed.length +
     models.catalog.filter((m) => m.installed).length +
-    optionalRuntimes.value.filter((r) => r.installed).length,
+    optionalRuntimes.value.filter((r) => r.installed).length +
+    plugins.soundfonts.length,
 );
 
 /** 兼容文件排在前面，安装器排后面。 */
@@ -704,6 +734,41 @@ async function doRevealModel(id: string): Promise<void> {
           </button>
         </div>
       </div>
+
+      <!-- 已导入的 SoundFont 音色库：与插件并列，各自一份清单 -->
+      <ul v-if="visibleInstalledSoundfonts.length" class="list">
+        <li v-for="font in visibleInstalledSoundfonts" :key="'sf-' + font.id" class="card">
+          <div class="card-main">
+            <div class="card-top">
+              <span class="card-name">{{ font.name }}</span>
+              <span class="badge">{{ i18n.t("manager.kindSoundfont") }}</span>
+            </div>
+            <p class="card-author">
+              {{ font.format.toUpperCase() }} ·
+              {{ i18n.t("plugins.soundfontPresets", { count: font.presets.length }) }} ·
+              {{ humanSize(font.size) }}
+            </p>
+          </div>
+
+          <button
+            v-if="confirmingFont !== font.id"
+            class="icon-btn danger"
+            :title="i18n.t('plugins.soundfontRemove', { name: font.name })"
+            :aria-label="i18n.t('plugins.soundfontRemove', { name: font.name })"
+            @click="confirmingFont = font.id"
+          >
+            <TrashIcon class="w-[15px] h-[15px]" />
+          </button>
+          <span v-else class="confirm">
+            <button class="mini-btn danger" @click="removeSoundfont(font.id, font.name)">
+              {{ i18n.t("manager.confirmRemove") }}
+            </button>
+            <button class="mini-btn" @click="confirmingFont = null">
+              {{ i18n.t("common.cancel") }}
+            </button>
+          </span>
+        </li>
+      </ul>
 
       <ul
         v-if="
@@ -988,7 +1053,7 @@ async function doRevealModel(id: string): Promise<void> {
         </li>
       </ul>
 
-      <div v-else class="empty">
+      <div v-else-if="visibleInstalledSoundfonts.length === 0" class="empty">
         <ArrowDownTrayIcon class="empty-icon" />
         <p class="empty-text">
           {{ i18n.t(installedTotal > 0 ? "manager.emptyInstalledFiltered" : "manager.emptyInstalled") }}
@@ -1042,7 +1107,7 @@ async function doRevealModel(id: string): Promise<void> {
         />
         <div class="chips" role="group" :aria-label="i18n.t('manager.kindFilter')">
           <button
-            v-for="k in (['all', 'instrument', 'effect', 'model', 'runtime'] as const)"
+            v-for="k in (['all', 'instrument', 'effect', 'model', 'runtime', 'soundfont'] as const)"
             v-show="k !== 'runtime' || optionalRuntimes.length || runtimes.discovered.length"
             :key="k"
             class="chip"
@@ -1060,7 +1125,9 @@ async function doRevealModel(id: string): Promise<void> {
                       ? "manager.kindEffect"
                       : k === "runtime"
                         ? "manager.kindRuntime"
-                        : "manager.kindModel",
+                        : k === "soundfont"
+                          ? "manager.kindSoundfont"
+                          : "manager.kindModel",
               )
             }}
           </button>
@@ -1099,6 +1166,14 @@ async function doRevealModel(id: string): Promise<void> {
           </button>
         </div>
       </div>
+
+      <!-- 音色库：走另一份索引（SoundFont 注册表），不混进插件列表；
+           搜索框与上方共用一个词，输入停下来 300 ms 才查 -->
+      <SoundFontStorePanel
+        v-if="kindFilter === 'soundfont'"
+        :query="query"
+        :show-search="false"
+      />
 
       <ul v-if="availableShown > 0" class="list">
         <!-- 模型（当筛选允许时；与插件共用同一份搜索与筛选、同一套卡片排版） -->
@@ -1459,7 +1534,7 @@ async function doRevealModel(id: string): Promise<void> {
         </li>
       </ul>
 
-      <div v-else class="empty">
+      <div v-else-if="kindFilter !== 'soundfont'" class="empty">
         <ArrowPathIcon class="empty-icon" :class="{ spinning: manager.loading }" />
         <p class="empty-text">
           {{ i18n.t(manager.loading ? "manager.loadingRegistry" : "manager.emptyAvailable") }}
