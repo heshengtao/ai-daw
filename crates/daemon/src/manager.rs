@@ -1951,7 +1951,10 @@ fn url_file_name(url: &str) -> Option<String> {
 /// 与 `ai-daw-soundfont-registry` 的 `archive` 字段一一对应。7z 暂不支持（见
 /// [`extract_archive`] 的注释）。
 pub(crate) fn archive_supported(kind: &str) -> bool {
-    matches!(kind, "zip" | "tar.gz" | "tgz" | "tar.bz2" | "tbz2" | "tar.xz" | "txz")
+    matches!(
+        kind,
+        "zip" | "tar.gz" | "tgz" | "tar.bz2" | "tbz2" | "tar.xz" | "txz" | "7z"
+    )
 }
 
 /// 把归档解到 `dest`；非归档（如裸 `.clap`）则直接把下载文件放进去。
@@ -1961,10 +1964,7 @@ pub(crate) fn extract_archive(archive: &Path, dest: &Path, url: &str) -> Result<
         "tar.gz" | "tgz" => extract_tar_gz(archive, dest),
         "tar.bz2" | "tbz2" => extract_tar_bz2(archive, dest),
         "tar.xz" | "txz" => extract_tar_xz(archive, dest),
-        "7z" => Err(
-            "暂不支持 7z 归档（客户端还没有 7z 解码器）。请在浏览器打开下载页，解压后手动导入 .sf2/.sf3"
-                .into(),
-        ),
+        "7z" => extract_7z(archive, dest),
         _ => {
             let name = url_file_name(url).ok_or("无法从下载地址推断文件名")?;
             fs::copy(archive, dest.join(name)).map_err(|e| format!("复制失败：{e}"))?;
@@ -2019,6 +2019,53 @@ fn extract_tar_bz2(archive: &Path, dest: &Path) -> Result<(), String> {
 fn extract_tar_xz(archive: &Path, dest: &Path) -> Result<(), String> {
     let file = fs::File::open(archive).map_err(|e| e.to_string())?;
     extract_tar(xz2::read::XzDecoder::new(file), dest, "tar.xz")
+}
+
+/// 7z：社区 SoundFont 包（FreePats 等）最常用的格式，纯 Rust 解码。
+fn extract_7z(archive: &Path, dest: &Path) -> Result<(), String> {
+    use sevenz_rust::{Error as SevenZError, Password, SevenZReader};
+
+    let file = fs::File::open(archive).map_err(|e| e.to_string())?;
+    let len = file.metadata().map_err(|e| e.to_string())?.len();
+    let mut reader =
+        SevenZReader::new(file, len, Password::empty()).map_err(|e| format!("不是有效的 7z：{e}"))?;
+
+    let mut total: u64 = 0;
+    let mut oversize = false;
+    reader
+        .for_each_entries(|entry, reader| -> Result<bool, SevenZError> {
+            let rel = Path::new(entry.name());
+            // 与 zip / tar 同一条规矩：绝对路径与 `..` 一律不写盘（防目录穿越）。
+            if rel.components().any(|c| {
+                matches!(
+                    c,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            }) {
+                return Ok(true);
+            }
+            let out = dest.join(rel);
+            if entry.is_directory() {
+                fs::create_dir_all(&out)?;
+                return Ok(true);
+            }
+            total += entry.size();
+            if total > MAX_EXTRACTED_BYTES {
+                oversize = true;
+                return Ok(false);
+            }
+            if let Some(parent) = out.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut writer = fs::File::create(&out)?;
+            std::io::copy(reader, &mut writer)?;
+            Ok(true)
+        })
+        .map_err(|e| format!("解压 7z 失败：{e}"))?;
+    if oversize {
+        return Err("归档解压后体积过大，已中止".into());
+    }
+    Ok(())
 }
 
 /// 三种 tar 共用一套解包逻辑（压缩层只负责给出字节流）。
@@ -2813,6 +2860,22 @@ pub async fn plugin_manager_probe_proxy(
 mod tests {
     use super::*;
 
+    /// 递归列出目录里的文件（测试用）。
+    fn walk_files(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    out.extend(walk_files(&path));
+                } else {
+                    out.push(path);
+                }
+            }
+        }
+        out
+    }
+
     /// 老配置文件里没有 `hf_token` 字段：必须照常加载，**不能**整份退回默认值
     /// （`StoreNetwork::load` 在反序列化失败时会 `unwrap_or_default()`，那会悄悄清空
     /// 用户的代理与镜像设置）。
@@ -3493,6 +3556,32 @@ mod tests {
     /// 三种 tar（gz / bz2 / xz）解出来的内容必须一致，且都防目录穿越。
     ///
     /// 社区 SoundFont 包与 Linux CUDA 组件都会用后两种，`extract_archive` 之前只认 gz。
+    /// 用一份**真实的** FreePats 7z 验证解码器（默认忽略；手动跑：
+    /// `AIDAW_TEST_7Z=/path/to/x.7z cargo test -p ai-daw-daemon --lib 7z -- --ignored`）。
+    #[test]
+    #[ignore = "需要一份真实的 7z，见测试体注释"]
+    fn extracts_a_real_freepats_7z() {
+        let Ok(path) = std::env::var("AIDAW_TEST_7Z") else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("ai-daw-real-7z-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("temp dir");
+        extract_archive(Path::new(&path), &dir, "https://freepats.zenvoid.org/x.7z")
+            .expect("真实 7z 必须能解");
+        let found: Vec<_> = walk_files(&dir);
+        assert!(
+            found.iter().any(|file| {
+                matches!(
+                    file.extension().and_then(|e| e.to_str()),
+                    Some("sf2") | Some("sf3")
+                )
+            }),
+            "解出来应该至少有一个 sf2：{found:?}"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn extracts_tar_gz_bz2_and_xz() {
         use std::io::Write;
@@ -3525,21 +3614,6 @@ mod tests {
         xz.write_all(&tar_bytes).expect("xz");
         let xz = xz.finish().expect("xz bytes");
 
-        fn walk_files(dir: &Path) -> Vec<PathBuf> {
-            let mut out = Vec::new();
-            if let Ok(entries) = fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        out.extend(walk_files(&path));
-                    } else {
-                        out.push(path);
-                    }
-                }
-            }
-            out
-        }
-
         for (name, bytes) in [("a.tar.gz", gz), ("a.tar.bz2", bz), ("a.tar.xz", xz)] {
             let archive = dir.join(name);
             fs::write(&archive, &bytes).expect("write archive");
@@ -3552,9 +3626,25 @@ mod tests {
             assert_eq!(extracted, b"RIFF....sfbk fake soundfont", "{name} 内容不对");
         }
 
-        // 7z 不支持时要给出可执行的提示，而不是一个解码器报错。
-        let err = extract_archive(&dir.join("a.tar.gz"), &dir, "https://example.com/x.7z").unwrap_err();
-        assert!(err.contains("7z"), "错误要说明是 7z 不支持：{err}");
+        // 7z：FreePats 的主力格式，必须同样能解。
+        let seven = dir.join("a.7z");
+        {
+            let mut writer = sevenz_rust::SevenZWriter::create(&seven).expect("create 7z");
+            let mut entry = sevenz_rust::SevenZArchiveEntry::new();
+            entry.name = "bank/piano.sf3".into();
+            entry.has_stream = true;
+            writer
+                .push_archive_entry(entry, Some(&b"RIFF....sfbk fake soundfont"[..]))
+                .expect("push entry");
+            writer.finish().expect("finish 7z");
+        }
+        let out7 = dir.join("out-a.7z");
+        fs::create_dir_all(&out7).expect("out dir");
+        extract_archive(&seven, &out7, "https://example.com/a.7z").expect("extract 7z");
+        assert_eq!(
+            fs::read(out7.join("bank").join("piano.sf3")).expect("7z file"),
+            b"RIFF....sfbk fake soundfont"
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

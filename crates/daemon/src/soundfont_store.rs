@@ -560,10 +560,11 @@ mod tests {
         let file = file.expect("installable");
         assert_eq!(file.format, "sf3");
 
-        // 7z 目前不支持：给出可读原因，而不是「不可用」。
+        // 7z 现在也支持（FreePats 的主力格式），同样能一键装。
         let (file, blocked) = choose_file(&banks[1]);
-        assert!(file.is_none());
-        assert!(blocked.unwrap().contains("7z"));
+        assert!(blocked.is_none());
+        let file = file.expect("7z 应当可装");
+        assert_eq!(file.archive.as_deref(), Some("7z"));
 
         // 纯外链同样不能一键装。
         let (file, blocked) = choose_file(&banks[2]);
@@ -704,8 +705,8 @@ mod tests {
         let found = search_in(&banks, &installed, "piano");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].slug, "freepats/upright-piano-kw");
-        assert!(!found[0].installable, "7z 还不能一键装");
-        assert!(found[0].blocked.is_some());
+        assert!(found[0].installable, "7z 现在能一键装");
+        assert!(found[0].blocked.is_none());
 
         // 空关键词 = 全部，带 installed 标记。
         let mut installed = std::collections::HashSet::new();

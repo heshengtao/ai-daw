@@ -44,7 +44,7 @@
 
 > **安全边界**：`install_soundfont` 会真的联网。只有用户明确同意后才可调用，且必须 `confirm=true`；
 > 说明时一并告诉用户**许可**（NC / ND 系列仅限非商业使用）与体积。
-> 索引里 `installable=false` 的条目（7z 包、纯下载页）**不要硬装**——把 URL 给用户，让他在浏览器下载。
+> 索引里 `installable=false` 的条目（只提供下载页的库）**不要硬装**——把 URL 给用户，让他在浏览器下载。
 
 一个库会展开成几十上百个音色条目，所以「换音色」时用 `set_track_instrument(track, plugin_id)`
 传的是**具体预设的 id**，不是库本身。
