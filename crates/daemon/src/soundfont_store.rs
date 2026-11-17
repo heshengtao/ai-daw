@@ -245,15 +245,6 @@ pub fn install(
         .iter()
         .find(|bank| bank.slug == slug)
         .ok_or_else(|| format!("索引里没有 slug「{slug}」"))?;
-    let (file, blocked) = choose_file(bank);
-    let file = file.ok_or_else(|| {
-        format!(
-            "「{}」不能一键安装：{}",
-            bank.name,
-            blocked.unwrap_or_else(|| "没有可用的下载".into())
-        )
-    })?;
-
     let dir = crate::paths::data_dir(app)?.join("soundfonts");
     let network = StoreRuntime::load(app).network();
     let proxy = manager::resolve_proxy(&network).proxy;
