@@ -689,9 +689,11 @@ mod tests {
         let banks = parse_registry(BUNDLED).expect("随包索引必须可解析");
         assert!(banks.len() >= 5, "随包索引太少：{}", banks.len());
         assert!(banks.iter().any(|bank| bank.slug == "musescore/general"));
+        let installable = banks.iter().filter(|bank| choose_file(bank).0.is_some()).count();
         assert!(
-            banks.iter().any(|bank| choose_file(bank).0.is_some()),
-            "至少要有一条能一键安装，否则商店是空壳"
+            installable >= 10,
+            "能一键装的太少（{installable}/{}）：商店体验会像空壳",
+            banks.len()
         );
     }
 
