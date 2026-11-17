@@ -23,7 +23,7 @@ import {
 import { useRouter } from "vue-router";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import DownloadStrip from "@/components/common/DownloadStrip.vue";
-import SoundFontStorePanel from "@/components/workspace/SoundFontStorePanel.vue";
+import { useSoundfontStore } from "@/composables/useSoundfontStore";
 import { managerResolveUrl, modelResolveUrl } from "@/api/tauri";
 import { useManagerStore } from "@/stores/manager";
 import { useModelsStore } from "@/stores/models";
@@ -317,6 +317,25 @@ function needsHostConfirm(f: ManagerFile): boolean {
 }
 
 // ---- 列表 ----
+
+/** 在线音色库：搜索/安装逻辑与插件面板共用，这里只负责卡片排版。 */
+const {
+  results: sfResults,
+  loading: sfLoading,
+  error: sfError,
+  installing: sfInstalling,
+  search: searchSoundfonts,
+  install: installSoundfont,
+  openPage: openSoundfontPage,
+} = useSoundfontStore();
+
+// 与顶部搜索框共用关键词：输入停下来 300 ms 再查索引（切到音色库筛选取一次当前词）。
+let sfDebounce: number | undefined;
+watch([kindFilter, query], ([kind]) => {
+  if (kind !== "soundfont") return;
+  window.clearTimeout(sfDebounce);
+  sfDebounce = window.setTimeout(() => void searchSoundfonts(query.value), 300);
+});
 
 const available = computed<ManagerPlugin[]>(() => {
   // 「模型 / 运行时 / 音色库」筛选各自只列自己那一类，插件一条都不出。
@@ -1175,13 +1194,69 @@ async function doRevealModel(id: string): Promise<void> {
         </div>
       </div>
 
-      <!-- 音色库：走另一份索引（SoundFont 注册表），不混进插件列表；
-           搜索框与上方共用一个词，输入停下来 300 ms 才查 -->
-      <SoundFontStorePanel
-        v-if="kindFilter === 'soundfont'"
-        :query="query"
-        :show-search="false"
-      />
+      <!-- 音色库：走另一份索引（SoundFont 注册表），排版与插件卡片一致 -->
+      <template v-if="kindFilter === 'soundfont'">
+        <p v-if="sfLoading" class="hint">{{ i18n.t("common.loading") }}</p>
+        <p v-else-if="sfError" class="hint">{{ sfError }}</p>
+        <div v-else-if="sfResults.length === 0" class="empty">
+          <ArrowDownTrayIcon class="empty-icon" />
+          <p class="empty-text">{{ i18n.t("plugins.soundfontStoreEmpty") }}</p>
+        </div>
+
+        <ul v-else class="list">
+          <li v-for="bank in sfResults" :key="bank.slug" class="card col">
+            <div class="card-top">
+              <span class="card-name">{{ bank.name }}</span>
+              <span class="badge">{{ i18n.t("manager.kindSoundfont") }}</span>
+              <span v-if="bank.format" class="badge">{{ bank.format.toUpperCase() }}</span>
+              <span v-if="bank.installed" class="badge installed">
+                {{ i18n.t("plugins.soundfontStoreInstalledBadge") }}
+              </span>
+            </div>
+            <p class="card-author">
+              {{ bank.vendor }}<span v-if="bank.license"> · {{ bank.license }}</span>
+            </p>
+            <p class="card-desc">{{ bank.description }}</p>
+
+            <div class="files">
+              <div class="file-row" :class="{ unavailable: !bank.installable && !bank.installed }">
+                <span class="file-summary" :title="bank.blocked ?? ''">
+                  <template v-if="bank.size">{{ humanSize(bank.size) }}</template>
+                  <template v-if="bank.format"> · {{ bank.format.toUpperCase() }}</template>
+                  <template v-if="bank.presets">
+                    · {{ i18n.t("plugins.soundfontPresets", { count: bank.presets }) }}
+                  </template>
+                </span>
+                <button v-if="bank.installed" class="mini-btn" disabled>
+                  {{ i18n.t("plugins.soundfontStoreInstalledBadge") }}
+                </button>
+                <button
+                  v-else-if="!bank.installable && bank.homepage"
+                  class="mini-btn"
+                  :title="bank.blocked ?? ''"
+                  @click="openSoundfontPage(bank)"
+                >
+                  {{ i18n.t("plugins.soundfontStoreOpen") }}
+                  <ArrowTopRightOnSquareIcon class="w-[13px] h-[13px]" />
+                </button>
+                <button
+                  v-else
+                  class="mini-btn primary"
+                  :disabled="!bank.installable || sfInstalling !== null"
+                  :title="bank.blocked ?? ''"
+                  @click="installSoundfont(bank)"
+                >
+                  {{
+                    sfInstalling === bank.slug
+                      ? i18n.t("plugins.soundfontStoreInstalling")
+                      : i18n.t("plugins.soundfontStoreInstall")
+                  }}
+                </button>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </template>
 
       <ul v-if="availableShown > 0" class="list">
         <!-- 模型（当筛选允许时；与插件共用同一份搜索与筛选、同一套卡片排版） -->

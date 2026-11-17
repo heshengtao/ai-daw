@@ -1,111 +1,37 @@
 <script setup lang="ts">
 /**
- * 在线 SoundFont 音色库列表：搜索 → 一键安装 → 已装标记 / 打不开时给出口。
+ * 插件面板里的「在线音色库」紧凑列表：自己的搜索框 + 一行一个库。
  *
- * 自包含（搜索词、结果、安装中状态都在组件里），插件面板和下载管理器共用同一份实现。
- * 数据来自 `ai-daw-soundfont-registry` 的静态索引：后端带 6 小时缓存，拉不到时退回随包快照。
+ * 下载管理器那边用的是 `card` 卡片（与插件/模型同一套排版），所以这里只保留紧凑样式；
+ * 两处的搜索与安装逻辑都来自 `useSoundfontStore`。
  */
-import { onMounted, ref, watch } from "vue";
-import { installSoundfontFromStore, searchSoundfontStore } from "@/api/tauri";
-import { usePluginsStore } from "@/stores/plugins";
-import { useLayoutStore } from "@/stores/layout";
+import { onMounted, ref } from "vue";
+import { useSoundfontStore } from "@/composables/useSoundfontStore";
 import { useI18n } from "@/i18n";
 import { humanSize } from "@/utils/models";
-import { openExternal } from "@/utils/external";
-import type { SoundfontStoreMatch } from "@/api/types";
 
-const props = withDefaults(
-  defineProps<{
-    /** 外部的搜索词（管理器的搜索框）；`showSearch=false` 时用它驱动搜索。 */
-    query?: string;
-    /** 是否渲染自己的搜索框。 */
-    showSearch?: boolean;
-    /** 挂载后是否立刻拉一次索引。 */
-    autoLoad?: boolean;
-  }>(),
-  { query: "", showSearch: true, autoLoad: true },
-);
-
-const emit = defineEmits<{ (e: "installed", slug: string): void }>();
-
-const plugins = usePluginsStore();
-const layout = useLayoutStore();
 const i18n = useI18n();
+const { results, loading, error, installing, search, install, openPage } = useSoundfontStore();
+const query = ref("");
 
-const ownQuery = ref(props.query);
-const results = ref<SoundfontStoreMatch[]>([]);
-const loading = ref(false);
-const error = ref<string | null>(null);
-const installing = ref<string | null>(null);
+onMounted(() => void search(""));
 
-const effectiveQuery = () => (props.showSearch ? ownQuery.value : props.query).trim();
-
-async function search(): Promise<void> {
-  loading.value = true;
-  error.value = null;
-  try {
-    results.value = await searchSoundfontStore(effectiveQuery());
-  } catch (err) {
-    error.value = String(err);
-    results.value = [];
-  } finally {
-    loading.value = false;
-  }
-}
-
-// 管理器里共用顶部搜索框：输入停下来再查，别每个键都打一次索引。
-let debounce: number | undefined;
-watch(
-  () => props.query,
-  () => {
-    if (props.showSearch) return;
-    window.clearTimeout(debounce);
-    debounce = window.setTimeout(() => void search(), 300);
-  },
-);
-
-onMounted(() => {
-  if (props.autoLoad) void search();
-});
-
-async function install(bank: SoundfontStoreMatch): Promise<void> {
-  if (!bank.installable || installing.value) return;
-  installing.value = bank.slug;
-  try {
-    const outcome = await installSoundfontFromStore(bank.slug);
-    await plugins.refreshSoundfonts();
-    layout.notify(
-      i18n.t("plugins.soundfontStoreInstalled", {
-        name: bank.name,
-        count: outcome.imported.length,
-      }),
-    );
-    const row = results.value.find((item) => item.slug === bank.slug);
-    if (row) row.installed = true;
-    emit("installed", bank.slug);
-  } catch (err) {
-    layout.notify(i18n.t("error.load", { error: String(err) }));
-  } finally {
-    installing.value = null;
-  }
-}
-
-function openPage(bank: SoundfontStoreMatch): void {
-  if (bank.homepage) void openExternal(bank.homepage);
+function submit(): void {
+  void search(query.value);
 }
 </script>
 
 <template>
   <div class="sfp">
-    <div v-if="showSearch" class="sfp-search">
+    <div class="sfp-search">
       <input
-        v-model="ownQuery"
+        v-model="query"
         type="search"
         :placeholder="i18n.t('plugins.soundfontStoreSearchPlaceholder')"
         :aria-label="i18n.t('plugins.soundfontStoreSearchPlaceholder')"
-        @keyup.enter="search"
+        @keyup.enter="submit"
       />
-      <button :disabled="loading" @click="search">{{ i18n.t("common.search") }}</button>
+      <button :disabled="loading" @click="submit">{{ i18n.t("common.search") }}</button>
     </div>
 
     <p v-if="loading" class="sfp-hint">{{ i18n.t("common.loading") }}</p>
@@ -128,7 +54,6 @@ function openPage(bank: SoundfontStoreMatch): void {
         <span v-if="bank.installed" class="sfp-badge">
           {{ i18n.t("plugins.soundfontStoreInstalledBadge") }}
         </span>
-        <!-- 不能一键装的（只给下载页）：把用户送到作者页面，而不是发一个灰按钮 -->
         <button
           v-else-if="!bank.installable && bank.homepage"
           class="sfp-btn"
