@@ -27,6 +27,10 @@ const SOURCES: &[&str] = &[
 const TTL: Duration = Duration::from_secs(6 * 3600);
 /// 一次最多导入一个压缩包里的多少个库（Sonatina 那种全集有几十个 sf2）。
 const MAX_BANKS_PER_ARCHIVE: usize = 60;
+/// 随包快照：网络与磁盘缓存都不可用时的最后兜底。
+///
+/// 保证「连不上 GitHub」时商店仍能列出已知的几件库（与插件商店的随包注册表同一套思路）。
+const BUNDLED: &str = include_str!("../../../src-tauri/resources/soundfont-registry.json");
 
 /// 索引里的一个下载文件。
 #[derive(Debug, Clone, Deserialize)]
@@ -164,14 +168,27 @@ pub fn catalog(app: &crate::tauri_api::AppHandle, force: bool) -> Result<Vec<Sto
     }
 
     // 网络全挂：用上一次落盘的索引（过期也胜过「商店打不开」）。
-    if let Some(path) = disk {
-        if let Ok(text) = fs::read_to_string(&path) {
+    if let Some(path) = &disk {
+        if let Ok(text) = fs::read_to_string(path) {
             if let Ok(banks) = parse_registry(&text) {
                 *cache().lock().unwrap() = Some((Instant::now(), banks.clone()));
                 return Ok(banks);
             }
         }
     }
+
+    // 最后一层：随包快照（`include_str!` 保证一定有）。此时错误不抛给界面——
+    // 用旧数据总比「商店整块打不开」好，但要留一条日志说明为什么没更新。
+    if let Ok(banks) = parse_registry(BUNDLED) {
+        eprintln!(
+            "[soundfonts] 索引拉取失败，改用随包快照（{} 件）：{}",
+            banks.len(),
+            errors.join("；")
+        );
+        *cache().lock().unwrap() = Some((Instant::now(), banks.clone()));
+        return Ok(banks);
+    }
+
     Err(format!("音色库索引拉取失败：{}", errors.join("；")))
 }
 
@@ -542,6 +559,17 @@ mod tests {
         assert!(score_bank(&banks[0], "zzz").is_none());
         // 大小写不敏感。
         assert!(score_bank(&banks[0], "general").unwrap() > 0);
+    }
+
+    #[test]
+    fn bundled_snapshot_parses_and_has_installable_banks() {
+        let banks = parse_registry(BUNDLED).expect("随包索引必须可解析");
+        assert!(banks.len() >= 5, "随包索引太少：{}", banks.len());
+        assert!(banks.iter().any(|bank| bank.slug == "musescore/general"));
+        assert!(
+            banks.iter().any(|bank| choose_file(bank).0.is_some()),
+            "至少要有一条能一键安装，否则商店是空壳"
+        );
     }
 
     #[test]

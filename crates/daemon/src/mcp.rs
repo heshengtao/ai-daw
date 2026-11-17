@@ -993,6 +993,34 @@ pub(crate) struct InstallPluginArgs {
     confirm: bool,
 }
 
+/// 导入本地 SoundFont。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ImportSoundfontArgs {
+    /// `.sf2` / `.sf3` 的绝对路径（用户给的本地文件）。
+    path: String,
+    /// 显示名；缺省用文件名。
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// 搜索在线音色库索引。
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SearchSoundfontStoreArgs {
+    /// 关键词（中英文都行）；缺省 = 全部。
+    #[serde(default)]
+    query: Option<String>,
+}
+
+/// 从在线索引安装一件音色库（高风险：联网下载几十到几百 MB）。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct InstallSoundfontArgs {
+    /// 索引里的 slug（用 `search_soundfont_store` 拿）。
+    slug: String,
+    /// 必须为 true：表示用户已在当前对话中明确同意下载。
+    #[serde(default)]
+    confirm: bool,
+}
+
 /// 下载本地 AI 模型（高风险：大文件、走网络）。
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct DownloadModelArgs {
@@ -5282,6 +5310,81 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         crate::manager::install_registry_plugin(app, args.slug.trim(), None)
     }
 
+    /// 列出本机已导入的用户 SoundFont 与它们的预设。
+    pub(crate) fn list_soundfonts() -> Result<String, String> {
+        let entries = crate::soundfonts::catalog();
+        let presets: usize = entries.iter().map(|entry| entry.presets.len()).sum();
+        json_s(&serde_json::json!({
+            "libraries": entries,
+            "library_count": entries.len(),
+            "preset_count": presets,
+            "hint": "音色 id 形如 `sf2.user.<库 id>.<bank>.<program>`；导入用 import_soundfont，在线安装用 install_soundfont。",
+        }))
+    }
+
+    /// 导入一个本地 `.sf2` / `.sf3`（复制进托管目录 + 枚举预设）。
+    ///
+    /// 这不是下载，风险低；但几百 MB 的库要几秒，所以调用方放阻塞线程。
+    pub(crate) fn import_soundfont(
+        app: &AppHandle,
+        args: ImportSoundfontArgs,
+    ) -> Result<String, String> {
+        let entry = crate::soundfonts::import(
+            std::path::Path::new(&args.path),
+            args.name,
+            None,
+        )?;
+        let state = app.state::<Arc<AppState>>();
+        crate::commands::refresh_soundfont_registry(&state);
+        Ok(format!(
+            "已导入「{}」：{} 个预设（{}，库 id {}）。用 list_soundfonts 看完整清单。",
+            entry.name,
+            entry.presets.len(),
+            entry.format.to_uppercase(),
+            entry.id
+        ))
+    }
+
+    /// 搜索在线音色库（只读，不下载）。
+    pub(crate) fn search_soundfont_store(
+        app: &AppHandle,
+        args: SearchSoundfontStoreArgs,
+    ) -> Result<String, String> {
+        let matches = crate::soundfont_store::search(
+            app,
+            args.query.as_deref().unwrap_or(""),
+        )?;
+        json_s(&serde_json::json!({
+            "query": args.query,
+            "matches": matches,
+            "hint": "只读：查到后先把候选（名称、许可、体积、能否一键装）告诉用户，问过再 install_soundfont。",
+        }))
+    }
+
+    /// 从在线索引安装一件音色库。高风险：**必须由用户明确同意**。
+    pub(crate) fn install_soundfont(
+        app: &AppHandle,
+        args: InstallSoundfontArgs,
+    ) -> Result<String, String> {
+        if !args.confirm {
+            return Err("拒绝安装：install_soundfont 会从互联网下载几十到几百 MB 的音色库。                 请先向用户说明库名、体积与许可（NC/ND 系列仅限非商业）；                 用户在当前对话中明确同意后，再以 confirm=true 重试。"
+                .into());
+        }
+        let outcome = crate::soundfont_store::install(app, args.slug.trim())?;
+        let state = app.state::<Arc<AppState>>();
+        crate::commands::refresh_soundfont_registry(&state);
+        Ok(format!(
+            "已安装「{}」：导入 {} 个音色库{}。用 list_soundfonts 查看。",
+            outcome.name,
+            outcome.imported.len(),
+            if outcome.skipped.is_empty() {
+                String::new()
+            } else {
+                format!("，跳过 {} 个文件（{}）", outcome.skipped.len(), outcome.skipped.join("；"))
+            }
+        ))
+    }
+
     /// 列出本地 AI 模型与安装状态（只读）。
     pub(crate) fn list_models(app: &AppHandle) -> Result<String, String> {
         json_s(&crate::models::statuses(app))
@@ -6411,6 +6514,10 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("list_synth_presets", "列出内置合成器的**出厂音色**（36 条，9 类）：id / 中文名 / 分类 / 一句话描述 / 完整参数补丁。捏音色时先看这里，用 preview_synth 试听，再用 set_params(track, params, reset=true) 落地。", ListSynthPresetsArgs),
             tool_def!("search_plugin_store", "搜索**可下载**的插件（插件管理器的注册表，不是本机已装目录）。与 find_instrument 同一套语义查询（中英文都行），返回 slug / 名称 / 作者 / 介绍 / 是否已装 / 可用格式 / 体积 / 匹配理由，并附一组**不下载也能用**的替代方案（alternatives）。**只读，不下载**——查到后先把选项和替代方案告诉用户，问要不要装；不要自行安装。", SearchPluginStoreArgs),
             tool_def!("install_plugin", "**高风险**：从注册表下载并解压安装一个插件（会真的联网下载可执行代码）。**只有用户在当前对话中明确同意后才能调用**，且必须传 `confirm=true`；否则调用会被拒绝。不确定 slug 时先用 search_plugin_store。", InstallPluginArgs),
+            tool_def!("list_soundfonts", "列出**本机已导入**的 SoundFont 音色库（SF2/SF3）：库名、格式、预设数、每个预设的 bank/program 与插件 id。想给某条轨道换音色、或确认某个库装没装时先调它。"),
+            tool_def!("import_soundfont", "把用户本机的一个 `.sf2` / `.sf3` 导入成可用音色（复制进托管目录、解析出全部预设）。只处理本地文件，不联网。", ImportSoundfontArgs),
+            tool_def!("search_soundfont_store", "搜索**可下载**的 SoundFont 音色库索引（不是本机已装目录）：名称 / 许可 / 体积 / 能否一键安装 / 不能装的原因。**只读，不下载**——查到后先把候选与许可见告诉用户，问过再装。", SearchSoundfontStoreArgs),
+            tool_def!("install_soundfont", "**高风险**：从在线索引下载并安装一件 SoundFont 音色库（几十到几百 MB，会联网）。**只有用户在当前对话中明确同意后才能调用**，且必须传 `confirm=true`；否则调用会被拒绝。slug 用 search_soundfont_store 查。", InstallSoundfontArgs),
             tool_def!("list_models", "列出本地 AI 模型（音源分离 / 音频转 MIDI / 降噪 / 节拍检测）的 id、体积、是否随包、是否已安装、可下载源与**权重许可**（`license`；CC-BY-NC 系列仅限非商业）。装模型前先看这里。"),
             tool_def!("download_model", "**高风险**：从互联网下载本地 AI 模型权重（可能数百 MB）。**只有用户明确同意后才能调用**，且必须传 `confirm=true`；否则会被拒绝。说明用途时要一并告诉用户**权重许可**：`license` 为 CC-BY-NC 的模型（YuE2、SheetSage2）只允许非商业使用。下载在后台进行，之后用 list_models 查 installed。", DownloadModelArgs),
             tool_def!("find_instrument", "按**语义名**找音色：`guqin-like` / `古琴` / `gamelan` / `shamisen` / `erhu` / `piano` / `strings` / `bass` / `drums` / `pad`… **本机安装的插件优先**（名字/标签/安装包文件名命中），没有安装才返回内置近似（例如古琴 → 尼龙吉他 + 混响）。查询会拆词并带上规则的中英别名（guqin ↔ 古琴、pipa ↔ 琵琶）。返回 pluginId、source（installed/builtin/approximation）、score、置信度、推荐理由、出厂音色参数与建议效果。", FindInstrumentArgs),
@@ -6578,6 +6685,10 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             "find_instrument" => find_instrument(app, parse_args(args)?),
             "search_plugin_store" => search_plugin_store(app, parse_args(args)?),
             "install_plugin" => install_plugin(app, parse_args(args)?),
+            "list_soundfonts" => list_soundfonts(),
+            "import_soundfont" => import_soundfont(app, parse_args(args)?),
+            "search_soundfont_store" => search_soundfont_store(app, parse_args(args)?),
+            "install_soundfont" => install_soundfont(app, parse_args(args)?),
             "list_models" => list_models(app),
             "download_model" => download_model(app, parse_args(args)?),
             "transport_play" => transport_play(app),
@@ -6868,6 +6979,75 @@ impl DawMcpServer {
             .await
             .map_err(|e| fail(e.to_string()))?
             .map_err(fail)
+    }
+
+    // ---- 用户 SoundFont（本地导入 / 在线音色库） ----
+
+    #[tool(
+        description = "列出**本机已导入**的 SoundFont 音色库（SF2/SF3）：库名、格式、预设数、每个预设的 bank/program 与插件 id。挑音色或确认装没装时先调它。",
+        annotations(title = "列出已导入的音色库", read_only_hint = true)
+    )]
+    fn list_soundfonts(&self) -> Result<String, ErrorData> {
+        tools::list_soundfonts().map_err(fail)
+    }
+
+    #[tool(
+        description = "把用户本机的一个 `.sf2` / `.sf3` 导入成可用音色（复制进托管目录并解析全部预设）。只处理本地文件，不联网。",
+        annotations(title = "导入本地音色库")
+    )]
+    async fn import_soundfont(
+        &self,
+        Parameters(args): Parameters<ImportSoundfontArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        crate::tauri_api::async_runtime::spawn_blocking(move || {
+            tools::import_soundfont(&app, args)
+        })
+        .await
+        .map_err(|e| fail(e.to_string()))?
+        .map_err(fail)
+    }
+
+    #[tool(
+        description = "搜索**可下载**的 SoundFont 音色库索引：名称 / 许可 / 体积 / 能否一键安装 / 不能装的原因。**只读，不下载**——查到后先告诉用户候选与许可，问过再装。",
+        annotations(
+            title = "搜索在线音色库",
+            read_only_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn search_soundfont_store(
+        &self,
+        Parameters(args): Parameters<SearchSoundfontStoreArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        crate::tauri_api::async_runtime::spawn_blocking(move || {
+            tools::search_soundfont_store(&app, args)
+        })
+        .await
+        .map_err(|e| fail(e.to_string()))?
+        .map_err(fail)
+    }
+
+    #[tool(
+        description = "**高风险**：从在线索引下载并安装一件 SoundFont 音色库（几十到几百 MB，会联网）。**只有用户在当前对话中明确同意后才能调用**，且必须传 `confirm=true`；否则会被拒绝。slug 用 search_soundfont_store 查。",
+        annotations(
+            title = "下载并安装音色库（高风险）",
+            destructive_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn install_soundfont(
+        &self,
+        Parameters(args): Parameters<InstallSoundfontArgs>,
+    ) -> Result<String, ErrorData> {
+        let app = self.app.clone();
+        crate::tauri_api::async_runtime::spawn_blocking(move || {
+            tools::install_soundfont(&app, args)
+        })
+        .await
+        .map_err(|e| fail(e.to_string()))?
+        .map_err(fail)
     }
 
     #[tool(
@@ -8694,6 +8874,10 @@ mod tests {
             "find_instrument",
             "search_plugin_store",
             "install_plugin",
+            "list_soundfonts",
+            "import_soundfont",
+            "search_soundfont_store",
+            "install_soundfont",
             "list_models",
             "download_model",
             "transport_play",
@@ -9196,7 +9380,7 @@ mod tests {
     #[test]
     fn high_risk_tools_are_annotated() {
         let router = DawMcpServer::tool_router();
-        for name in ["install_plugin", "download_model", "install_runtime"] {
+        for name in ["install_plugin", "download_model", "install_runtime", "install_soundfont"] {
             let tool = router
                 .get(name)
                 .unwrap_or_else(|| panic!("缺少工具 {name}"));
@@ -9215,7 +9399,15 @@ mod tests {
                 "{name} 必须 open_world"
             );
         }
-        for name in ["search_plugin_store", "list_models", "list_runtimes", "get_capabilities", "get_levels"] {
+        for name in [
+            "search_plugin_store",
+            "search_soundfont_store",
+            "list_soundfonts",
+            "list_models",
+            "list_runtimes",
+            "get_capabilities",
+            "get_levels",
+        ] {
             let tool = router
                 .get(name)
                 .unwrap_or_else(|| panic!("缺少工具 {name}"));

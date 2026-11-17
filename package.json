@@ -18,7 +18,8 @@
     "selftest:score": "rolldown tools/score-selftest.ts -o .tmp/score-selftest.mjs -f esm -p node && node .tmp/score-selftest.mjs",
     "selftest:import": "rolldown tools/import-selftest.ts -o .tmp/import-selftest.mjs -f esm -p node && node .tmp/import-selftest.mjs",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "fetch:soundfonts": "node tools/fetch-soundfont-registry.mjs"
   },
   "dependencies": {
     "@coderline/alphatab": "^1.8.4",

@@ -1,0 +1,282 @@
+{
+  "schema_version": 1,
+  "soundfonts": [
+    {
+      "slug": "freepats/concert-harp",
+      "name": "Concert Harp",
+      "vendor": "FreePats",
+      "description": "Concert harp with plucked sustains, small variant. Packaged as a tar.xz archive containing an SF2.",
+      "homepage": "https://freepats.zenvoid.org/OrchestralStrings/harp.html",
+      "source": "https://freepats.zenvoid.org/OrchestralStrings/harp.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "harp",
+        "orchestral",
+        "freepats"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/OrchestralStrings/ConcertHarp/ConcertHarp-small-SF2-20200702.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 5088608
+        }
+      ]
+    },
+    {
+      "slug": "freepats/electric-guitar-clean",
+      "name": "Electric Guitar Clean (bridge, small)",
+      "vendor": "FreePats",
+      "description": "FSBS electric guitar, clean bridge pickups, small variant. Hosted as a GitHub release asset from the FreePats project itself.",
+      "homepage": "https://freepats.zenvoid.org/ElectricGuitar/clean-electric-guitar.html",
+      "source": "https://github.com/freepats/electric-guitar-FSBS-clean",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "guitar",
+        "electric",
+        "clean",
+        "freepats"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/electric-guitar-FSBS-clean/releases/download/2026-08-07/EGuitarFSBS-clean-bridge-small-SF2-20260807.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 6599454
+        }
+      ]
+    },
+    {
+      "slug": "fluidr3/gm",
+      "name": "FluidR3 GM",
+      "vendor": "Frank Wen",
+      "description": "The classic free General MIDI SoundFont by Frank Wen, distributed as a zip containing FluidR3_GM.sf2. Larger and more detailed than MuseScore General, and the sample base both that bank and FluidR3Mono derive from.",
+      "source": "https://ftp.osuosl.org/pub/musescore/soundfont/",
+      "license": "MIT",
+      "license_url": "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General_License.md",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "gm",
+      "presets": 128,
+      "tags": [
+        "gm",
+        "general-midi",
+        "classic",
+        "fluidr3"
+      ],
+      "files": [
+        {
+          "url": "https://ftp.osuosl.org/pub/musescore/soundfont/fluid-soundfont.zip",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "zip",
+          "size": 131834190
+        }
+      ]
+    },
+    {
+      "slug": "generaluser/gs",
+      "name": "GeneralUser GS",
+      "vendor": "S. Christian Collins",
+      "description": "The best-known lightweight GM/GS bank: 259 instrument presets and 11 drum kits under 30 MB of RAM, tuned for General MIDI playback and retro gaming. Distributed from the author's own site under a custom freeware licence, so this entry links to the download page instead of a direct file.",
+      "homepage": "https://schristiancollins.com/generaluser.php",
+      "source": "https://schristiancollins.com/generaluser.php",
+      "license": "LicenseRef-generaluser-gs",
+      "license_url": "https://schristiancollins.com/generaluser.php",
+      "redistributable": false,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "gm",
+      "presets": 259,
+      "tags": [
+        "gm",
+        "gs",
+        "general-midi",
+        "retro",
+        "lightweight"
+      ],
+      "files": [
+        {
+          "url": "https://schristiancollins.com/generaluser.php",
+          "format": "sf2",
+          "install": "external",
+          "note": "Custom GeneralUser GS licence: free to use, redistribution needs the author's terms. Add a direct file entry only once a stable, hashable mirror exists."
+        }
+      ]
+    },
+    {
+      "slug": "musescore/general",
+      "name": "MuseScore General",
+      "vendor": "MuseScore",
+      "description": "The General MIDI bank shipped with MuseScore: 128 melodic presets plus a drum kit, built on FluidR3Mono samples. The SF3 file is roughly 38 MB, the uncompressed SF2 roughly 206 MB.",
+      "homepage": "https://musescore.org/en/handbook/4/soundfonts",
+      "source": "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/",
+      "license": "MIT",
+      "license_url": "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General_License.md",
+      "redistributable": true,
+      "formats": [
+        "sf2",
+        "sf3"
+      ],
+      "kind": "gm",
+      "presets": 128,
+      "tags": [
+        "gm",
+        "general-midi",
+        "orchestral",
+        "musescore"
+      ],
+      "files": [
+        {
+          "url": "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3",
+          "format": "sf3",
+          "install": "file",
+          "size": 39900972
+        },
+        {
+          "url": "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf2",
+          "format": "sf2",
+          "install": "file",
+          "size": 215614036
+        }
+      ]
+    },
+    {
+      "slug": "sonatina/symphonic-orchestra",
+      "name": "Sonatina Symphonic Orchestra (SF2)",
+      "vendor": "Mattias Westlund",
+      "description": "A complete free orchestral library converted from the original SFZ release into SoundFont banks: strings, woodwinds, brass, percussion, piano, harpsichord and chorus. 398 MB zip, so expect a long download.",
+      "source": "https://ftp.osuosl.org/pub/musescore/soundfont/",
+      "license": "LicenseRef-cc-sampling-plus-1.0",
+      "license_url": "https://creativecommons.org/licenses/sampling+/1.0/",
+      "redistributable": false,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "collection",
+      "tags": [
+        "orchestral",
+        "strings",
+        "brass",
+        "woodwinds",
+        "percussion"
+      ],
+      "files": [
+        {
+          "url": "https://ftp.osuosl.org/pub/musescore/soundfont/Sonatina_Symphonic_Orchestra_SF2.zip",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "zip",
+          "size": 417656133,
+          "note": "The original sample library is under the obsolete CC Sampling Plus 1.0 licence, which forbids commercial redistribution."
+        }
+      ]
+    },
+    {
+      "slug": "freepats/spanish-classical-guitar",
+      "name": "Spanish Classical Guitar",
+      "vendor": "FreePats",
+      "description": "Nylon-string classical guitar with round-robin and multiple velocity layers, packaged as a 7z archive containing an SF2.",
+      "homepage": "https://freepats.zenvoid.org/Guitar/acoustic-guitar.html",
+      "source": "https://freepats.zenvoid.org/Guitar/acoustic-guitar.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "guitar",
+        "nylon",
+        "acoustic",
+        "freepats"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Guitar/SpanishClassicalGuitar/SpanishClassicalGuitar-SF2-20190618.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 9990750
+        }
+      ]
+    },
+    {
+      "slug": "freepats/tenor-saxophone",
+      "name": "Tenor Saxophone",
+      "vendor": "FreePats",
+      "description": "Tenor saxophone with sustains and staccatos, small variant. Packaged as a tar.bz2 archive containing an SF2.",
+      "homepage": "https://freepats.zenvoid.org/Reed/saxophone.html",
+      "source": "https://freepats.zenvoid.org/Reed/saxophone.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "saxophone",
+        "tenor",
+        "reed",
+        "freepats"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Reed/TenorSaxophone/TenorSaxophone-small-SF2-20200717.tar.bz2",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.bz2",
+          "size": 6786876
+        }
+      ]
+    },
+    {
+      "slug": "freepats/upright-piano-kw",
+      "name": "Upright Piano KW (small)",
+      "vendor": "FreePats",
+      "description": "FreePats' upright piano, small variant: one velocity layer per key, light enough to load on a laptop. 7z archive containing an SF2.",
+      "homepage": "https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html",
+      "source": "https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "piano",
+        "acoustic",
+        "freepats"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Piano/UprightPianoKW/UprightPianoKW-small-SF2-20190703.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 6093984
+        }
+      ]
+    }
+  ]
+}

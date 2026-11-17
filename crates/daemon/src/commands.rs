@@ -3945,7 +3945,7 @@ pub async fn soundfont_store_install(
 ///
 /// 用户音色是**运行期**加进来的，扫描目录（catalog）没变，所以要走 `set_catalog` 才触发重建；
 /// 工程本身不用动，重建会保留播放位置与已打开的插件窗口。
-fn refresh_soundfont_registry(state: &AppState) {
+pub(crate) fn refresh_soundfont_registry(state: &AppState) {
     state.audio.set_catalog(state.catalog_snapshot());
 }
 
