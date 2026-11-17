@@ -109,6 +109,7 @@ AI DAW hosts **VST3** and **CLAP** plugins everywhere, plus **Audio Units (AU / 
 - **Plugin manager** — search the registry, filter by instrument/effect and platform, install / update / uninstall
 - **Local import** — bring in a plugin you have installed elsewhere
 - **Editors & parameters** — open a plugin's own UI, or drive its parameters from the inspector and automation lanes; AU plugins without their own view get a generic parameter panel
+- **SoundFont libraries** — import your own `.sf2` / `.sf3` (one bank expands into dozens of presets), or install an open bank such as MuseScore General, FluidR3 or FreePats from the built-in SoundFont index
 
 <p align="center">
   <img src="./assets/screenshots/04-plugins.png" width="100%" alt="The plugins panel: a built-in synth and effect list, with filters for built-in and external plugins">

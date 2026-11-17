@@ -2,10 +2,68 @@
   "schema_version": 1,
   "soundfonts": [
     {
+      "slug": "freepats/pipe-organ",
+      "name": "Church Organ Emulation",
+      "vendor": "FreePats",
+      "description": "Church pipe organ: a big, sustained sound that wants reverb on the track.",
+      "homepage": "https://freepats.zenvoid.org/Organ/pipe-organ.html",
+      "source": "https://freepats.zenvoid.org/Organ/pipe-organ.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "organ",
+        "pipe organ",
+        "church"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Organ/ChurchOrganEmulation/ChurchOrganEmulation-SF2-20190924.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 12895300
+        }
+      ]
+    },
+    {
+      "slug": "freepats/clarinet",
+      "name": "Clarinet",
+      "vendor": "FreePats",
+      "description": "Clarinet with sustains and short articulations.",
+      "homepage": "https://freepats.zenvoid.org/Reed/clarinet.html",
+      "source": "https://freepats.zenvoid.org/Reed/clarinet.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "clarinet",
+        "reed",
+        "woodwind"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Reed/Clarinet1/Clarinet-SF2-20190818.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 6965072
+        }
+      ]
+    },
+    {
       "slug": "freepats/concert-harp",
       "name": "Concert Harp",
       "vendor": "FreePats",
-      "description": "Concert harp with plucked sustains, small variant. Packaged as a tar.xz archive containing an SF2.",
+      "description": "Concert harp with plucked sustains, small variant. Samples come from the CC0 Versilian Community Sample Library; only the page's promo photo is CC BY-NC.",
       "homepage": "https://freepats.zenvoid.org/OrchestralStrings/harp.html",
       "source": "https://freepats.zenvoid.org/OrchestralStrings/harp.html",
       "license": "CC0-1.0",
@@ -122,6 +180,93 @@
       ]
     },
     {
+      "slug": "freepats/glass",
+      "name": "Glass",
+      "vendor": "FreePats",
+      "description": "Glass harmonica / glass percussion: bell-like, fragile tones.",
+      "homepage": "https://freepats.zenvoid.org/ChromaticPercussion/glass.html",
+      "source": "https://freepats.zenvoid.org/ChromaticPercussion/glass.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "glass",
+        "percussion",
+        "chromatic"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/ChromaticPercussion/Glass/Glass-SF2-20191227.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 10322984
+        }
+      ]
+    },
+    {
+      "slug": "freepats/jaw-harp",
+      "name": "Jaw Harp",
+      "vendor": "FreePats",
+      "description": "Jaw harp (khomus) with the twangy, formant-heavy character of the real instrument.",
+      "homepage": "https://freepats.zenvoid.org/Ethnic/jaw-harp.html",
+      "source": "https://freepats.zenvoid.org/Ethnic/jaw-harp.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "jaw harp",
+        "khomus",
+        "ethnic"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Ethnic/JawHarp/JawHarp-SF2-20200606.tar.bz2",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.bz2",
+          "size": 1897559
+        }
+      ]
+    },
+    {
+      "slug": "freepats/kalimba",
+      "name": "Kalimba",
+      "vendor": "FreePats",
+      "description": "Thumb piano (kalimba) with soft, bell-like tines.",
+      "homepage": "https://freepats.zenvoid.org/Ethnic/kalimba.html",
+      "source": "https://freepats.zenvoid.org/Ethnic/kalimba.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "kalimba",
+        "thumb piano",
+        "ethnic"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Ethnic/Kalimba/Kalimba-SF2-20190723.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 3848000
+        }
+      ]
+    },
+    {
       "slug": "musescore/general",
       "name": "MuseScore General",
       "vendor": "MuseScore",
@@ -155,6 +300,64 @@
           "format": "sf2",
           "install": "file",
           "size": 215614036
+        }
+      ]
+    },
+    {
+      "slug": "freepats/recorder",
+      "name": "Recorder",
+      "vendor": "FreePats",
+      "description": "Recorder (blockflute) with clear, breathy tone. The archive is 7z, so the client links it rather than installing it.",
+      "homepage": "https://freepats.zenvoid.org/Wind/recorder.html",
+      "source": "https://freepats.zenvoid.org/Wind/recorder.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "recorder",
+        "flute",
+        "woodwind"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Wind/Recorder1/Recorder-SF2-20201205.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 8289356
+        }
+      ]
+    },
+    {
+      "slug": "freepats/electric-organ",
+      "name": "Rock Organ Emulation",
+      "vendor": "FreePats",
+      "description": "Transistor/rock organ with drawbar-style tone.",
+      "homepage": "https://freepats.zenvoid.org/Organ/electric-organ.html",
+      "source": "https://freepats.zenvoid.org/Organ/electric-organ.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "organ",
+        "electric organ",
+        "rock"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Organ/RockOrganEmulation/RockOrganEmulation-SF2-20190715.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 12549588
         }
       ]
     },
@@ -220,6 +423,35 @@
       ]
     },
     {
+      "slug": "freepats/synthesizer-percussion",
+      "name": "Synthesizer Percussion",
+      "vendor": "FreePats",
+      "description": "Synthesised percussion hits (claps, blips, toms) for electronic parts.",
+      "homepage": "https://freepats.zenvoid.org/Percussion/electric-percussion.html",
+      "source": "https://freepats.zenvoid.org/Percussion/electric-percussion.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "percussion",
+        "synthesizer",
+        "electronic"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Percussion/SynthesizerPercussion/SynthesizerPercussion-SF2-20220718.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 1027681
+        }
+      ]
+    },
+    {
       "slug": "freepats/tenor-saxophone",
       "name": "Tenor Saxophone",
       "vendor": "FreePats",
@@ -275,6 +507,35 @@
           "install": "archive",
           "archive": "7z",
           "size": 6093984
+        }
+      ]
+    },
+    {
+      "slug": "freepats/xylophone",
+      "name": "Xylophone (medium mallets)",
+      "vendor": "FreePats",
+      "description": "Medium-mallet xylophone; the archive holds one SF2.",
+      "homepage": "https://freepats.zenvoid.org/ChromaticPercussion/xylophone.html",
+      "source": "https://freepats.zenvoid.org/ChromaticPercussion/xylophone.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "xylophone",
+        "mallet",
+        "percussion"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/ChromaticPercussion/Xylophone1/Xylophone-MediumMallets-SF2-20200706.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 1756892
         }
       ]
     }

@@ -109,6 +109,7 @@ AI DAW 支持 **VST3** 与 **CLAP** 插件（Windows / macOS / Linux），在 ma
 - **插件管理器** —— 搜索注册表，按乐器 / 效果与平台筛选，安装 / 更新 / 卸载
 - **本地导入** —— 把已经在别处装好的插件接进来
 - **界面与参数** —— 打开插件自带的界面，或从检查器与自动化车道驱动它的参数；没有自带界面的 AU 也能拿到通用参数面板
+- **采样音色库** —— 直接导入自己的 `.sf2` / `.sf3`（一个库展开成几十上百个预设），或从内置的 SoundFont 索引一键装 MuseScore General、FluidR3、FreePats 等开源库
 
 <p align="center">
   <img src="./assets/screenshots/04-plugins.png" width="100%" alt="插件面板：内置合成器与效果器列表，可按内置 / 外部插件筛选">

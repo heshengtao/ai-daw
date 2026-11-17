@@ -28,6 +28,26 @@
 
 > **安全边界**：`search_plugin_store` 是只读的；`install_plugin` 会真的从互联网下载并解压可执行插件。
 > 只有用户在当前对话中明确说「装吧 / 可以下载」时才允许调用，且必须 `confirm=true`。
+
+## 用户 SoundFont 音色库（SF2 / SF3）
+
+内置采样乐器是固定的 18 件。**用户自己的 `.sf2` / `.sf3`** 走另一条路——它不是插件，是采样数据：
+
+1. `list_soundfonts` —— 看本机已导入的库、每库多少预设、每个预设的插件 id
+   （形如 `sf2.user.<库 id>.<bank>.<program>`）。**挑音色前先看这里**。
+2. `import_soundfont(path=..., name=...)` —— 导入用户本机的一个文件：复制进托管目录、算哈希、
+   解析出全部预设。几百 MB 的库要几秒。**不动网络**。
+3. `search_soundfont_store(query=...)` —— 搜在线索引（`ai-daw-soundfont-registry`）：
+   名称 / 许可 / 体积 / 能否一键装 / 不能装的原因（例如只提供 7z 包或只有下载页）。
+   **只读，不下载。**
+4. `install_soundfont(slug=..., confirm=true)` —— **高风险**：联网下载几十到几百 MB。
+
+> **安全边界**：`install_soundfont` 会真的联网。只有用户明确同意后才可调用，且必须 `confirm=true`；
+> 说明时一并告诉用户**许可**（NC / ND 系列仅限非商业使用）与体积。
+> 索引里 `installable=false` 的条目（7z 包、纯下载页）**不要硬装**——把 URL 给用户，让他在浏览器下载。
+
+一个库会展开成几十上百个音色条目，所以「换音色」时用 `set_track_instrument(track, plugin_id)`
+传的是**具体预设的 id**，不是库本身。
 > 永远不要为了「省事」自动安装，也不要把安装说成已经完成——没调用工具就是没装。
 
 | 工具 | 参数 | 说明 |

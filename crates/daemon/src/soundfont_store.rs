@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::manager;
+use crate::manager::{self, StoreRuntime};
 
 /// 索引地址：GitHub raw 为主，jsDelivr 作为镜像（国内直连 raw 常常不通）。
 const SOURCES: &[&str] = &[
@@ -121,10 +121,24 @@ pub struct StoreInstall {
     pub skipped: Vec<String>,
 }
 
-/// 内存缓存：`(拉取时刻, 索引)`。
-fn cache() -> &'static Mutex<Option<(Instant, Vec<StoreBank>)>> {
-    static CACHE: OnceLock<Mutex<Option<(Instant, Vec<StoreBank>)>>> = OnceLock::new();
+/// 一次拉取的结果：索引 + 它该缓存多久。
+///
+/// 正常命中是 6 小时；退回**随包快照**时只缓存 60 秒——网络恢复了要能很快重试，
+/// 否则用户会以为商店永远停在旧数据上。
+struct Cached {
+    at: Instant,
+    banks: Vec<StoreBank>,
+    ttl: Duration,
+}
+
+fn cache() -> &'static Mutex<Option<Cached>> {
+    static CACHE: OnceLock<Mutex<Option<Cached>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn remember(banks: Vec<StoreBank>, ttl: Duration) -> Vec<StoreBank> {
+    *cache().lock().unwrap() = Some(Cached { at: Instant::now(), banks: banks.clone(), ttl });
+    banks
 }
 
 /// 测试注入口：直接用一份 JSON 顶掉网络（单元测试不联网）。
@@ -136,9 +150,9 @@ fn override_registry() -> &'static Mutex<Option<String>> {
 /// 读索引（带 6 小时内存缓存与磁盘兜底）。
 pub fn catalog(app: &crate::tauri_api::AppHandle, force: bool) -> Result<Vec<StoreBank>, String> {
     if !force {
-        if let Some((at, banks)) = cache().lock().unwrap().as_ref() {
-            if at.elapsed() < TTL {
-                return Ok(banks.clone());
+        if let Some(cached) = cache().lock().unwrap().as_ref() {
+            if cached.at.elapsed() < cached.ttl {
+                return Ok(cached.banks.clone());
             }
         }
     }
@@ -158,8 +172,7 @@ pub fn catalog(app: &crate::tauri_api::AppHandle, force: bool) -> Result<Vec<Sto
                     if let Some(path) = &disk {
                         let _ = fs::write(path, &text);
                     }
-                    *cache().lock().unwrap() = Some((Instant::now(), banks.clone()));
-                    return Ok(banks);
+                    return Ok(remember(banks, TTL));
                 }
                 Err(err) => errors.push(format!("{url} → {err}")),
             },
@@ -171,8 +184,7 @@ pub fn catalog(app: &crate::tauri_api::AppHandle, force: bool) -> Result<Vec<Sto
     if let Some(path) = &disk {
         if let Ok(text) = fs::read_to_string(path) {
             if let Ok(banks) = parse_registry(&text) {
-                *cache().lock().unwrap() = Some((Instant::now(), banks.clone()));
-                return Ok(banks);
+                return Ok(remember(banks, TTL));
             }
         }
     }
@@ -185,8 +197,7 @@ pub fn catalog(app: &crate::tauri_api::AppHandle, force: bool) -> Result<Vec<Sto
             banks.len(),
             errors.join("；")
         );
-        *cache().lock().unwrap() = Some((Instant::now(), banks.clone()));
-        return Ok(banks);
+        return Ok(remember(banks, Duration::from_secs(60)));
     }
 
     Err(format!("音色库索引拉取失败：{}", errors.join("；")))
@@ -244,7 +255,26 @@ pub fn install(
     })?;
 
     let dir = crate::paths::data_dir(app)?.join("soundfonts");
-    fs::create_dir_all(&dir).map_err(|e| format!("创建 {} 失败：{e}", dir.display()))?;
+    let network = StoreRuntime::load(app).network();
+    let proxy = manager::resolve_proxy(&network).proxy;
+    install_into(&dir, bank, proxy.as_ref())
+}
+
+/// [`install`] 的核心：目录与代理由调用方给（单测因此可以不碰 Tauri）。
+pub(crate) fn install_into(
+    dir: &Path,
+    bank: &StoreBank,
+    proxy: Option<&ureq::Proxy>,
+) -> Result<StoreInstall, String> {
+    let (file, blocked) = choose_file(bank);
+    let file = file.ok_or_else(|| {
+        format!(
+            "「{}」不能一键安装：{}",
+            bank.name,
+            blocked.unwrap_or_else(|| "没有可用的下载".into())
+        )
+    })?;
+    fs::create_dir_all(dir).map_err(|e| format!("创建 {} 失败：{e}", dir.display()))?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -254,14 +284,12 @@ pub fn install(
 
     let result = (|| -> Result<StoreInstall, String> {
         let download = work.join("download.bin");
-        let network = manager::StoreRuntime::load(app).network();
-    let proxy = manager::resolve_proxy(&network).proxy;
         manager::download_verified(
             &[file.url.clone()],
             &download,
             file.sha256.as_deref().unwrap_or(""),
             file.size.unwrap_or(0),
-            proxy.as_ref(),
+            proxy,
             None,
             &mut |_, _| {},
         )?;
@@ -468,10 +496,10 @@ fn parse_registry(text: &str) -> Result<Vec<StoreBank>, String> {
 fn fetch(url: &str, proxy: Option<&ureq::Proxy>) -> Result<String, String> {
     let agent = manager::tls_agent(
         proxy,
-        Some(Duration::from_secs(5)),
-        Some(Duration::from_secs(10)),
+        Some(Duration::from_secs(3)),
+        Some(Duration::from_secs(6)),
+        Some(Duration::from_secs(8)),
         Some(Duration::from_secs(20)),
-        Some(Duration::from_secs(60)),
     );
     let mut resp = agent.get(url).call().map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
@@ -559,6 +587,110 @@ mod tests {
         assert!(score_bank(&banks[0], "zzz").is_none());
         // 大小写不敏感。
         assert!(score_bank(&banks[0], "general").unwrap() > 0);
+    }
+
+    /// 端到端：下载 → 校验 sha256 → 解压 zip → 导入托管目录。
+    ///
+    /// 起一个只回一次请求的本地 HTTP 服务，避免测试依赖外网（索引注入走 override 槽）。
+    #[test]
+    fn install_downloads_extracts_and_imports() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        use sha2::{Digest, Sha256};
+
+        let _guard = crate::soundfonts::test_lock();
+
+        // 1. 造一个只含一个真实 SF3 的 zip。
+        let sf3 = include_bytes!("../../instruments/assets/piano.sf3");
+        let mut zip_bytes = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_bytes));
+            writer
+                .start_file("Piano.sf3", zip::write::SimpleFileOptions::default())
+                .expect("zip entry");
+            writer.write_all(sf3).expect("zip body");
+            writer.finish().expect("zip finish");
+        }
+        let sha256 = format!("{:x}", Sha256::digest(&zip_bytes));
+        let size = zip_bytes.len() as u64;
+
+        // 2. 本地服务：只服务一次 GET。
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let body = zip_bytes.clone();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf);
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/zip\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = socket.write_all(header.as_bytes());
+                let _ = socket.write_all(&body);
+            }
+        });
+
+        // 3. 索引注入 + 托管目录。
+        let json = format!(
+            r#"{{"schema_version":1,"soundfonts":[{{"slug":"test/bank","name":"Test Bank","license":"CC0-1.0","formats":["sf3"],
+                "files":[{{"url":"http://127.0.0.1:{port}/bank.zip","format":"sf3","install":"archive","archive":"zip","size":{size},"sha256":"{sha256}"}}]}}]}}"#
+        );
+        let banks = parse_registry(&json).expect("fixture parses");
+        assert!(choose_file(&banks[0]).0.is_some(), "fixture 应当可装");
+
+        let dir = std::env::temp_dir().join(format!("ai-daw-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        crate::soundfonts::init(dir.clone());
+
+        let outcome = install_into(&dir, &banks[0], None).expect("install");
+        assert_eq!(outcome.imported.len(), 1, "zip 里一个 sf3 应导入一条");
+        assert_eq!(outcome.slug, "test/bank");
+        let entry = &outcome.imported[0];
+        assert!(std::path::Path::new(&entry.file).is_file(), "文件要落到托管目录");
+        assert_eq!(entry.source.as_deref(), Some("test/bank"), "来源要记成 slug");
+        assert!(!entry.presets.is_empty(), "预设要解析出来");
+        assert_eq!(crate::soundfonts::catalog().len(), 1, "清单里要能看到它");
+
+        server.join().expect("server thread");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 下载内容与索引里的 sha256 不符时必须拒绝，且不留半成品。
+    #[test]
+    fn install_rejects_a_hash_mismatch() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let _guard = crate::soundfonts::test_lock();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf);
+                let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nnope");
+            }
+        });
+
+        let dir = std::env::temp_dir().join(format!("ai-daw-store-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        crate::soundfonts::init(dir.clone());
+
+        let json = format!(
+            r#"{{"schema_version":1,"soundfonts":[{{"slug":"test/bad","name":"Bad","license":"CC0-1.0","formats":["sf3"],
+                "files":[{{"url":"http://127.0.0.1:{port}/bank.sf3","format":"sf3","install":"file","size":4,"sha256":"{}"}}]}}]}}"#,
+            "0".repeat(64)
+        );
+        let banks = parse_registry(&json).expect("fixture parses");
+        let err = install_into(&dir, &banks[0], None).unwrap_err();
+        assert!(err.contains("sha256") || err.contains("校验"), "错误要说明校验失败：{err}");
+        assert!(crate::soundfonts::catalog().is_empty(), "失败不该留下条目");
+        server.join().expect("server thread");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

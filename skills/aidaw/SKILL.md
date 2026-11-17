@@ -81,7 +81,7 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 | 音频 | `references/audio.md` | 导入音频、波形、**录音（开始 / 结束 / 选输入设备）**、**音频转 MIDI、降噪、音源分离**、**本地模型状态（`list_models`）与高风险下载（`download_model`）** |
 | 传输 | `references/transport.md` | 播放 / 暂停 / 停止 / 定位 / 循环 |
 | 分析导出 | `references/analysis.md` | 渲染预览、响度 / 频谱分析、导出 WAV |
-| 插件 | `references/plugin.md` | **按分类与音色描述挑乐器/效果器**、**搜索可下载插件（`search_plugin_store`）与高风险安装（`install_plugin`）**、**重扫插件**、**内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）**、参数表、**效果器参数与顺序**、**用户预设（列表 / 新增 / 覆盖 / 删除）** |
+| 插件 | `references/plugin.md` | **按分类与音色描述挑乐器/效果器**、**搜索可下载插件（`search_plugin_store`）与高风险安装（`install_plugin`）**、**重扫插件**、**内置采样乐器（钢琴/吉他/贝斯/鼓组/弦乐/铜管）**、参数表、**效果器参数与顺序**、**用户预设（列表 / 新增 / 覆盖 / 删除）**、**用户 SF2/SF3 音色库（导入 / 在线音色库安装）** |
 | 音色设计 | `references/sound-design.md` | **内置合成器捏音色**：参数语义、`preview_synth` 预听闭环、**36 条出厂音色（`list_synth_presets`）**、风格配方、独立滤波包络 / 每声部 LFO / unison / 过采样 |
 | 音色记忆 | `references/sound-memory.md` | **跨工程保存 / 检索 / 应用整条音色链**；用户明确要求或确认后才保存，默认不自动存 |
 | 插件开发 | `references/clap-plugin-dev.md` | **把需求做成 CLAP 插件**：生态与选型、最小 ABI、线程规则、Rust（nih-plug）/ C++（clap-helpers）/ C 三条路线、跨平台打包、`clap-validator`、装进 AI DAW 验收 |

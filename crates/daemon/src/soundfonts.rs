@@ -384,17 +384,19 @@ fn save_manifest(dir: &Path, entries: &[SoundFontEntry]) -> Result<(), String> {
     fs::rename(&tmp, &target).map_err(|e| format!("保存清单失败：{e}"))
 }
 
+/// 库是**进程级单例**（真实应用里本来就只有一份），所以所有碰它的测试必须串行。
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|err| err.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// 库是**进程级单例**（真实应用里本来就只有一份），所以测试必须串行，否则一个用例的
     /// `init` 会把另一个用例正在写的目录换掉。
-    fn serial() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|err| err.into_inner())
-    }
-
     /// 拿一份真实可解析的 SF3 当「用户文件」：内置钢琴资产。
     fn builtin_sf3() -> &'static [u8] {
         include_bytes!("../../instruments/assets/piano.sf3")
@@ -409,7 +411,7 @@ mod tests {
 
     #[test]
     fn import_copies_hashes_and_lists_presets() {
-        let _guard = serial();
+        let _guard = crate::soundfonts::test_lock();
         let dir = temp_dir("import");
         init(dir.clone());
         let source = dir.join("Piano Sampler.sf3");
@@ -443,7 +445,7 @@ mod tests {
 
     #[test]
     fn import_rejects_garbage_and_leaves_nothing_behind() {
-        let _guard = serial();
+        let _guard = crate::soundfonts::test_lock();
         let dir = temp_dir("garbage");
         init(dir.clone());
         // 源文件放在子目录里：托管目录本身只应该出现「导入成功的库 + 清单」。
@@ -468,7 +470,7 @@ mod tests {
 
     #[test]
     fn manifest_drops_entries_whose_file_disappeared() {
-        let _guard = serial();
+        let _guard = crate::soundfonts::test_lock();
         let dir = temp_dir("ghost");
         init(dir.clone());
         let source = dir.join("a.sf3");
@@ -482,7 +484,7 @@ mod tests {
 
     #[test]
     fn registrations_expose_one_plugin_per_preset() {
-        let _guard = serial();
+        let _guard = crate::soundfonts::test_lock();
         let dir = temp_dir("regs");
         init(dir.clone());
         let source = dir.join("a.sf3");
@@ -506,7 +508,7 @@ mod tests {
 
     #[test]
     fn plugin_id_shape_is_documented() {
-        let _guard = serial();
+        let _guard = crate::soundfonts::test_lock();
         assert_eq!(plugin_id("0123abcd", 0, 0), "sf2.user.0123abcd.0.0");
     }
 }
