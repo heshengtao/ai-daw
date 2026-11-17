@@ -647,6 +647,50 @@ mod tests {
         assert_eq!(crate::soundfonts::catalog().len(), 1, "清单里要能看到它");
 
         server.join().expect("server thread");
+
+        // 同一个流程再走一遍 7z（FreePats 的主力格式）。
+        let mut sevenz_bytes = Vec::new();
+        {
+            let mut writer =
+                sevenz_rust::SevenZWriter::new(std::io::Cursor::new(&mut sevenz_bytes)).expect("7z writer");
+            let mut entry = sevenz_rust::SevenZArchiveEntry::new();
+            entry.name = "Piano7z.sf3".into();
+            entry.has_stream = true;
+            writer.push_archive_entry(entry, Some(&sf3[..])).expect("7z entry");
+            writer.finish().expect("7z finish");
+        }
+        let sevenz_sha = format!("{:x}", Sha256::digest(&sevenz_bytes));
+        let sevenz_size = sevenz_bytes.len() as u64;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let body = sevenz_bytes.clone();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf);
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = socket.write_all(header.as_bytes());
+                let _ = socket.write_all(&body);
+            }
+        });
+        let sevenz_json = format!(
+            r#"{{"schema_version":1,"soundfonts":[{{"slug":"test/bank7z","name":"Test 7z","license":"CC0-1.0","formats":["sf3"],
+                "files":[{{"url":"http://127.0.0.1:{port}/bank.7z","format":"sf3","install":"archive","archive":"7z","size":{sevenz_size},"sha256":"{sevenz_sha}"}}]}}]}}"#
+        );
+        let sevenz_banks = parse_registry(&sevenz_json).expect("7z fixture parses");
+        let sevenz_outcome = install_into(&dir, &sevenz_banks[0], None).expect("install 7z");
+        assert_eq!(sevenz_outcome.imported.len(), 1, "7z 里一个 sf3 应导入一条");
+        // 两个包里是**同一份**采样：按内容哈希去重，清单里仍然只有一条。
+        assert_eq!(
+            sevenz_outcome.imported[0].id, outcome.imported[0].id,
+            "同样的内容不应复制出第二份"
+        );
+        assert_eq!(crate::soundfonts::catalog().len(), 1, "去重后清单只有一条");
+        server.join().expect("server thread");
+
         let _ = std::fs::remove_dir_all(dir);
     }
 
