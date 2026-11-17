@@ -319,8 +319,13 @@ function needsHostConfirm(f: ManagerFile): boolean {
 // ---- 列表 ----
 
 const available = computed<ManagerPlugin[]>(() => {
-  // 「模型」筛选只列模型，插件一条都不出。
-  if (kindFilter.value === "model" || kindFilter.value === "runtime") return [];
+  // 「模型 / 运行时 / 音色库」筛选各自只列自己那一类，插件一条都不出。
+  if (
+    kindFilter.value === "model" ||
+    kindFilter.value === "runtime" ||
+    kindFilter.value === "soundfont"
+  )
+    return [];
   const q = query.value.trim().toLowerCase();
   return manager.registry.filter((p) => {
     if (compatibleOnly.value && !p.files.some((f) => f.compatible)) return false;
@@ -339,7 +344,8 @@ const visibleModels = computed(() => {
   if (
     kindFilter.value === "instrument" ||
     kindFilter.value === "effect" ||
-    kindFilter.value === "runtime"
+    kindFilter.value === "runtime" ||
+    kindFilter.value === "soundfont"
   )
     return [];
   const q = query.value.trim().toLowerCase();
@@ -486,7 +492,8 @@ const visibleInstalledModels = computed(() => {
   if (
     installedFilter.value === "instrument" ||
     installedFilter.value === "effect" ||
-    installedFilter.value === "runtime"
+    installedFilter.value === "runtime" ||
+    installedFilter.value === "soundfont"
   )
     return [];
   const q = installedQuery.value.trim().toLowerCase();
@@ -1148,7 +1155,8 @@ async function doRevealModel(id: string): Promise<void> {
             {{ i18n.t("manager.sourceSettings") }}
           </button>
         </div>
-        <div class="meta">
+        <!-- 音色库走另一份索引：这里是插件/模型的数量，不适用 -->
+        <div v-if="kindFilter !== 'soundfont'" class="meta">
           <span class="meta-text">
             {{ i18n.t("manager.count", { shown: availableShown, total: availableTotal }) }}
           </span>
