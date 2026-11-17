@@ -57,6 +57,7 @@ const zh: Record<string, string> = {
   "plugins.soundfontStoreBrowse": "在线音色库…",
   "plugins.soundfontStoreHide": "收起在线音色库",
   "plugins.soundfontStoreSearchPlaceholder": "搜索：钢琴 / GM / 弦乐…",
+  "plugins.soundfontStoreOpen": "打开页面",
   "plugins.soundfontStoreEmpty": "没有匹配的音色库",
   "plugins.soundfontStoreInstall": "安装",
   "plugins.soundfontStoreInstalling": "安装中…",

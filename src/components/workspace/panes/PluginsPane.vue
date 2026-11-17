@@ -14,6 +14,7 @@ import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import { pickSoundfontsToImport } from "@/api/dialogs";
 import { installSoundfontFromStore, searchSoundfontStore } from "@/api/tauri";
 import { humanSize } from "@/utils/models";
+import { openExternal } from "@/utils/external";
 import type { SoundfontStoreMatch } from "@/api/types";
 import { usePluginsStore } from "@/stores/plugins";
 import { useProjectStore } from "@/stores/project";
@@ -342,6 +343,15 @@ async function retryScan(): Promise<void> {
               <span v-if="bank.installed" class="sf-badge">
                 {{ i18n.t("plugins.soundfontStoreInstalledBadge") }}
               </span>
+              <!-- 不能一键装的（7z / 只给下载页）：把用户送到作者页面，而不是发一个灰按钮 -->
+              <button
+                v-else-if="!bank.installable && bank.homepage"
+                class="sf-install"
+                :title="bank.blocked ?? ''"
+                @click="openExternal(bank.homepage)"
+              >
+                {{ i18n.t("plugins.soundfontStoreOpen") }}
+              </button>
               <button
                 v-else
                 class="sf-install"

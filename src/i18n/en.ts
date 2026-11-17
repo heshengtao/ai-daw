@@ -57,6 +57,7 @@ const en: Record<string, string> = {
   "plugins.soundfontStoreBrowse": "Online library…",
   "plugins.soundfontStoreHide": "Hide the online library",
   "plugins.soundfontStoreSearchPlaceholder": "Search: piano / GM / strings…",
+  "plugins.soundfontStoreOpen": "Open page",
   "plugins.soundfontStoreEmpty": "No matching SoundFont",
   "plugins.soundfontStoreInstall": "Install",
   "plugins.soundfontStoreInstalling": "Installing…",
