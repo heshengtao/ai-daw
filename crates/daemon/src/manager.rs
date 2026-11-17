@@ -1924,9 +1924,11 @@ fn hex_lower(bytes: &[u8]) -> String {
 fn url_extension(url: &str) -> String {
     let path = url.split(['?', '#']).next().unwrap_or(url);
     let name = path.rsplit('/').next().unwrap_or(path).to_lowercase();
-    if let Some(rest) = name.strip_suffix(".tar.gz") {
-        let _ = rest;
-        return "tar.gz".into();
+    // 双扩展名先匹配：`.tar.gz` / `.tar.bz2` / `.tar.xz` 的末段是压缩层，不是容器。
+    for suffix in [".tar.gz", ".tar.bz2", ".tar.xz"] {
+        if name.ends_with(suffix) {
+            return suffix[1..].to_string();
+        }
     }
     match name.rsplit_once('.') {
         Some((_, ext)) => ext.to_string(),
@@ -1944,11 +1946,25 @@ fn url_file_name(url: &str) -> Option<String> {
     }
 }
 
+/// 支持一键解压的归档种类。
+///
+/// 与 `ai-daw-soundfont-registry` 的 `archive` 字段一一对应。7z 暂不支持（见
+/// [`extract_archive`] 的注释）。
+pub(crate) fn archive_supported(kind: &str) -> bool {
+    matches!(kind, "zip" | "tar.gz" | "tgz" | "tar.bz2" | "tbz2" | "tar.xz" | "txz")
+}
+
 /// 把归档解到 `dest`；非归档（如裸 `.clap`）则直接把下载文件放进去。
-fn extract_archive(archive: &Path, dest: &Path, url: &str) -> Result<(), String> {
+pub(crate) fn extract_archive(archive: &Path, dest: &Path, url: &str) -> Result<(), String> {
     match url_extension(url).as_str() {
         "zip" => extract_zip(archive, dest),
         "tar.gz" | "tgz" => extract_tar_gz(archive, dest),
+        "tar.bz2" | "tbz2" => extract_tar_bz2(archive, dest),
+        "tar.xz" | "txz" => extract_tar_xz(archive, dest),
+        "7z" => Err(
+            "暂不支持 7z 归档（客户端还没有 7z 解码器）。请在浏览器打开下载页，解压后手动导入 .sf2/.sf3"
+                .into(),
+        ),
         _ => {
             let name = url_file_name(url).ok_or("无法从下载地址推断文件名")?;
             fs::copy(archive, dest.join(name)).map_err(|e| format!("复制失败：{e}"))?;
@@ -1992,12 +2008,26 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<(), String> {
 
 fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<(), String> {
     let file = fs::File::open(archive).map_err(|e| e.to_string())?;
-    let decoder = flate2::read::GzDecoder::new(file);
-    let mut tar = tar::Archive::new(decoder);
+    extract_tar(flate2::read::GzDecoder::new(file), dest, "tar.gz")
+}
+
+fn extract_tar_bz2(archive: &Path, dest: &Path) -> Result<(), String> {
+    let file = fs::File::open(archive).map_err(|e| e.to_string())?;
+    extract_tar(bzip2::read::BzDecoder::new(file), dest, "tar.bz2")
+}
+
+fn extract_tar_xz(archive: &Path, dest: &Path) -> Result<(), String> {
+    let file = fs::File::open(archive).map_err(|e| e.to_string())?;
+    extract_tar(xz2::read::XzDecoder::new(file), dest, "tar.xz")
+}
+
+/// 三种 tar 共用一套解包逻辑（压缩层只负责给出字节流）。
+fn extract_tar<R: std::io::Read>(reader: R, dest: &Path, label: &str) -> Result<(), String> {
+    let mut tar = tar::Archive::new(reader);
     let mut total: u64 = 0;
     for entry in tar
         .entries()
-        .map_err(|e| format!("不是有效的 tar.gz：{e}"))?
+        .map_err(|e| format!("不是有效的 {label}：{e}"))?
     {
         let mut entry = entry.map_err(|e| e.to_string())?;
         let rel = entry.path().map_err(|e| e.to_string())?.into_owned();
@@ -3459,4 +3489,75 @@ mod tests {
         );
         assert_eq!(sources.last().unwrap(), REGISTRY_URL, "官方源兜底");
     }
+
+    /// 三种 tar（gz / bz2 / xz）解出来的内容必须一致，且都防目录穿越。
+    ///
+    /// 社区 SoundFont 包与 Linux CUDA 组件都会用后两种，`extract_archive` 之前只认 gz。
+    #[test]
+    fn extracts_tar_gz_bz2_and_xz() {
+        use std::io::Write;
+
+        fn build_tar() -> Vec<u8> {
+            let mut builder = tar::Builder::new(Vec::new());
+            let body = b"RIFF....sfbk fake soundfont";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, "bank/piano.sf3", body.as_slice()).expect("append");
+            builder.into_inner().expect("tar bytes")
+        }
+
+        let dir = std::env::temp_dir().join(format!("ai-daw-archive-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("temp dir");
+        let tar_bytes = build_tar();
+
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&tar_bytes).expect("gz");
+        let gz = gz.finish().expect("gz bytes");
+
+        let mut bz = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::fast());
+        bz.write_all(&tar_bytes).expect("bz2");
+        let bz = bz.finish().expect("bz2 bytes");
+
+        let mut xz = xz2::write::XzEncoder::new(Vec::new(), 1);
+        xz.write_all(&tar_bytes).expect("xz");
+        let xz = xz.finish().expect("xz bytes");
+
+        fn walk_files(dir: &Path) -> Vec<PathBuf> {
+            let mut out = Vec::new();
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        out.extend(walk_files(&path));
+                    } else {
+                        out.push(path);
+                    }
+                }
+            }
+            out
+        }
+
+        for (name, bytes) in [("a.tar.gz", gz), ("a.tar.bz2", bz), ("a.tar.xz", xz)] {
+            let archive = dir.join(name);
+            fs::write(&archive, &bytes).expect("write archive");
+            let out = dir.join(format!("out-{name}"));
+            fs::create_dir_all(&out).expect("out dir");
+            extract_archive(&archive, &out, &format!("https://example.com/{name}")).expect("extract");
+            let found: Vec<_> = walk_files(&out);
+            println!("{name}: {found:?}");
+            let extracted = fs::read(out.join("bank").join("piano.sf3")).expect("file extracted");
+            assert_eq!(extracted, b"RIFF....sfbk fake soundfont", "{name} 内容不对");
+        }
+
+        // 7z 不支持时要给出可执行的提示，而不是一个解码器报错。
+        let err = extract_archive(&dir.join("a.tar.gz"), &dir, "https://example.com/x.7z").unwrap_err();
+        assert!(err.contains("7z"), "错误要说明是 7z 不支持：{err}");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
 }
+

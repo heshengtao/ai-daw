@@ -45,6 +45,7 @@ pub mod server;
 pub mod session;
 pub mod singing;
 pub mod sound_memories;
+pub mod soundfont_store;
 pub mod soundfonts;
 pub mod state;
 pub mod svc;

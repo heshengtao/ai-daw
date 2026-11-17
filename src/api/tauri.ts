@@ -101,6 +101,8 @@ import type {
   PluginScanDir,
   PluginScanStatus,
   SoundFontEntry,
+  SoundfontStoreInstall,
+  SoundfontStoreMatch,
   SoundMemorySummary,
   StoreNetwork,
   TransportSnapshot,
@@ -1716,6 +1718,18 @@ export function importSoundfont(path: string, name?: string, source?: string): P
 export function removeSoundfont(id: string): Promise<SoundFontEntry[]> {
   if (mockEnabled()) return Promise.resolve(mockApi.removeSoundfont(id));
   return invoke<SoundFontEntry[]>("soundfont_remove", { id });
+}
+
+/** 在线音色库：按关键词搜索索引（空串 = 全部）。 */
+export function searchSoundfontStore(query = ""): Promise<SoundfontStoreMatch[]> {
+  if (mockEnabled()) return Promise.resolve([]);
+  return invoke<SoundfontStoreMatch[]>("soundfont_store_search", { query });
+}
+
+/** 从在线索引安装一件音色库（下载 + 校验 + 解压 + 导入）。 */
+export function installSoundfontFromStore(slug: string): Promise<SoundfontStoreInstall> {
+  if (mockEnabled()) return Promise.reject(new Error("浏览器预览模式不能安装音色库"));
+  return invoke<SoundfontStoreInstall>("soundfont_store_install", { slug });
 }
 
 /** 订阅用户 SoundFont 库变化事件（导入 / 删除后推送一次）。 */

@@ -14,7 +14,7 @@ use ai_daw_engine::model::{
     TrackId, Transport, VelocityShape,
 };
 use ai_daw_engine::op::OpRecord;
-use ai_daw_engine::registry::{PluginRegistry, PluginSlot};
+use ai_daw_engine::registry::PluginSlot;
 use ai_daw_engine::render::{render_with_assets_progress, RenderOptions};
 use ai_daw_engine::tempo::TempoMap;
 use ai_daw_engine::transport::TransportCommand;
@@ -3905,6 +3905,40 @@ pub async fn soundfont_remove(
     let catalog = crate::soundfonts::catalog();
     let _ = app.emit(crate::state::EVENT_SOUNDFONTS, catalog.clone());
     Ok(catalog)
+}
+
+/// 在线音色库：按关键词搜索（空 = 全部）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn soundfont_store_search(
+    app: crate::tauri_api::AppHandle,
+    query: Option<String>,
+) -> Result<Vec<crate::soundfont_store::StoreMatch>, String> {
+    crate::tauri_api::async_runtime::spawn_blocking(move || {
+        crate::soundfont_store::search(&app, query.as_deref().unwrap_or(""))
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+/// 从在线索引安装一件音色库（下载 → 校验 → 解压 → 导入 → 重建注册表）。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn soundfont_store_install(
+    app: crate::tauri_api::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    slug: String,
+) -> Result<crate::soundfont_store::StoreInstall, String> {
+    let handle = app.clone();
+    let outcome = crate::tauri_api::async_runtime::spawn_blocking(move || {
+        crate::soundfont_store::install(&handle, &slug)
+    })
+    .await
+    .map_err(|err| err.to_string())??;
+    refresh_soundfont_registry(&state);
+    let _ = app.emit(
+        crate::state::EVENT_SOUNDFONTS,
+        crate::soundfonts::catalog(),
+    );
+    Ok(outcome)
 }
 
 /// 让音频线程重建插件注册表。

@@ -41,6 +41,7 @@ import type {
   DiscoveredRuntime,
   CatalogPlugin,
   SoundFontEntry,
+  SoundfontStoreMatch,
   Clip,
   ClipPlacement,
   ClipRef,
@@ -1428,6 +1429,8 @@ export const mockApi = {
   },
 
   removeSoundfont: (_id: string): SoundFontEntry[] => [],
+
+  searchSoundfontStore: (_query: string): SoundfontStoreMatch[] => [],
 
   rescanPlugins: (): CatalogPlugin[] => [...MOCK_PLUGINS],
 

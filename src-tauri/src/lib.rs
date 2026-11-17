@@ -682,6 +682,8 @@ pub fn run() {
             ai_daw_daemon::commands::soundfonts_list,
             ai_daw_daemon::commands::soundfont_import,
             ai_daw_daemon::commands::soundfont_remove,
+            ai_daw_daemon::commands::soundfont_store_search,
+            ai_daw_daemon::commands::soundfont_store_install,
             ai_daw_daemon::commands::plugin_params,
             ai_daw_daemon::commands::add_effect,
             ai_daw_daemon::commands::remove_effect,

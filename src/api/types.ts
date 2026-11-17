@@ -716,6 +716,38 @@ export interface SoundFontEntry {
   source?: string;
 }
 
+/** 在线音色库索引里的一条（与后端 `soundfont_store::StoreMatch` 对应）。 */
+export interface SoundfontStoreMatch {
+  slug: string;
+  name: string;
+  vendor: string;
+  description: string;
+  license: string;
+  license_url: string | null;
+  homepage: string | null;
+  formats: string[];
+  kind: string | null;
+  presets: number | null;
+  tags: string[];
+  /** 本机是否已经装过。 */
+  installed: boolean;
+  /** 能否一键安装。 */
+  installable: boolean;
+  /** 不能一键安装的原因（界面直接显示）。 */
+  blocked: string | null;
+  size: number | null;
+  format: string | null;
+  archive: string | null;
+}
+
+/** 一次在线安装的结果（与后端 `soundfont_store::StoreInstall` 对应）。 */
+export interface SoundfontStoreInstall {
+  slug: string;
+  name: string;
+  imported: SoundFontEntry[];
+  skipped: string[];
+}
+
 /** 扫描时被跳过的插件（崩溃 / 超时 / 读取失败）。 */
 export interface SkippedPlugin {
   path: string;

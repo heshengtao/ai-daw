@@ -69,6 +69,8 @@ tar = "0.4"
 flate2 = "1"
 # Linux 的 CUDA 组件（NVIDIA redist）只发 `.tar.xz`。
 xz2 = "0.1"
+# 社区 SoundFont 包（以及部分插件）只发 `.tar.bz2`。
+bzip2 = "0.5"
 
 # 音色记忆库：插件二进制状态以 base64 存进 JSON，避免 Vec<u8> 变成数字数组。
 base64 = "0.22"
