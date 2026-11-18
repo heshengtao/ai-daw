@@ -2,6 +2,119 @@
   "schema_version": 1,
   "soundfonts": [
     {
+      "slug": "avl/black-pearl",
+      "name": "AVL Drumkits — Black Pearl",
+      "vendor": "AVL Drumkits",
+      "description": "Black Pearl acoustic kit recorded with 5 velocity layers per piece, packaged as a single SF2 for the AVL LV2 plugin. CC-BY-SA-3.0.",
+      "homepage": "https://www.bandshed.net/avldrumkits/",
+      "source": "https://www.bandshed.net/avldrumkits/",
+      "license": "CC-BY-SA-3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "drumkit",
+      "tags": [
+        "drums",
+        "acoustic",
+        "drum kit"
+      ],
+      "files": [
+        {
+          "url": "https://www.bandshed.net/sounds/AVLDrumkits_SF2/Black_Pearl_4_LV2.sf2",
+          "format": "sf2",
+          "install": "file",
+          "size": 19448258
+        }
+      ]
+    },
+    {
+      "slug": "avl/blonde-bop",
+      "name": "AVL Drumkits — Blonde Bop",
+      "vendor": "AVL Drumkits",
+      "description": "Blonde Bop kit: a tight, dry jazz-leaning kit with 5-10 velocity layers per piece. CC-BY-SA-3.0.",
+      "homepage": "https://www.bandshed.net/avldrumkits/",
+      "source": "https://www.bandshed.net/avldrumkits/",
+      "license": "CC-BY-SA-3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "drumkit",
+      "tags": [
+        "drums",
+        "acoustic",
+        "jazz"
+      ],
+      "files": [
+        {
+          "url": "https://www.bandshed.net/sounds/AVLDrumkits_SF2/Blonde_Bop_LV2.sf2",
+          "format": "sf2",
+          "install": "file",
+          "size": 31399792
+        }
+      ]
+    },
+    {
+      "slug": "avl/red-zeppelin",
+      "name": "AVL Drumkits — Red Zeppelin",
+      "vendor": "AVL Drumkits",
+      "description": "Red Zeppelin kit: a bigger, roomier rock kit with 5 velocity layers per piece. CC-BY-SA-3.0.",
+      "homepage": "https://www.bandshed.net/avldrumkits/",
+      "source": "https://www.bandshed.net/avldrumkits/",
+      "license": "CC-BY-SA-3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "drumkit",
+      "tags": [
+        "drums",
+        "acoustic",
+        "rock"
+      ],
+      "files": [
+        {
+          "url": "https://www.bandshed.net/sounds/AVLDrumkits_SF2/Red_Zeppelin_4_LV2.sf2",
+          "format": "sf2",
+          "install": "file",
+          "size": 26470546
+        }
+      ]
+    },
+    {
+      "slug": "freepats/bagpipe",
+      "name": "Bagpipe (small)",
+      "vendor": "FreePats",
+      "description": "A bagpipe in G recorded in 2020 by Gilles Sadowski; the small SF2 variant trims the sample set while keeping the drone and chanter.",
+      "homepage": "https://freepats.zenvoid.org/Ethnic/bagpipe.html",
+      "source": "https://freepats.zenvoid.org/Ethnic/bagpipe.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "bagpipe",
+        "folk",
+        "ethnic"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/bagpipe/releases/download/2026-08-06/Bagpipe-small-SF2-20260806.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 6976695
+        }
+      ]
+    },
+    {
       "slug": "freepats/pipe-organ",
       "name": "Church Organ Emulation",
       "vendor": "FreePats",
@@ -92,6 +205,35 @@
       ]
     },
     {
+      "slug": "freepats/drawbar-organ",
+      "name": "Drawbar Organ",
+      "vendor": "FreePats",
+      "description": "Hammond-style drawbar organ recorded from the setBfree software synthesizer.",
+      "homepage": "https://freepats.zenvoid.org/Organ/electric-organ.html",
+      "source": "https://freepats.zenvoid.org/Organ/electric-organ.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "organ",
+        "hammond",
+        "drawbar"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Organ/DrawbarOrganEmulation/DrawbarOrganEmulation-SF2-20190712.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 6037780
+        }
+      ]
+    },
+    {
       "slug": "freepats/electric-guitar-clean",
       "name": "Electric Guitar Clean (bridge, small)",
       "vendor": "FreePats",
@@ -123,6 +265,154 @@
       ]
     },
     {
+      "slug": "freepats/electric-guitar-direct",
+      "name": "Electric Guitar Direct (DI)",
+      "vendor": "FreePats",
+      "description": "The raw direct-input signal of a Fender electric guitar, meant to be fed through an amp simulator rather than played dry.",
+      "homepage": "https://freepats.zenvoid.org/ElectricGuitar/clean-electric-guitar.html",
+      "source": "https://freepats.zenvoid.org/ElectricGuitar/clean-electric-guitar.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "guitar",
+        "electric guitar",
+        "di",
+        "dry"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/electric-guitar-FSBS-direct/releases/download/2022-09-11/EGuitarFSBS-direct-SF2-20220911.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 63256498
+        }
+      ]
+    },
+    {
+      "slug": "freepats/electric-guitar-distorted-1",
+      "name": "Electric Guitar Distorted #1",
+      "vendor": "FreePats",
+      "description": "FSBS distorted electric guitar #1: the same Fender guitar through a high-gain amp and effects chain.",
+      "homepage": "https://freepats.zenvoid.org/ElectricGuitar/distorted-electric-guitar.html",
+      "source": "https://freepats.zenvoid.org/ElectricGuitar/distorted-electric-guitar.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "guitar",
+        "electric guitar",
+        "distorted",
+        "rock"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/electric-guitar-FSBS-dist1/releases/download/2022-09-11/EGuitarFSBS-dist1-SF2-20220911.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 332579821
+        }
+      ]
+    },
+    {
+      "slug": "freepats/electric-guitar-distorted-2",
+      "name": "Electric Guitar Distorted #2",
+      "vendor": "FreePats",
+      "description": "FSBS distorted electric guitar #2, a heavier voicing of the same recorded instrument.",
+      "homepage": "https://freepats.zenvoid.org/ElectricGuitar/distorted-electric-guitar.html",
+      "source": "https://freepats.zenvoid.org/ElectricGuitar/distorted-electric-guitar.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "guitar",
+        "electric guitar",
+        "distorted",
+        "metal"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/electric-guitar-FSBS-dist2/releases/download/2022-09-11/EGuitarFSBS-dist2-SF2-20220911.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 127358936
+        }
+      ]
+    },
+    {
+      "slug": "freepats/electric-guitar-jazz",
+      "name": "Electric Guitar Jazz (bridge, small)",
+      "vendor": "FreePats",
+      "description": "FSBS jazz electric guitar: a Fender recorded direct, then run through an amp and effects chain; bridge pickup, small variant.",
+      "homepage": "https://freepats.zenvoid.org/ElectricGuitar/clean-electric-guitar.html",
+      "source": "https://freepats.zenvoid.org/ElectricGuitar/clean-electric-guitar.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "guitar",
+        "electric guitar",
+        "jazz"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/electric-guitar-FSBS-jazz/releases/download/2026-08-07/EGuitarFSBS-jazz-bridge-small-SF2-20260807.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 5232868
+        }
+      ]
+    },
+    {
+      "slug": "freepats/electric-bass-finger",
+      "name": "Fingered Electric Bass (YR)",
+      "vendor": "FreePats",
+      "description": "Fingered electric bass from the same Yamaha RBX session as the picked variant; CC0.",
+      "homepage": "https://freepats.zenvoid.org/ElectricGuitar/clean-electric-bass.html",
+      "source": "https://freepats.zenvoid.org/ElectricGuitar/clean-electric-bass.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "bass",
+        "electric bass",
+        "finger"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/electric-bass-YR/releases/download/2019-09-30/FingerBassYR-SF2-20190930.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 2613000
+        }
+      ]
+    },
+    {
       "slug": "fluidr3/gm",
       "name": "FluidR3 GM",
       "vendor": "Frank Wen",
@@ -150,6 +440,154 @@
           "archive": "zip",
           "size": 131834190,
           "sha256": "2a1ed0bf74251717e6820142063670d3ff40ee67b32843efdbeeab69aed344fd"
+        }
+      ]
+    },
+    {
+      "slug": "musescore/fluidr3mono",
+      "name": "FluidR3Mono GM",
+      "vendor": "Michael Cowgill / Frank Wen",
+      "description": "The mono, memory-lean version of FluidR3 GM (2.315) that MuseScore 2 shipped, MIT licensed. The Debian source tarball holds FluidR3Mono_GM2-315.SF2.",
+      "homepage": "https://packages.debian.org/sid/fluidr3mono-gm-soundfont",
+      "source": "https://packages.debian.org/sid/fluidr3mono-gm-soundfont",
+      "license": "MIT",
+      "license_url": "https://opensource.org/license/mit",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "gm",
+      "tags": [
+        "gm",
+        "fluidr3",
+        "mono",
+        "lightweight"
+      ],
+      "files": [
+        {
+          "url": "https://deb.debian.org/debian/pool/main/f/fluidr3mono-gm-soundfont/fluidr3mono-gm-soundfont_2.315.orig.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 86444136
+        }
+      ]
+    },
+    {
+      "slug": "freepats/fm-piano-1",
+      "name": "FM Piano #1 (DX7 E.Piano)",
+      "vendor": "FreePats",
+      "description": "The Yamaha DX7 'E. Piano 1' patch, recorded from the Hexter software synthesizer: the glassy FM electric piano of countless 1980s records.",
+      "homepage": "https://freepats.zenvoid.org/ElectricPiano/synthesized-piano.html",
+      "source": "https://freepats.zenvoid.org/ElectricPiano/synthesized-piano.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "piano",
+        "electric piano",
+        "fm",
+        "dx7"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/fm-piano1/releases/download/2019-09-16/FM-Piano1-SF2-20190916.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 13727542
+        }
+      ]
+    },
+    {
+      "slug": "freepats/fm-piano-2",
+      "name": "FM Piano #2 (bright)",
+      "vendor": "FreePats",
+      "description": "A brighter variation of the DX7 electric piano, also recorded from Hexter.",
+      "homepage": "https://freepats.zenvoid.org/ElectricPiano/synthesized-piano.html",
+      "source": "https://freepats.zenvoid.org/ElectricPiano/synthesized-piano.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "piano",
+        "electric piano",
+        "fm",
+        "bright"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/fm-piano2/releases/download/2016-11-12/FM-Piano2-SF2-20161112.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 4815653
+        }
+      ]
+    },
+    {
+      "slug": "freepats/general-midi",
+      "name": "FreePats General MIDI",
+      "vendor": "FreePats",
+      "description": "FreePats' own General MIDI set: 45 melodic instruments plus a 43-entry percussion kit, deliberately incomplete and expanded release by release. GPL-3.0 with a linking exception.",
+      "homepage": "https://freepats.zenvoid.org/SoundSets/general-midi.html",
+      "source": "https://freepats.zenvoid.org/SoundSets/general-midi.html",
+      "license": "GPL-3.0-or-later",
+      "license_url": "https://www.gnu.org/licenses/gpl-3.0.html",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "gm",
+      "tags": [
+        "gm",
+        "general midi",
+        "gpl"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/SoundSets/FreePats-GeneralMIDI/FreePatsGM-SF2-20221026.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 237775919
+        }
+      ]
+    },
+    {
+      "slug": "freepats/gm-percussion",
+      "name": "FreePats GM Percussion Set",
+      "vendor": "FreePats",
+      "description": "Standalone General MIDI percussion set with more layers than the kit inside the FreePats GM bank; cuica and timbales are still missing. GPL-3.0.",
+      "homepage": "https://freepats.zenvoid.org/SoundSets/general-midi.html",
+      "source": "https://freepats.zenvoid.org/SoundSets/general-midi.html",
+      "license": "GPL-3.0-or-later",
+      "license_url": "https://www.gnu.org/licenses/gpl-3.0.html",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "drumkit",
+      "tags": [
+        "drums",
+        "gm",
+        "percussion"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/SoundSets/GM-PercussionSet/FreePatsGM-Percussion-SF2-20200822.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 15610628
         }
       ]
     },
@@ -215,6 +653,65 @@
       ]
     },
     {
+      "slug": "freepats/hang-d-minor",
+      "name": "Hang (D Minor)",
+      "vendor": "FreePats",
+      "description": "A hang tuned in D minor, recorded in 2017 in the Medialab-Prado auditorium; the bank covers the instrument's diatonic scale with its characteristic metallic ring.",
+      "homepage": "https://freepats.zenvoid.org/ChromaticPercussion/hang.html",
+      "source": "https://freepats.zenvoid.org/ChromaticPercussion/hang.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "hang",
+        "hang drum",
+        "percussion",
+        "ethnic"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/hang-D-minor/releases/download/2022-03-30/Hang-D-minor-SF2-20220330.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 11474857
+        }
+      ]
+    },
+    {
+      "slug": "freepats/honky-tonk-piano",
+      "name": "Honky-Tonk Piano (small)",
+      "vendor": "FreePats",
+      "description": "A Francis Bacon player piano recorded in stereo by Piotr Barcz: the detuned, historic honky-tonk tone. Small SF2 variant.",
+      "homepage": "https://freepats.zenvoid.org/Piano/honky-tonk-piano.html",
+      "source": "https://freepats.zenvoid.org/Piano/honky-tonk-piano.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "piano",
+        "honky-tonk",
+        "ragtime"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/old-piano-FB/releases/download/2020-04-01/PianoFB-small-SF2-20200401.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 9214536
+        }
+      ]
+    },
+    {
       "slug": "freepats/jaw-harp",
       "name": "Jaw Harp",
       "vendor": "FreePats",
@@ -275,6 +772,65 @@
       ]
     },
     {
+      "slug": "freepats/lately-bass",
+      "name": "Lately Bass",
+      "vendor": "FreePats",
+      "description": "The TX81Z 'Lately Bass' patch, recreated with Dexed and adapted for SF2.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-bass.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-bass.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "bass",
+        "synth",
+        "fm",
+        "tx81z"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/lately-bass/releases/download/2024-04-09/LatelyBass-SF2-20240409.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 2047154
+        }
+      ]
+    },
+    {
+      "slug": "freepats/muldjord-drumkit",
+      "name": "Muldjord Drum Kit",
+      "vendor": "FreePats",
+      "description": "Lars Muldjord's acoustic kit: two kicks, three hanging toms, floor tom, snare, hi-hat, two crashes, two rides and a china, with velocity layers. CC-BY-4.0.",
+      "homepage": "https://freepats.zenvoid.org/Percussion/acoustic-drum-kit.html",
+      "source": "https://freepats.zenvoid.org/Percussion/acoustic-drum-kit.html",
+      "license": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "drumkit",
+      "tags": [
+        "drums",
+        "acoustic",
+        "drum kit"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/muldjordkit/releases/download/2020-10-18/MuldjordKit-SF2-20201018.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 54877940
+        }
+      ]
+    },
+    {
       "slug": "musescore/general",
       "name": "MuseScore General",
       "vendor": "MuseScore",
@@ -310,6 +866,182 @@
           "install": "file",
           "size": 215614036,
           "sha256": "ee51d2c4b1525e70f19a45909c4fd7a2e26d91d115fa89dbf5a6bc413d8b9bf3"
+        }
+      ]
+    },
+    {
+      "slug": "musescore/general-hq",
+      "name": "MuseScore General HQ",
+      "vendor": "MuseScore",
+      "description": "The high-quality build of MuseScore General (S. Christian Collins' adaptation of FluidR3Mono), full 128-preset GM set. The Debian source tarball contains MuseScore_General_HQ.sf2.",
+      "homepage": "https://packages.debian.org/sid/musescore-general-soundfont",
+      "source": "https://packages.debian.org/sid/musescore-general-soundfont",
+      "license": "MIT",
+      "license_url": "https://opensource.org/license/mit",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "gm",
+      "tags": [
+        "gm",
+        "orchestral",
+        "musescore",
+        "hq"
+      ],
+      "files": [
+        {
+          "url": "https://deb.debian.org/debian/pool/main/m/musescore-general-soundfont/musescore-general-soundfont_0.2.1.orig.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 274424736
+        }
+      ]
+    },
+    {
+      "slug": "freepats/new-age-pad",
+      "name": "New Age Pad",
+      "vendor": "FreePats",
+      "description": "General MIDI program 89 (Synth Pad 1, new age) from ZynAddSubFX/Yoshimi.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-pad.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-pad.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "synth",
+        "pad",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/new-age/releases/download/2019-07-30/NewAge-SF2-20190730.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 7792228
+        }
+      ]
+    },
+    {
+      "slug": "freepats/ocarina",
+      "name": "Ocarina",
+      "vendor": "FreePats",
+      "description": "Ocarina from Xavimart's instrument collection, recorded for FreePats.",
+      "homepage": "https://freepats.zenvoid.org/Wind/ocarina.html",
+      "source": "https://freepats.zenvoid.org/Wind/ocarina.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "ocarina",
+        "wind",
+        "folk"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/ocarina1/releases/download/2024-10-02/Ocarina-SF2-20241002.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 3183518
+        }
+      ]
+    },
+    {
+      "slug": "mindwerks/opl3-fm",
+      "name": "OPL-3 FM 128M",
+      "vendor": "Mindwerks",
+      "description": "A General MIDI bank built from OPL3 FM synthesis: the sound of early-1990s AdLib and Sound Blaster cards, with 128 melodic presets and a drum kit. CC-BY-SA-4.0.",
+      "homepage": "https://github.com/Mindwerks/opl3-soundfont",
+      "source": "https://github.com/Mindwerks/opl3-soundfont",
+      "license": "CC-BY-SA-4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "gm",
+      "tags": [
+        "gm",
+        "opl3",
+        "fm",
+        "retro",
+        "chiptune"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/Mindwerks/opl3-soundfont/releases/download/1.0/OPL-3_FM_128M.sf2",
+          "format": "sf2",
+          "install": "file",
+          "size": 135020964
+        }
+      ]
+    },
+    {
+      "slug": "freepats/percussive-organ",
+      "name": "Percussive Organ",
+      "vendor": "FreePats",
+      "description": "Percussive Hammond organ variation by the Strix SoundFont Team.",
+      "homepage": "https://freepats.zenvoid.org/Organ/electric-organ.html",
+      "source": "https://freepats.zenvoid.org/Organ/electric-organ.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "organ",
+        "hammond",
+        "percussive"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Organ/PercussiveOrganEmulation/PercussiveOrganEmulation-SF2-20190715.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 12348808
+        }
+      ]
+    },
+    {
+      "slug": "freepats/electric-bass-picked",
+      "name": "Picked Electric Bass (YR)",
+      "vendor": "FreePats",
+      "description": "Picked electric bass recorded from a Yamaha RBX by Andrea Biasior and released to FreePats under CC0.",
+      "homepage": "https://freepats.zenvoid.org/ElectricGuitar/clean-electric-bass.html",
+      "source": "https://freepats.zenvoid.org/ElectricGuitar/clean-electric-bass.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "bass",
+        "electric bass",
+        "picked"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/electric-bass-YR/releases/download/2019-09-30/PickedBassYR-SF2-20190930.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 2345077
         }
       ]
     },
@@ -370,6 +1102,94 @@
           "archive": "tar.xz",
           "size": 12549588,
           "sha256": "5be252317cc511d0d92e94b07e2289540b57e4381ec34b26392e685f9b1d505d"
+        }
+      ]
+    },
+    {
+      "slug": "open-soundfonts/saint-james-orchestra",
+      "name": "Saint James Orchestra Soundfonts",
+      "vendor": "Saint James Orchestra",
+      "description": "48 separate orchestral SF2 banks — violin, viola, cello and bass with arco, legato, detache, pizzicato and tremolo variants, plus brass, woodwinds, harp, piano and percussion. GPL-3.0; the repository is the distribution point, so this entry opens it rather than a single archive.",
+      "homepage": "https://github.com/open-soundfonts/Saint_James_Orchestra_soundfonts",
+      "source": "https://github.com/open-soundfonts/Saint_James_Orchestra_soundfonts",
+      "license": "GPL-3.0-only",
+      "license_url": "https://www.gnu.org/licenses/gpl-3.0.html",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "collection",
+      "tags": [
+        "orchestral",
+        "strings",
+        "brass",
+        "woodwind",
+        "gpl"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/open-soundfonts/Saint_James_Orchestra_soundfonts",
+          "format": "sf2",
+          "install": "external",
+          "note": "One repository with 49 .sf2 files; download the ones you need (or the repo zip) and load them as separate banks."
+        }
+      ]
+    },
+    {
+      "slug": "freepats/salamander-grand-piano",
+      "name": "Salamander Grand Piano",
+      "vendor": "FreePats",
+      "description": "Alexander Holm's Salamander grand piano converted to SF2 by FreePats. CC-BY-3.0, so credit the original recording (and FreePats for the conversion) when you use it.",
+      "homepage": "https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html",
+      "source": "https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html",
+      "license": "CC-BY-3.0",
+      "license_url": "https://creativecommons.org/licenses/by/3.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "piano",
+        "grand piano",
+        "acoustic"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Piano/SalamanderGrandPiano/SalamanderGrandPiano-SF2-V3+20200602.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 310397984
+        }
+      ]
+    },
+    {
+      "slug": "open-soundfonts/sgm-v2.01",
+      "name": "SGM V2.01",
+      "vendor": "Open Soundfonts",
+      "description": "A large GM/GS bank split into three SF2 parts to fit GitHub's file-size limit: presets 0-30, 31-79, and 80-127 plus every GS drum kit. Download all three parts to get the complete bank. GPL-3.0.",
+      "homepage": "https://github.com/open-soundfonts/SGM_V2_01_soundfonts",
+      "source": "https://github.com/open-soundfonts/SGM_V2_01_soundfonts",
+      "license": "GPL-3.0-only",
+      "license_url": "https://www.gnu.org/licenses/gpl-3.0.html",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "gm",
+      "tags": [
+        "gm",
+        "gs",
+        "orchestral",
+        "gpl"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/open-soundfonts/SGM_V2_01_soundfonts",
+          "format": "sf2",
+          "install": "external",
+          "note": "Three .tar.gz parts (about 270 MB total); a client cannot merge them into one bank, so this entry links the project page."
         }
       ]
     },
@@ -437,6 +1257,531 @@
       ]
     },
     {
+      "slug": "freepats/steel-string-guitar",
+      "name": "Steel-String Guitar (small)",
+      "vendor": "FreePats",
+      "description": "Steel-string acoustic guitar assembled from FlameStudios' Seagull samples; small variant. GPL-3.0, like the rest of the bank's samples.",
+      "homepage": "https://freepats.zenvoid.org/Guitar/steel-acoustic-guitar.html",
+      "source": "https://freepats.zenvoid.org/Guitar/steel-acoustic-guitar.html",
+      "license": "GPL-3.0-only",
+      "license_url": "https://www.gnu.org/licenses/gpl-3.0.html",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "guitar",
+        "acoustic guitar",
+        "steel string"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Guitar/FSS-SteelStringGuitar/FSS-SteelStringGuitar-small-SF2-20200521.tar.xz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.xz",
+          "size": 2749164
+        }
+      ]
+    },
+    {
+      "slug": "freepats/sweep-pad",
+      "name": "Sweep Pad",
+      "vendor": "FreePats",
+      "description": "General MIDI program 96 (Synth Pad 8, sweep) from ZynAddSubFX/Yoshimi.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-pad.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-pad.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "synth",
+        "pad",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/sweep-pad/releases/download/2019-08-13/SweepPad-SF2-20190813.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 7588540
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-bass-lead",
+      "name": "Synth Bass & Lead",
+      "vendor": "FreePats",
+      "description": "General MIDI program 88 (Synth Lead 8, bass + lead) made with Surge.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-lead.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-lead.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "synth",
+        "lead",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-bass-lead/releases/download/2020-05-22/SynthBassLead-SF2-20200522.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 6446819
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-bass-1",
+      "name": "Synth Bass 1",
+      "vendor": "FreePats",
+      "description": "General MIDI program 39 (Synth Bass 1), recorded from ZynAddSubFX/Yoshimi.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-bass.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-bass.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "bass",
+        "synth",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-bass-1/releases/download/2019-07-23/SynthBass1-SF2-20190723.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 3382236
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-bass-2",
+      "name": "Synth Bass 2",
+      "vendor": "FreePats",
+      "description": "General MIDI program 40 (Synth Bass 2): the DX7 'Bass 1' patch via Hexter.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-bass.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-bass.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "bass",
+        "synth",
+        "gm",
+        "dx7"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-bass-2/releases/download/2021-04-05/SynthBass2-SF2-20210405.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 1766956
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-brass-1",
+      "name": "Synth Brass 1",
+      "vendor": "FreePats",
+      "description": "General MIDI program 63 (Synth Brass 1), recorded from ZynAddSubFX/Yoshimi.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-brass.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-brass.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "brass",
+        "synth",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-brass-1/releases/download/2021-04-26/SynthBrass1-SF2-20210426.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 5493409
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-brass-2",
+      "name": "Synth Brass 2",
+      "vendor": "FreePats",
+      "description": "DX7 'Brass 7' patch rendered through Dexed for General MIDI program 63.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-brass.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-brass.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "brass",
+        "synth",
+        "gm",
+        "dx7"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-brass-2/releases/download/2024-06-10/SynthBrass2-SF2-20240610.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 3563685
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-crystal",
+      "name": "Synth Crystal",
+      "vendor": "FreePats",
+      "description": "General MIDI program 99 (Synth FX 3, crystal) rendered from Dexed.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-effects.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-effects.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "synth",
+        "fx",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-crystal/releases/download/2019-08-12/SynthCrystal-SF2-20190812.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 4571849
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-fifths",
+      "name": "Synth Fifths",
+      "vendor": "FreePats",
+      "description": "General MIDI program 87 (Synth Lead 7, fifths) made with Surge.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-lead.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-lead.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "synth",
+        "lead",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-fifths/releases/download/2020-05-19/SynthFifths-SF2-20200519.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 12102701
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-goblins",
+      "name": "Synth Goblins",
+      "vendor": "FreePats",
+      "description": "General MIDI program 102 (Synth FX 6, goblins) made with ZynAddSubFX.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-effects.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-effects.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "synth",
+        "fx",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-goblins/releases/download/2020-06-12/SynthGoblins-SF2-20200612.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 19534910
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-calliope",
+      "name": "Synth Lead Calliope",
+      "vendor": "FreePats",
+      "description": "General MIDI program 83 (Synth Lead 3, calliope) from Hexter and ZynAddSubFX.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-lead.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-lead.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "synth",
+        "lead",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-calliope/releases/download/2020-05-12/SynthCalliope-SF2-20200512.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 7909567
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-square",
+      "name": "Synth Lead Square",
+      "vendor": "FreePats",
+      "description": "General MIDI program 81 (Synth Lead 1, square) from ZynAddSubFX/Yoshimi.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-lead.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-lead.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "synth",
+        "lead",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-square/releases/download/2020-05-12/SynthSquare-SF2-20200512.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 9429325
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-pad-bowed",
+      "name": "Synth Pad Bowed",
+      "vendor": "FreePats",
+      "description": "General MIDI program 93 (Synth Pad 5, bowed), samples by the Strix SoundFont Team.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-pad.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-pad.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "synth",
+        "pad",
+        "gm",
+        "bowed"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-pad-bowed/releases/download/2019-07-19/SynthPadBowed-SF2-20190719.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 22310184
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-pad-choir",
+      "name": "Synth Pad Choir",
+      "vendor": "FreePats",
+      "description": "General MIDI program 92 (Synth Pad 4, choir) made with ZynAddSubFX.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-pad.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-pad.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "synth",
+        "pad",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-pad-choir/releases/download/2020-05-16/SynthPadChoir-SF2-20200516.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 12594157
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-scifi",
+      "name": "Synth Sci-Fi",
+      "vendor": "FreePats",
+      "description": "General MIDI program 104 (Synth FX 8, sci-fi) made with Surge.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-effects.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-effects.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "synth",
+        "fx",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-scifi/releases/download/2020-05-17/SynthSciFi-SF2-20200517.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 22886392
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-soundtrack",
+      "name": "Synth Soundtrack",
+      "vendor": "FreePats",
+      "description": "General MIDI program 98 (Synth FX 2, soundtrack) made with ZynAddSubFX.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-effects.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-effects.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "synth",
+        "fx",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-soundtrack/releases/download/20200521/SynthSoundtrack-SF2-20200521.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 18137576
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-strings-1",
+      "name": "Synth Strings 1",
+      "vendor": "FreePats",
+      "description": "General MIDI program 51 (Synth Strings 1) from ZynAddSubFX/Yoshimi.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-strings.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-strings.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "strings",
+        "synth",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-strings-1/releases/download/2020-05-28/SynthStrings1-SF2-20200528.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 4411732
+        }
+      ]
+    },
+    {
+      "slug": "freepats/synth-strings-2",
+      "name": "Synth Strings 2",
+      "vendor": "FreePats",
+      "description": "General MIDI program 52 (Synth Strings 2) from ZynAddSubFX/Yoshimi.",
+      "homepage": "https://freepats.zenvoid.org/Synthesizer/synth-strings.html",
+      "source": "https://freepats.zenvoid.org/Synthesizer/synth-strings.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "strings",
+        "synth",
+        "gm"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/synth-strings-2/releases/download/2020-05-28/SynthStrings2-SF2-20200528.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 7804213
+        }
+      ]
+    },
+    {
       "slug": "freepats/synthesizer-percussion",
       "name": "Synthesizer Percussion",
       "vendor": "FreePats",
@@ -498,6 +1843,122 @@
       ]
     },
     {
+      "slug": "timbrechbill/timgm6mb",
+      "name": "TimGM6mb",
+      "vendor": "Tim Brechbill",
+      "description": "The 6 MB General MIDI bank that shipped with MuseScore 1: small enough to load on any laptop, still a serviceable GM fallback. GPL-2.0.",
+      "homepage": "https://packages.debian.org/sid/timgm6mb-soundfont",
+      "source": "https://packages.debian.org/sid/timgm6mb-soundfont",
+      "license": "GPL-2.0-only",
+      "license_url": "https://www.gnu.org/licenses/old-licenses/gpl-2.0.html",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "gm",
+      "tags": [
+        "gm",
+        "lightweight",
+        "classic"
+      ],
+      "files": [
+        {
+          "url": "https://deb.debian.org/debian/pool/main/t/timgm6mb-soundfont/timgm6mb-soundfont_1.3.orig.tar.gz",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.gz",
+          "size": 5560953
+        }
+      ]
+    },
+    {
+      "slug": "freepats/timpani",
+      "name": "Timpani",
+      "vendor": "FreePats",
+      "description": "Timpani assembled from Versilian Community Sample Library recordings, tuned for orchestral use.",
+      "homepage": "https://freepats.zenvoid.org/Percussion/orchestral-percussion.html",
+      "source": "https://freepats.zenvoid.org/Percussion/orchestral-percussion.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "timpani",
+        "orchestral",
+        "percussion"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/timpani/releases/download/2024-08-10/Timpani-SF2-20240810.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 4723477
+        }
+      ]
+    },
+    {
+      "slug": "freepats/tubular-bells",
+      "name": "Tubular Bells",
+      "vendor": "FreePats",
+      "description": "Tubular bells assembled from Versilian Community Sample Library samples; the small SF2 variant keeps the strike and the long decay without the full multisample weight.",
+      "homepage": "https://freepats.zenvoid.org/ChromaticPercussion/tubular-bells.html",
+      "source": "https://freepats.zenvoid.org/ChromaticPercussion/tubular-bells.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "tubular bells",
+        "bells",
+        "percussion"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/tubular-bells1/releases/download/2024-11-30/TubularBells-small-SF2-20241130.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 4492697
+        }
+      ]
+    },
+    {
+      "slug": "freepats/ukulele",
+      "name": "Ukulele",
+      "vendor": "FreePats",
+      "description": "A tenor Flight Fireball ukulele sampled across C4-C6 in one session, with two percussive articulations.",
+      "homepage": "https://freepats.zenvoid.org/GuitarFamily/ukulele.html",
+      "source": "https://freepats.zenvoid.org/GuitarFamily/ukulele.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "ukulele",
+        "guitar",
+        "plucked"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/ukulele1/releases/download/2026-08-11/Ukulele-SF2-20260811.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 1522308
+        }
+      ]
+    },
+    {
       "slug": "freepats/upright-piano-kw",
       "name": "Upright Piano KW (small)",
       "vendor": "FreePats",
@@ -528,6 +1989,35 @@
       ]
     },
     {
+      "slug": "freepats/world-percussion",
+      "name": "World Percussion",
+      "vendor": "FreePats",
+      "description": "Hand percussion from Xavimart's collection: cajón, bongos, egg shaker, tambourine, claps, claves, castanets, conga, maracas and darbuka.",
+      "homepage": "https://freepats.zenvoid.org/Percussion/world-and-rare-percussion.html",
+      "source": "https://freepats.zenvoid.org/Percussion/world-and-rare-percussion.html",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "percussion",
+        "world",
+        "hand percussion"
+      ],
+      "files": [
+        {
+          "url": "https://github.com/freepats/world-percussion/releases/download/2020-09-05/WorldPercussion-SF2-20200905.7z",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "7z",
+          "size": 5100075
+        }
+      ]
+    },
+    {
       "slug": "freepats/xylophone",
       "name": "Xylophone (medium mallets)",
       "vendor": "FreePats",
@@ -554,6 +2044,35 @@
           "archive": "tar.xz",
           "size": 1756892,
           "sha256": "b142f2a25f0610f13d1d657c60ae3f28be58cf026d216826125c6fb9d1af631b"
+        }
+      ]
+    },
+    {
+      "slug": "freepats/ydp-grand-piano",
+      "name": "YDP Grand Piano",
+      "vendor": "FreePats",
+      "description": "Built from the Zenph Studios Yamaha Disklavier Pro multisamples for OLPC, adapted to SF2 by FreePats; CC-BY-3.0.",
+      "homepage": "https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html",
+      "source": "https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html",
+      "license": "CC-BY-3.0",
+      "license_url": "https://creativecommons.org/licenses/by/3.0/",
+      "redistributable": true,
+      "formats": [
+        "sf2"
+      ],
+      "kind": "instrument",
+      "tags": [
+        "piano",
+        "grand piano",
+        "yamaha"
+      ],
+      "files": [
+        {
+          "url": "https://freepats.zenvoid.org/Piano/YDP-GrandPiano/YDP-GrandPiano-SF2-20160804.tar.bz2",
+          "format": "sf2",
+          "install": "archive",
+          "archive": "tar.bz2",
+          "size": 36737684
         }
       ]
     }
