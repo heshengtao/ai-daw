@@ -199,6 +199,9 @@ AI DAW 可以**不开窗口**运行，把同一套界面提供给局域网里的
 docker run -d --name ai-daw -p 28430:28430 -v ai-daw-data:/data ailm32442/ai-daw
 ```
 
+镜像随 `v*` 发版发布，`latest` 指向最近一次发版；日常 main 提交不再重建镜像，
+需要验证 `Dockerfile` 时在 Actions 里手动跑一次 `Docker (ai-daw)` 即可。
+
 浏览器打开 <http://localhost:28430> 就能直接用 —— **没有登录、没有令牌、也没有 cookie 校验**。
 无头版是给没有显示器的机器准备的，访问控制交给部署侧（局域网 / 容器网络 / 反向代理）。
 

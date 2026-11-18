@@ -201,6 +201,10 @@ same undo history, same audio engine.
 docker run -d --name ai-daw -p 28430:28430 -v ai-daw-data:/data ailm32442/ai-daw
 ```
 
+Images are published on `v*` release tags, and `latest` points at the most recent
+release; ordinary main commits no longer rebuild the image. To exercise the
+`Dockerfile`, run the `Docker (ai-daw)` workflow manually from Actions.
+
 Open <http://localhost:28430> and start working — **no login, no token, no cookie check**.
 The headless build is meant for machines without a display; access control is the
 deployment's job (LAN, container network, or a reverse proxy in front of it).
