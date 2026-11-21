@@ -13,6 +13,7 @@ import {
   SparklesIcon,
   ChatBubbleLeftRightIcon,
   ListBulletIcon,
+  SquaresPlusIcon,
   ChevronRightIcon,
 } from "@heroicons/vue/24/outline";
 import InspectorPanel from "./InspectorPanel.vue";
@@ -23,18 +24,22 @@ import ManagerPane from "./panes/ManagerPane.vue";
 import SoundLibraryPane from "./panes/SoundLibraryPane.vue";
 import OpsPane from "./panes/OpsPane.vue";
 import AiPanel from "./panes/AiPanel.vue";
+import ExtensionsPane from "./panes/ExtensionsPane.vue";
+import ExtensionPaneHost from "@/components/common/ExtensionPaneHost.vue";
 import EmptyStack from "@/components/onboarding/EmptyStack.vue";
-import { defineAsyncComponent } from "vue";
+import { computed, defineAsyncComponent } from "vue";
 import { PICKABLE_PANES, useLayoutStore, type PaneId } from "@/stores/layout";
+import { useExtensionsStore } from "@/stores/extensions";
 import { useI18n } from "@/i18n";
 
 // 写歌智能体带着 markdown 渲染（marked + dompurify），按需加载、别拖累首屏。
 const SongAgentPanel = defineAsyncComponent(() => import("./agent/SongAgentPanel.vue"));
 
 const layout = useLayoutStore();
+const ext = useExtensionsStore();
 const i18n = useI18n();
 
-const ICONS: Record<PaneId, unknown> = {
+const ICONS: Record<string, unknown> = {
   inspector: AdjustmentsHorizontalIcon,
   mixer: AdjustmentsVerticalIcon,
   editor: MusicalNoteIcon,
@@ -44,7 +49,21 @@ const ICONS: Record<PaneId, unknown> = {
   ops: ListBulletIcon,
   agent: ChatBubbleLeftRightIcon,
   ai: SparklesIcon,
+  extensions: SquaresPlusIcon,
 };
+
+/** 当前标签如果是扩展面板，就取它的组件（否则 `null`）。 */
+const extensionComponent = computed(() => ext.componentFor(layout.activeTab));
+
+/** 空态里列出的面板：内置 + 扩展。 */
+const pickable = computed(() => [
+  ...PICKABLE_PANES.map((pane) => ({
+    id: pane.id as PaneId,
+    label: i18n.t(pane.labelKey),
+    hint: i18n.t(pane.hintKey),
+  })),
+  ...ext.paneEntries.map((pane) => ({ id: pane.id as PaneId, label: pane.label, hint: pane.hint })),
+]);
 </script>
 
 <template>
@@ -58,14 +77,14 @@ const ICONS: Record<PaneId, unknown> = {
           <p class="empty-title">{{ i18n.t("right.emptyTitle") }}</p>
           <p class="empty-sub">{{ i18n.t("right.emptyHint") }}</p>
           <ul class="empty-list">
-            <li v-for="p in PICKABLE_PANES" :key="p.id">
+            <li v-for="p in pickable" :key="p.id">
               <button class="empty-item" @click="layout.openTab(p.id)">
                 <span class="empty-icon-wrap">
                   <component :is="ICONS[p.id]" class="empty-icon" />
                 </span>
                 <span class="empty-text">
-                  <span class="empty-label">{{ i18n.t(p.labelKey) }}</span>
-                  <span class="empty-hint">{{ i18n.t(p.hintKey) }}</span>
+                  <span class="empty-label">{{ p.label }}</span>
+                  <span class="empty-hint">{{ p.hint }}</span>
                 </span>
                 <ChevronRightIcon class="empty-arrow" />
               </button>
@@ -82,6 +101,19 @@ const ICONS: Record<PaneId, unknown> = {
         <OpsPane v-else-if="layout.activeTab === 'ops'" />
         <SongAgentPanel v-else-if="layout.activeTab === 'agent'" />
         <AiPanel v-else-if="layout.activeTab === 'ai'" />
+        <ExtensionsPane v-else-if="layout.activeTab === 'extensions'" />
+        <!-- 扩展贡献的面板：组件由扩展在装载时注册进来。 -->
+        <ExtensionPaneHost
+          v-else-if="extensionComponent"
+          :key="layout.activeTab"
+          :pane="layout.activeTab"
+          :component="extensionComponent"
+        />
+        <!-- 存下来的扩展面板还没注册上来（扩展没装 / 没启用 / 正在装载）。 -->
+        <div v-else class="empty" key="missing">
+          <p class="empty-title">{{ i18n.t("panes.missingTitle") }}</p>
+          <p class="empty-sub">{{ i18n.t("panes.missingHint") }}</p>
+        </div>
       </transition>
     </div>
   </aside>

@@ -72,6 +72,16 @@ Every edit an agent makes goes through the same command pipeline as the UI: it l
 
 ## Features
 
+### Inspire — One line in, a finished take out
+
+The leftmost view in the top bar is **Inspire**: a full-page "write → generate → listen" desk. Write on the left, listen on the right. No likes, no shares, no upgrade gates — only your description, your lyrics, and the playback bar.
+
+- **One dropdown, two engines** — local YuE2 / ACE-Step weights and any configured cloud service (Suno / Mureka / Lyria …) share a single list; adding a provider means changing one place
+- **Simple / Advanced** — Simple takes one line of description; Advanced lets you write lyrics with `[Verse]` / `[Chorus]` / `[Bridge]` / `[Outro]` tags and tune duration, steps and seed
+- **It fetches what it needs** — missing weights, a missing engine, or a stopped engine are handled in order when you press Generate
+- **Takes in a column** — grouped by day; each take uses its **waveform** as the cover, tinted by the project track colour, with that take's playback bar underneath: click to listen, drag to scrub
+- **The list stays local** — generation history lives on your machine; clearing it never touches tracks or audio files in the project
+
 ### Arranging & Editing — Compose on a real timeline
 
 Lay out a song the way you hear it. Drag clips across tracks, split them where the music changes, and let the ruler and grid follow a tempo and time signature you can change anywhere in the song. MIDI clips draw their own notes and audio clips draw their own waveform, so you can read the arrangement at a glance.

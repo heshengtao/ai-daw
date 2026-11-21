@@ -27,6 +27,19 @@ pub enum RpcError {
     Unauthorized,
 }
 
+impl RpcError {
+    /// 给人/给扩展看的一句话错误（与 HTTP 响应体里的 `error` 同义）。
+    pub fn message(&self) -> String {
+        match self {
+            Self::Unknown(cmd) => format!("unknown command: {cmd}"),
+            Self::BadArgs(err) => format!("bad args: {err}"),
+            Self::Failed(err) => err.clone(),
+            Self::Unsupported(why) => why.clone(),
+            Self::Unauthorized => "unauthorized".into(),
+        }
+    }
+}
+
 impl IntoResponse for RpcError {
     fn into_response(self) -> Response {
         let (status, message) = match self {

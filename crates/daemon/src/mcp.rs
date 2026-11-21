@@ -278,6 +278,57 @@ pub(crate) struct InstrumentArgs {
     plugin_id: String,
 }
 
+/// `list_extensions` 的参数。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ListExtensionsArgs {
+    /// 按包名 / 版本 / 工具名过滤（可选）。
+    #[serde(default)]
+    query: Option<String>,
+}
+
+/// `search_extension_market` 的参数。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SearchExtensionArgs {
+    /// 关键词（包名 / 标题 / 关键词，中英文都行）。
+    #[serde(default)]
+    query: Option<String>,
+    /// 最多返回几条（默认 20，上限 100）。
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+/// `install_extension` 的参数。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct InstallExtensionArgs {
+    /// npm 包名（市场里的 `name`）。
+    name: String,
+    /// 精确版本；不给就由 registry 选兼容的最新版。
+    #[serde(default)]
+    version: Option<String>,
+    /// 市场索引地址（从市场装时带上，用于记录来源）。
+    #[serde(default)]
+    index: Option<String>,
+    /// **必须显式确认**：装扩展等于在本机执行第三方代码。
+    #[serde(default)]
+    confirm: bool,
+}
+
+/// 只带包名的参数（卸载 / 重载）。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ExtensionNameArgs {
+    /// npm 包名。
+    name: String,
+}
+
+/// 启用 / 停用的参数。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SetExtensionEnabledArgs {
+    /// npm 包名。
+    name: String,
+    /// 开 / 关。
+    enabled: bool,
+}
+
 /// `list_plugins` 的参数：按类别 / 关键词过滤。
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct ListPluginsArgs {
@@ -596,7 +647,7 @@ pub(crate) struct SetAutomationArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct HelpArgs {
     /// 能力域：`project` / `track` / `clip` / `note` / `composition` / `mix` / `audio` / `transport` /
-    /// `analysis` / `plugin` / `sound-design` / `sound-memory` / `theory` / `rhythm` / `genres` / `workflow` / `film` / `expression`；留空返回索引。
+    /// `analysis` / `plugin` / `sound-design` / `sound-memory` / `theory` / `rhythm` / `genres` / `workflow` / `film` / `expression` / `extensions`；留空返回索引。
     #[serde(default)]
     topic: Option<String>,
 }
@@ -675,6 +726,10 @@ pub(crate) const SKILL_DOCS: &[(&str, &str)] = &[
     (
         "expression",
         include_str!("../../../skills/aidaw/references/expression.md"),
+    ),
+    (
+        "extensions",
+        include_str!("../../../skills/aidaw/references/extensions.md"),
     ),
 ];
 
@@ -2447,6 +2502,90 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
     ///
     /// 老版本只回传扫描结果的原始字段（id / name / vendor / kind / format），模型看到
     /// `JC303` 完全不知道那是 TB-303 贝斯；而且**内置合成器根本不在里面**。
+    /// 已装扩展与其贡献（工具 / 面板 / 内容包）+ 装载状态。
+    ///
+    /// 装了扩展之后先看它：知道有哪些工具可用、哪些扩展装载失败了、以及面板从哪来。
+    pub(crate) fn list_extensions(app: &AppHandle, args: ListExtensionsArgs) -> Result<String, String> {
+        let state = app.state::<Arc<AppState>>();
+        let mut value = crate::extensions::list_json(&state);
+        let query = args.query.unwrap_or_default().trim().to_lowercase();
+        if !query.is_empty() {
+            for key in ["installed", "tools", "panes"] {
+                if let Some(items) = value.get_mut(key).and_then(serde_json::Value::as_array_mut) {
+                    items.retain(|item| item.to_string().to_lowercase().contains(&query));
+                }
+            }
+        }
+        serde_json::to_string(&value).map_err(|err| err.to_string())
+    }
+
+    /// 市场搜索（只读）：装上扩展之前先让模型和用户看清楚有什么。
+    pub(crate) fn search_extension_market(
+        app: &AppHandle,
+        args: SearchExtensionArgs,
+    ) -> Result<String, String> {
+        let state = app.state::<Arc<AppState>>();
+        let state = Arc::clone(&state);
+        let query = args.query.unwrap_or_default();
+        let limit = args.limit.unwrap_or(20).clamp(1, 100) as usize;
+        let value = crate::extensions::market_search_json(
+            app,
+            &state,
+            false,
+            &query,
+            &ai_daw_extensions::search::Sort::Relevance,
+            0,
+            limit,
+            "zh",
+        )?;
+        serde_json::to_string(&value).map_err(|err| err.to_string())
+    }
+
+    /// 安装扩展（高风险）：必须 `confirm=true`，且用户在当前对话里明确同意。
+    pub(crate) fn install_extension(
+        app: &AppHandle,
+        args: InstallExtensionArgs,
+    ) -> Result<String, String> {
+        if !args.confirm {
+            return Err(
+                "install_extension 需要 confirm=true：装扩展等于在本机执行第三方代码，\
+                 先把包名 / 版本 / 来源告诉用户，得到明确同意再调用。"
+                    .into(),
+            );
+        }
+        let state = app.state::<Arc<AppState>>();
+        let state = Arc::clone(&state);
+        let value = crate::extensions::install_package(app, &state, &args.name, args.version, args.index)?;
+        serde_json::to_string(&value).map_err(|err| err.to_string())
+    }
+
+    /// 卸载扩展。
+    pub(crate) fn uninstall_extension(app: &AppHandle, args: ExtensionNameArgs) -> Result<String, String> {
+        let state = app.state::<Arc<AppState>>();
+        let state = Arc::clone(&state);
+        let value = crate::extensions::uninstall_package(&state, &args.name)?;
+        serde_json::to_string(&value).map_err(|err| err.to_string())
+    }
+
+    /// 启用 / 停用扩展（停用保留文件，只是不装载）。
+    pub(crate) fn set_extension_enabled(
+        app: &AppHandle,
+        args: SetExtensionEnabledArgs,
+    ) -> Result<String, String> {
+        let state = app.state::<Arc<AppState>>();
+        let state = Arc::clone(&state);
+        let value = crate::extensions::set_extension_enabled(&state, &args.name, args.enabled)?;
+        serde_json::to_string(&value).map_err(|err| err.to_string())
+    }
+
+    /// 重新装载（改了文件后用）。
+    pub(crate) fn reload_extension(app: &AppHandle, args: ExtensionNameArgs) -> Result<String, String> {
+        let state = app.state::<Arc<AppState>>();
+        let state = Arc::clone(&state);
+        let value = crate::extensions::reload_extension(&state, &args.name)?;
+        serde_json::to_string(&value).map_err(|err| err.to_string())
+    }
+
     pub(crate) fn list_plugins(app: &AppHandle, args: ListPluginsArgs) -> Result<String, String> {
         let want = match args
             .kind
@@ -6650,6 +6789,12 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             tool_def!("transcribe_score", "**录音转谱（SheetSage2）**：把一条音频轨或一个 WAV 文件转成 **ABC 谱**（YuE2 翻唱的第一步：转谱 → compose_song 给 `abc_file` + `cot=melody` 按谱重唱）。需要 2.5 GB 的 SheetSage2 权重（管理器里下载）。会先停掉写歌引擎腾显存，跑完自动结束；一首 3 分钟的歌约 1–3 分钟。", TranscribeScoreArgs),
             tool_def!("read_yue_score", "读一份生成时落盘的产物（`.abc` / `.semantic.json` / 生成记录 `.json`），返回文本。", ReadTextArgs),
             tool_def!("midi_to_abc", "**MIDI 片段 → ABC 谱**（翻唱的 MIDI 参考）：旋律已在工程里就不必用 SheetSage2 听一遍，零推理、瞬间完成；返回 `abc` / `lyrics` / `bars` / `notes`，把 `abc` 给 `compose_song(abc=…, cot=\"melody\")` 就是按这段 MIDI 重唱。", MidiToAbcArgs),
+            tool_def!("list_extensions", "列出**已安装的扩展插件**（npm 分发的应用级插件）：包名、版本、启用状态、来源、它注册的 MCP 工具、右栏面板、装载错误。扩展工具与内置工具在同一个 `tools/list` 里出现，先用它看清楚装了些什么、哪些装载失败了；要装新的先 search_extension_market，再 install_extension（高风险，必须用户确认）。", ListExtensionsArgs),
+            tool_def!("search_extension_market", "搜索**可安装的应用级扩展**（npm 分发的插件：MCP 工具 / 面板 / 内容包，不是 VST3/CLAP）。返回包名、标题、作者、版本、兼容性与安装状态，以及索引来源。**只读，不下载**——查到后把候选与来源告诉用户，问过再 install_extension(confirm=true)。", SearchExtensionArgs),
+            tool_def!("install_extension", "**高风险**：安装一个扩展（npm 包，会在本机执行第三方代码）。必须 `confirm=true`，且用户在当前对话里明确同意；不确定包名先 search_extension_market。装完自动热装载，工具立刻可用。", InstallExtensionArgs),
+            tool_def!("uninstall_extension", "卸载一个扩展：停掉宿主线程、回收它注册的工具与面板、删掉包文件。只删本应用装的。", ExtensionNameArgs),
+            tool_def!("set_extension_enabled", "启用 / 停用一个已装扩展。停用只是不装载（工具与面板都不出现），文件保留。", SetExtensionEnabledArgs),
+            tool_def!("reload_extension", "重新装载一个扩展（改过它的文件、或想让它按新配置重新 activate 时用）。不重启应用。", ExtensionNameArgs),
             tool_def!("export_midi", "把工程导出成标准 MIDI 文件（多轨、带速度图 / 拍号图 / CC 与逐音歌词）；可用 `tracks` 只导指定轨道。只读派生，不改工程、不进历史。", ExportMidiArgs),
             tool_def!("swap_voice", "**音色替换（SoulX-SVC）**：把一条人声轨换成参考声线，旋律 / 歌词 / 节奏跟着原音频走，结果写成源轨下面的**新音频轨**（一次撤销）。目标与参考都应是单声部人声——混音先 separate_stems 取人声。离线渲染，10 秒约 1–2 分钟。", SwapVoiceArgs),
             tool_def!("preview_track_mix", "混音电平预览：离线渲染整首（或只 solo 一条轨）并报峰值 / 真峰值 / 积分响度 / RMS，附这条轨的推子、声像、发送数与效果器数。调完推子/压缩后用它核对「到底多响」。", PreviewMixArgs),
@@ -6674,6 +6819,11 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
         name: &str,
         args: serde_json::Value,
     ) -> Result<String, String> {
+        // 扩展注册的工具不在内置 match 里：先问注册表，命中就交给扩展宿主。
+        let encoded = serde_json::to_string(&args).unwrap_or_else(|_| "{}".into());
+        if let Some(result) = crate::extensions::try_call(app, name, &encoded) {
+            return result;
+        }
         match name {
             "get_project" => get_project(app),
             "get_project_overview" => get_project_overview(app),
@@ -6816,6 +6966,12 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             "transcribe_score" => transcribe_score(app, parse_args(args)?),
             "read_yue_score" => read_yue_score(app, parse_args(args)?),
             "midi_to_abc" => midi_to_abc(app, parse_args(args)?),
+            "list_extensions" => list_extensions(app, parse_args(args)?),
+            "search_extension_market" => search_extension_market(app, parse_args(args)?),
+            "install_extension" => install_extension(app, parse_args(args)?),
+            "uninstall_extension" => uninstall_extension(app, parse_args(args)?),
+            "set_extension_enabled" => set_extension_enabled(app, parse_args(args)?),
+            "reload_extension" => reload_extension(app, parse_args(args)?),
             "export_midi" => export_midi(app, parse_args(args)?),
             "swap_voice" => swap_voice(app, parse_args(args)?),
             "preview_track_mix" => preview_track_mix(app, parse_args(args)?),
@@ -6853,6 +7009,62 @@ impl DawMcpServer {
 #[tool_router]
 impl DawMcpServer {
     // ---- 只读 ----
+
+    #[tool(
+        description = "列出**已安装的扩展插件**：包名、版本、启用状态、来源、它注册的 MCP 工具、右栏面板与装载错误。扩展工具与内置工具出现在同一个 tools/list 里；要装新的先 search_extension_market，再 install_extension（高风险，需用户确认）。",
+        annotations(title = "列出扩展插件", read_only_hint = true)
+    )]
+    fn list_extensions(
+        &self,
+        Parameters(args): Parameters<ListExtensionsArgs>,
+    ) -> Result<String, ErrorData> {
+        tools::list_extensions(&self.app, args).map_err(fail)
+    }
+
+    #[tool(
+        description = "搜索可安装的应用级扩展（npm 分发的插件：MCP 工具 / 面板 / 内容包）。只读；查到后先告诉用户候选与来源，得到同意再 install_extension(confirm=true)。",
+        annotations(title = "搜索扩展市场", read_only_hint = true)
+    )]
+    fn search_extension_market(
+        &self,
+        Parameters(args): Parameters<SearchExtensionArgs>,
+    ) -> Result<String, ErrorData> {
+        tools::search_extension_market(&self.app, args).map_err(fail)
+    }
+
+    #[tool(
+        description = "高风险：安装一个应用级扩展（npm 包，会在本机执行第三方代码）。必须 confirm=true 且用户已明确同意。装完自动热装载。"
+    )]
+    fn install_extension(
+        &self,
+        Parameters(args): Parameters<InstallExtensionArgs>,
+    ) -> Result<String, ErrorData> {
+        tools::install_extension(&self.app, args).map_err(fail)
+    }
+
+    #[tool(description = "卸载一个应用级扩展：停宿主、回收注册、删包文件。")]
+    fn uninstall_extension(
+        &self,
+        Parameters(args): Parameters<ExtensionNameArgs>,
+    ) -> Result<String, ErrorData> {
+        tools::uninstall_extension(&self.app, args).map_err(fail)
+    }
+
+    #[tool(description = "启用 / 停用一个已装扩展（停用不删文件，只是不装载）。")]
+    fn set_extension_enabled(
+        &self,
+        Parameters(args): Parameters<SetExtensionEnabledArgs>,
+    ) -> Result<String, ErrorData> {
+        tools::set_extension_enabled(&self.app, args).map_err(fail)
+    }
+
+    #[tool(description = "重新装载一个扩展（改了它的文件之后用，不重启应用）。")]
+    fn reload_extension(
+        &self,
+        Parameters(args): Parameters<ExtensionNameArgs>,
+    ) -> Result<String, ErrorData> {
+        tools::reload_extension(&self.app, args).map_err(fail)
+    }
 
     #[tool(
         description = "读取当前工程的**全量**快照：轨道、片段、音符、速度/拍号（含关键点）、混音。插件二进制状态只给 `state_bytes`。只想看结构时用 get_project_overview——这份快照在大工程里很占上下文。"
@@ -8304,8 +8516,74 @@ impl ServerHandler for DawMcpServer {
              （轨道 / 乐器 / 片段 id 与音符数），需要逐音核对时用 get_clip_notes，只有确实要\
              全量字段时才用 get_project（它不含插件二进制状态）。\
              挑音色 / 效果器前先 list_plugins（带分类与音色描述，别凭插件名猜），\
-             单个插件用 describe_plugin 看参数表；改完可以用 analyze_project 听感确认。",
+             单个插件用 describe_plugin 看参数表；改完可以用 analyze_project 听感确认。\
+             装进来的**扩展插件**（list_extensions）也会贡献工具：它们和内建工具出现在同一个 \
+             tools/list 里，同样是这条编辑管线。",
         )
+    }
+
+    /// MCP 的 `tools/list`：内建 144 条 + 扩展注册的（`#[tool_handler]` 只给内建那份，
+    /// 这里手动覆盖以便把运行时装进来的工具一起吐出去）。
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        let mut tools = self.tool_router.list_all();
+        {
+            let state = self.app.state::<Arc<AppState>>();
+            let state = Arc::clone(&state);
+            for (name, description, parameters) in crate::extensions::mcp_tool_defs(&state) {
+                let schema = match parameters {
+                    serde_json::Value::Object(map) => map,
+                    _ => serde_json::Map::new(),
+                };
+                tools.push(rmcp::model::Tool::new(name, description, schema));
+            }
+        }
+        let supports_cache_hints = context
+            .protocol_version()
+            .is_some_and(|version| version >= rmcp::model::ProtocolVersion::V_2026_07_28);
+        Ok(rmcp::model::ListToolsResult {
+            result_type: Some(rmcp::model::ResultType::COMPLETE),
+            tools,
+            meta: None,
+            next_cursor: None,
+            ttl_ms: supports_cache_hints.then_some(0),
+            cache_scope: supports_cache_hints.then_some(rmcp::model::CacheScope::Public),
+        })
+    }
+
+    /// MCP 的 `tools/call`：内建走路由表，其余的交给扩展宿主。
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        if !self.tool_router.has_route(&request.name) {
+            let args = request
+                .arguments
+                .clone()
+                .map(serde_json::Value::Object)
+                .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+            let encoded = serde_json::to_string(&args).unwrap_or_else(|_| "{}".into());
+            return match crate::extensions::try_call(&self.app, &request.name, &encoded) {
+                Some(Ok(text)) => Ok(rmcp::model::CallToolResult::success(vec![
+                    rmcp::model::ContentBlock::text(text),
+                ])
+                .into()),
+                Some(Err(err)) => Ok(rmcp::model::CallToolResult::error(vec![
+                    rmcp::model::ContentBlock::text(err),
+                ])
+                .into()),
+                None => Err(rmcp::ErrorData::invalid_params(
+                    format!("未知工具：{}", request.name),
+                    None,
+                )),
+            };
+        }
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
     }
 }
 
@@ -9009,6 +9287,13 @@ mod tests {
             "swap_voice",
             "preview_track_mix",
             "get_levels",
+            // ---- 扩展插件 ----
+            "list_extensions",
+            "search_extension_market",
+            "install_extension",
+            "uninstall_extension",
+            "set_extension_enabled",
+            "reload_extension",
         ];
         for name in expected {
             assert!(

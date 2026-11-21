@@ -1461,6 +1461,25 @@ export const mockApi = {
 
   listPlugins: (): CatalogPlugin[] => [...MOCK_PLUGINS],
 
+  // ---- 扩展插件（浏览器预览：没有真正的宿主，只给空状态）----
+  extensionsRpc: (op: string, _args?: Record<string, unknown>): unknown => {
+    if (op === "list") {
+      return {
+        appVersion: "0.0.0-preview",
+        indexes: [],
+        registry: "https://registry.npmjs.org",
+        mirrors: [],
+        installed: [],
+        panes: [],
+        tools: [],
+        contents: [],
+      };
+    }
+    if (op === "client_manifest") return { items: [] };
+    if (op === "market") return { entries: [], total: 0, nextOffset: null, sources: [] };
+    return { ok: true };
+  },
+
   // ---- 用户 SoundFont（浏览器里没有文件对话框，只给出空清单与明确的错误）----
   listSoundfonts: (): SoundFontEntry[] => [],
 

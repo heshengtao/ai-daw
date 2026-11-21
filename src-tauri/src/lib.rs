@@ -560,6 +560,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ai_daw_daemon::commands::app_ready,
+            ai_daw_daemon::extensions::extensions_rpc,
             crate::web::web_access_info,
             crate::web::web_access_set_lan,
             ai_daw_daemon::paths::data_dir_info,

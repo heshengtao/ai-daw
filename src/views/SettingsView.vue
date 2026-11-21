@@ -24,6 +24,7 @@ import ComboField from "@/components/common/ComboField.vue";
 import Md3Select, { type SelectOption } from "@/components/common/Md3Select.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import { usePluginsStore } from "@/stores/plugins";
+import { useExtensionsStore } from "@/stores/extensions";
 import { useRuntimesStore } from "@/stores/runtimes";
 import EngineBackendPicker from "@/components/common/EngineBackendPicker.vue";
 import Md3Segmented from "@/components/common/Md3Segmented.vue";
@@ -98,6 +99,7 @@ type Section =
   | "layout"
   | "storage"
   | "plugins"
+  | "extensions"
   | "network"
   | "music"
   | "text"
@@ -111,6 +113,7 @@ const SECTIONS: { id: Section; labelKey: string; captionKey: string }[] = [
   { id: "layout", labelKey: "settings.section.layout", captionKey: "settings.section.layout.caption" },
   { id: "storage", labelKey: "settings.section.storage", captionKey: "settings.section.storage.caption" },
   { id: "plugins", labelKey: "settings.section.plugins", captionKey: "settings.section.plugins.caption" },
+  { id: "extensions", labelKey: "settings.section.extensions", captionKey: "settings.section.extensions.caption" },
   { id: "network", labelKey: "settings.section.network", captionKey: "settings.section.network.caption" },
   { id: "music", labelKey: "settings.section.music", captionKey: "settings.section.music.caption" },
   { id: "text", labelKey: "settings.section.text", captionKey: "settings.section.text.caption" },
@@ -135,6 +138,39 @@ const SOURCE_PREFS: { id: ModelSourcePreference; labelKey: string }[] = [
 
 const APP_VERSION = "1.9.0";
 
+// ---- 应用扩展：索引源与 npm registry（面板里只留跳转，编辑都在这一节） ----
+const extIndexes = ref("");
+const extRegistry = ref("");
+const extMirrors = ref("");
+const extSaving = ref(false);
+
+function loadExtensionSettings(): void {
+  extIndexes.value = extensions.indexes.join("\n");
+  extRegistry.value = extensions.registry;
+  extMirrors.value = (extensions.snapshot?.mirrors ?? []).join("\n");
+}
+
+async function saveExtensionSettings(): Promise<void> {
+  extSaving.value = true;
+  try {
+    const indexes = extIndexes.value
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    const mirrors = extMirrors.value
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    await extensions.saveIndexes(indexes);
+    await extensions.saveRegistry(extRegistry.value.trim(), mirrors);
+    layout.notify(i18n.t("settings.extensions.saved"));
+  } catch (error) {
+    layout.notify(String(error));
+  } finally {
+    extSaving.value = false;
+  }
+}
+
 const router = useRouter();
 const active = ref<Section>("general");
 const { theme, accent, setTheme, setAccent } = useTheme();
@@ -143,6 +179,7 @@ const project = useProjectStore();
 const settings = useSettingsStore();
 const onboarding = useOnboardingStore();
 const plugins = usePluginsStore();
+const extensions = useExtensionsStore();
 const updater = useUpdaterStore();
 /** 写歌智能体的配置镜像：供应商列表存完要让它重新读一次。 */
 const agentStore = useAgentStore();
@@ -1262,6 +1299,7 @@ onMounted(() => {
   void loadTextProviders();
   void updater.loadVersion();
   // 深链：`/settings?section=text` 直接落到「文本生成」（写歌智能体的「去配置」会这么跳）。
+  void extensions.refresh().then(loadExtensionSettings);
   const section = router.currentRoute.value.query.section;
   if (typeof section === "string" && SECTIONS.some((s) => s.id === section)) {
     active.value = section as Section;
@@ -1672,6 +1710,48 @@ onUnmounted(() => {
                   :aria-label="i18n.t('settings.dev.log')"
                   @click="layout.toggleDevDrawer()"
                 />
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- 应用扩展：索引源与 registry（面板里的设置入口跳到这里） -->
+        <template v-else-if="active === 'extensions'">
+          <div class="group">
+            <div class="group-title">{{ i18n.t("settings.extensions.indexes") }}</div>
+            <div class="card">
+              <div class="col-row">
+                <span class="row-sub">{{ i18n.t("settings.extensions.indexesHint") }}</span>
+                <textarea
+                  v-model="extIndexes"
+                  class="net-input"
+                  rows="3"
+                  spellcheck="false"
+                  placeholder="https://example.com/index.json"
+                />
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-sub">{{ i18n.t("settings.extensions.appVersion", { version: APP_VERSION }) }}</span>
+                </div>
+                <button class="scan-btn" :disabled="extSaving" @click="saveExtensionSettings">
+                  {{ extSaving ? i18n.t("settings.store.saving") : i18n.t("settings.extensions.save") }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="group">
+            <div class="group-title">npm</div>
+            <div class="card">
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.extensions.registry") }}</span>
+                <input v-model="extRegistry" class="net-input" type="text" spellcheck="false" />
+              </div>
+              <div class="col-row">
+                <span class="row-title">{{ i18n.t("settings.extensions.mirrors") }}</span>
+                <span class="row-sub">{{ i18n.t("settings.extensions.mirrorsHint") }}</span>
+                <textarea v-model="extMirrors" class="net-input" rows="2" spellcheck="false" />
               </div>
             </div>
           </div>

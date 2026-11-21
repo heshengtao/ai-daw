@@ -37,6 +37,8 @@ ai-daw-analysis = { path = "../analysis" }
 ai-daw-asset = { path = "../asset" }
 # 本地 AI（音频转 MIDI / 降噪）：内置 DSP，不依赖外部模型。
 ai-daw-local-ai = { path = "../local-ai" }
+# 扩展插件运行时（QuickJS 宿主、注册表、市场、安装）：npm 分发的应用级插件。
+ai-daw-extensions = { path = "../extensions" }
 # 母带处理（响度归一 + 真峰值限幅 + 立体声宽度）：纯 DSP，不依赖模型。
 ai-daw-mastering = { path = "../mastering" }
 # 内嵌 MCP 服务器（Streamable HTTP，只监听回环）。

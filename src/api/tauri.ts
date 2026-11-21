@@ -2425,3 +2425,18 @@ export function onDataDirProgress(
   if (mockEnabled()) return Promise.resolve(() => {});
   return listen<DataDirProgress>(EVENT_DATA_DIR, (e) => handler(e.payload));
 }
+
+// ---------------------------------------------------------------------------
+// 扩展插件（Extensions）
+// ---------------------------------------------------------------------------
+
+/**
+ * 扩展的唯一入口：`op` 见后端 `extensions::api`（list / market / install / …）。
+ *
+ * 一个入口而不是十几个命令：Tauri 的 `invoke_handler`、`/rpc` 的命令表、CLI 的命令表
+ * 是三份手工清单，每加一个能力要改三处；这里只加一个 `op` 分支。
+ */
+export function extensionsRpc<T>(op: string, args?: Record<string, unknown>): Promise<T> {
+  if (mockEnabled()) return Promise.resolve(mockApi.extensionsRpc(op, args) as T);
+  return invoke<T>("extensions_rpc", { op, args: args ?? {} });
+}

@@ -163,11 +163,14 @@ pub async fn serve_with_app(
     let listener = TcpListener::bind((std::net::IpAddr::V4(ip), port)).await?;
     let addr = listener.local_addr()?;
     let static_dir = daemon.config().web_dir.clone();
-    let router = crate::server::router(Arc::new(crate::server::ServerState {
+    let server = Arc::new(crate::server::ServerState {
         daemon,
         static_dir,
         app,
-    }));
+    });
+    // 扩展要能执行宿主命令，就得先接上 `/rpc` 那张表；装载也放在这里（建表已经完成）。
+    crate::extensions::start(&server);
+    let router = crate::server::router(server);
     Ok((addr, async move {
         let _ = axum::serve(listener, router).await;
     }))

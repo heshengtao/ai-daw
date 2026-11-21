@@ -77,6 +77,8 @@ pub struct AppState {
     pub presets: Mutex<PresetStore>,
     /// 音色记忆库（跨工程；文件位置由 `init_sound_memories` 装上）。
     pub sound_memories: Mutex<SoundMemoryStore>,
+    /// 应用级扩展（npm 分发的插件：MCP 工具 / 面板 / 内容包）。见 `crate::extensions`。
+    pub extensions: std::sync::Arc<ai_daw_extensions::Manager>,
     /// 云端音乐生成（Lyria / ElevenLabs / Mureka / Treblo）的供应商配置。
     /// 文件位置由 `init_cloud_music` 装上；密钥明文，与 `ai.json` 同一套惯例。
     pub cloud_music: crate::cloud_music::CloudMusicRuntime,
@@ -220,6 +222,7 @@ impl AppState {
             editor_windows: Arc::new(Mutex::new(HashMap::new())),
             presets: Mutex::new(PresetStore::load(None)),
             sound_memories: Mutex::new(SoundMemoryStore::load(None)),
+            extensions: crate::extensions::open_manager(&host),
             cloud_music: crate::cloud_music::CloudMusicRuntime::new(),
             assets,
             session_path: Mutex::new(None),

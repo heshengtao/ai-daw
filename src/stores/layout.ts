@@ -8,7 +8,7 @@ import type { Notation } from "@/utils/notation";
 const KEY = "ai-daw-layout";
 
 /** 鍙充晶闈㈡澘鍙墦寮€鐨勭獥鍙ｇ被鍨嬶紱鍚庣画鏂板闈㈡澘鍙渶鍦ㄦ鐧昏銆?*/
-export type PaneId =
+export type BuiltinPaneId =
   | "inspector"
   | "mixer"
   | "plugins"
@@ -17,7 +17,16 @@ export type PaneId =
   | "editor"
   | "agent"
   | "ai"
-  | "ops";
+  | "ops"
+  | "extensions";
+
+/**
+ * 右栏标签的 id：内置面板，或**扩展插件**在清单里声明的面板 id。
+ *
+ * 用 `string & {}` 而不是纯 `string`：内置 id 仍有字面量补全与笔误检查，同时允许
+ * 运行时注册进来的扩展面板 id（由 `registerPaneId` 校验过才进得来）。
+ */
+export type PaneId = BuiltinPaneId | (string & {});
 
 /**
  * 鼠标模式（工具栏五选一）：
@@ -55,7 +64,7 @@ export const EDIT_LANE_VIEWS: EditLaneView[] = ["lane", "score", "keyboard"];
 export const TOOLS: Tool[] = ["draw", "eraser", "select", "split", "lyric"];
 
 /** 鍏ㄩ儴鍙敤闈㈡澘鐨勫厓鏁版嵁锛堜緵"鏂板缓鏍囩"閫夋嫨鍣ㄥ睍绀猴級銆傛枃妗堟槸 i18n key锛屾覆鏌撴椂缈昏瘧銆?*/
-export const PANES: { id: PaneId; labelKey: string; hintKey: string }[] = [
+export const PANES: { id: BuiltinPaneId; labelKey: string; hintKey: string }[] = [
   { id: "inspector", labelKey: "panes.inspector", hintKey: "panes.inspectorHint" },
   { id: "mixer", labelKey: "panes.mixer", hintKey: "panes.mixerHint" },
   { id: "editor", labelKey: "panes.editor", hintKey: "panes.editorHint" },
@@ -65,6 +74,7 @@ export const PANES: { id: PaneId; labelKey: string; hintKey: string }[] = [
   { id: "ops", labelKey: "panes.ops", hintKey: "panes.opsHint" },
   { id: "agent", labelKey: "panes.agent", hintKey: "panes.agentHint" },
   { id: "ai", labelKey: "panes.ai", hintKey: "panes.aiHint" },
+  { id: "extensions", labelKey: "panes.extensions", hintKey: "panes.extensionsHint" },
 ];
 
 /**
@@ -190,11 +200,43 @@ function load(): Saved {
   }
 }
 
-const VALID_PANES: PaneId[] = PANES.map((p) => p.id);
+const VALID_PANES: BuiltinPaneId[] = PANES.map((p) => p.id);
+
+/**
+ * 运行时注册进来的扩展面板 id。
+ *
+ * 内置面板是编译期常量；扩展面板在装载时才知道，所以单独一张表。`sanitizeTabs`
+ * 用它放行 localStorage 里存下来的扩展面板标签；扩展被卸载后这些标签会失效并回退。
+ */
+const dynamicPanes = new Set<string>();
+
+/** 注册一个扩展面板 id（由扩展 store 在装载时调用）。 */
+export function registerPaneId(id: string): void {
+  if (VALID_PANES.includes(id as BuiltinPaneId)) return;
+  dynamicPanes.add(id);
+}
+
+/** 注销一个扩展面板 id（卸载 / 重载时调用）。 */
+export function unregisterPaneId(id: string): void {
+  dynamicPanes.delete(id);
+}
+
+/** 这个 id 现在是不是一个可用的面板。 */
+export function isValidPaneId(id: string): boolean {
+  return VALID_PANES.includes(id as BuiltinPaneId) || dynamicPanes.has(id);
+}
 
 function sanitizeTabs(value: unknown): PaneId[] {
   if (!Array.isArray(value)) return ["inspector"];
-  const tabs = value.filter((v): v is PaneId => VALID_PANES.includes(v as PaneId));
+  // **不**按「此刻是否已注册」过滤：扩展面板要等扩展装载完才注册，启动时就把标签删掉
+  // 会让用户每次重启都丢掉自己开着的扩展面板。未知 id 只是暂时渲染不出来（界面会过滤
+  // 显示），等它注册上来就恢复。
+  const seen = new Set<string>();
+  const tabs = value.filter((item): item is PaneId => {
+    if (typeof item !== "string" || item.length === 0 || seen.has(item)) return false;
+    seen.add(item);
+    return true;
+  });
   return tabs.length > 0 ? tabs : ["inspector"];
 }
 

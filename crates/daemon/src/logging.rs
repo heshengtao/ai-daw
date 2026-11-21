@@ -57,3 +57,19 @@ pub fn info(message: impl AsRef<str>) {
         let _ = writeln!(file, "[{stamp}] {}", message.as_ref());
     }
 }
+
+/// 扩展写的日志（`<包名> [level] message`）。
+///
+/// 走同一个输出通道，避免扩展自己开一份日志文件；级别只影响前缀，不改变落点。
+pub fn extension(plugin: &str, level: &str, message: &str) {
+    match level {
+        "error" => eprintln!("[ext:{plugin}] {message}"),
+        "warn" => eprintln!("[ext:{plugin}] warn: {message}"),
+        "debug" => {
+            if std::env::var_os("AIDAW_EXT_DEBUG").is_some() {
+                eprintln!("[ext:{plugin}] debug: {message}");
+            }
+        }
+        _ => println!("[ext:{plugin}] {message}"),
+    }
+}

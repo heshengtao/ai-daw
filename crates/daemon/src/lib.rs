@@ -21,6 +21,7 @@ pub mod cloud_music;
 pub mod commands;
 pub mod cue_sheet;
 pub mod daemon;
+pub mod extensions;
 pub mod factory_presets;
 pub mod history;
 pub mod host;

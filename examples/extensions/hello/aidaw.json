@@ -1,0 +1,15 @@
+{
+  "apiVersion": 1,
+  "id": "hello-extension",
+  "title": { "zh": "示例扩展", "en": "Hello Extension" },
+  "description": {
+    "zh": "演示 Host 工具与 Client 面板：读取工程概览并展示。",
+    "en": "Demonstrates a host tool and a client panel."
+  },
+  "host": "./dist/host.cjs",
+  "client": "./dist/client.js",
+  "capabilities": ["tools", "ui"],
+  "panes": [
+    { "id": "hello-pane", "title": { "zh": "示例面板", "en": "Hello pane" }, "icon": "puzzle", "order": 200 }
+  ]
+}

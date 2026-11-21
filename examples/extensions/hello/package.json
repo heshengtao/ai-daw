@@ -1,0 +1,13 @@
+{
+  "name": "@aidaw/hello-extension",
+  "version": "0.1.0",
+  "description": "示例扩展：一个 MCP 工具 + 一个右栏面板",
+  "type": "module",
+  "exports": {
+    ".": "./dist/host.cjs",
+    "./client": "./dist/client.js"
+  },
+  "files": ["dist", "aidaw.json"],
+  "aidaw": { "manifest": "./aidaw.json" },
+  "engines": { "aidaw": ">=1.9.0 <2.0.0" }
+}

@@ -3,7 +3,7 @@
  * 面板标签栏：标签 + 「+」打开选择器。
  * 作为顶栏的一部分渲染（与顶栏同一行），不再单独占一行。
  */
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import {
   PlusIcon,
   XMarkIcon,
@@ -16,20 +16,38 @@ import {
   SparklesIcon,
   ChatBubbleLeftRightIcon,
   ListBulletIcon,
+  SquaresPlusIcon,
 } from "@heroicons/vue/24/outline";
 import Tooltip from "@/components/common/Tooltip.vue";
 import { PANES, PICKABLE_PANES, useLayoutStore, type PaneId } from "@/stores/layout";
+import { useExtensionsStore } from "@/stores/extensions";
 import { useI18n } from "@/i18n";
 
 const layout = useLayoutStore();
+const ext = useExtensionsStore();
 const i18n = useI18n();
 const pickerOpen = ref(false);
 const pickerRoot = ref<HTMLElement | null>(null);
 
 /** 「+」里能挑的面板（不含「插件界面」，理由见 `stores/layout` 里的说明）。 */
-const PICKABLE = PICKABLE_PANES;
+const PICKABLE = computed(() => [
+  ...PICKABLE_PANES.map((pane) => ({
+    id: pane.id as PaneId,
+    label: i18n.t(pane.labelKey),
+    hint: i18n.t(pane.hintKey),
+  })),
+  // 扩展贡献的面板：文案来自扩展清单，不是 i18n key。
+  ...ext.paneEntries.map((pane) => ({ id: pane.id as PaneId, label: pane.label, hint: pane.hint })),
+]);
 
-const ICONS: Record<PaneId, unknown> = {
+/** 标签栏里**真正能渲染**的标签：内置面板，或已经注册上来的扩展面板。 */
+const visibleTabs = computed(() =>
+  layout.tabs.filter(
+    (id) => PANES.some((pane) => pane.id === id) || ext.paneEntries.some((pane) => pane.id === id),
+  ),
+);
+
+const ICONS: Record<string, unknown> = {
   inspector: AdjustmentsHorizontalIcon,
   mixer: AdjustmentsVerticalIcon,
   editor: MusicalNoteIcon,
@@ -39,11 +57,18 @@ const ICONS: Record<PaneId, unknown> = {
   ops: ListBulletIcon,
   agent: ChatBubbleLeftRightIcon,
   ai: SparklesIcon,
+  extensions: SquaresPlusIcon,
 };
+
+/** 扩展面板没有专属图标时退回「扩展」那个图标。 */
+function iconFor(id: PaneId): unknown {
+  return ICONS[id] ?? ICONS.extensions;
+}
 
 function labelOf(id: PaneId): string {
   const key = PANES.find((p) => p.id === id)?.labelKey;
-  return key ? i18n.t(key) : id;
+  if (key) return i18n.t(key);
+  return ext.paneLabel(id) ?? id;
 }
 
 function isOpen(id: PaneId): boolean {
@@ -78,7 +103,7 @@ onUnmounted(() => {
 <template>
   <div class="tabs" role="tablist">
     <div
-      v-for="id in layout.tabs"
+      v-for="id in visibleTabs"
       :key="id"
       class="tab"
       :class="{ on: id === layout.activeTab }"
@@ -86,7 +111,7 @@ onUnmounted(() => {
       :aria-selected="id === layout.activeTab"
       @click="layout.activeTab = id"
     >
-      <component :is="ICONS[id]" class="tab-icon" />
+      <component :is="iconFor(id)" class="tab-icon" />
       <span class="tab-label">{{ labelOf(id) }}</span>
       <button class="tab-close" :aria-label="i18n.t('panes.close', { name: labelOf(id) })" @click.stop="layout.closeTab(id)">
         <XMarkIcon class="w-[13px] h-[13px]" />
@@ -119,10 +144,10 @@ onUnmounted(() => {
           :disabled="isOpen(p.id) && layout.activeTab === p.id"
           @click="pick(p.id)"
         >
-          <component :is="ICONS[p.id]" class="picker-icon" />
+          <component :is="iconFor(p.id)" class="picker-icon" />
           <span class="picker-text">
-            <span class="picker-label">{{ i18n.t(p.labelKey) }}</span>
-            <span class="picker-hint">{{ i18n.t(p.hintKey) }}</span>
+            <span class="picker-label">{{ p.label }}</span>
+            <span class="picker-hint">{{ p.hint }}</span>
           </span>
           <span v-if="isOpen(p.id)" class="picker-badge">{{ i18n.t("panes.opened") }}</span>
         </button>

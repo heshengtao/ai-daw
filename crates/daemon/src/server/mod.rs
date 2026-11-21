@@ -79,6 +79,20 @@ async fn rpc_handler(
             Err(err) => return RpcError::BadArgs(err.to_string()).into_response(),
         }
     };
+    // 扩展插件：装 / 卸 / 市场 / 状态都走一个入口（前端与桌面端同一份实现）。
+    if cmd == "extensions_rpc" {
+        let op = args.get("op").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+        let payload = args
+            .get("args")
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        let app = state.app_handle();
+        let state_arc = state.daemon.state_arc();
+        return match crate::extensions::api(&app, &state_arc, &op, payload).await {
+            Ok(value) => axum::Json(value).into_response(),
+            Err(err) => RpcError::Failed(err).into_response(),
+        };
+    }
     // 导出：渲染 + 编码要几秒到几十秒，单独 await。路径留空时由服务端生成暂存文件。
     if cmd == "export_audio" {
         #[derive(serde::Deserialize)]
@@ -575,15 +589,17 @@ async fn static_handler(
         return (StatusCode::BAD_REQUEST, "bad path").into_response();
     }
     let file = dir.join(relative);
-    let bytes = match tokio::fs::read(&file).await {
-        Ok(bytes) => bytes,
-        // 不认识的路由回落到 index.html（hash 路由用不到，但直接访问 `/` 之外也顺手）。
+    let (bytes, served) = match tokio::fs::read(&file).await {
+        Ok(bytes) => (bytes, relative.to_string()),
+        // 不认识的路由回落到 index.html（history 路由直接访问 `/settings` 这类深链时走这里）。
         Err(_) => match tokio::fs::read(dir.join("index.html")).await {
-            Ok(bytes) => bytes,
+            // MIME 要按**实际服务的文件**算：`/settings` 没有扩展名，若按请求路径猜会变成
+            // application/octet-stream，浏览器直接当下载处理（页面白着不动）。
+            Ok(bytes) => (bytes, "index.html".to_string()),
             Err(_) => return (StatusCode::NOT_FOUND, "not found").into_response(),
         },
     };
-    let mime = guess_mime(relative);
+    let mime = guess_mime(&served);
     let mut response = ([(axum::http::header::CONTENT_TYPE, mime)], bytes).into_response();
     response
 }

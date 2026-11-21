@@ -107,6 +107,8 @@ fn exec(
     actor: Actor,
     commands: Vec<Command>,
 ) -> (Project, Vec<Event>) {
+    // 扩展发起的写操作：署名改成 `ext:<包名>`（线程局部量由扩展宿主在调用期间设置）。
+    let actor = crate::extensions::actor_override().unwrap_or(actor);
     let (mut project, events) = {
         let mut engine = state.engine.lock().unwrap();
         let events: Vec<Event> = engine.execute_all(commands, actor);

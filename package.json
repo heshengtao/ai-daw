@@ -16,6 +16,7 @@
     "build:sidecars": "npm run build:aidaw && npm run build:vst3-helper",
     "release:notes": "node tools/release-notes.mjs",
     "selftest:score": "rolldown tools/score-selftest.ts -o .tmp/score-selftest.mjs -f esm -p node && node .tmp/score-selftest.mjs",
+    "selftest:extensions": "node tools/extension-selftest.mjs",
     "selftest:import": "rolldown tools/import-selftest.ts -o .tmp/import-selftest.mjs -f esm -p node && node .tmp/import-selftest.mjs",
     "preview": "vite preview",
     "tauri": "tauri",

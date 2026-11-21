@@ -85,6 +85,7 @@ App 的 bundle id 是 **`com.aidaw.app`**，它的配置目录由这个 id 推�
 | 音色设计 | `references/sound-design.md` | **内置合成器捏音色**：参数语义、`preview_synth` 预听闭环、**36 条出厂音色（`list_synth_presets`）**、风格配方、独立滤波包络 / 每声部 LFO / unison / 过采样 |
 | 音色记忆 | `references/sound-memory.md` | **跨工程保存 / 检索 / 应用整条音色链**；用户明确要求或确认后才保存，默认不自动存 |
 | 插件开发 | `references/clap-plugin-dev.md` | **把需求做成 CLAP 插件**：生态与选型、最小 ABI、线程规则、Rust（nih-plug）/ C++（clap-helpers）/ C 三条路线、跨平台打包、`clap-validator`、装进 AI DAW 验收 |
+| 应用扩展 | `references/extensions.md` | **应用级插件（npm 分发，不是 DSP）**：`list_extensions` 看已装、扩展工具与内建工具同表；**搜索市场（`search_extension_market`）→ 用户同意 → `install_extension(confirm=true)`**；开发契约（`aidaw.json` / CJS Host / ESM Client / 面板注册）与发布 |
 | 乐理 | `references/theory.md` | MIDI 音高、音阶/调式、和弦与进行、声部连接、音域、旋律写作 |
 | 节奏 | `references/rhythm.md` | 拍/网格换算、GM 鼓映射、`builtin.drums` 原声鼓组、鼓型、力度/量化/swing/人性化 |
 | 曲风 | `references/genres.md` | 14 类曲风的 BPM/拍号/和声/鼓型/贝斯/配器/结构/混音配方 |

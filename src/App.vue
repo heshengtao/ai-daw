@@ -37,6 +37,7 @@ import { useImportingStore, useExportingStore } from "@/stores/importing";
 import { useTimelineStore } from "@/stores/timeline";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { useSettingsStore } from "@/stores/settings";
+import { useExtensionsStore } from "@/stores/extensions";
 import { useI18n } from "@/i18n";
 import { exportAudio, exportMidi, exportScore, importProject, onPluginsEvent, onSoundfontsEvent, readImportFile, type ExportFormat } from "@/api/tauri";
 import type { ProjectHistoryEntry } from "@/api/types";
@@ -71,6 +72,7 @@ const exportJob = useExportingStore();
 const timeline = useTimelineStore();
 const onboarding = useOnboardingStore();
 const settings = useSettingsStore();
+const extensions = useExtensionsStore();
 const i18n = useI18n();
 const route = useRoute();
 
@@ -81,7 +83,9 @@ useProjectSync();
 // 浏览器里播放时收 daemon 推来的 PCM（桌面端不启用，声音从本机声卡出）。
 useWebMonitor();
 
-/** 设置页独占中栏：不显示音轨栏与右侧面板。 */
+/** 设置页独占中栏：不显示音轨栏与右侧面板。
+ * 灵感页不在此列——它和编排 / 编辑 / 乐谱 / 混音一样保留左右两栏（顶栏的品牌区就在左栏里），
+ * 唯一的差别是它没有下窗口（下窗口只长在编排 / 编辑里）。 */
 const isSettings = computed(() => route.path.startsWith("/settings"));
 
 /** 独立窗口的路由前缀。 */
@@ -680,6 +684,8 @@ onMounted(async () => {
   // 后端只在工程仍是默认模板时才改——用户动过就一个字都不动；改名不进撤销栈。
   // 只由主窗口做：二级窗口同时来一遍是多余的工程写入。
   if (isPrimaryWindow) await project.localizeStarterTracks().catch(() => {});
+  // 扩展插件：只有主窗口装载 Client 侧模块（二级窗口里再注册一遍面板没有意义）。
+  if (isPrimaryWindow) void extensions.init();
   // 用户预设：跨工程，取一次就够（保存/删除后会各自刷新）。
   void presets.refresh();
   // 启动时静默查一次更新（只由主窗口做）：有新版本就提示去设置页更新；查不到（例如还没发过
