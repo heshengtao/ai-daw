@@ -809,6 +809,7 @@ pub fn run() {
             ai_daw_daemon::yue_engine::ai_yue_compose,
             ai_daw_daemon::yue_engine::ai_yue_compose_cancel,
             ai_daw_daemon::yue_engine::ai_yue_import_abc,
+            ai_daw_daemon::yue_engine::ai_yue_import_audio,
             ai_daw_daemon::yue_engine::ai_yue_score,
             ai_daw_daemon::yue_engine::ai_yue_record,
             ai_daw_daemon::yue_engine::ai_yue_continuable,

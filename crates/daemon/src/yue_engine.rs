@@ -202,6 +202,60 @@ pub fn ai_yue_import_abc(app: crate::tauri_api::AppHandle, path: String) -> Resu
     ))
 }
 
+/// 把一条已经落盘的生成音频摆进工程（灵感页卡片的「导入到工程」）。
+///
+/// 生成时如果带了 `place_in_project = false`，音频只落盘、不进工程；这个命令补上那一步。
+/// 重复调用就是再建一条轨——同一首歌放到两个位置是合理需求，不做去重。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_yue_import_audio(
+    app: crate::tauri_api::AppHandle,
+    path: String,
+    name: Option<String>,
+) -> Result<String, String> {
+    let state = app.state::<Arc<AppState>>();
+    let decoded = state.assets.load(&path)?;
+    let sample_rate = decoded.sample_rate.max(1.0);
+    let seconds = decoded.frames() as f64 / sample_rate;
+
+    // 工程按拍记时间：这里和 `ai_yue_compose` 用同一套换算，导进来才和生成时摆的位置一致。
+    let tempo = {
+        let engine = state.engine.lock().unwrap();
+        engine.project().transport.tempo
+    };
+    let beats = seconds * tempo / 60.0;
+
+    // 录出来的文件名是 `yue2-1795187559510.wav` 这种，直接当轨道名太难认；
+    // 优先用界面上那首歌的标题，没给才退回文件名。
+    let track_name = name
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            std::path::Path::new(&path)
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "导入音频".into())
+        });
+
+    let source = AudioSource {
+        path,
+        offset_frames: 0,
+        frames: None,
+        rate: 1.0,
+        pitch_semitones: 0.0,
+    };
+    crate::commands::run_agent_all(
+        &app,
+        vec![EngineCommand::AddAudioTrack {
+            name: track_name.clone(),
+            start: 0.0,
+            length: beats.max(1.0),
+            source,
+            at: None,
+        }],
+    );
+    Ok(track_name)
+}
+
 /// 引擎的 CUDA `cuda_perf` 预设开关（默认开；8 GB 显存的卡可关）。
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ai_yue_cuda_perf(app: crate::tauri_api::AppHandle) -> bool {
