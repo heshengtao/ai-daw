@@ -17,7 +17,7 @@
 - 注释与文案沿用现有风格：中文、解释「为什么」而不是「做了什么」。
 - 不引入任何新依赖。
 - **提交纪律：工作区有大量与本任务无关的未提交改动。每次提交只 `git add` 本任务列出的文件，禁止 `git add -A` / `git add .` / `git commit -a`。**
-- 后端校验：`cargo test -p ai-daw-daemon`。前端类型校验：`npx vue-tsc --noEmit -p tsconfig.json`（完成后统一跑一次 `npm run build`）。
+- 后端校验：`cargo test -p ai-daw-daemon --lib --no-default-features`（CI 用的就是这条；省略 `--no-default-features` 会启用 `desktop` 特性，导致 `server::tests` / `extensions::tests` 里 9 个与本次无关的用例失败）。前端类型校验：`npx vue-tsc --noEmit -p tsconfig.json`（完成后统一跑一次 `npm run build`）。
 
 ---
 
@@ -69,7 +69,7 @@
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-cargo test -p ai-daw-daemon place_in_project_defaults_to_true
+cargo test -p ai-daw-daemon --lib --no-default-features place_in_project_defaults_to_true
 ```
 
 Expected: 编译错误 `no field place_in_project on type ComposeArgs`。
@@ -118,8 +118,8 @@ Expected: 编译错误 `no field place_in_project on type ComposeArgs`。
 - [ ] **Step 5: 跑测试确认通过**
 
 ```bash
-cargo test -p ai-daw-daemon place_in_project_defaults_to_true
-cargo test -p ai-daw-daemon
+cargo test -p ai-daw-daemon --lib --no-default-features place_in_project_defaults_to_true
+cargo test -p ai-daw-daemon --lib --no-default-features
 ```
 
 Expected: 新测试 PASS，其余测试全绿（无 `warning: unused variable`）。
@@ -223,7 +223,7 @@ Expected: 通过。若 `app.state::<Arc<AppState>>()` 报未导入 `Manager`，�
 
 ```bash
 cargo build -p ai-daw
-cargo test -p ai-daw-daemon
+cargo test -p ai-daw-daemon --lib --no-default-features
 ```
 
 Expected: 均通过（若 `-p ai-daw` 不是正确的 crate 名，用 `cargo build --workspace`）。
@@ -912,7 +912,7 @@ git commit -m "feat(inspire): 纯音乐/有人声改成显式开关"
 
 ## 收尾验证（全部任务完成后）
 
-- [ ] `cargo test -p ai-daw-daemon`：全绿
+- [ ] `cargo test -p ai-daw-daemon --lib --no-default-features`：全绿
 - [ ] `npm run build`：`vue-tsc --noEmit` + `vite build` 都通过
 - [ ] 手动跑一遍（引擎需已就绪，**不要为验证再加载新模型**）：
   1. 灵感页输入「jazz」，点「爵士」芯片 → 提示词变成完整英文 tag 串
