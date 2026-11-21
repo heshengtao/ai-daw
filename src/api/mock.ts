@@ -633,6 +633,46 @@ function mockRuntimeCatalog(): RuntimeStatus[] {
   ];
 }
 
+/**
+ * 浏览器预览用的**最小合法 WAV**（3 秒正弦 + 渐入渐出）。
+ *
+ * 预览模式没有后端，`read_import_file` 原来回空字节，于是所有「读音频 → 播放」的界面
+ * 在浏览器里只能看到一条报错（灵感页的试听、导入预览都算）。造一份真能解码的 WAV，
+ * 播放 / 进度条 / 暂停这些交互就能在 `npm run dev` 里真的跑起来。
+ */
+let mockWav: Uint8Array | null = null;
+function mockPreviewWav(): Uint8Array {
+  if (mockWav) return mockWav;
+  const sampleRate = 8000;
+  const seconds = 3;
+  const frames = sampleRate * seconds;
+  const bytes = new Uint8Array(44 + frames * 2);
+  const view = new DataView(bytes.buffer);
+  const ascii = (offset: number, text: string): void => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + frames * 2, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, "data");
+  view.setUint32(40, frames * 2, true);
+  for (let i = 0; i < frames; i += 1) {
+    const t = i / sampleRate;
+    const env = Math.min(1, t * 4) * Math.max(0, 1 - t / seconds);
+    view.setInt16(44 + i * 2, Math.round(Math.sin(2 * Math.PI * 220 * t) * env * 0.28 * 32767), true);
+  }
+  mockWav = bytes;
+  return bytes;
+}
+
 /** 是否使用假数据。 */
 export function mockEnabled(): boolean {
   return import.meta.env.DEV && !("__TAURI_INTERNALS__" in window);
@@ -1769,7 +1809,10 @@ export const mockApi = {
         yueJob = {
           ...yueJob,
           state: "done",
-          message: `已生成「${label}」：90 秒（预览模式没有真音频）`,
+          // 预览模式也给一条路径：灵感页要拿它去取波形 / 试听（读回来的是合成 WAV）。
+          audio: "/mock/audio/generated.wav",
+          score: "/mock/audio/generated.abc",
+          message: `已生成「${label}」：90 秒（预览模式的音频是合成音）`,
           seconds: 90,
         };
       }
@@ -3034,8 +3077,8 @@ export const mockApi = {
   exportScore: (path: string): string => path,
   // MIDI 由后端从工程生成；预览模式只回假路径。
   exportMidi: (path: string): string => path,
-  // 浏览器预览里没有真实文件可读：导入流程会以「文件为空」报错，属预期行为。
-  readImportFile: (): Uint8Array => new Uint8Array(0),
+  // 浏览器预览里没有真实文件：一律回那段合成的 WAV，让「读音频 → 播放」的流程能跑通。
+  readImportFile: (): Uint8Array => mockPreviewWav(),
   importProject: (next: Project): Project => {
     state = clone(next);
     return clone(state);

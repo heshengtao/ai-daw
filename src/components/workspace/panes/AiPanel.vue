@@ -18,7 +18,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { BoltIcon, ClipboardDocumentIcon } from "@heroicons/vue/24/outline";
-import Md3Select, { type SelectOption } from "@/components/common/Md3Select.vue";
+import Md3Select from "@/components/common/Md3Select.vue";
 import AiYuePage from "@/components/workspace/panes/ai/AiYuePage.vue";
 import AiSingingPage from "@/components/workspace/panes/ai/AiSingingPage.vue";
 import AiSvcPage from "@/components/workspace/panes/ai/AiSvcPage.vue";
@@ -63,10 +63,10 @@ import { useDownloadsStore } from "@/stores/downloads";
 import { useModelsStore } from "@/stores/models";
 import { useRuntimesStore } from "@/stores/runtimes";
 import { useModelChoice } from "@/composables/useModelChoice";
+import { useMusicSource } from "@/composables/useMusicSource";
 import { useModelDownloadPrompt } from "@/composables/useModelDownloadPrompt";
 import { useAiIntentStore } from "@/stores/aiIntent";
 import { useYueStore } from "@/stores/yue";
-import { useCloudMusicStore } from "@/stores/cloudMusic";
 import { useI18n } from "@/i18n";
 import { copyText } from "@/utils/clipboard";
 import { restartApp } from "@/utils/restart";
@@ -118,61 +118,20 @@ function onAiBack(): void {
 }
 
 // ---- 音乐来源：本地 YuE2 / 云端官方 API，共用「AI 写歌」的一个下拉 ----
-const CLOUD_SOURCE = "cloud:";
-const MUSIC_CONFIG_ACTION = "__configure_music__";
-
-const cloudMusic = useCloudMusicStore();
+//
+// 这份列表与「灵感」页是**同一份**（`useMusicSource`）：一个下拉里既有本地权重档，
+// 也有已配置的云端服务，第一项是「设置音乐 API…」。以前这段拼装两边各写一遍，
+// 加一个服务就要改两处，分组的文案也会不一致。
+const musicSource = useMusicSource();
+const {
+  cloudMusic,
+  provider: cloudProvider,
+  value: musicSourceId,
+  options: musicOptions,
+} = musicSource;
+const { pick: onMusicSourcePick, onAction: onMusicAction } = musicSource;
 /** 子页打开时锁定的服务：进页之后改列表不应该把正在生成的服务换掉。 */
 const cloudPageProviderId = ref("");
-const cloudProvider = computed(
-  () => cloudMusic.enabledProviders.find((provider) => provider.id === cloudMusic.selectedId) ?? null,
-);
-
-/** 下拉统一值：本地模型直接用 id，云端加 `cloud:` 前缀。 */
-const musicSourceId = computed<string | null>(() =>
-  cloudProvider.value ? `${CLOUD_SOURCE}${cloudProvider.value.id}` : yueDraftModel.value,
-);
-
-/** 下拉列表：第一项是设置入口，然后本地模型、云端服务两组。 */
-const musicOptions = computed<SelectOption[]>(() => {
-  const list: SelectOption[] = [
-    {
-      id: MUSIC_CONFIG_ACTION,
-      label: i18n.t("ai.musicApiConfigure"),
-      hint: i18n.t("ai.musicApiConfigureHint"),
-      action: true,
-    },
-  ];
-  for (const option of yueModelOptions.value) {
-    list.push({ ...option, group: i18n.t("ai.musicGroupLocal") });
-  }
-  for (const provider of cloudMusic.enabledProviders) {
-    list.push({
-      id: `${CLOUD_SOURCE}${provider.id}`,
-      label: provider.name,
-      hint: provider.model || i18n.t("settings.music.defaultModel"),
-      group: i18n.t("ai.musicGroupCloud"),
-    });
-  }
-  return list;
-});
-
-function openMusicSettings(): void {
-  void router.push({ name: "settings", query: { section: "music" } });
-}
-
-function onMusicAction(id?: string): void {
-  if (id === MUSIC_CONFIG_ACTION) openMusicSettings();
-}
-
-function onMusicSourcePick(value: string): void {
-  if (value.startsWith(CLOUD_SOURCE)) {
-    cloudMusic.select(value.slice(CLOUD_SOURCE.length));
-    return;
-  }
-  cloudMusic.select("");
-  yueDraftModel.value = value;
-}
 
 // ---- 顶部标签：全部 / 生成 / 转换（「全部」里用分隔标题分组）----
 const aiTab = ref<"all" | "generate" | "convert">("all");
@@ -302,14 +261,11 @@ async function pickBackend(kind: BackendPreference): Promise<void> {
 }
 
 // ---- YuE2 写歌 ----
-/** 已装 / 未装的 YuE2 权重都在下拉里；选过哪一档跨会话记住（卡片与子页共用）。 */
-const yueChoice = useModelChoice("compose", () =>
-  modelsStore.catalog.filter((m) => m.feature === "compose"),
-);
-const yueDraftModel = yueChoice.id;
-const chosenYueModel = yueChoice.current;
-/** 下拉选项与其它模型卡片同一套（名称 + 「已下载 / 需下载 · 体积」）。 */
-const yueModelOptions = yueChoice.selectOptions;
+/**
+ * 当前这一档本地权重：已装 / 未装的都在下拉里，选过哪一档跨会话记住。
+ * 与「灵感」页共用同一个「记住的选择」（两边改一处，另一边立刻跟上）。
+ */
+const chosenYueModel = musicSource.localModel;
 
 /** audio.cpp 引擎至少装了一份（安装包默认不带：权重和引擎都要就位才算「能写歌」）。 */
 const engineInstalled = computed(() =>
