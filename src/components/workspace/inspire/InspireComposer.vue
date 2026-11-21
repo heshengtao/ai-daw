@@ -18,6 +18,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { SparklesIcon, TrashIcon } from "@heroicons/vue/24/outline";
 import Md3Segmented from "@/components/common/Md3Segmented.vue";
+import Md3Switch from "@/components/common/Md3Switch.vue";
 import Md3Select from "@/components/common/Md3Select.vue";
 import NumberField from "@/components/common/NumberField.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
@@ -115,21 +116,13 @@ const modeOptions = computed<SegmentedOption[]>(() => [
   },
 ]);
 
-const vocalsValue = computed<string>({
-  get: () => (instrumental.value ? "instrumental" : "vocals"),
+/** 开关问的是「有没有人声」；内部仍记 `instrumental`（提交与 `styleOf` 都读它）。 */
+const vocals = computed<boolean>({
+  get: () => !instrumental.value,
   set: (value) => {
-    instrumental.value = value === "instrumental";
+    instrumental.value = !value;
   },
 });
-
-const vocalsOptions = computed<SegmentedOption[]>(() => [
-  { value: "vocals", label: i18n.t("inspire.vocals"), title: i18n.t("inspire.vocalsHint") },
-  {
-    value: "instrumental",
-    label: i18n.t("inspire.instrumental"),
-    title: i18n.t("inspire.instrumentalHint"),
-  },
-]);
 
 // ---- 本地引擎 / 权重状态 ----
 const enginePacks = computed(() => runtimes.items.filter((r) => r.group === "audiocpp"));
@@ -466,14 +459,19 @@ onUnmounted(() => {
         <span class="carried-link">{{ i18n.t("inspire.lyricsEdit") }}</span>
       </button>
 
-      <!-- 人声：纯音乐 / 有人声，显式开关（不再靠「歌词是否为空」猜） -->
-      <div class="field">
-        <span class="field-label">{{ i18n.t("inspire.voices") }}</span>
-        <Md3Segmented
-          v-model="vocalsValue"
-          :options="vocalsOptions"
-          :aria-label="i18n.t('inspire.voices')"
-        />
+      <!-- 人声：一个开关，左标签右开关（关掉 = 纯音乐，不再靠「歌词是否为空」猜） -->
+      <div class="m3-row">
+        <div class="m3-row-main">
+          <span class="m3-row-label">{{ i18n.t("inspire.voices") }}</span>
+          <span class="m3-row-sub">{{ i18n.t("inspire.voicesHint") }}</span>
+        </div>
+        <div class="m3-row-control">
+          <Md3Switch
+            v-model="vocals"
+            :label="i18n.t('inspire.voices')"
+            :disabled="inspire.crafting"
+          />
+        </div>
       </div>
 
       <!-- 进阶参数：时长 / 步数 / 种子 -->
@@ -516,7 +514,7 @@ onUnmounted(() => {
 
       <p v-if="advanced" class="hint">{{ i18n.t("inspire.seedHint") }}</p>
       <!-- 歌词留空意味着什么，本地与云端不一样：云端是显式的「纯音乐」开关，本地是让模型自己写词 -->
-      <p class="hint">{{ i18n.t(instrumental ? "inspire.instrumentalHint" : "inspire.lyricsAuto") }}</p>
+      <p v-if="!instrumental" class="hint">{{ i18n.t("inspire.lyricsAuto") }}</p>
     </div>
 
     <footer class="composer-foot">
