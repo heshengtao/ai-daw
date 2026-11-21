@@ -31,6 +31,7 @@ import {
   QuestionMarkCircleIcon,
   SparklesIcon,
   SquaresPlusIcon,
+  LightBulbIcon,
 } from "@heroicons/vue/24/outline";
 import Tooltip from "@/components/common/Tooltip.vue";
 import MenuButton from "@/components/common/MenuButton.vue";
@@ -72,6 +73,8 @@ const i18n = useI18n();
 const isMac = isMacOS();
 
 const navItems: NavItem[] = [
+  // 灵感排最前：这一版的主张是「先有想法，再排时间线」。
+  { labelKey: "topbar.view.inspire", path: "/inspire", icon: LightBulbIcon },
   { labelKey: "topbar.view.arrange", path: "/arrange", icon: Squares2X2Icon },
   { labelKey: "topbar.view.edit", path: "/edit", icon: PianoIcon },
   { labelKey: "topbar.view.score", path: "/score", icon: DocumentTextIcon },
@@ -227,6 +230,7 @@ function onMouseDown(e: MouseEvent): void {
       <nav
         class="view-nav"
         :class="{ 'is-settings': isSettings }"
+        :style="{ '--nav-count': navItems.length }"
         data-tour="views"
         role="tablist"
         :aria-label="i18n.t('topbar.viewGroup')"
@@ -442,7 +446,7 @@ function onMouseDown(e: MouseEvent): void {
 .view-nav {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--nav-count, 4), minmax(0, 1fr));
   align-items: center;
   height: 36px;
   margin-left: 8px;
@@ -457,7 +461,7 @@ function onMouseDown(e: MouseEvent): void {
   top: 3px;
   bottom: 3px;
   left: 3px;
-  width: calc((100% - 6px) / 4);
+  width: calc((100% - 6px) / var(--nav-count, 4));
   border-radius: 999px;
   background-color: rgb(var(--md-secondary-container));
   box-shadow: var(--md-elevation-1);
