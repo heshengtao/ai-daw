@@ -18,10 +18,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::manager::{self, StoreRuntime};
 
-/// 索引地址：GitHub raw 为主，jsDelivr 作为镜像（国内直连 raw 常常不通）。
+/// 索引地址，按顺序回退。
+///
+/// GitHub Pages 为主（`*.github.io` 走 Fastly，实测能稳定取到）；jsDelivr 当镜像；
+/// raw.githubusercontent.com 放最后——部分网络下它的 TLS 连接会被 reset。
 const SOURCES: &[&str] = &[
-    "https://raw.githubusercontent.com/heshengtao/ai-daw-soundfont-registry/main/registry.json",
+    "https://heshengtao.github.io/ai-daw-soundfont-registry/registry.json",
     "https://cdn.jsdelivr.net/gh/heshengtao/ai-daw-soundfont-registry@main/registry.json",
+    "https://raw.githubusercontent.com/heshengtao/ai-daw-soundfont-registry/main/registry.json",
 ];
 /// 索引缓存有效期：与插件商店一致（6 小时）。
 const TTL: Duration = Duration::from_secs(6 * 3600);

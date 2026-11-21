@@ -26,12 +26,14 @@ use ai_daw_host_vst3::CatalogPlugin;
 use crate::state::{AppState, EVENT_PLUGINS};
 use std::sync::Arc;
 
-/// 注册表地址：**ai-daw 仓库里的快照**（打包时由 `tools/fetch-plugin-registry.mjs` 更新）。
+/// 注册表地址：`ai-daw-plugin-registry` 仓库的 GitHub Pages 快照（每周自动从 Open Audio Stack 同步）。
 ///
-/// 客户端不再每次直连上游 Open Audio Stack——上游只在打包时被请求一次。可用环境变量覆盖，
-/// 便于测试 / 镜像。
+/// 用 Pages 而不是 raw.githubusercontent.com：部分网络下 raw 的 TLS 连接会被 reset
+/// （curl 能过、Rust 的 TLS 栈被掐），`*.github.io` 走 Fastly 能稳定取到。
+/// 客户端不再每次直连上游 Open Audio Stack——上游只在快照仓库里被请求一次。
+/// 用户仍可在设置里配置镜像；失败时依次退回磁盘缓存与随包快照（`BUNDLED_REGISTRY`）。
 const REGISTRY_URL: &str =
-    "https://raw.githubusercontent.com/heshengtao/ai-daw/main/src-tauri/resources/plugin-registry.json";
+    "https://heshengtao.github.io/ai-daw-plugin-registry/plugin-registry.json";
 /// 随包快照：网络与本地缓存都不可用时的最后兜底（`include_str!` 保证一定有）。
 const BUNDLED_REGISTRY: &str = include_str!("../../../src-tauri/resources/plugin-registry.json");
 /// 注册表缓存有效期：6 小时。

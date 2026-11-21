@@ -2,7 +2,7 @@
 /**
  * 更新随包的 SoundFont 音色库索引快照。
  *
- * 客户端运行时会先请求 `ai-daw-soundfont-registry` 的 `registry.json`（GitHub raw → jsDelivr
+ * 客户端运行时会先请求 `ai-daw-soundfont-registry` 的 `registry.json`（GitHub Pages → jsDelivr → raw
  * → 本地磁盘缓存），都拿不到时退回**随包快照**（`include_str!`），所以商店在任何网络下都能
  * 至少列出已知的几件库。
  *
@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCE =
   process.env.SOUNDFONT_REGISTRY_SOURCE?.trim() ||
-  "https://raw.githubusercontent.com/heshengtao/ai-daw-soundfont-registry/main/registry.json";
+  "https://heshengtao.github.io/ai-daw-soundfont-registry/registry.json";
 const OUT =
   process.env.SOUNDFONT_REGISTRY_OUT?.trim() ||
   path.join(ROOT, "src-tauri", "resources", "soundfont-registry.json");
