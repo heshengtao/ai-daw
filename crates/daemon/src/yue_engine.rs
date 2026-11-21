@@ -901,6 +901,11 @@ pub struct ComposeArgs {
     /// - 普通生成：**新建一条轨**插到这条轨道下面（省略 = 追加到工程末尾）；
     /// - 续写（带了 `semantic_prefix`）：把新片段**接在这条轨道最后一个音频片段的末尾**。
     pub after_track: Option<u64>,
+    /// 生成完是否把音频摆进工程（默认 `true`）。
+    ///
+    /// 灵感界面传 `false`：先把歌留在灵感页，用户点「导入到工程」才进编排。
+    /// AI 面板与 MCP 不传这个字段，行为不变。
+    pub place_in_project: Option<bool>,
     /// 新轨道的名字。
     pub name: Option<String>,
 }
@@ -1778,9 +1783,13 @@ fn collect(
         };
 
         let is_extension = extension.is_some();
+        // 摆进工程是可选的：灵感界面只想先听歌，不想每次都在编排页多一条轨。
+        // 命令照样组出来（省得这段分叉），只是不发给引擎。
+        let place = args.place_in_project.unwrap_or(true);
         let mut commands = Vec::new();
         if let Some((track, start, track_name)) = append_anchor {
-            appended_to = Some(track_name);
+            // 只有真的摆进去了，才算「接在某条轨道后面」。
+            appended_to = place.then_some(track_name);
             commands.push(EngineCommand::AddAudioClip {
                 track,
                 start,
@@ -1818,7 +1827,9 @@ fn collect(
             });
         }
 
-        crate::commands::run_agent_all(app, commands);
+        if place {
+            crate::commands::run_agent_all(app, commands);
+        }
         audio_path = Some(wav_text);
         seconds = Some(render_secs as f32);
         if is_extension {
@@ -2208,6 +2219,18 @@ mod tests {
         let options = &body["request"]["options"];
         assert_eq!(options["semantic_prefix_file"], "/tmp/take.semantic.json");
         assert_eq!(options["semantic_max_tokens"], 4500);
+    }
+
+    /// 「摆不摆进工程」是个可选开关：缺省必须还是「摆」，否则 AI 面板与 MCP 会突然少一轨。
+    #[test]
+    fn place_in_project_defaults_to_true() {
+        let args: ComposeArgs = serde_json::from_str(r#"{"style":"pop"}"#).unwrap();
+        assert_eq!(args.place_in_project, None);
+        assert!(args.place_in_project.unwrap_or(true));
+
+        let args: ComposeArgs =
+            serde_json::from_str(r#"{"style":"pop","place_in_project":false}"#).unwrap();
+        assert_eq!(args.place_in_project, Some(false));
     }
 
     /// 语义码文件被读成**内联前缀**：去掉 BOM、验数组，再把 `semantic_prefix_file` 清掉。

@@ -6275,6 +6275,8 @@ pitch_range 是建议写作音域（MIDI 音高）；mono=true 是单音乐器�
             cfg_scale: args.cfg_scale,
             model: args.model,
             after_track: args.after_track,
+            // MCP 的语义就是「让工程里多一轨」，不跟着灵感界面走：保持自动导入。
+            place_in_project: None,
             name: args.name,
         };
         crate::yue_engine::compose_blocking(app, request)
