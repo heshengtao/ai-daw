@@ -1496,6 +1496,12 @@ export function yueImportAbc(path: string): Promise<string> {
   return invoke<string>("ai_yue_import_abc", { path });
 }
 
+/** 把生成好的音频导入工程，新建一条音频轨；返回最终使用的轨道名。 */
+export function yueImportAudio(path: string, name?: string): Promise<string> {
+  if (mockEnabled()) return Promise.resolve(mockApi.yueImportAudio(path, name));
+  return invoke<string>("ai_yue_import_audio", { path, name });
+}
+
 /** 读回生成时落盘的 ABC 谱文本（「载入刚生成的谱」再改）。 */
 export function yueScore(path: string): Promise<string> {
   if (mockEnabled()) return Promise.resolve(mockApi.yueScore());

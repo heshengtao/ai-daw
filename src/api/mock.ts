@@ -1720,6 +1720,8 @@ export const mockApi = {
 
   yueImportAbc: (_path: string): string => "已把谱面导入工程（预览模式）",
 
+  yueImportAudio: (_path: string, name?: string): string => name?.trim() || "导入音频",
+
   yueCudaPerf: (): boolean => mockNetwork.yue_cuda_perf,
 
   yueSetCudaPerf: (enabled: boolean): void => {

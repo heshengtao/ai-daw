@@ -1327,6 +1327,8 @@ export interface YueComposeArgs {
   model?: string | null;
   /** 生成结果插到这条轨道下面（轨道 id；省略 = 追加到末尾）。 */
   after_track?: number | null;
+  /** 生成完是否把音频摆进工程（默认 true；灵感界面传 false，稍后手动导入）。 */
+  place_in_project?: boolean;
   /** 新轨道的名字。 */
   name?: string;
 }
