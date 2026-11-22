@@ -2631,6 +2631,16 @@ const zh: Record<string, string> = {
   "inspire.import": "导入到工程",
   "inspire.imported": "已导入 · 再导入一次",
   "inspire.importedToast": "已导入为轨道「{name}」",
+  "inspire.continue": "续写",
+  "inspire.continueBody": "这首 {length}，接着往下写多长？",
+  "inspire.continueExtend": "加长",
+  "inspire.continueUnit": "秒",
+  "inspire.continueMore": "增加 5 秒",
+  "inspire.continueLess": "减少 5 秒",
+  "inspire.continueTotal": "总长 {length}（引擎单次上限 600 秒）",
+  "inspire.continueStart": "开始续写",
+  "inspire.continueTitle": "{title}（续写）",
+  "inspire.continueNeedsCode": "这首没有语义码，续写不了：只有本机生成的曲子才会落一份语义码",
 };
 
 export default zh;

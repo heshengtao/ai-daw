@@ -15,7 +15,7 @@
  */
 import { computed, ref, watch } from "vue";
 import { defineStore } from "pinia";
-import { onYueJobEvent, readImportFile, yueImportAudio } from "@/api/tauri";
+import { onYueJobEvent, readImportFile, yueImportAudio, yueRecord } from "@/api/tauri";
 import type { YueComposeArgs, YueJobStatus } from "@/api/types";
 import { useCloudMusicStore } from "@/stores/cloudMusic";
 import { useI18n } from "@/i18n";
@@ -46,6 +46,10 @@ export interface InspireItem {
   /** 时长（秒）；`0` = 还不知道（播放时以 `<audio>` 的元数据为准）。 */
   seconds: number;
   createdAt: number;
+  /** 生成参数存档（`.json`）：续写要读它的 style / model。 */
+  record?: string | null;
+  /** 语义码（`.semantic.json`）：续写的**唯一**输入（不是音频）。 */
+  semantic?: string | null;
 }
 
 /** 提交一次生成要带的东西。 */
@@ -63,8 +67,12 @@ export interface CraftRequest {
   steps?: number;
   /** 本地：种子（-1 = 随机）。 */
   seed?: number;
-  /** 纯音乐：云端是显式开关；本地 = 歌词留空。 */
+  /** 纯音乐：云端是显式开关；本地 = 歌词留空 + 后端的两段式。 */
   instrumental?: boolean;
+  /** 续写：拿这首的语义码当开头（`semantic_prefix_file`）。 */
+  semanticPrefix?: string | null;
+  /** 这是一次续写（只影响标题，别让人以为它是新写的一首）。 */
+  continuation?: boolean;
 }
 
 /** 正在跑的那一次生成（骨架行与落库都靠它）。 */
@@ -94,6 +102,8 @@ function loadItems(): InspireItem[] {
         source: item.source === "cloud" ? "cloud" : "local",
         seconds: Number(item.seconds) || 0,
         createdAt: Number(item.createdAt) || Date.now(),
+        record: typeof item.record === "string" ? item.record : null,
+        semantic: typeof item.semantic === "string" ? item.semantic : null,
       }));
   } catch {
     return [];
@@ -471,10 +481,17 @@ export const useInspireStore = defineStore("inspire", () => {
     elapsed.value = 0;
   }
 
-  function record(request: CraftRequest, path: string, seconds: number, model: string): void {
+  function record(
+    request: CraftRequest,
+    path: string,
+    seconds: number,
+    model: string,
+    sidecars?: { record?: string | null; semantic?: string | null },
+  ): void {
+    const title = titleOf(request, i18n.t("inspire.untitled"));
     push({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      title: titleOf(request, i18n.t("inspire.untitled")),
+      title: request.continuation ? i18n.t("inspire.continueTitle", { title }) : title,
       prompt: request.prompt.trim(),
       lyrics: request.instrumental ? "" : request.lyrics,
       model: model || request.model,
@@ -482,6 +499,8 @@ export const useInspireStore = defineStore("inspire", () => {
       path,
       seconds: Number(seconds) || 0,
       createdAt: Date.now(),
+      record: sidecars?.record ?? null,
+      semantic: sidecars?.semantic ?? null,
     });
   }
 
@@ -497,7 +516,10 @@ export const useInspireStore = defineStore("inspire", () => {
         error.value = i18n.t("inspire.noAudio");
         return;
       }
-      record(request, status.audio, status.seconds ?? request.duration, request.model);
+      record(request, status.audio, status.seconds ?? request.duration, request.model, {
+        record: status.record,
+        semantic: status.semantic,
+      });
       return;
     }
     if (status.state === "failed") {
@@ -537,6 +559,14 @@ export const useInspireStore = defineStore("inspire", () => {
       export_semantic: true,
       model: request.target,
       after_track: null,
+      // 灵感页只负责「先听歌」：渲染结果只落盘，**不碰工程**。
+      // 要进编排页，得用户点卡片上的「导入」——那才是「我要它」的表达。
+      place_in_project: false,
+      // 纯器乐：YuE2 后端会先出谱、把旋律从 Vocal 搬进 Ins，再渲染。
+      // 只把歌词清空是不够的——模型照样会给人声部安排旋律。
+      instrumental: request.instrumental === true,
+      // 续写：只吃语义码（不是音频），后端会强制走 cot=off 接着往下长。
+      semantic_prefix_file: request.semanticPrefix ?? null,
     };
     try {
       stopJob = await onYueJobEvent((status) => onLocalJob(status, mine));
@@ -626,6 +656,97 @@ export const useInspireStore = defineStore("inspire", () => {
     error.value = null;
   }
 
+  // ---- 续写 ----
+
+  /**
+   * 一条记录的旁挂文件。
+   *
+   * 新记录直接把路径存下来了；老记录（这次改动之前生成的）只能按同名规则推：
+   * `xxx.wav` 旁边就是 `xxx.json` 与 `xxx.semantic.json`。云端结果没有这两样。
+   */
+  function sidecarsOf(item: InspireItem): { record: string | null; semantic: string | null } {
+    if (item.source !== "local") return { record: null, semantic: null };
+    const stem = item.path.replace(/\.[^./\\]+$/, "");
+    return {
+      record: item.record ?? `${stem}.json`,
+      semantic: item.semantic ?? `${stem}.semantic.json`,
+    };
+  }
+
+  /** 这首能不能续写（本地生成 + 有语义码）。 */
+  function canContinue(item: InspireItem): boolean {
+    return item.source === "local";
+  }
+
+  /** 引擎没起就先拉起来（续写同样要它），最多等 15 分钟。 */
+  async function ensureEngine(model: string | null): Promise<boolean> {
+    if (yue.ready) return true;
+    try {
+      await yue.start(model ?? undefined);
+    } catch (err) {
+      error.value = String(err);
+      return false;
+    }
+    const started = Date.now();
+    while (Date.now() - started < 15 * 60_000) {
+      if (yue.ready) return true;
+      if (yue.engine?.state === "error") {
+        error.value = yue.engine.message ?? i18n.t("inspire.failed");
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    error.value = i18n.t("inspire.engineTimeout");
+    return false;
+  }
+
+  /**
+   * **续写**：拿这首的语义码当开头，接着往下写（不碰工程）。
+   *
+   * 续写的条件（风格 / 模型 / 是否纯器乐）从落盘的生成记录里读——不沿用它们，接出来的
+   * 段落会像另一首歌。`extend` 是「再加多长」（秒，界面上由 `ContinueDialog` 问），
+   * 总长 = 原曲 + 加长，夹在引擎的单次上限 600 秒内。
+   */
+  async function craftContinuation(item: InspireItem, extend = 60): Promise<void> {
+    if (crafting.value) return;
+    error.value = null;
+    const { record, semantic } = sidecarsOf(item);
+    if (!record || !semantic) {
+      error.value = i18n.t("inspire.continueNeedsCode");
+      return;
+    }
+    let saved: { args?: Record<string, unknown> } | null = null;
+    try {
+      saved = JSON.parse(await yueRecord(record)) as { args?: Record<string, unknown> };
+    } catch {
+      error.value = i18n.t("inspire.continueNeedsCode");
+      return;
+    }
+    const args = (saved?.args ?? {}) as {
+      style?: string;
+      steps?: number;
+      model?: string;
+      instrumental?: boolean;
+    };
+    const model = args.model ?? null;
+    if (!(await ensureEngine(model))) return;
+    const base = item.seconds > 0 ? item.seconds : 60;
+    const total = Math.min(600, Math.max(15, Math.round(base + extend)));
+    await craftLocal({
+      prompt: String(args.style ?? item.prompt ?? ""),
+      lyrics: "",
+      model: item.model,
+      source: "local",
+      duration: total,
+      target: model,
+      steps: typeof args.steps === "number" ? args.steps : 32,
+      seed: -1,
+      instrumental: args.instrumental === true,
+      semanticPrefix: semantic,
+      continuation: true,
+    });
+  }
+
   return {
     // 列表
     items,
@@ -645,6 +766,9 @@ export const useInspireStore = defineStore("inspire", () => {
     craftCloud,
     cancelCraft,
     clearError,
+    // 续写
+    canContinue,
+    craftContinuation,
     // 导入工程
     importingId,
     importToProject,

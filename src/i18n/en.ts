@@ -2634,6 +2634,16 @@ const en: Record<string, string> = {
   "inspire.import": "Add to project",
   "inspire.imported": "Added · add again",
   "inspire.importedToast": "Added as track \"{name}\"",
+  "inspire.continue": "Extend",
+  "inspire.continueBody": "This take is {length}. How much longer should it be?",
+  "inspire.continueExtend": "Extend",
+  "inspire.continueUnit": "s",
+  "inspire.continueMore": "5 seconds more",
+  "inspire.continueLess": "5 seconds less",
+  "inspire.continueTotal": "Total {length} (the engine caps one pass at 600 s)",
+  "inspire.continueStart": "Extend it",
+  "inspire.continueTitle": "{title} (extended)",
+  "inspire.continueNeedsCode": "No semantic codes for this one — only locally generated takes keep a code file, so it cannot be extended",
 };
 
 export default en;

@@ -11,6 +11,7 @@
 import { computed, ref } from "vue";
 import { SparklesIcon } from "@heroicons/vue/24/outline";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
+import ContinueDialog from "./ContinueDialog.vue";
 import InspireRow from "./InspireRow.vue";
 import { dayLabel, formatDuration } from "./format";
 import { useI18n } from "@/i18n";
@@ -21,6 +22,9 @@ const i18n = useI18n();
 const inspire = useInspireStore();
 const layout = useLayoutStore();
 const clearOpen = ref(false);
+/** 正在问「续写多长」的那一条。 */
+const continueOpen = ref(false);
+const continueTarget = ref<InspireItem | null>(null);
 
 interface Group {
   key: string;
@@ -62,6 +66,18 @@ function clearAll(): void {
 async function importItem(item: InspireItem): Promise<void> {
   const name = await inspire.importToProject(item);
   if (name) layout.notify(i18n.t("inspire.importedToast", { name }));
+}
+
+/** 续写：先问「接多长」，再让 store 去跑（结果作为一条新记录落在列表顶上）。 */
+function continueItem(item: InspireItem): void {
+  continueTarget.value = item;
+  continueOpen.value = true;
+}
+
+function startContinuation(seconds: number): void {
+  const item = continueTarget.value;
+  if (!item) return;
+  void inspire.craftContinuation(item, seconds);
 }
 
 /** 骨架行的进度：云端有真实百分比，本地只能不定长。 */
@@ -146,6 +162,7 @@ const craftPct = computed(() => inspire.progressPct);
           @toggle="pick(item)"
           @seek="(ratio) => seek(item, ratio)"
           @import="importItem(item)"
+          @continue="continueItem(item)"
           @remove="inspire.remove(item.id)"
         />
       </template>
@@ -160,6 +177,8 @@ const craftPct = computed(() => inspire.progressPct);
       danger
       @confirm="clearAll"
     />
+
+    <ContinueDialog v-model:open="continueOpen" :item="continueTarget" @confirm="startContinuation" />
   </section>
 </template>
 
