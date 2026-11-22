@@ -814,6 +814,51 @@ fn clip_window<'a>(samples: &'a [f32], channels: usize, source: &AudioSource) ->
     &samples[offset * channels..(offset + take) * channels]
 }
 
+/// 生成记录里写的**计划速度**（`Q:1/4=88`）。
+///
+/// 两个来源，按可信度排序：
+/// 1. 旁挂的 `<音频>.abc`——YuE2 落盘时会把谱面和音频写在一起；
+/// 2. `<音频>.json` 生成记录里的 `args.abc`——两段式纯器乐只把改写后的谱存进记录，不落 `.abc`。
+///
+/// 速度是先规划再渲染的，那是事实不是估计。外部导入的音频两者都没有，返回 `None`，照旧走检测。
+fn planned_tempo(path: &str) -> Option<f64> {
+    let audio = std::path::Path::new(path);
+    if let Ok(text) = std::fs::read_to_string(audio.with_extension("abc")) {
+        if let Some(bpm) = parse_planned_tempo(&text) {
+            return Some(bpm);
+        }
+    }
+    let text = std::fs::read_to_string(audio.with_extension("json")).ok()?;
+    let record: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let abc = record.get("args")?.get("abc")?.as_str()?;
+    parse_planned_tempo(abc)
+}
+
+/// 从 ABC 文本里读 `Q:` 字段。
+///
+/// 认这几种写法：`Q:1/4=88`、`Q:1/4 88`、`Q:88`、`Q:"Allegro" 1/4=88`。
+/// 只要落在 20–400 BPM 的合理区间就算数，否则返回 `None`。
+fn parse_planned_tempo(text: &str) -> Option<f64> {
+    for line in text.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("Q:") else {
+            continue;
+        };
+        // 去掉引号里的表情记号，只留数字。
+        let rest = rest.replace('"', " ");
+        // `1/4=88` 取等号右边；`1/4 88` 没有等号就整行扫。
+        let tail = rest.rsplit('=').next().unwrap_or(&rest);
+        for token in tail.split_whitespace() {
+            if let Ok(value) = token.parse::<f64>() {
+                if (20.0..=400.0).contains(&value) {
+                    return Some(value);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// 节拍检测并写回：**一次事务**里设速度 + 拍号 + 把片段对齐到小节线。
 ///
 /// 对齐做三件事，全部落在同一笔撤销记录里：
@@ -842,11 +887,17 @@ fn apply_tempo_detection(
         Err(e) => return Err(e),
     };
 
-    let (bpm, num, den) = (
-        detection.bpm,
-        detection.time_sig_num,
-        detection.time_sig_den,
-    );
+    // 自家生成的曲子：旁边的 `.abc` 里写着**计划速度**（`Q:1/4=88`）。那是事实，
+    // 比从音频里估更准，直接用它；拍号 / 相位仍然交给 Beat This。
+    let planned = planned_tempo(&input.source.path);
+    let (bpm, num, den) = match planned {
+        Some(bpm) => (bpm, detection.time_sig_num, detection.time_sig_den),
+        None => (
+            detection.bpm,
+            detection.time_sig_num,
+            detection.time_sig_den,
+        ),
+    };
     // 一小节多少拍（四分音符为基准）：4/4 → 4，3/4 → 3。
     let bar_beats = num as f64 * (4.0 / den as f64);
     // 第一个重拍相对片段起点的拍数。
@@ -881,8 +932,13 @@ fn apply_tempo_detection(
     );
 
     let first_bar = ((start + phase_beats) / bar_beats).round() as i64 + 1;
+    let source_note = if planned.is_some() {
+        "，速度取自生成记录"
+    } else {
+        ""
+    };
     Ok(format!(
-        "速度 {bpm:.1} BPM · {num}/{den}（{} 个拍点 / {} 个重拍）；首重拍对齐到第 {first_bar} 小节",
+        "速度 {bpm:.1} BPM · {num}/{den}（{} 个拍点 / {} 个重拍）{source_note}；首重拍对齐到第 {first_bar} 小节",
         detection.beats, detection.downbeats,
     ))
 }
@@ -1109,4 +1165,71 @@ fn ai_output_path(app: &crate::tauri_api::AppHandle, kind: &str) -> Result<Strin
         .join(format!("{kind}-{stamp}.wav"))
         .to_string_lossy()
         .into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_q_with_equal_sign() {
+        assert_eq!(parse_planned_tempo("X:1\nM:4/4\nL:1/16\nQ:1/4=88\nK:F\n"), Some(88.0));
+    }
+
+    #[test]
+    fn reads_q_without_equal_sign() {
+        assert_eq!(parse_planned_tempo("Q:1/4 96\n"), Some(96.0));
+        assert_eq!(parse_planned_tempo("Q:120\n"), Some(120.0));
+    }
+
+    #[test]
+    fn ignores_words_in_q() {
+        assert_eq!(
+            parse_planned_tempo("Q:\"Allegro\" 1/4=132\n"),
+            Some(132.0)
+        );
+    }
+
+    #[test]
+    fn rejects_unusable_tempo() {
+        assert_eq!(parse_planned_tempo("Q:1/4=5\n"), None);
+        assert_eq!(parse_planned_tempo("Q:1/4=9999\n"), None);
+        assert_eq!(parse_planned_tempo("X:1\nM:4/4\n"), None);
+    }
+
+    #[test]
+    fn planned_tempo_reads_the_abc_sidecar() {
+        let dir = std::env::temp_dir().join(format!("ai-daw-plan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("side.wav");
+        std::fs::write(&wav, b"RIFF").unwrap();
+        std::fs::write(dir.join("side.abc"), "X:1\nQ:1/4=88\n").unwrap();
+        assert_eq!(planned_tempo(wav.to_str().unwrap()), Some(88.0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn planned_tempo_reads_the_record_when_there_is_no_abc() {
+        let dir = std::env::temp_dir().join(format!("ai-daw-plan2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("rec.wav");
+        std::fs::write(&wav, b"RIFF").unwrap();
+        std::fs::write(
+            dir.join("rec.json"),
+            r#"{"args":{"abc":"X:1\nQ:1/4=96\nK:F\n"}}"#,
+        )
+        .unwrap();
+        assert_eq!(planned_tempo(wav.to_str().unwrap()), Some(96.0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn planned_tempo_is_none_without_sidecars() {
+        let dir = std::env::temp_dir().join(format!("ai-daw-plan3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("plain.wav");
+        std::fs::write(&wav, b"RIFF").unwrap();
+        assert_eq!(planned_tempo(wav.to_str().unwrap()), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

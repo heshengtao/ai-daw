@@ -97,6 +97,30 @@ fn main() {
         "BPM（crate 估计）：{:?}",
         beat_this::calculate_bpm(&analysis)
     );
+    let fit = ai_daw_local_ai::models::beat_this::estimate_bpm(&analysis.beats);
+    let act = fit.and_then(|hint| {
+        ai_daw_local_ai::models::beat_this::activation_bpm(&analysis, hint)
+    });
+    let flux = fit.and_then(|hint| ai_daw_local_ai::models::beat_this::mel_flux_bpm(&analysis, hint));
+    let fused = match fit {
+        Some(f) => {
+            let others: Vec<f64> = [act, flux]
+                .into_iter()
+                .flatten()
+                .filter(|v| (v - f).abs() / f < 0.05)
+                .collect();
+            if others.is_empty() {
+                Some(f)
+            } else {
+                Some((2.0 * f + others.iter().sum::<f64>()) / (2.0 + others.len() as f64))
+            }
+        }
+        None => act,
+    };
+    println!("BPM（本仓库：拍点回归）：{fit:?}");
+    println!("BPM（本仓库：logits 自相关）：{act:?}");
+    println!("BPM（本仓库：mel 通量自相关）：{flux:?}");
+    println!("BPM（本仓库：融合后）：{fused:?}");
     println!(
         "拍号估计（本仓库逻辑）：{}",
         ai_daw_local_ai::models::beat_this::time_signature_num(&analysis)
