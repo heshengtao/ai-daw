@@ -7,6 +7,7 @@
 //! 既服务 webview，也服务 HTTP 上的浏览器客户端。
 
 pub mod abc;
+pub mod abc_edit;
 pub mod agent;
 pub mod ai;
 pub mod articulation_map;

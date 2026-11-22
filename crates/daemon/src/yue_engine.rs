@@ -962,6 +962,13 @@ pub struct ComposeArgs {
     pub place_in_project: Option<bool>,
     /// 新轨道的名字。
     pub name: Option<String>,
+    /// **纯器乐**。
+    ///
+    /// - YuE2：走两段式——先只出谱（`stop_after=abc`），把 `Vocal` 的旋律搬进 `Ins`，
+    ///   再拿改过的谱渲染。空歌词 + style 里加 `instrumental` 都治不住它（官方文档也这么说）；
+    /// - ACE-Step：它的上游 API 有真正的 `instrumental` 开关，但它对这版引擎是歌词约定，
+    ///   所以发 `[Instrumental]` 当歌词。
+    pub instrumental: Option<bool>,
 }
 
 impl ComposeArgs {
@@ -1052,7 +1059,11 @@ fn ace_step_body(args: &ComposeArgs) -> serde_json::Value {
         // 引擎侧是 u32；`seed()` 给的是 u64（纳秒余数），取低 32 位即可。
         "seed": (args.seed() % u32::MAX as u64) as u32,
     });
-    if !args.lyrics.trim().is_empty() {
+    if args.instrumental.unwrap_or(false) {
+        // ACE-Step 有真正的器乐开关，但这版引擎只认歌词约定：`[Instrumental]` = 纯器乐
+        // （ACE-Step 1.5 文档原文：「Use "[Instrumental]" for instrumental tracks」）。
+        options["lyrics"] = serde_json::json!("[Instrumental]");
+    } else if !args.lyrics.trim().is_empty() {
         options["lyrics"] = serde_json::json!(args.lyrics);
     }
     if let Some(cfg) = args.cfg_scale.filter(|c| *c >= 0.0) {
@@ -1315,15 +1326,14 @@ fn run_compose_job(
     if family == "yue2" {
         normalize_prefix(&mut args)?;
     }
-    let body = request_body(&args, family);
-    let result = submit(port, &body);
+    let body = compose_body(port, &mut args, family);
     engine_state().busy.store(false, Ordering::SeqCst);
     if engine_state().cancel.load(Ordering::Relaxed) {
         // 取消那条事件已经在 `ai_yue_compose_cancel` 里发过了。
         return Ok(String::new());
     }
-    match result {
-        Ok(run) => match collect(app, &args, &body, run, started.elapsed(), family) {
+    match body {
+        Ok((body, run)) => match collect(app, &args, &body, run, started.elapsed(), family) {
             Ok(job) => emit_job(app, &job),
             Err(message) => emit_job(
                 app,
@@ -1528,8 +1538,7 @@ fn compose_blocking_inner(app: &crate::tauri_api::AppHandle, mut args: ComposeAr
         normalize_prefix(&mut args)?;
     }
     let started = Instant::now();
-    let body = request_body(&args, family);
-    let run = submit(port, &body)?;
+    let (body, run) = compose_body(port, &mut args, family)?;
     if engine_state().cancel.load(Ordering::Relaxed) {
         return Ok("已取消".into());
     }
@@ -1556,6 +1565,53 @@ pub fn ai_yue_compose_cancel(app: crate::tauri_api::AppHandle) {
             ..Default::default()
         },
     );
+}
+
+/// 组请求体并提交。YuE2 的纯器乐要两段：先出谱 → 把旋律搬进 `Ins` → 再按改过的谱渲染。
+///
+/// 为什么不能只靠「空歌词」：YuE2 先写一份带 `Vocal` / `Ins` 的谱再渲染，空歌词只是让
+/// `Vocal` 没词，模型照样给主旋律安排人声音色（实测谱里 `Vocal` 一行全是音符）。
+/// 官方文档给的正是这套搬旋律的做法，并明确「谱里 Vocal 留休止也不保证没人声」。
+fn compose_body(
+    port: u16,
+    args: &mut ComposeArgs,
+    family: &str,
+) -> Result<(serde_json::Value, RunResult), String> {
+    // 只有「从零写一首」才走两段式：调用方自己给了谱（翻唱 / 按谱重唱），
+    // 或者这是续写（语义码前缀），改谱只会把人家给的东西弄坏。
+    let fresh = args.abc.trim().is_empty()
+        && args.abc_file.is_none()
+        && args.semantic_prefix.is_none()
+        && args.semantic_prefix_file.is_none();
+    if args.instrumental.unwrap_or(false) && family == "yue2" && fresh {
+        let abc = plan_abc(port, args)?;
+        let rewritten = crate::abc_edit::move_vocal_to_ins(&abc)?;
+        args.abc = rewritten;
+        args.abc_file = None;
+        args.lyrics = String::new();
+    }
+    let body = request_body(args, family);
+    let run = submit(port, &body)?;
+    Ok((body, run))
+}
+
+/// 纯器乐的第一段：只要谱。
+fn plan_abc(port: u16, args: &ComposeArgs) -> Result<String, String> {
+    let mut plan = args.clone();
+    plan.stop_after = Some("abc".into());
+    plan.export_semantic = Some(false);
+    plan.lyrics = String::new();
+    plan.abc = String::new();
+    plan.abc_file = None;
+    // 别再触发自己。
+    plan.instrumental = None;
+    let body = request_body(&plan, "yue2");
+    let run = submit(port, &body)?;
+    if engine_state().cancel.load(Ordering::Relaxed) {
+        return Err("已取消".into());
+    }
+    run.score
+        .ok_or_else(|| "纯器乐：第一段没有返回谱面".to_string())
 }
 
 /// 提交并等结果。请求体由调用方先组好——**种子只在这里算一次**，否则「记录里的 seed」

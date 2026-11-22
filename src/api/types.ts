@@ -1329,6 +1329,13 @@ export interface YueComposeArgs {
   after_track?: number | null;
   /** 生成完是否把音频摆进工程（默认 true；灵感界面传 false，稍后手动导入）。 */
   place_in_project?: boolean;
+  /**
+   * 纯器乐。
+   *
+   * YuE2 会在后端走两段式（先出谱、把 Vocal 的旋律搬进 Ins，再渲染）；
+   * ACE-Step 则是把 `[Instrumental]` 交给它。只传「歌词留空」是不管用的。
+   */
+  instrumental?: boolean;
   /** 新轨道的名字。 */
   name?: string;
 }
