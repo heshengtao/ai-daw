@@ -6,7 +6,8 @@
 //!
 //! - **Windows**：把每个子进程塞进一个 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job。
 //!   父进程无论怎么死，它持有的 Job 句柄都会关闭，内核随即杀掉组里所有进程。
-//! - **Unix**：spawn 前给子进程设 `PR_SET_PDEATHSIG = SIGKILL`，父进程消失时内核直接送达。
+//! - **Linux**：spawn 前给子进程设 `PR_SET_PDEATHSIG = SIGKILL`，父进程消失时内核直接送达。
+//! - **macOS / 其它平台**：内核没有 `PR_SET_PDEATHSIG`，这里退化为空操作（依赖正常清理）。
 //!
 //! ```no_run
 //! # fn main() -> std::io::Result<()> {
@@ -25,7 +26,7 @@
 ///
 /// Unix 要写进 `Command::pre_exec`，所以必须发生在 spawn 之前；Windows 上是空操作。
 pub fn configure(command: &mut std::process::Command) {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt;
 
@@ -41,7 +42,7 @@ pub fn configure(command: &mut std::process::Command) {
         }
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "linux"))]
     {
         let _ = command;
     }
