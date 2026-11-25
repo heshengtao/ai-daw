@@ -498,24 +498,40 @@ onUnmounted(() => stop?.());
 .kind-switch {
   margin-left: auto;
   display: inline-flex;
-  padding: 2px;
-  gap: 2px;
-  border-radius: 999px;
-  background-color: rgb(var(--md-surface-container-high) / 0.7);
+  align-items: center;
+  gap: 3px;
 }
 .kind-btn {
-  padding: 4px 12px;
+  height: 28px;
+  padding: 0 12px;
   border: none;
-  border-radius: 999px;
-  background: transparent;
+  border-radius: 7px;
+  background-color: rgb(var(--md-surface-container-highest));
   font: inherit;
-  font-size: 11px;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
   color: rgb(var(--md-on-surface-variant));
   cursor: pointer;
+  transition:
+    border-radius var(--md-dur-effects-default) var(--md-spring-effects-default),
+    background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
+    color var(--md-dur-effects-default) var(--md-spring-effects-default);
+}
+.kind-btn:first-child {
+  border-radius: 14px 7px 7px 14px;
+}
+.kind-btn:last-child {
+  border-radius: 7px 14px 14px 7px;
+}
+.kind-btn:hover:not(.on) {
+  color: rgb(var(--md-on-surface));
+  filter: brightness(1.06);
 }
 .kind-btn.on {
-  background-color: rgb(var(--md-primary) / 0.18);
-  color: rgb(var(--md-on-surface));
+  border-radius: 14px;
+  background-color: rgb(var(--md-secondary-container));
+  color: rgb(var(--md-on-secondary-container));
   font-weight: 600;
 }
 .toolbar {

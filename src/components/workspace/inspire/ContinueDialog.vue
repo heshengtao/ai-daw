@@ -7,6 +7,7 @@
  */
 import { computed, ref, watch } from "vue";
 import { MinusIcon, PlusIcon } from "@heroicons/vue/24/outline";
+import Md3Chip from "@/components/common/Md3Chip.vue";
 import ModalShell from "@/components/common/ModalShell.vue";
 import { useI18n } from "@/i18n";
 import type { InspireItem } from "@/stores/inspire";
@@ -89,17 +90,16 @@ function confirm(): void {
       <p class="line">{{ i18n.t("inspire.continueBody", { length: formatDuration(original) }) }}</p>
 
       <div class="presets">
-        <button
+        <Md3Chip
           v-for="seconds in PRESETS"
           :key="seconds"
-          type="button"
-          class="chip"
-          :class="{ on: extend === seconds }"
+          size="sm"
+          :selected="extend === seconds"
           :disabled="seconds > maxExtend"
           @click="preset(seconds)"
         >
           {{ formatDuration(seconds) }}
-        </button>
+        </Md3Chip>
       </div>
 
       <div class="row">

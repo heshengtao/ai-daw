@@ -17,6 +17,7 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { SparklesIcon, TrashIcon } from "@heroicons/vue/24/outline";
+import Md3Chip from "@/components/common/Md3Chip.vue";
 import Md3Segmented from "@/components/common/Md3Segmented.vue";
 import Md3Switch from "@/components/common/Md3Switch.vue";
 import Md3Select from "@/components/common/Md3Select.vue";
@@ -501,18 +502,16 @@ onUnmounted(() => {
       <label class="field">
         <span class="field-label">{{ i18n.t("inspire.style") }}</span>
         <div class="tags preset-tags">
-          <button
+          <Md3Chip
             v-for="preset in STYLE_PRESETS"
             :key="preset.id"
-            class="m3-chip tag"
-            :class="{ on: prompt.includes(preset.tags) }"
-            type="button"
-            :aria-pressed="prompt.includes(preset.tags)"
+            size="sm"
+            :selected="prompt.includes(preset.tags)"
             :disabled="inspire.crafting"
             @click="togglePreset(preset.tags)"
           >
             {{ i18n.t(preset.label) }}
-          </button>
+          </Md3Chip>
         </div>
         <textarea
           v-model="prompt"
@@ -532,16 +531,16 @@ onUnmounted(() => {
           <span class="field-sub">{{ i18n.t("inspire.lyricsHint") }}</span>
         </div>
         <div class="tags">
-          <button
+          <Md3Chip
             v-for="tag in SECTION_TAGS"
             :key="tag"
-            class="m3-chip tag"
-            type="button"
+            size="sm"
+            variant="assist"
             :disabled="inspire.crafting"
             @click="insertTag(tag)"
           >
             {{ tag }}
-          </button>
+          </Md3Chip>
         </div>
         <textarea
           ref="lyricsEl"

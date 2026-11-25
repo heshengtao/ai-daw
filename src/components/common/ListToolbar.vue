@@ -14,6 +14,7 @@
  */
 import { computed, ref } from "vue";
 import { MagnifyingGlassIcon, XMarkIcon } from "@heroicons/vue/24/outline";
+import Md3Chip from "@/components/common/Md3Chip.vue";
 
 /** 一组互斥 chip：`active` 为空串表示这组当前没有选中项（例如「仅可自动化」被关掉时）。 */
 interface ChipGroup {
@@ -101,16 +102,15 @@ defineExpose({ focusSearch });
       role="group"
       :aria-label="group.label"
     >
-      <button
+      <Md3Chip
         v-for="c in group.chips"
         :key="c.id"
-        class="chip"
-        :class="{ on: group.active === c.id }"
-        :aria-pressed="group.active === c.id"
+        size="sm"
+        :selected="group.active === c.id"
         @click="emit('update:activeChip', { groupId: group.id, chipId: c.id })"
       >
         {{ c.label }}
-      </button>
+      </Md3Chip>
     </div>
 
     <div class="sorts">
@@ -225,25 +225,35 @@ defineExpose({ focusSearch });
 .seg {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 999px;
-  background-color: rgb(var(--md-surface-container));
+  gap: 3px;
 }
 .seg-btn {
-  height: 24px;
+  height: 26px;
   padding: 0 12px;
   border: 0;
-  border-radius: 999px;
-  background: transparent;
+  border-radius: 6px;
+  background-color: rgb(var(--md-surface-container-highest));
   color: rgb(var(--md-on-surface-variant));
   font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
-  transition: background-color 0.14s ease, color 0.14s ease;
+  transition:
+    border-radius var(--md-dur-effects-default) var(--md-spring-effects-default),
+    background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
+    color var(--md-dur-effects-default) var(--md-spring-effects-default);
+}
+.seg-btn:first-child {
+  border-radius: 13px 6px 6px 13px;
+}
+.seg-btn:last-child {
+  border-radius: 6px 13px 13px 6px;
 }
 .seg-btn.on {
+  border-radius: 13px;
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
+  font-weight: 600;
 }
 .seg-btn:focus-visible {
   outline: 2px solid rgb(var(--md-primary));

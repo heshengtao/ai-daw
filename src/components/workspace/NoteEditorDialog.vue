@@ -9,6 +9,7 @@
  * 需要精确到音分时，0.01 个半音 = 1 音分，精度并没有丢失。
  */
 import { computed, ref, watch } from "vue";
+import Md3Chip from "@/components/common/Md3Chip.vue";
 import ModalShell from "@/components/common/ModalShell.vue";
 import NumberField from "@/components/common/NumberField.vue";
 import Md3Select, { type SelectOption } from "@/components/common/Md3Select.vue";
@@ -533,16 +534,16 @@ async function applyActive(): Promise<void> {
       <p class="m3-hint">{{ i18n.t("noteEditor.exprLead") }}</p>
 
       <div class="presets">
-        <button
+        <Md3Chip
           v-for="preset in presets"
           :key="preset.id"
-          class="m3-chip"
-          type="button"
+          size="sm"
+          variant="assist"
           :title="preset.hint"
           @click="applyPreset(preset.id)"
         >
           {{ preset.label }}
-        </button>
+        </Md3Chip>
       </div>
 
       <section class="m3-card">

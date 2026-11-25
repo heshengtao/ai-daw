@@ -403,9 +403,10 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
+  flex: 0 0 auto;
   transition:
-    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
-    padding var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    border-radius var(--md-dur-effects-default) var(--md-spring-effects-default),
     background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
     color var(--md-dur-effects-default) var(--md-spring-effects-default);
 }
@@ -420,12 +421,10 @@ onMounted(() => {
   filter: brightness(1.06);
 }
 .tab:active {
-  padding: 0 16px;
   border-radius: 11px;
 }
 .tab.on {
   border-radius: 15px;
-  padding: 0 15px;
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
   font-weight: 600;

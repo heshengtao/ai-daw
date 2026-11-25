@@ -13,6 +13,7 @@
  */
 import { computed, reactive, ref, watch } from "vue";
 import { PlusIcon } from "@heroicons/vue/24/outline";
+import Md3Chip from "@/components/common/Md3Chip.vue";
 import ModalShell from "@/components/common/ModalShell.vue";
 import Md3Select, { type SelectOption } from "@/components/common/Md3Select.vue";
 import Md3Switch from "@/components/common/Md3Switch.vue";
@@ -589,15 +590,15 @@ const remainingSuggestions = computed(() =>
           <div v-if="remainingSuggestions.length" class="suggestions">
             <span class="m3-field-label">{{ i18n.t("midi.suggestions") }}</span>
             <div class="chips">
-              <button
+              <Md3Chip
                 v-for="name in remainingSuggestions"
                 :key="name"
-                class="m3-chip"
-                type="button"
+                size="sm"
+                variant="assist"
                 @click="addSuggestion(name)"
               >
                 {{ name }}
-              </button>
+              </Md3Chip>
             </div>
           </div>
         </aside>

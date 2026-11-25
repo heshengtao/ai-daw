@@ -18,6 +18,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { BoltIcon, ClipboardDocumentIcon } from "@heroicons/vue/24/outline";
+import Md3Chip from "@/components/common/Md3Chip.vue";
 import Md3Select from "@/components/common/Md3Select.vue";
 import AiYuePage from "@/components/workspace/panes/ai/AiYuePage.vue";
 import AiSingingPage from "@/components/workspace/panes/ai/AiSingingPage.vue";
@@ -754,19 +755,17 @@ watch(
     />
 
     <template v-else>
-    <!-- 顶部标签：全部 / 生成 / 转换（全部里用分隔标题分组） -->
-    <div class="ai-tabs" role="tablist" :aria-label="i18n.t('ai.tabLabel')">
-      <button
+    <!-- 顶部标签：全部 / 生成 / 转换（与 AI Cut 的 AI 功能筛选标签一致） -->
+    <div class="tags" role="group" :aria-label="i18n.t('ai.tabLabel')">
+      <Md3Chip
         v-for="t in AI_TABS"
         :key="t"
-        class="ai-tab"
-        :class="{ on: aiTab === t }"
-        role="tab"
-        :aria-selected="aiTab === t"
+        size="sm"
+        :selected="aiTab === t"
         @click="aiTab = t"
       >
         {{ aiTabLabel(t) }}
-      </button>
+      </Md3Chip>
     </div>
     <ul class="list">
       <!-- MCP 服务器：接入地址并入同一个容器 -->
@@ -1560,47 +1559,11 @@ watch(
 }
 
 /* ---- 顶部标签 / 分组标题 / 运行后端 ---- */
-.ai-tabs {
+.tags {
   display: flex;
-  gap: 3px;
+  flex-wrap: wrap;
+  gap: 6px;
   padding: 0 12px 10px;
-}
-.ai-tab {
-  height: 30px;
-  padding: 0 13px;
-  border: 0;
-  border-radius: 7px;
-  background-color: rgb(var(--md-surface-container-highest));
-  color: rgb(var(--md-on-surface-variant));
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
-    padding var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
-    background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
-    color var(--md-dur-effects-default) var(--md-spring-effects-default);
-}
-.ai-tab:first-child {
-  border-radius: 15px 7px 7px 15px;
-}
-.ai-tab:last-child {
-  border-radius: 7px 15px 15px 7px;
-}
-.ai-tab:hover:not(.on) {
-  color: rgb(var(--md-on-surface));
-  filter: brightness(1.06);
-}
-.ai-tab:active {
-  padding: 0 16px;
-  border-radius: 11px;
-}
-.ai-tab.on {
-  border-radius: 15px;
-  padding: 0 15px;
-  background-color: rgb(var(--md-secondary-container));
-  color: rgb(var(--md-on-secondary-container));
-  font-weight: 600;
 }
 .ai-sep {
   margin: 6px 0 0;
