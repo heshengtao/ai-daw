@@ -23,6 +23,7 @@ import {
 import { useRouter } from "vue-router";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import DownloadStrip from "@/components/common/DownloadStrip.vue";
+import Md3Chip from "@/components/common/Md3Chip.vue";
 import { useSoundfontStore } from "@/composables/useSoundfontStore";
 import { managerResolveUrl, modelResolveUrl } from "@/api/tauri";
 import { useManagerStore } from "@/stores/manager";
@@ -739,25 +740,25 @@ async function doRevealModel(id: string): Promise<void> {
           :aria-label="i18n.t('manager.installedSearchPlaceholder')"
         />
         <div class="chips" role="group" :aria-label="i18n.t('manager.kindFilter')">
-          <button
+          <Md3Chip
             v-for="k in INSTALLED_FILTERS"
             v-show="k !== 'runtime' || optionalRuntimes.some((r) => r.installed)"
             :key="k"
-            class="chip"
-            :class="{ on: installedFilter === k }"
-            :aria-pressed="installedFilter === k"
+            size="sm"
+            :selected="installedFilter === k"
             @click="installedFilter = k"
           >
             {{ installedFilterLabel(k) }}
-          </button>
-          <button
-            class="chip source-chip"
+          </Md3Chip>
+          <Md3Chip
+            size="sm"
+            variant="assist"
             :title="i18n.t('manager.sourceSettingsHint')"
             @click="openSourceSettings"
           >
             <AdjustmentsHorizontalIcon class="w-[13px] h-[13px]" />
             {{ i18n.t("manager.sourceSettings") }}
-          </button>
+          </Md3Chip>
         </div>
       </div>
 
@@ -1132,13 +1133,12 @@ async function doRevealModel(id: string): Promise<void> {
           :aria-label="i18n.t('manager.searchPlaceholder')"
         />
         <div class="chips" role="group" :aria-label="i18n.t('manager.kindFilter')">
-          <button
+          <Md3Chip
             v-for="k in (['all', 'instrument', 'effect', 'model', 'runtime', 'soundfont'] as const)"
             v-show="k !== 'runtime' || optionalRuntimes.length || runtimes.discovered.length"
             :key="k"
-            class="chip"
-            :class="{ on: kindFilter === k }"
-            :aria-pressed="kindFilter === k"
+            size="sm"
+            :selected="kindFilter === k"
             @click="kindFilter = k"
           >
             {{
@@ -1156,23 +1156,23 @@ async function doRevealModel(id: string): Promise<void> {
                           : "manager.kindModel",
               )
             }}
-          </button>
-          <button
-            class="chip"
-            :class="{ on: compatibleOnly }"
-            :aria-pressed="compatibleOnly"
+          </Md3Chip>
+          <Md3Chip
+            size="sm"
+            :selected="compatibleOnly"
             @click="compatibleOnly = !compatibleOnly"
           >
             {{ i18n.t("manager.compatibleOnly") }}
-          </button>
-          <button
-            class="chip source-chip"
+          </Md3Chip>
+          <Md3Chip
+            size="sm"
+            variant="assist"
             :title="i18n.t('manager.sourceSettingsHint')"
             @click="openSourceSettings"
           >
             <AdjustmentsHorizontalIcon class="w-[13px] h-[13px]" />
             {{ i18n.t("manager.sourceSettings") }}
-          </button>
+          </Md3Chip>
         </div>
         <!-- 音色库走另一份索引：这里是插件/模型的数量，不适用 -->
         <div v-if="kindFilter !== 'soundfont'" class="meta">

@@ -19,6 +19,7 @@ import {
   SparklesIcon,
   UserIcon,
 } from "@heroicons/vue/24/outline";
+import Md3Chip from "@/components/common/Md3Chip.vue";
 import { useI18n } from "@/i18n";
 import { useOpLogStore } from "@/stores/opLog";
 import { useProjectStore } from "@/stores/project";
@@ -216,17 +217,16 @@ onMounted(async () => {
 
     <div class="toolbar">
       <div class="filters" role="group" :aria-label="i18n.t('ops.title')">
-        <button
+        <Md3Chip
           v-for="item in filters"
           :key="item.id"
-          class="chip"
-          :class="{ on: filter === item.id }"
-          :aria-pressed="filter === item.id"
+          size="sm"
+          :selected="filter === item.id"
           @click="filter = item.id"
         >
           {{ i18n.t(item.labelKey) }}
           <span class="chip-count">{{ countOf(item.id) }}</span>
-        </button>
+        </Md3Chip>
       </div>
       <label class="search">
         <MagnifyingGlassIcon class="search-icon" />

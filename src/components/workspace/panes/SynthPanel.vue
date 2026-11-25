@@ -14,6 +14,7 @@
 import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
+import Md3Chip from "@/components/common/Md3Chip.vue";
 import Md3Knob from "@/components/common/Md3Knob.vue";
 import Oscilloscope from "@/components/common/Oscilloscope.vue";
 import PianoKeyboard from "@/components/common/PianoKeyboard.vue";
@@ -463,16 +464,15 @@ function pickPad(option: PresetOption): void {
 
         <div class="preset-foot">
           <div class="chips" role="group" :aria-label="t('preset.choose')">
-            <button
+            <Md3Chip
               v-for="slug in coarseOptions"
               :key="slug"
-              class="chip"
-              :class="{ on: slug === coarse }"
-              :aria-pressed="slug === coarse"
+              size="sm"
+              :selected="slug === coarse"
               @click="coarse = slug"
             >
               {{ t(`presetCategory.${slug}`) }}
-            </button>
+            </Md3Chip>
           </div>
           <div class="bar">
             <PresetBar :plugin-id="SYNTH_ID" :params="props.params" @apply="applyPreset" />

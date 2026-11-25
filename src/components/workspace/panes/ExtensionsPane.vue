@@ -19,6 +19,7 @@ import {
   PuzzlePieceIcon,
   ExclamationTriangleIcon,
 } from "@heroicons/vue/24/outline";
+import Md3Chip from "@/components/common/Md3Chip.vue";
 import { useExtensionsStore, type InstalledExtension, type MarketEntry } from "@/stores/extensions";
 import { useLayoutStore } from "@/stores/layout";
 import { pickDirectory } from "@/api/dialogs";
@@ -267,10 +268,10 @@ onMounted(() => {
         />
         <div class="chips" role="group" :aria-label="i18n.t('extensions.indexSource')">
           <span class="chip status-chip" :class="indexStatus">{{ indexLabel }}</span>
-          <button class="chip source-chip" type="button" @click="openSettings">
+          <Md3Chip size="sm" variant="assist" @click="openSettings">
             <AdjustmentsHorizontalIcon class="w-[13px] h-[13px]" />
             {{ i18n.t("extensions.sourceSettings") }}
-          </button>
+          </Md3Chip>
         </div>
       </div>
 

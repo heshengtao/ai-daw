@@ -12,6 +12,7 @@ import {
   TrashIcon,
 } from "@heroicons/vue/24/outline";
 
+import Md3Chip from "@/components/common/Md3Chip.vue";
 import { useSoundMemoriesStore } from "@/stores/soundMemories";
 import { useProjectStore } from "@/stores/project";
 import { useSelectionStore } from "@/stores/selection";
@@ -288,22 +289,22 @@ onUnmounted(() => stop?.());
     </div>
 
     <div v-if="sounds.tags.length" class="tags">
-      <button
-        class="chip"
-        :class="{ active: sounds.activeTag === '' }"
+      <Md3Chip
+        size="sm"
+        :selected="sounds.activeTag === ''"
         @click="sounds.activeTag = ''"
       >
         {{ t("sounds.tagAll") }}
-      </button>
-      <button
+      </Md3Chip>
+      <Md3Chip
         v-for="tag in sounds.tags"
         :key="tag"
-        class="chip"
-        :class="{ active: sounds.activeTag === tag }"
+        size="sm"
+        :selected="sounds.activeTag === tag"
         @click="sounds.activeTag = tag"
       >
         {{ tagLabel(tag) }}
-      </button>
+      </Md3Chip>
     </div>
 
     <div class="list">

@@ -11,6 +11,7 @@
 import { computed, ref } from "vue";
 import { CheckIcon, PlusIcon, TrashIcon } from "@heroicons/vue/24/outline";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
+import Md3Chip from "@/components/common/Md3Chip.vue";
 import { pickSoundfontsToImport } from "@/api/dialogs";
 import SoundFontStorePanel from "@/components/workspace/SoundFontStorePanel.vue";
 import { usePluginsStore } from "@/stores/plugins";
@@ -216,16 +217,15 @@ async function retryScan(): Promise<void> {
 
       <!-- 来源快速筛选：全部 / 内置 / 外部 -->
       <div class="src-chips" role="group" :aria-label="i18n.t('plugins.sourceFilter')">
-        <button
+        <Md3Chip
           v-for="s in SOURCES"
           :key="s.id"
-          class="src-chip"
-          :class="{ on: source === s.id }"
-          :aria-pressed="source === s.id"
+          size="sm"
+          :selected="source === s.id"
           @click="source = s.id"
         >
           {{ i18n.t(s.labelKey) }}
-        </button>
+        </Md3Chip>
       </div>
     </div>
 
