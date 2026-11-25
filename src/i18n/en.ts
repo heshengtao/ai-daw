@@ -1090,8 +1090,10 @@ const en: Record<string, string> = {
   "model.yue2-q8-0": "YuE2 3B · Q8_0 (default)",
   "model.yue2-q4-0": "YuE2 3B · Q4_0",
   "model.yue2-bf16": "YuE2 3B · BF16",
-  "model.ace-step-turbo-q8": "ACE-Step 1.5 Turbo · Q8_0 (default · smaller)",
-  "model.ace-step-turbo-bf16": "ACE-Step 1.5 Turbo · BF16 (closest to the original weights)",
+  "model.ace-step-turbo-q8": "ACE-Step 1.5 Turbo · Q8_0",
+  "model.ace-step-turbo-bf16": "ACE-Step 1.5 Turbo · BF16",
+  "model.ace-step-base-bf16": "ACE-Step 1.5 Base · BF16",
+  "model.ace-step-base-q8": "ACE-Step 1.5 Base · Q8_0",
   // Execution backends (backend `local-ai::backend::catalog`), same idea.
   "backend.cpu": "CPU",
   "backend.cpu.note": "Plain CPU (default, available on every platform)",
@@ -2534,8 +2536,8 @@ const en: Record<string, string> = {
   // ---- Model family differences (YuE2 has score / continuation / cover; ACE-Step is prompt + lyrics) ----
   "yue.describe": "Music prompt",
   "yue.describeHint": "One line describing the music, e.g. cinematic synth pop with clear vocals",
-  "yue.needPrompt": "Write a music prompt first (ACE-Step takes the style from it)",
-  "yue.onlyYue2": "Cover, continuation, score and LoRA only apply to YuE2; ACE-Step renders the whole song from prompt + lyrics",
+  "yue.needPrompt": "Write a music prompt first (it sets the style)",
+  "yue.onlyYue2": "Cover, continuation, score and LoRA only apply to YuE2",
   "yue.stepsHintTurbo": "Turbo checkpoints cap this at 8 steps",
 
   // ---- Hugging Face authorization (gated repos) ----
@@ -2579,15 +2581,18 @@ const en: Record<string, string> = {
   "inspire.lyrics": "Lyrics",
   "inspire.lyricsHint": "One line at a time; tag each part",
   "inspire.lyricsPlaceholder": "[Verse]\nWrite your lyrics here, one line at a time\n\n[Chorus]\nA chorus to repeat",
-  "inspire.lyricsCarried": "{count} lines of lyrics carried over",
-  "inspire.lyricsEdit": "Edit",
+  "inspire.lyricsOptional": "Optional: leave it empty and the model writes the words",
+  "inspire.lyricsSimplePlaceholder": "A few lines of lyrics (optional)",
   "inspire.duration": "Duration",
   "inspire.steps": "Steps",
   "inspire.seed": "Seed",
   "inspire.seedHint": "Seed -1 = a different take each time; fix it to reproduce one",
   "inspire.lyricsAuto": "Leave the lyrics empty and the model writes them",
-  "inspire.voices": "With vocals",
-  "inspire.voicesHint": "Off means instrumental: the lyrics are ignored",
+  "inspire.instrumental": "Instrumental",
+  "inspire.instrumentalSwitchHint": "On means instrumental: the lyrics become a [Verse]/[Chorus] + [instrumental] template",
+  "inspire.takes": "Takes",
+  "inspire.batchProgress": "Take {index}/{total} · {time}",
+  "inspire.batchHint": "Generated one after another: each take gets a new seed; Stop ends the queue",
   "inspire.discard": "Clear the input",
   "inspire.create": "Generate",
   "inspire.stop": "Stop",
@@ -2643,7 +2648,11 @@ const en: Record<string, string> = {
   "inspire.continueTotal": "Total {length} (the engine caps one pass at 600 s)",
   "inspire.continueStart": "Extend it",
   "inspire.continueTitle": "{title} (extended)",
+  "inspire.instrumentalHint": "Instrumental: the lyrics become a section template ([Verse]/[Chorus]/[Outro] + [instrumental] tags); the style also says \u201cinstrumental, no vocals\u201d (edit it any time)",
   "inspire.continueNeedsCode": "No semantic codes for this one — only locally generated takes keep a code file, so it cannot be extended",
+  "inspire.download": "Download to this computer",
+  "inspire.downloadHint": "Save this take to your computer",
+  "inspire.savedTo": "Saved to {path}",
 };
 
 export default en;

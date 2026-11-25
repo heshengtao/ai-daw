@@ -7,7 +7,13 @@
  * 上面压一个**常显**的播放/暂停键——这一格能点、点哪儿，用户不用猜。
  */
 import { computed } from "vue";
-import { ArrowDownTrayIcon, ArrowPathIcon, ArrowUturnRightIcon, TrashIcon } from "@heroicons/vue/24/outline";
+import {
+  ArrowDownTrayIcon,
+  ArrowPathIcon,
+  ArrowUturnRightIcon,
+  PlusIcon,
+  TrashIcon,
+} from "@heroicons/vue/24/outline";
 import { CpuChipIcon, CloudIcon } from "@heroicons/vue/24/outline";
 import InspireCover from "./InspireCover.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
@@ -23,14 +29,18 @@ const props = defineProps<{
   placed?: boolean;
   /** 正在导入这一条。 */
   busy?: boolean;
+  /** 这是不是当前选中的卡（底部栏播放键控制的那一首）。 */
+  focused?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "toggle"): void;
   (e: "seek", ratio: number): void;
+  (e: "select"): void;
   (e: "remove"): void;
   (e: "import"): void;
   (e: "continue"): void;
+  (e: "download"): void;
 }>();
 
 const i18n = useI18n();
@@ -68,7 +78,14 @@ function onSeek(ratio: number): void {
 </script>
 
 <template>
-  <article class="row" :class="{ playing, current }">
+  <article
+    class="row"
+    :class="{ playing, current, focused }"
+    tabindex="0"
+    @click="emit('select')"
+    @focus="emit('select')"
+    @keydown.enter.self.prevent="emit('toggle')"
+  >
     <div class="thumb">
       <InspireCover
         :seed="item.id"
@@ -87,7 +104,7 @@ function onSeek(ratio: number): void {
           <CpuChipIcon v-else class="badge-icon" />
           <span class="badge-text">{{ item.model || i18n.t(item.source === "cloud" ? "inspire.cloud" : "inspire.local") }}</span>
         </span>
-        <div class="actions">
+        <div class="actions" @click.stop>
           <!-- 续写：接这首的语义码往下写一分钟（云端结果没有语义码，不出现这个按钮） -->
           <Tooltip v-if="item.source === 'local'" :text="i18n.t('inspire.continue')" align="end">
             <button
@@ -100,6 +117,17 @@ function onSeek(ratio: number): void {
               <ArrowUturnRightIcon class="icon" />
             </button>
           </Tooltip>
+          <!-- 下载到本地：把这段 WAV 另存到磁盘（桌面端走系统保存框） -->
+          <Tooltip :text="i18n.t('inspire.downloadHint')" align="end">
+            <button
+              class="download"
+              type="button"
+              :aria-label="i18n.t('inspire.download')"
+              @click="emit('download')"
+            >
+              <ArrowDownTrayIcon class="icon" />
+            </button>
+          </Tooltip>
           <Tooltip :text="placed ? i18n.t('inspire.imported') : i18n.t('inspire.import')" align="end">
             <button
               class="import"
@@ -110,7 +138,7 @@ function onSeek(ratio: number): void {
               @click="emit('import')"
             >
               <ArrowPathIcon v-if="busy" class="icon spin" />
-              <ArrowDownTrayIcon v-else class="icon" />
+              <PlusIcon v-else class="icon" />
             </button>
           </Tooltip>
           <Tooltip :text="i18n.t('inspire.removeHint')" align="end">
@@ -152,6 +180,22 @@ function onSeek(ratio: number): void {
 .row.current {
   border-color: rgb(var(--md-outline-variant) / 0.45);
   background-color: rgb(var(--md-on-surface) / 0.035);
+}
+/*
+ * 选中（焦点）卡：底部栏播放键此刻控制的就是它。
+ * 用主色描边而不是更重的底色——列表里始终有一张是选中的，太重会抢掉标题的注意力。
+ */
+.row.focused {
+  border-color: rgb(var(--md-primary) / 0.55);
+  background-color: rgb(var(--md-primary) / 0.05);
+}
+/* 卡片本身可聚焦（Tab / 点击选中），键盘焦点用描边说清楚。 */
+.row:focus {
+  outline: none;
+}
+.row:focus-visible {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: -2px;
 }
 
 /* ---- 封面：程序化图案 + 常显播放键（见 InspireCover） ---- */
@@ -232,6 +276,7 @@ function onSeek(ratio: number): void {
 /* 两个动作按钮共用一个底：尺寸、圆角、对齐必须一致，只有「显示时机」不同。 */
 .import,
 .continue,
+.download,
 .remove {
   flex: 0 0 auto;
   width: 26px;
@@ -253,6 +298,7 @@ function onSeek(ratio: number): void {
    （26px 见方），比旁边删除按钮的 15px 图标大一圈——这正是两个按钮「大小不统一」的原因。 */
 .import .icon,
 .continue .icon,
+.download .icon,
 .remove .icon {
   width: 15px;
   height: 15px;
@@ -261,6 +307,7 @@ function onSeek(ratio: number): void {
   background-color: rgb(var(--md-primary) / 0.12);
   color: rgb(var(--md-primary));
 }
+.download:hover:not(:disabled),
 .continue:hover:not(:disabled) {
   background-color: rgb(var(--md-primary) / 0.12);
   color: rgb(var(--md-primary));
@@ -270,6 +317,7 @@ function onSeek(ratio: number): void {
   cursor: default;
   opacity: 0.6;
 }
+.download:focus-visible,
 .continue:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 1px;
@@ -344,12 +392,14 @@ function onSeek(ratio: number): void {
   /* 收一档时两个按钮一起收，别一个 26 一个 22 */
   .import,
   .continue,
+  .download,
   .remove {
     width: 22px;
     height: 22px;
   }
   .import .icon,
   .continue .icon,
+  .download .icon,
   .remove .icon {
     width: 13px;
     height: 13px;

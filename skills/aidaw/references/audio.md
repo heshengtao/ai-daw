@@ -61,8 +61,9 @@
 
 **写歌的前置条件**：`compose_song` 需要两样东西——audio.cpp 引擎（运行时里的
 `audiocpp-*`，用 `install_runtime`）与**一份写歌权重**（模型里的 `yue2-q8-0` / `yue2-q4-0` /
-`yue2-bf16`，或 `ace-step-turbo-q8` / `ace-step-turbo-bf16`，用 `download_model`）。
-两者都装好之前，写歌会报「引擎启动失败 / 没装」。两家的能力差别见 `composition.md`
+`yue2-bf16`，或 `ace-step-turbo-q8` / `ace-step-turbo-bf16`、`ace-step-base-bf16` / `ace-step-base-q8`，
+用 `download_model`）。
+两者都装好之前，写歌会报「引擎启动失败 / 没装」。各档差别见 `composition.md`
 的「用哪份写歌权重」。
 
 **改逐音歌词**：`update_notes` 支持 `lyric`（空串清除）——歌声合成发现某个字唱错时改这一个音

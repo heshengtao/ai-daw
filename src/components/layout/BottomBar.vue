@@ -25,6 +25,7 @@
  * 离线试听，两种模式下这些按钮的行为完全一致。
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import {
   PlayIcon,
   PauseIcon,
@@ -46,6 +47,7 @@ import TimeSignatureField from "@/components/common/TimeSignatureField.vue";
 import Tooltip from "@/components/common/Tooltip.vue";
 import { retryAudio } from "@/api/tauri";
 import { useEngineEventsStore } from "@/stores/engineEvents";
+import { useInspireStore } from "@/stores/inspire";
 import { useLayoutStore } from "@/stores/layout";
 import { useMidiStore } from "@/stores/midi";
 import { useProjectStore } from "@/stores/project";
@@ -66,6 +68,8 @@ const selection = useSelectionStore();
 const midi = useMidiStore();
 const i18n = useI18n();
 const aiEvents = useEngineEventsStore();
+const inspire = useInspireStore();
+const route = useRoute();
 
 /** 录音目标轨道：选中轨道，否则首轨。 */
 const recordTrack = computed(() => selection.track?.id ?? store.project?.tracks[0]?.id ?? null);
@@ -287,7 +291,42 @@ const timeHint = computed(() =>
   i18n.t("bottom.timeTitle", { time: timeText.value, bar: positionText.value }),
 );
 
-const isPlaying = computed(() => transport.playing);
+/**
+ * **灵感页里的播放键是「选中卡片」的遥控器**，不是工程走带的播放键。
+ *
+ * 卡片一侧（封面播放键 / 拖进度条）改的都是 `inspire.playingId`，这里直接读同一份状态；
+ * 反过来按这颗键也只对焦点卡生效，所以两处的图标永远一致。切走页面由 `leaveView` 解除。
+ */
+const inInspire = computed(() => route.name === "inspire");
+/** 同步态下这颗键控制的是哪一首（没有焦点卡时为 `null`）。 */
+const cardTarget = computed(() => (inInspire.value ? inspire.focusedItem : null));
+/** 焦点卡正在读盘 / 解码：按钮上给转圈，别让人以为点了没反应。 */
+const cardLoading = computed(
+  () => cardTarget.value !== null && inspire.loadingId === cardTarget.value.id,
+);
+const isPlaying = computed(() => (inInspire.value ? inspire.focusedPlaying : transport.playing));
+/** 工程走带自己的播放态。时间读数只跟它走——卡片试听不是工程播放，读数不该亮。 */
+const transportPlaying = computed(() => transport.playing);
+/** 播放键的 tooltip：同步到卡片时把歌名带上，明确「按下去动的是哪一首」。 */
+const playHint = computed(() => {
+  const base = isPlaying.value ? i18n.t("bottom.pause") : i18n.t("bottom.play");
+  return cardTarget.value ? `${base} · ${cardTarget.value.title}` : base;
+});
+
+/** 播放 / 暂停：灵感页里控卡片，其余页面照旧控工程走带。 */
+function onTogglePlay(): void {
+  if (inInspire.value) void inspire.toggleFocused();
+  else void transport.toggle();
+}
+
+// 切走灵感页 = 解除同步：停掉试听、清掉焦点，这颗键回到工程走带。
+watch(
+  () => route.name,
+  (name, previous) => {
+    if (previous === "inspire" && name !== "inspire") inspire.leaveView();
+  },
+);
+
 const isAiActive = computed(() => props.aiActive);
 const isPreview = computed(() => transport.mode === "preview");
 /** 无声卡（虚拟时钟）：播放照常，只是本机不出声、声音走网页。 */
@@ -475,10 +514,10 @@ function onRetryAudio(): void {
       </Tooltip>
     </div>
 
-    <!-- 正中：播放 / 暂停。两翼等宽 → 它恒落在底栏中线上。 -->
+    <!-- 正中：播放 / 暂停。两翼等宽 → 它恒落在底栏中线上。灵感页里它控的是选中的卡片。 -->
     <Tooltip
       class="play-tip"
-      :text="isPlaying ? i18n.t('bottom.pause') : i18n.t('bottom.play')"
+      :text="playHint"
       place="above"
       align="center"
     >
@@ -486,9 +525,10 @@ function onRetryAudio(): void {
         class="play-btn"
         :class="{ playing: isPlaying }"
         :aria-label="isPlaying ? i18n.t('bottom.pauseLabel') : i18n.t('bottom.playLabel')"
-        @click="transport.toggle()"
+        @click="onTogglePlay"
       >
-        <PauseIcon v-if="isPlaying" class="w-[18px] h-[18px]" />
+        <ArrowPathIcon v-if="cardLoading" class="w-[18px] h-[18px] spin" />
+        <PauseIcon v-else-if="isPlaying" class="w-[18px] h-[18px]" />
         <PlayIcon v-else class="w-[20px] h-[20px]" />
       </button>
     </Tooltip>
@@ -539,7 +579,7 @@ function onRetryAudio(): void {
         落在同一条水平线上。小节.拍 放进 tooltip——那仍然是编排时最常用的定位口径。
       -->
       <Tooltip :text="timeHint" place="above" align="center">
-        <span class="timecode" :class="{ on: isPlaying }" role="timer" :aria-label="timeHint">
+        <span class="timecode" :class="{ on: transportPlaying }" role="timer" :aria-label="timeHint">
           <!-- 不足一小时只显示「分:秒」：多数工程都在这段，省下的宽度留给拍号 / BPM。 -->
           <template v-if="timeParts.hours > 0">
             <span class="timecode-cell">
@@ -828,6 +868,15 @@ function onRetryAudio(): void {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 3px;
 }
+/* 焦点卡在读盘 / 解码：播放键上转圈，与卡片封面的加载状态是同一个信号。 */
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 /* 录音键：空闲是暗红圆点，录制中点亮并放大。 */
 .rec-btn {
   width: 32px;
@@ -1113,6 +1162,9 @@ function onRetryAudio(): void {
   /* 电平本来就是 120ms 一次的离散读数，去掉补间仍然读得懂。 */
   .level-fill {
     transition: none;
+  }
+  .spin {
+    animation: none;
   }
 }
 </style>

@@ -9,16 +9,18 @@
 
 ## 用哪份写歌权重（模型家族）
 
-`compose_song` 的 `model` 决定引擎挂哪一份权重，也决定请求的形状——两家的能力不一样：
+`compose_song` 的 `model` 决定引擎挂哪一份权重，也决定请求的形状——两家能力的差别：
 
 | 家族 | 权重 id | 怎么出歌 | 独有能力 |
 | --- | --- | --- | --- |
 | `yue2`（YuE2，CC-BY-NC） | `yue2-q8-0` / `yue2-q4-0` / `yue2-bf16` | 风格 + 歌词 →（可选先写谱）→ 语义码 → 音频 | 谱面（`stop_after=abc`）、语义码续写、翻唱（按参考谱唱）、LoRA |
-| `ace_step`（ACE-Step 1.5，MIT） | `ace-step-turbo-q8` / `ace-step-turbo-bf16` | **一句描述**（`style`）+ 歌词 → 整首 | 无 |
+| `ace_step`（ACE-Step 1.5，MIT） | `ace-step-turbo-q8` / `-bf16`（8 步蒸馏档）；`ace-step-base-bf16` / `-q8`（32–64 步质量档） | **一句描述**（`style`）+ 歌词 → 整首 | 无 |
 
 ACE-Step 只走「描述 + 歌词 → 整首」：它不写谱，所以 `abc` / `cot` / `stop_after` /
 `semantic_prefix_file` 一律无效（发过去也不会被读）。`style` 那句话是它的提示词正文，**空着会
-直接被引擎拒绝**。两家共用同一个 audio.cpp 引擎进程，换模型就是重启引擎（几 GB 权重要重新加载）。
+直接被引擎拒绝**。**Turbo 与 Base 不是精度差，是档位差**：Turbo 蒸馏成 8 步，快但糊；要细节
+就用 Base + 32–64 步（`num_inference_steps` 会按权重档位自动夹）。两家共用同一个 audio.cpp
+引擎进程，换模型就是重启引擎（几 GB 权重要重新加载）。
 
 ## YuE2 的三种输出阶段
 
@@ -52,8 +54,8 @@ ACE-Step 只走「描述 + 歌词 → 整首」：它不写谱，所以 `abc` / 
 - 把新片段接在 `after_track` 那条轨道**最后一个音频片段的末尾**（同一条轨，接着放就是连着的一整首）；
 - 文本条件沿用原曲：桌面界面从生成记录 `<音频>.json` 里取回 `style` / `lyrics` / `model` 填进表单。
   不沿用它们，语义码再准，接出来的段落也会像另一首歌。
-- 只对 **YuE2** 有效：ACE-Step 的请求体没有 `semantic_prefix`，带前缀调它会直接报错（否则会静默
-  忽略前缀，等于又写了一首无关的歌）；通过 MCP 调时记得自己带上原曲的 `style` / `lyrics`。
+- 只对 **YuE2** 有效（ACE-Step 的请求体没有 `semantic_prefix`，带前缀调它会直接报错）；
+  通过 MCP 调时记得自己带上原曲的 `style` / `lyrics`。
 
 **翻唱（参考旋律 → 谱 → 重唱）** 有两条入口，区别只在「谱从哪来」：
 

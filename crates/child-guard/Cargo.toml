@@ -1,0 +1,14 @@
+[package]
+name = "ai-daw-child-guard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "子进程生命周期：父进程一死（Ctrl+C / 崩溃 / 强杀），子进程跟着死"
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

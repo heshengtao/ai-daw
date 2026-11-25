@@ -28,7 +28,7 @@ import type { SegmentedOption } from "@/components/common/segmented";
 import { formatDuration } from "./format";
 import { STYLE_PRESETS } from "./styles";
 import { useI18n } from "@/i18n";
-import { useInspireStore } from "@/stores/inspire";
+import { useInspireStore, MAX_BATCH } from "@/stores/inspire";
 import { useLayoutStore } from "@/stores/layout";
 import { useModelsStore } from "@/stores/models";
 import { useRuntimesStore } from "@/stores/runtimes";
@@ -59,6 +59,56 @@ const {
 const music = useMusicSource();
 const { value: sourceValue, options: sourceOptions, provider: cloudProvider, localModel, isCloud } = music;
 
+/**
+ * 纯音乐开关**写进风格串**的标记。
+ *
+ * 两道保险缺一不可：歌词会被后端整份换成 `[instrumental]` 标签块（真正管住人声的那一步，
+ * 见 `yue_engine::INSTRUMENTAL_LYRICS`），风格里再明确说一句「不要人声」。这里让用户
+ * **看得见**这段文字（在风格框里），想改随时能改。
+ */
+const INSTRUMENTAL_TAG = "instrumental, no vocals";
+
+/**
+ * 当前选的是不是本地的 **ACE-Step**。
+ *
+ * ACE-Step 的器乐路径就是「歌词留空」，不需要、也不能靠风格里的否定式提示（会被规划器的
+ * CoT 重写带偏，实测反而「乱弹」）。所以对它不加标签，让「纯音乐」= 和「不勾 + 空歌词」
+ * 完全一样的请求。
+ */
+const aceLocalModel = computed(
+  () => !isCloud.value && /^ace-step-/.test(localModel.value?.id ?? ""),
+);
+
+function promptMentionsInstrumental(text: string): boolean {
+  return /\binstrumental\b/i.test(text);
+}
+
+/** 打开纯音乐：风格里补上器乐标记（ACE-Step 除外，见上）。 */
+function addInstrumentalIntent(): void {
+  if (aceLocalModel.value) return;
+  const current = prompt.value.trim();
+  if (promptMentionsInstrumental(current)) return;
+  prompt.value = current ? `${current}, ${INSTRUMENTAL_TAG}` : INSTRUMENTAL_TAG;
+}
+
+/**
+ * 关掉纯音乐：把风格里的器乐标记撤掉。
+ *
+ * **不认位置**：打开后用户可能又点了风格预设，预设是往末尾追加的，标记就被挤到中间去了
+ * （`jazz, instrumental, no vocals, lo-fi`）。所以按整段短语找、删掉后顺手收拾逗号。
+ * 短语本身很具体（`instrumental, no vocals`），不会误伤用户写的普通风格词。
+ */
+function removeInstrumentalIntent(): void {
+  const pattern = /instrumental\s*,\s*no\s+vocals/i;
+  if (!pattern.test(prompt.value)) return;
+  prompt.value = prompt.value
+    .replace(pattern, "")
+    .replace(/\s*,\s*,\s*/g, ", ")
+    .replace(/^\s*,\s*/, "")
+    .replace(/\s*,\s*$/, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
 /** 歌词里可插入的结构标签（与 YuE2 / 云端服务都认的那套一致）。 */
 const SECTION_TAGS = ["[Verse]", "[Chorus]", "[Bridge]", "[Outro]"];
 
@@ -72,6 +122,8 @@ interface Draft {
   seed: number;
   instrumental: boolean;
   advanced: boolean;
+  /** 一批生成几首（1 = 单首）。 */
+  count: number;
 }
 
 function loadDraft(): Partial<Draft> {
@@ -90,9 +142,33 @@ const lyrics = ref(typeof draft.lyrics === "string" ? draft.lyrics : "");
 const duration = ref(typeof draft.duration === "number" ? draft.duration : 120);
 const steps = ref(typeof draft.steps === "number" ? draft.steps : 32);
 const seed = ref(typeof draft.seed === "number" ? draft.seed : -1);
+/** 一批几首：串行跑，每首换一个种子（固定种子 +1），拿到 N 个不同的 take。 */
+const count = ref(
+  typeof draft.count === "number" ? Math.min(MAX_BATCH, Math.max(1, draft.count)) : 1,
+);
 
 /** 纯音乐 / 有人声。默认有人声——与改动前「歌词留空 = 模型写词」的行为一致。 */
 const instrumental = ref(draft.instrumental === true);
+
+// 开关：打开就往风格里补器乐标记，关掉就只撤我们补的那一段（用户自己写的
+// 「instrumental」不动）。**不在挂载时跑删除**——草稿里可能本来就是用户手写的标签。
+watch(instrumental, (on, was) => {
+  if (on) addInstrumentalIntent();
+  else if (was) removeInstrumentalIntent();
+});
+// 换模型（本地权重 / 云端服务）时把标记补回去：它标的是「这首要不要人声」。
+watch(
+  localModel,
+  () => {
+    if (instrumental.value) addInstrumentalIntent();
+  },
+  { immediate: true },
+);
+// 切到 / 切走 ACE-Step：它不吃否定式标签，切过去时把之前加的那段撤掉。
+watch(aceLocalModel, (ace) => {
+  if (ace) removeInstrumentalIntent();
+  else if (instrumental.value) addInstrumentalIntent();
+});
 
 const setupOpen = ref(false);
 const preparing = ref(false);
@@ -116,14 +192,6 @@ const modeOptions = computed<SegmentedOption[]>(() => [
   },
 ]);
 
-/** 开关问的是「有没有人声」；内部仍记 `instrumental`（提交与 `styleOf` 都读它）。 */
-const vocals = computed<boolean>({
-  get: () => !instrumental.value,
-  set: (value) => {
-    instrumental.value = !value;
-  },
-});
-
 // ---- 本地引擎 / 权重状态 ----
 const enginePacks = computed(() => runtimes.items.filter((r) => r.group === "audiocpp"));
 const engineInstalled = computed(() => enginePacks.value.some((pack) => pack.installed));
@@ -131,8 +199,33 @@ const modelReady = computed(() => localModel.value?.installed === true);
 const weightDownloading = computed(() =>
   localModel.value ? models.installing(localModel.value.id) : false,
 );
-/** YuE2 常用 32 步，ACE-Step 的 Turbo 档只要 8 步。 */
-const stepsMax = computed(() => (localModel.value?.family === "ace_step" ? 8 : 128));
+/** ACE-Step 的 **Turbo** 档：蒸馏成 8 步，再多也不会更细。 */
+const turboModel = computed(() => {
+  const model = localModel.value;
+  return model?.family === "ace_step" && !/base|sft/i.test(model.id);
+});
+
+/**
+ * 步数上限跟着「档位」走：YuE2 常用 32 步；ACE-Step 的 Turbo 是 8 步上限，
+ * Base/SFT 才是质量档，32–64 步才有意义。
+ */
+const stepsMax = computed(() => {
+  const model = localModel.value;
+  if (model?.family !== "ace_step") return 128;
+  return turboModel.value ? 8 : 64;
+});
+
+/**
+ * 步数的**默认值**也跟着档位走：切到 Turbo → 8，切到别的模型 → 32。
+ *
+ * 只在「档位」变化时重置（YuE2 的 q8 ↔ bf16 之间来回切不会把你手填的数冲掉）；
+ * 挂载时不覆盖草稿里的值。
+ */
+const stepsPreset = computed(() => (turboModel.value ? 8 : 32));
+watch(stepsPreset, (value, before) => {
+  if (before === undefined || before === value) return;
+  steps.value = value;
+});
 
 /** 云端服务允许的最长时长（没拉到预设时按 300 秒兜底）。 */
 const maxSeconds = computed(() => {
@@ -146,6 +239,14 @@ watch(maxSeconds, (max) => {
 /** 底部那行状态：说清「现在能不能生成、缺什么」。 */
 const statusLine = computed(() => {
   if (inspire.crafting) {
+    const at = inspire.batch;
+    if (at) {
+      return i18n.t("inspire.batchProgress", {
+        index: Math.min(at.total, at.done + 1),
+        total: at.total,
+        time: formatDuration(inspire.elapsed),
+      });
+    }
     return `${inspire.craftLine} · ${formatDuration(inspire.elapsed)}`;
   }
   if (isCloud.value) {
@@ -188,31 +289,37 @@ function badgeOfLocal(): string {
 function submitLocal(): void {
   const model = localModel.value;
   if (!model) return;
-  void inspire.craftLocal({
-    prompt: prompt.value,
-    lyrics: instrumental.value ? "" : lyrics.value,
-    model: badgeOfLocal(),
-    source: "local",
-    duration: duration.value,
-    target: model.id,
-    steps: steps.value,
-    seed: seed.value,
-    instrumental: instrumental.value,
-  });
+  void inspire.craftBatch(
+    {
+      prompt: prompt.value,
+      lyrics: instrumental.value ? "" : lyrics.value,
+      model: badgeOfLocal(),
+      source: "local",
+      duration: duration.value,
+      target: model.id,
+      steps: steps.value,
+      seed: seed.value,
+      instrumental: instrumental.value,
+    },
+    count.value,
+  );
 }
 
 function submitCloud(): void {
   const provider = cloudProvider.value;
   if (!provider) return;
-  void inspire.craftCloud({
-    prompt: prompt.value,
-    lyrics: instrumental.value ? "" : lyrics.value,
-    model: provider.model ? `${provider.name} · ${provider.model}` : provider.name,
-    source: "cloud",
-    duration: duration.value,
-    target: provider.id,
-    instrumental: instrumental.value,
-  });
+  void inspire.craftBatch(
+    {
+      prompt: prompt.value,
+      lyrics: instrumental.value ? "" : lyrics.value,
+      model: provider.model ? `${provider.name} · ${provider.model}` : provider.name,
+      source: "cloud",
+      duration: duration.value,
+      target: provider.id,
+      instrumental: instrumental.value,
+    },
+    count.value,
+  );
 }
 
 /** 启动引擎并等它真的就绪（加载几 GB 权重是分钟级，期间按钮显示「准备中」）。 */
@@ -329,7 +436,7 @@ function togglePreset(tags: string): void {
 // 草稿持久化：只在停下来之后写，别每敲一个字打一次 localStorage。
 let draftTimer: number | null = null;
 watch(
-  [prompt, lyrics, duration, steps, seed, advanced],
+  [prompt, lyrics, duration, steps, seed, advanced, count],
   () => {
     if (draftTimer !== null) window.clearTimeout(draftTimer);
     draftTimer = window.setTimeout(() => {
@@ -344,6 +451,7 @@ watch(
             seed: seed.value,
             instrumental: instrumental.value,
             advanced: advanced.value,
+            count: count.value,
           } satisfies Draft),
         );
       } catch {
@@ -446,35 +554,43 @@ onUnmounted(() => {
         />
       </section>
 
-      <!-- 简单模式里已经有词了：别让用户以为它被丢了 -->
-      <button
-        v-else-if="lyrics.trim()"
-        class="carried"
-        type="button"
-        @click="advanced = true"
-      >
-        <span class="carried-text">
-          {{ i18n.t("inspire.lyricsCarried", { count: lyrics.trim().split("\n").filter((l) => l.trim()).length }) }}
-        </span>
-        <span class="carried-link">{{ i18n.t("inspire.lyricsEdit") }}</span>
-      </button>
+      <!-- 简单模式：没开纯音乐就给一个紧凑的歌词框（开了就不出现——歌词不参与生成）；
+           歌词内容一直保留，切回「有人声」时会原样回来 -->
+      <label v-else-if="!instrumental" class="field">
+        <div class="field-head">
+          <span class="field-label">{{ i18n.t("inspire.lyrics") }}</span>
+          <span class="field-sub">{{ i18n.t("inspire.lyricsOptional") }}</span>
+        </div>
+        <textarea
+          v-model="lyrics"
+          class="m3-textarea lyrics-input simple-lyrics"
+          spellcheck="false"
+          :rows="3"
+          :placeholder="i18n.t('inspire.lyricsSimplePlaceholder')"
+          :disabled="inspire.crafting"
+        />
+      </label>
 
-      <!-- 人声：一个开关，左标签右开关（关掉 = 纯音乐，不再靠「歌词是否为空」猜） -->
+      <!-- 纯音乐：一个开关，左标签右开关（开 = 纯音乐，不再靠「歌词是否为空」猜） -->
       <div class="m3-row">
         <div class="m3-row-main">
-          <span class="m3-row-label">{{ i18n.t("inspire.voices") }}</span>
-          <span class="m3-row-sub">{{ i18n.t("inspire.voicesHint") }}</span>
+          <span class="m3-row-label">{{ i18n.t("inspire.instrumental") }}</span>
+          <span class="m3-row-sub">{{ i18n.t("inspire.instrumentalSwitchHint") }}</span>
         </div>
         <div class="m3-row-control">
           <Md3Switch
-            v-model="vocals"
-            :label="i18n.t('inspire.voices')"
+            v-model="instrumental"
+            :label="i18n.t('inspire.instrumental')"
             :disabled="inspire.crafting"
           />
         </div>
       </div>
+      <!-- 打开纯音乐后：说清楚「歌词去哪了、为什么这样能行」——歌词换成标签块 + 风格写明器乐 -->
+      <p v-if="instrumental" class="instrumental-hint">
+        {{ i18n.t("inspire.instrumentalHint") }}
+      </p>
 
-      <!-- 进阶参数：时长 / 步数 / 种子 -->
+      <!-- 进阶参数：时长 / 数量 / 步数 / 种子 -->
       <div v-if="advanced" class="params">
         <label class="param">
           <span class="param-label">{{ i18n.t("inspire.duration") }}</span>
@@ -485,6 +601,18 @@ onUnmounted(() => {
             :max="isCloud ? maxSeconds : 600"
             :step="5"
             input-width="54px"
+            :disabled="inspire.crafting"
+          />
+        </label>
+        <!-- 一批几首：串行跑，每首换一个种子；1 = 现在的单首行为 -->
+        <label class="param">
+          <span class="param-label">{{ i18n.t("inspire.takes") }}</span>
+          <NumberField
+            v-model="count"
+            :sr-label="i18n.t('inspire.takes')"
+            :min="1"
+            :max="MAX_BATCH"
+            input-width="42px"
             :disabled="inspire.crafting"
           />
         </label>
@@ -513,19 +641,15 @@ onUnmounted(() => {
       </div>
 
       <p v-if="advanced" class="hint">{{ i18n.t("inspire.seedHint") }}</p>
+      <!-- 数量 > 1：说清楚是「串行排队」，不是一次并行出 N 首 -->
+      <p v-if="advanced && count > 1" class="hint">
+        {{ i18n.t("inspire.batchHint", { count }) }}
+      </p>
       <!-- 歌词留空意味着什么，本地与云端不一样：云端是显式的「纯音乐」开关，本地是让模型自己写词 -->
       <p v-if="!instrumental" class="hint">{{ i18n.t("inspire.lyricsAuto") }}</p>
     </div>
 
     <footer class="composer-foot">
-      <div v-if="inspire.crafting" class="craft-bar">
-        <span
-          class="craft-fill"
-          :class="{ indeterminate: inspire.progressPct === null }"
-          :style="inspire.progressPct === null ? undefined : { width: `${inspire.progressPct}%` }"
-        />
-      </div>
-
       <div class="foot-row">
         <Tooltip :text="i18n.t('inspire.discard')">
           <button
@@ -648,6 +772,10 @@ onUnmounted(() => {
   font-family: var(--font-mono, inherit);
   line-height: 1.7;
 }
+/* 简单模式只给 3 行：够写副歌，又不把「一句描述就能生成」的轻量感挤掉 */
+.simple-lyrics {
+  min-height: 76px;
+}
 /* 文本框里的结构标签用等宽字体更整齐，但正文别跟着变窄 */
 .lyrics-input::placeholder {
   font-family: inherit;
@@ -689,6 +817,17 @@ onUnmounted(() => {
   font-size: 10.5px;
   line-height: 1.5;
   color: rgb(var(--md-on-surface-muted));
+}
+
+/* 纯器乐说明行：告诉用户「歌词已清空、风格里已写明器乐意图」 */
+.instrumental-hint {
+  margin: -4px 0 2px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgb(var(--md-on-surface-muted));
+}
+.instrumental-hint.on {
+  color: rgb(var(--md-primary));
 }
 
 /* 简单模式下「歌词还在」的提示条：整条可点，直接切回进阶 */
@@ -734,25 +873,6 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.craft-bar {
-  position: relative;
-  height: 3px;
-  border-radius: 999px;
-  overflow: hidden;
-  background-color: rgb(var(--md-on-surface) / 0.1);
-}
-.craft-fill {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background-color: rgb(var(--md-primary));
-  transition: width var(--md-duration-medium-1) var(--md-ease-standard);
-}
-.craft-fill.indeterminate {
-  width: 32%;
-  animation: crawl 1.5s var(--md-ease-emphasized) infinite;
 }
 
 .foot-row {
@@ -857,27 +977,11 @@ onUnmounted(() => {
   white-space: normal;
 }
 
-@keyframes crawl {
-  0% {
-    transform: translateX(-110%);
-  }
-  100% {
-    transform: translateX(320%);
-  }
-}
-
-
 @media (prefers-reduced-motion: reduce) {
   .create,
   .discard,
-  .carried,
-  .craft-fill {
+  .carried {
     transition: none;
-  }
-  .craft-fill.indeterminate {
-    animation: none;
-    width: 100%;
-    opacity: 0.45;
   }
 }
 </style>

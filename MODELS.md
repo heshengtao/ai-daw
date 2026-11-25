@@ -46,7 +46,8 @@ project. Permissive licenses first; the non-commercial ones are called out separ
 | `htdemucs-6s` | stem separation (6 stems) | MIT | Meta Demucs v4 (`htdemucs_6s`); self-contained ONNX export |
 | `soulx-singer-fp16` / `soulx-singer-fp32` | singing voice | Apache-2.0 | SoulX-Singer (Soul AI Lab); ONNX split export on ModelScope, byte-identical Hugging Face mirror |
 | `soulx-svc-fp16hq` / `soulx-svc-fp32` | voice swap (SVC) | Apache-2.0 | SoulX-Singer-SVC (Soul AI Lab); ONNX split export on ModelScope |
-| `ace-step-turbo-q8` / `ace-step-turbo-bf16` | song generation | MIT | ACE-Step; GGUF weights from `audio-cpp/audio.cpp-gguf` (Hugging Face + ModelScope) |
+| `ace-step-turbo-q8` / `ace-step-turbo-bf16` | song generation (fast, 8-step turbo) | MIT | ACE-Step; GGUF weights from `audio-cpp/audio.cpp-gguf` (Hugging Face + ModelScope) |
+| `ace-step-base-bf16` / `ace-step-base-q8` | song generation (quality, 32–64-step base) | MIT | ACE-Step; GGUF weights from `audio-cpp/audio.cpp-gguf` (Hugging Face + ModelScope) |
 | `qwen3-asr-1.7b` / `qwen3-asr-0.6b` | lyrics transcription (ASR) | Apache-2.0 | Qwen3-ASR (Alibaba); GGUF weights from `audio-cpp/audio.cpp-gguf` |
 | `crisperwhisper-2-large` | lyrics transcription (ASR) | MIT | CrisperWhisper 2.0; GGUF weights from `audio-cpp/audio.cpp-gguf` |
 | `muscriptor-small` / `-medium` / `-large` | audio → MIDI (multi-instrument) | **CC BY-NC 4.0** | Mirelo × Kyutai; GGUF conversions from `audio-cpp/audio.cpp-gguf` (Hugging Face + ModelScope), run by the `audiocpp` engine |

@@ -74,6 +74,12 @@ function continueItem(item: InspireItem): void {
   continueOpen.value = true;
 }
 
+/** 下载到本地：桌面端弹保存框，成功才提示落点。 */
+async function saveItem(item: InspireItem): Promise<void> {
+  const saved = await inspire.saveToDisk(item);
+  if (saved) layout.notify(i18n.t("inspire.savedTo", { path: saved }));
+}
+
 function startContinuation(seconds: number): void {
   const item = continueTarget.value;
   if (!item) return;
@@ -159,10 +165,13 @@ const craftPct = computed(() => inspire.progressPct);
           :hue="inspire.hueOf(item)"
           :placed="inspire.placedOf(item)"
           :busy="inspire.importingId === item.id"
+          :focused="inspire.focusedId === item.id"
           @toggle="pick(item)"
           @seek="(ratio) => seek(item, ratio)"
+          @select="inspire.focusItem(item)"
           @import="importItem(item)"
           @continue="continueItem(item)"
+          @download="saveItem(item)"
           @remove="inspire.remove(item.id)"
         />
       </template>
@@ -345,7 +354,7 @@ const craftPct = computed(() => inspire.progressPct);
   height: 4px;
   border-radius: 999px;
   overflow: hidden;
-  background-color: rgb(var(--md-on-surface) / 0.1);
+  background-color: rgb(var(--md-on-surface) / 0.14);
 }
 .skel-fill {
   display: block;
@@ -355,7 +364,9 @@ const craftPct = computed(() => inspire.progressPct);
   transition: width var(--md-duration-medium-1) var(--md-ease-standard);
 }
 .skel-fill.indeterminate {
-  width: 34%;
+  /* 生成中：主色压到 60%，一眼看出是「在跑」而不是「已经填了一半」 */
+  width: 36%;
+  background-color: rgb(var(--md-primary) / 0.6);
   animation: slide 1.5s var(--md-ease-emphasized) infinite;
 }
 .skel-line {

@@ -1502,6 +1502,17 @@ export function yueImportAudio(path: string, name?: string): Promise<string> {
   return invoke<string>("ai_yue_import_audio", { path, name });
 }
 
+/**
+ * 把生成结果另存到本地。
+ *
+ * 桌面端 `dest` 是保存对话框给的路径；浏览器客户端没有对话框，传空串，由后端落到数据目录的
+ * `exports/`，前端再走 `/download` 拉下来。返回最终落地的绝对路径。
+ */
+export function yueSaveAudio(src: string, dest: string): Promise<string> {
+  if (mockEnabled()) return Promise.resolve(dest || src);
+  return invoke<string>("ai_yue_save_audio", { src, dest });
+}
+
 /** 读回生成时落盘的 ABC 谱文本（「载入刚生成的谱」再改）。 */
 export function yueScore(path: string): Promise<string> {
   if (mockEnabled()) return Promise.resolve(mockApi.yueScore());

@@ -816,6 +816,7 @@ pub fn run() {
             ai_daw_daemon::yue_engine::ai_yue_continuable,
             ai_daw_daemon::yue_engine::ai_yue_lora,
             ai_daw_daemon::yue_engine::ai_yue_set_lora,
+            ai_daw_daemon::yue_engine::ai_yue_save_audio,
             ai_daw_daemon::yue_transcribe::ai_yue_transcribe,
             ai_daw_daemon::yue_transcribe::ai_yue_transcribe_cancel,
             ai_daw_daemon::yue_midi::ai_yue_midi_abc,

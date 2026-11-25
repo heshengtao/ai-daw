@@ -26,7 +26,8 @@
 
 1. **AI 初稿**：`compose_song(style="city pop, female vocal", lyrics="...", duration=120)`
    → 新音频轨（一次撤销）。参数：`model` 选 `yue2-q8-0` / `yue2-q4-0` / `yue2-bf16`（省略用已装默认）
-   或 `ace-step-turbo-q8` / `ace-step-turbo-bf16`（MIT 许可、不写谱，`style` 必须是一句音乐描述）；
+   或 `ace-step-turbo-q8` / `ace-step-turbo-bf16`（8 步蒸馏档，快）/ `ace-step-base-bf16` /
+   `ace-step-base-q8`（质量档，32–64 步）；ACE-Step 的 `style` 必须是一句音乐描述；
    `cot`（full/melody/off）与 `stop_after` 只对 YuE2 有效；`cfg_scale`、`seed` 可复现；
    `after_track` 指定插入位置。
 2. **拆轨**：`separate_stems(track=<初稿轨>, model="htdemucs-6s")` → 鼓 / 贝斯 / 其他 / 人声

@@ -41,6 +41,8 @@ ai-daw-local-ai = { path = "../local-ai" }
 ai-daw-extensions = { path = "../extensions" }
 # 母带处理（响度归一 + 真峰值限幅 + 立体声宽度）：纯 DSP，不依赖模型。
 ai-daw-mastering = { path = "../mastering" }
+# 子进程生命周期：父进程被 Ctrl+C / 强杀时，内核负责把 audiocpp_server 一起收掉。
+ai-daw-child-guard = { path = "../child-guard" }
 # 内嵌 MCP 服务器（Streamable HTTP，只监听回环）。
 rmcp = { version = "3", features = [
     "server",

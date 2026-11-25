@@ -285,10 +285,13 @@ fn run_engine(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000);
     }
+    // 父进程被 Ctrl+C / 强杀时，内核负责把这个子进程一起收掉（详见 child_guard）。
+    ai_daw_child_guard::configure(&mut command);
 
     let child = command
         .spawn()
         .map_err(|e| format!("拉不起 audiocpp_server：{e}"))?;
+    ai_daw_child_guard::adopt(&child);
     *child_slot().lock().unwrap() = Some(child);
 
     // 权重 2.5 GB：加载 + 建图给 10 分钟，和写歌引擎一个尺度。

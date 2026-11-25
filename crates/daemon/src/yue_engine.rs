@@ -531,12 +531,14 @@ fn resolve_model(wanted: Option<&str>) -> Result<ModelChoice, String> {
         return choice_of(entry)
             .ok_or_else(|| format!("「{}」还没下载完（下载管理器 → 模型）", entry.name));
     }
-    const ORDER: [&str; 5] = [
+    const ORDER: [&str; 7] = [
         "yue2-q8-0",
         "yue2-q4-0",
         "yue2-bf16",
         "ace-step-turbo-q8",
         "ace-step-turbo-bf16",
+        "ace-step-base-bf16",
+        "ace-step-base-q8",
     ];
     for id in ORDER {
         if let Some(choice) = catalog::by_id(id).and_then(choice_of) {
@@ -800,6 +802,8 @@ fn boot_choice(
         // 别弹一个黑框出来。
         command.creation_flags(0x0800_0000);
     }
+    // 父进程被 Ctrl+C / 强杀时，内核负责把这个子进程一起收掉（详见 child_guard）。
+    ai_daw_child_guard::configure(&mut command);
 
     update(|s| {
         s.device = device.to_string();
@@ -816,6 +820,7 @@ fn boot_choice(
     let child = command
         .spawn()
         .map_err(|e| format!("拉不起 audiocpp_server：{e}"))?;
+    ai_daw_child_guard::adopt(&child);
     *engine_state().child.lock().unwrap() = Some(child);
 
     // 权重从磁盘进内存 + 上传显存要一阵；给 10 分钟，期间把已经加载的日志行带出去。
@@ -964,10 +969,10 @@ pub struct ComposeArgs {
     pub name: Option<String>,
     /// **纯器乐**。
     ///
-    /// - YuE2：走两段式——先只出谱（`stop_after=abc`），把 `Vocal` 的旋律搬进 `Ins`，
-    ///   再拿改过的谱渲染。空歌词 + style 里加 `instrumental` 都治不住它（官方文档也这么说）；
-    /// - ACE-Step：它的上游 API 有真正的 `instrumental` 开关，但它对这版引擎是歌词约定，
-    ///   所以发 `[Instrumental]` 当歌词。
+    /// - YuE2：歌词整份换成 `[instrumental]` 标签块（见 [`INSTRUMENTAL_LYRICS`]）。空歌词 +
+    ///   style 里写 `instrumental` 都治不住它，实测会冒人声；
+    /// - ACE-Step：**不发歌词**。这版 C++ 端口不认 `[Instrumental]` 标签，发了反而被当成
+    ///   歌词正文、把规划器带乱；留空才是器乐路径。
     pub instrumental: Option<bool>,
 }
 
@@ -1042,6 +1047,21 @@ fn request_body(args: &ComposeArgs, family: &str) -> serde_json::Value {
     }
 }
 
+/// 这份 ACE-Step 权重是不是 **Turbo** 档。
+///
+/// 引擎按**文件名**认变体（`base` / `sft` / `turbo` / `xl`），我们这边只能按权重 id 判断；
+/// id 里带 `base` / `sft` 的都不是 Turbo。没指定权重时按引擎默认（Turbo）算——宁可少发步数，
+/// 也别让 Turbo 收到一个它不会用的 40 步。
+fn ace_variant_is_turbo(model: Option<&str>) -> bool {
+    // 请求没带权重 id 时看引擎**实际加载**的那一档（MCP 这类路径就可能省略）。
+    let id = model
+        .filter(|m| !m.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| status().model);
+    let id = id.to_ascii_lowercase();
+    !(id.contains("base") || id.contains("sft"))
+}
+
 /// ACE-Step 的请求体：**描述**（顶层 `text`）+ 歌词 + 几个通用旋钮（全在 `options` 里）。
 ///
 /// 两处与 YuE2 不同（按 v0.9.3 的 `ace_step_parse_request` 逐字对过）：
@@ -1051,21 +1071,28 @@ fn request_body(args: &ComposeArgs, family: &str) -> serde_json::Value {
 ///
 /// Turbo 档不看 `guidance_scale`；用户自己填了（>= 0）才发，免得把默认值改成别的语义。
 fn ace_step_body(args: &ComposeArgs) -> serde_json::Value {
+    // Turbo 是蒸馏档，8 步就到位；Base/SFT 是原版扩散档，32–64 步才出细节。按权重 id 认变体，
+    // 别把 Base 的 40 步硬夹成 8（那是「Base 听着和 Turbo 一样糊」的元凶）。
+    let turbo = ace_variant_is_turbo(args.model.as_deref());
+    let steps = args.steps().min(if turbo { 8 } else { 64 });
     let mut options = serde_json::json!({
         "route": "text2music",
-        // Turbo 的上限就是 8 步：发更大的值不会更细，只会让人以为「调了有用」。
-        "num_inference_steps": args.steps().min(8),
+        "num_inference_steps": steps,
         "duration_sec": args.duration(),
         // 引擎侧是 u32；`seed()` 给的是 u64（纳秒余数），取低 32 位即可。
         "seed": (args.seed() % u32::MAX as u64) as u32,
     });
-    if args.instrumental.unwrap_or(false) {
-        // ACE-Step 有真正的器乐开关，但这版引擎只认歌词约定：`[Instrumental]` = 纯器乐
-        // （ACE-Step 1.5 文档原文：「Use "[Instrumental]" for instrumental tracks」）。
-        options["lyrics"] = serde_json::json!("[Instrumental]");
-    } else if !args.lyrics.trim().is_empty() {
+    if !args.instrumental.unwrap_or(false) && !args.lyrics.trim().is_empty() {
         options["lyrics"] = serde_json::json!(args.lyrics);
     }
+    // 纯器乐：**什么歌词都不发**（既不发正文，也不发 `[Instrumental]`）。
+    //
+    // 上游文档写的是「Use "[Instrumental]" for instrumental tracks」，但这是 Python 侧的
+    // 训练约定，audio.cpp 的 C++ 端口**没有实现它**：`prompt_builder.cpp` 只把歌词原文塞进
+    // LM / DiT 提示词（`# Lyric\n<歌词>`），既不识别 `instrumental` 字段，也不特判这个标签
+    // （整个 `src/models/ace_step/*` 里搜不到 `instrumental`）。实测把标签发过去，规划器会
+    // 把它当歌词正文处理，产出的东西反而「乱弹」；留空才是这版引擎的纯器乐路径。
+    // 也不发 `instrumental: true`：未知字段会被静默忽略，留着只会让人以为它在起作用。
     if let Some(cfg) = args.cfg_scale.filter(|c| *c >= 0.0) {
         options["guidance_scale"] = serde_json::json!(cfg);
     }
@@ -1381,9 +1408,31 @@ fn ensure_ready(app: &crate::tauri_api::AppHandle, model: Option<String>) -> Res
     let current = status();
     let same_model =
         current.state == "ready" && wanted.as_deref().is_none_or(|model| current.model == model);
-    if same_model {
+    // 子进程可能自己退了（显存不足 / 崩了），而状态还停在 "ready"：这时不能直接复用端口。
+    let alive = {
+        let mut guard = engine_state().child.lock().unwrap();
+        match guard.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+            None => false,
+        }
+    };
+    if same_model && alive {
         return current.port.ok_or_else(|| "引擎没有端口".to_string());
     }
+    if alive {
+        shutdown();
+        // `shutdown()` 只杀进程、不动状态；这里必须先落到 "stopped"，否则
+        // `ai_yue_engine_start` 会看到「ready + 同一个模型」直接返回，等于什么都没重启。
+        update(|s| {
+            s.state = "stopped".into();
+            s.port = None;
+            s.message = None;
+        });
+    }
+    // `shutdown()` 会顺手把 cancel 置真（那是给「用户点停止」用的）。这里是我们**自己**为了
+    // 换权重 / 救活引擎而重启，不是取消——不清掉的话，下面的等待循环 500 ms 后就会看到
+    // cancel 并报「已取消」，新引擎刚拉起来就被判失败，用户看到的就是「显存掉了、新模型没进显存」。
+    engine_state().cancel.store(false, Ordering::Relaxed);
     ai_yue_engine_start(app.clone(), wanted)?;
     let deadline = Instant::now() + Duration::from_secs(600);
     loop {
@@ -1405,7 +1454,6 @@ fn ensure_ready(app: &crate::tauri_api::AppHandle, model: Option<String>) -> Res
         }
     }
 }
-
 /// MuScriptor 版「引擎就绪」：比对的是**转录权重 id**，不是写歌模型。
 fn ensure_midi_ready(app: &crate::tauri_api::AppHandle, model: Option<&str>) -> Result<u16, String> {
     let wanted = model.filter(|m| !m.trim().is_empty());
@@ -1567,51 +1615,123 @@ pub fn ai_yue_compose_cancel(app: crate::tauri_api::AppHandle) {
     );
 }
 
-/// 组请求体并提交。YuE2 的纯器乐要两段：先出谱 → 把旋律搬进 `Ins` → 再按改过的谱渲染。
+/// 纯器乐时替换歌词的那份「段落模板」。
 ///
-/// 为什么不能只靠「空歌词」：YuE2 先写一份带 `Vocal` / `Ins` 的谱再渲染，空歌词只是让
-/// `Vocal` 没词，模型照样给主旋律安排人声音色（实测谱里 `Vocal` 一行全是音符）。
-/// 官方文档给的正是这套搬旋律的做法，并明确「谱里 Vocal 留休止也不保证没人声」。
+/// YuE2 没有真正的 `instrumental` 开关。官方文档写的是「歌词留空 = 器乐」，但实测空歌词
+/// 它照样会给人声部排旋律；整份铺满 `[instrumental]` 能压住人声，但没有段落骨架，编曲容易
+/// 平。所以这里给的是**带结构标签的模板**：`[Verse]` / `[Bridge]` / `[Chorus]` / `[Outro]`
+/// 定出曲式，每段下面跟 4 行 `[instrumental]` 占住「这一段只走器乐」。
+///
+/// 实测这样既不出人声，段落之间的起伏（主歌—桥段—副歌）也比纯标签块明显，听感更像一首
+/// 排过的曲子。别随手减段：段落少 / 每段标签少都会让模型重新给人声部排旋律。
+const INSTRUMENTAL_LYRICS: &str = "[Verse]
+[instrumental]
+[instrumental]
+[instrumental]
+[instrumental]
+[Bridge]
+[instrumental]
+[instrumental]
+[instrumental]
+[instrumental]
+[Chorus]
+[instrumental]
+[instrumental]
+[instrumental]
+[instrumental]
+[Bridge]
+[instrumental]
+[instrumental]
+[instrumental]
+[instrumental]
+[Verse]
+[instrumental]
+[instrumental]
+[instrumental]
+[instrumental]
+[Bridge]
+[instrumental]
+[instrumental]
+[instrumental]
+[instrumental]
+[Chorus]
+[instrumental]
+[instrumental]
+[instrumental]
+[instrumental]
+[Bridge]
+[instrumental]
+[instrumental]
+[instrumental]
+[instrumental]
+[Chorus]
+[instrumental]
+[instrumental]
+[instrumental]
+[instrumental]
+[Outro]
+[instrumental]
+[instrumental]
+[instrumental]
+[instrumental]";
+
+/// 纯器乐：把歌词换成器乐标签块。
+///
+/// 只对 YuE2 生效。ACE-Step 的器乐是「一句歌词都不发」（见 [`ace_step_body`]）：给它塞
+/// 结构标签反而会被当成歌词正文，把规划器带乱。
+fn apply_instrumental(args: &mut ComposeArgs, family: &str) {
+    if args.instrumental.unwrap_or(false) && family == "yue2" {
+        args.lyrics = INSTRUMENTAL_LYRICS.to_string();
+    }
+}
+
+/// 组请求体并提交。
+///
+/// 纯器乐：YuE2 走 [`apply_instrumental`]（歌词整份换成 `[instrumental]` 标签块，前端
+/// 开关还会把器乐意图写进 style），ACE-Step 则**连歌词都不发**（见 [`ace_step_body`]）。
+/// 这里不做「先出谱、把 Vocal 搬进 Ins」的两段式，也不挂器乐 LoRA——两条路实测都没能可靠
+/// 去掉人声，却让生成多花一倍以上时间。
 fn compose_body(
     port: u16,
     args: &mut ComposeArgs,
     family: &str,
 ) -> Result<(serde_json::Value, RunResult), String> {
-    // 只有「从零写一首」才走两段式：调用方自己给了谱（翻唱 / 按谱重唱），
-    // 或者这是续写（语义码前缀），改谱只会把人家给的东西弄坏。
-    let fresh = args.abc.trim().is_empty()
-        && args.abc_file.is_none()
-        && args.semantic_prefix.is_none()
-        && args.semantic_prefix_file.is_none();
-    if args.instrumental.unwrap_or(false) && family == "yue2" && fresh {
-        let abc = plan_abc(port, args)?;
-        let rewritten = crate::abc_edit::move_vocal_to_ins(&abc)?;
-        args.abc = rewritten;
-        args.abc_file = None;
-        args.lyrics = String::new();
-    }
+    apply_instrumental(args, family);
     let body = request_body(args, family);
     let run = submit(port, &body)?;
     Ok((body, run))
 }
-
-/// 纯器乐的第一段：只要谱。
-fn plan_abc(port: u16, args: &ComposeArgs) -> Result<String, String> {
-    let mut plan = args.clone();
-    plan.stop_after = Some("abc".into());
-    plan.export_semantic = Some(false);
-    plan.lyrics = String::new();
-    plan.abc = String::new();
-    plan.abc_file = None;
-    // 别再触发自己。
-    plan.instrumental = None;
-    let body = request_body(&plan, "yue2");
-    let run = submit(port, &body)?;
-    if engine_state().cancel.load(Ordering::Relaxed) {
-        return Err("已取消".into());
+/// 把生成结果**另存到本地**。
+///
+/// 桌面端：`dest` 是用户在保存对话框里选的路径，直接复制过去；
+/// 浏览器客户端没有保存对话框（`dest` 为空）：落到数据目录的 `exports/`，前端再用
+/// `/download` 把它拉成附件。
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn ai_yue_save_audio(
+    app: crate::tauri_api::AppHandle,
+    src: String,
+    dest: String,
+) -> Result<String, String> {
+    let source = PathBuf::from(&src);
+    if !source.is_file() {
+        return Err(format!("找不到音频文件：{src}"));
     }
-    run.score
-        .ok_or_else(|| "纯器乐：第一段没有返回谱面".to_string())
+    let target = if dest.trim().is_empty() {
+        let dir = crate::paths::data_dir(&app)?.join("exports");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let name = source
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "take.wav".into());
+        dir.join(name)
+    } else {
+        PathBuf::from(dest.trim())
+    };
+    if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| format!("建目录失败：{e}"))?;
+    }
+    std::fs::copy(&source, &target).map_err(|e| format!("复制失败：{e}"))?;
+    Ok(target.to_string_lossy().into_owned())
 }
 
 /// 提交并等结果。请求体由调用方先组好——**种子只在这里算一次**，否则「记录里的 seed」
@@ -2122,6 +2242,120 @@ mod tests {
         assert!(body["request"]["options"].get("abc").is_none());
         // `style` 必须在 options 里（放顶层服务端读不到）。
         assert_eq!(body["request"]["options"]["style"], "pop");
+    }
+
+    /// 纯器乐：YuE2 的歌词被换成整块 `[instrumental]` 标签。
+    ///
+    /// 这是「不冒人声」的关键——空歌词管不住它，段落模板才管得住。人声模式不能动歌词，
+    /// ACE-Step 的纯器乐是「留空歌词」（见 `ace_step_body`）。
+    #[test]
+    fn instrumental_replaces_yue2_lyrics_with_a_tag_block() {
+        let mut args = ComposeArgs {
+            style: "lo-fi".into(),
+            lyrics: "what a beautiful morning".into(),
+            instrumental: Some(true),
+            ..Default::default()
+        };
+        apply_instrumental(&mut args, "yue2");
+        assert_eq!(args.lyrics, INSTRUMENTAL_LYRICS);
+
+        let lines: Vec<&str> = args.lyrics.lines().collect();
+        // 10 个段落 ×（1 行段落标签 + 4 行 [instrumental]）。
+        assert_eq!(lines.len(), 50);
+        assert_eq!(lines[0], "[Verse]");
+        assert_eq!(lines.last().copied(), Some("[instrumental]"));
+        assert_eq!(
+            lines.iter().filter(|line| **line == "[instrumental]").count(),
+            40
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with('[') && **line != "[instrumental]")
+                .count(),
+            10
+        );
+
+        let mut vocals = ComposeArgs {
+            lyrics: "la la".into(),
+            ..Default::default()
+        };
+        apply_instrumental(&mut vocals, "yue2");
+        assert_eq!(vocals.lyrics, "la la");
+
+        let mut ace = ComposeArgs {
+            lyrics: "la".into(),
+            instrumental: Some(true),
+            ..Default::default()
+        };
+        apply_instrumental(&mut ace, "ace_step");
+        assert_eq!(ace.lyrics, "la");
+    }
+
+    /// ACE-Step 的纯器乐：**一句歌词都不发**。
+    ///
+    /// 上游文档说的 `[Instrumental]` 是 Python 侧的训练约定，这版 C++ 端口不特判它
+    /// （`prompt_builder.cpp` 只把歌词原文拼进提示词）；实测发这个标签会把规划器带乱，
+    /// 留空才是器乐路径。也别发 `instrumental` 字段——未知字段只会被静默忽略。
+    #[test]
+    fn ace_step_instrumental_sends_no_lyrics() {
+        let args = ComposeArgs {
+            style: "lo-fi".into(),
+            lyrics: "la la".into(),
+            instrumental: Some(true),
+            ..Default::default()
+        };
+        let body = request_body(&args, "ace_step");
+        assert_eq!(body["request"]["text"], "lo-fi");
+        assert_eq!(body["request"]["options"]["route"], "text2music");
+        assert!(body["request"]["options"].get("lyrics").is_none());
+        assert!(body["request"]["options"].get("instrumental").is_none());
+
+        // 人声模式照常带歌词。
+        let vocals = ComposeArgs {
+            style: "lo-fi".into(),
+            lyrics: "la la".into(),
+            ..Default::default()
+        };
+        let body = request_body(&vocals, "ace_step");
+        assert_eq!(body["request"]["options"]["lyrics"], "la la");
+    }
+
+    /// Turbo 只吃 8 步，Base/SFT 是质量档——40 步不能被夹成 8（那正是「Base 也糊」的成因）。
+    #[test]
+    fn ace_step_base_keeps_its_step_budget() {
+        let base = ComposeArgs {
+            style: "swing jazz".into(),
+            steps: Some(40),
+            model: Some("ace-step-base-bf16".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            ace_step_body(&base)["request"]["options"]["num_inference_steps"],
+            40
+        );
+
+        let turbo = ComposeArgs {
+            style: "swing jazz".into(),
+            steps: Some(40),
+            model: Some("ace-step-turbo-bf16".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            ace_step_body(&turbo)["request"]["options"]["num_inference_steps"],
+            8
+        );
+
+        // 没指定权重 = 引擎默认的 Turbo。
+        let unknown = ComposeArgs {
+            style: "swing jazz".into(),
+            steps: Some(40),
+            ..Default::default()
+        };
+        assert_eq!(
+            ace_step_body(&unknown)["request"]["options"]["num_inference_steps"],
+            8
+        );
     }
 
     #[test]

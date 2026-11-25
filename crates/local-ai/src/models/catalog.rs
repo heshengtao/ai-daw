@@ -902,14 +902,16 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
     // 与 YuE2 并列在「AI 写歌」的模型下拉里，但走路方式不同：YuE2 先写谱再唱（有 ABC 谱、
     // 语义码续写、翻唱），ACE-Step 是「一句描述 + 歌词 → 整首」，不写谱。两家**共用同一个
     // audio.cpp 引擎进程**，差别只在引擎配置里的 `family` 与请求体的形状
-    // （见 `src-tauri/src/yue_engine.rs`），所以这里只是多两档权重，不需要第二套引擎。
+    // （见 `src-tauri/src/yue_engine.rs`），所以这里只是多几档权重，不需要第二套引擎。
     //
-    // 权重钉在 `audio-cpp/audio.cpp-gguf` 的 `ACE-Step1.5-GGUF/turbo/`：HF 与魔搭
+    // **Turbo 与 Base 是两种档位，不是两种精度**：Turbo 是蒸馏过的 8 步档（快、适合草稿），
+    // Base 是原版扩散档（32–64 步才出细节）。同一句提示词、同一个种子，两者的差距是
+    // 「糊 vs 清楚」，换精度（bf16 ↔ q8）补不回来——之前只发 Turbo，听感发闷/发乱多半是这个。
+    // 权重钉在 `audio-cpp/audio.cpp-gguf` 的 `ACE-Step1.5-GGUF/{turbo,base}/`：HF 与魔搭
     // **同名同字节**（逐文件 sha256 一致，2026-11 核对），下载器按网络位置排序、失败换源。
-    // 只收 Turbo 档：Base 慢一倍、曲风差别不大；Turbo 的扩散步数上限是 8（见文档）。
     ModelEntry {
         id: "ace-step-turbo-q8",
-        name: "ACE-Step 1.5 Turbo · Q8_0（默认 · 省空间）",
+        name: "ACE-Step 1.5 Turbo · Q8_0",
         feature: "compose",
         // ACE-Step 1.5 上游（ACE-Step/Ace-Step1.5）是 **MIT**——和 YuE2 的 CC-BY-NC 不同，
         // 商业项目可以用。
@@ -925,7 +927,7 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
     },
     ModelEntry {
         id: "ace-step-turbo-bf16",
-        name: "ACE-Step 1.5 Turbo · BF16（最接近原版权重）",
+        name: "ACE-Step 1.5 Turbo · BF16",
         feature: "compose",
         license: "MIT",
         dir: Some("ace-step"),
@@ -937,6 +939,35 @@ pub static CATALOG: &[ModelEntry] = &[    ModelEntry {
             "ACE-Step1.5-GGUF/turbo/ace-step-1.5-turbo-bf16.gguf",
             10_090_406_336,
             "7aa8cc911bb7e47647bba619cf25afc22a42e35c568a102cd9a3b28a54b94013"
+        )],
+    },
+    ModelEntry {
+        id: "ace-step-base-bf16",
+        name: "ACE-Step 1.5 Base · BF16",
+        feature: "compose",
+        license: "MIT",
+        dir: Some("ace-step"),
+        bundled: false,
+        // 质量档：不蒸馏，吃 CFG，32–64 步才出细节；同样 10 GB，慢是慢在步数上。
+        files: &[ace_step_file!(
+            "ace-step-1.5-base-bf16.gguf",
+            "ACE-Step1.5-GGUF/base/ace-step-1.5-base-bf16.gguf",
+            10_090_405_184,
+            "d5bb61554bd8669ba5498054422e7a771414257d77acc47b3953e5da8c98836f"
+        )],
+    },
+    ModelEntry {
+        id: "ace-step-base-q8",
+        name: "ACE-Step 1.5 Base · Q8_0",
+        feature: "compose",
+        license: "MIT",
+        dir: Some("ace-step"),
+        bundled: false,
+        files: &[ace_step_file!(
+            "ace-step-1.5-base-q8_0.gguf",
+            "ACE-Step1.5-GGUF/base/ace-step-1.5-base-q8_0.gguf",
+            6_185_466_944,
+            "2fb7bc3627c79bc99486510619d4264da22d40814edff0415dd3337164336e4a"
         )],
     },
     // ---- SheetSage2（听音记谱）：YuE2「翻唱」的前置——录音 → ABC 谱 ----
@@ -1469,11 +1500,18 @@ mod tests {
                 );
             }
         }
-        // YuE2 三档 + ACE-Step 两档：少了哪一档都说明清单被人动过。
+        // YuE2 三档 + ACE-Step 四档：少了哪一档都说明清单被人动过。
         assert!(seen.contains(&("yue2-q8-0", "yue2")));
-        assert!(seen.contains(&("ace-step-turbo-q8", "ace_step")));
-        assert!(seen.contains(&("ace-step-turbo-bf16", "ace_step")));
-        assert_eq!(seen.iter().filter(|(_, f)| *f == "ace_step").count(), 2);
+        assert_eq!(seen.iter().filter(|(_, f)| *f == "yue2").count(), 3);
+        for id in [
+            "ace-step-turbo-q8",
+            "ace-step-turbo-bf16",
+            "ace-step-base-bf16",
+            "ace-step-base-q8",
+        ] {
+            assert!(seen.contains(&(id, "ace_step")), "缺 {id}");
+        }
+        assert_eq!(seen.iter().filter(|(_, f)| *f == "ace_step").count(), 4);
         // 非写歌模型不该有家族（否则引擎会去加载一份不是它管的权重）。
         assert!(compose_family(by_id("htdemucs-ort-v1").unwrap()).is_none());
     }

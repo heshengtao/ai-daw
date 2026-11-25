@@ -12,25 +12,35 @@
  * 引擎状态要在这里订阅一次：本地生成时面板要显示「引擎启动中 / 已就绪」，而它会随
  * `engine://yue-engine` 事件变；离开页面就退订，别让后台一直挂着。
  */
-import { onMounted, onUnmounted } from "vue";
+import { onMounted, onUnmounted, watch } from "vue";
 import InspireComposer from "@/components/workspace/inspire/InspireComposer.vue";
 import InspireLibrary from "@/components/workspace/inspire/InspireLibrary.vue";
 import { useInspireStore } from "@/stores/inspire";
+import { useTransportStore } from "@/stores/transport";
 import { useYueStore } from "@/stores/yue";
 
 const inspire = useInspireStore();
+const transport = useTransportStore();
 const yue = useYueStore();
 let stopYue: (() => void) | null = null;
 
+// 焦点跟着列表走：首次进入、以及生成结果落库后，始终有一张「当前卡片」，
+// 底部栏的播放键才有明确控制对象（没有焦点时它只能干瞪眼）。
+watch(() => inspire.items, () => inspire.ensureFocused(), { immediate: true });
+
 onMounted(() => {
   stopYue = yue.watch();
+  // 这一页的底部播放键控制卡片，不是工程走带；带着工程播放切进来会让「键的声音」
+  // 和「听到的声音」对不上，先停掉。
+  if (transport.playing) void transport.stop().catch(() => {});
+  inspire.ensureFocused();
 });
 
 onUnmounted(() => {
   stopYue?.();
   stopYue = null;
-  // 离开页面就停掉试听：这一页没有播放器 UI 了，响着没法关。
-  inspire.stopPlayback();
+  // 离开页面就解除同步：停掉试听，底部播放键回到工程走带（它没有卡片可控制了）。
+  inspire.leaveView();
 });
 </script>
 

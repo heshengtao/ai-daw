@@ -27,6 +27,7 @@ import { downloadFromServer } from "@/utils/download";
 import { useProjectStore } from "@/stores/project";
 import { useLayoutStore } from "@/stores/layout";
 import { useEngineEventsStore } from "@/stores/engineEvents";
+import { useInspireStore } from "@/stores/inspire";
 import { useTransportStore } from "@/stores/transport";
 import { usePluginsStore } from "@/stores/plugins";
 import { useUpdaterStore } from "@/stores/updater";
@@ -61,6 +62,7 @@ const project = useProjectStore();
 const layout = useLayoutStore();
 const events = useEngineEventsStore();
 const transport = useTransportStore();
+const inspire = useInspireStore();
 const plugins = usePluginsStore();
 const updater = useUpdaterStore();
 const presets = usePresetsStore();
@@ -625,9 +627,11 @@ function onKey(e: KeyboardEvent): void {
     return;
   }
   // 传输快捷键：空格播放/暂停，Home 回到起点。
+  // 灵感页里空格与底部播放键同义：控选中的那张卡（不是工程走带）。
   if (e.code === "Space") {
     e.preventDefault();
-    void transport.toggle();
+    if (route.name === "inspire") void inspire.toggleFocused();
+    else void transport.toggle();
     return;
   }
   if (e.key === "Home") {

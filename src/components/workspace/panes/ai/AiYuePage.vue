@@ -290,14 +290,17 @@ watch(isYue2, (yue2, before) => {
 });
 
 /**
- * 步数跟着家族走：YuE2 常用 32 步，ACE-Step 的 Turbo 档只要 8 步（再多也不会更细）。
- * 只在家族真的换掉时给回默认值，不覆盖用户自己填的数。 */
-const stepsMax = computed(() => (isYue2.value ? 128 : 8));
+ * 步数跟着**档位**走：YuE2 常用 32 步；ACE-Step 的 Turbo 是蒸馏档，8 步就到位，
+ * Base/SFT 是质量档，32–64 步才有意义。只在档位真的换掉时给回默认值，不覆盖用户填的数。 */
+const aceTurbo = computed(
+  () => family.value === "ace_step" && !/base|sft/i.test(modelId.value ?? ""),
+);
+const stepsMax = computed(() => (isYue2.value ? 128 : aceTurbo.value ? 8 : 64));
 watch(
-  family,
-  (value, before) => {
-    if (before !== undefined && before === value) return;
-    steps.value = value === "yue2" ? 32 : 8;
+  [family, aceTurbo],
+  () => {
+    // Turbo 档 8 步，其余（YuE2 / ACE Base）回到 32；只在档位真的换掉时重置。
+    steps.value = aceTurbo.value ? 8 : 32;
   },
   { immediate: true },
 );

@@ -38,11 +38,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ai-daw-child-guard"
+version = "1.9.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "ai-daw-daemon"
 version = "1.9.0"
 dependencies = [
  "ai-daw-analysis",
  "ai-daw-asset",
+ "ai-daw-child-guard",
  "ai-daw-engine",
  "ai-daw-extensions",
  "ai-daw-host-vst3",

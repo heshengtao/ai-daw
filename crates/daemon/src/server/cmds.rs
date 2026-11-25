@@ -658,6 +658,12 @@ pub fn call(app: &AppHandle, cmd: &str, args: Value) -> Option<Result<Value, Rpc
         let lora: crate::manager::YueLora = take(&args, "lora")?;        let out = crate::yue_engine::ai_yue_set_lora(app.clone(), lora);
         value(out)
     },
+    "ai_yue_save_audio" => |app, args| {
+        let src: String = take(&args, "src")?;
+        let dest: String = take(&args, "dest")?;
+        let out = crate::yue_engine::ai_yue_save_audio(app.clone(), src, dest);
+        value(out)
+    },
     "ai_yue_engine_start" => |app, args| {
         let model: Option<String> = take(&args, "model")?;        let out = crate::yue_engine::ai_yue_engine_start(app.clone(), model);
         value(out)
@@ -923,6 +929,7 @@ pub const NAMES: &[&str] = &[
     "ai_yue_select",
     "ai_yue_set_cuda_perf",
     "ai_yue_set_lora",
+    "ai_yue_save_audio",
     "ai_yue_transcribe",
     "ai_yue_transcribe_cancel",
     "analyze_harmony",

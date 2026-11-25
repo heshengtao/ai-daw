@@ -12,21 +12,29 @@
  * 音频播放**不走工程走带**：走带是「整首工程、所有轨道」，而这里要的是「单独听这一首」。
  * 用 `read_import_file` 把音频字节读进来塞给 `<audio>`，与工程的播放互不干扰（工程一开播
  * 就把试听停掉，免得两路声音叠在一起）。
+ *
+ * 但**灵感页里**底部栏那颗播放键要能当遥控器用：`focusedId` 记住当前选中的那张卡，
+ * 页面在时底部播放键控制它、图标状态也跟着它变；切走由 `leaveView` 解除同步。
  */
 import { computed, ref, watch } from "vue";
 import { defineStore } from "pinia";
-import { onYueJobEvent, readImportFile, yueImportAudio, yueRecord } from "@/api/tauri";
+import { onYueJobEvent, readImportFile, yueImportAudio, yueRecord, yueSaveAudio } from "@/api/tauri";
 import type { YueComposeArgs, YueJobStatus } from "@/api/types";
 import { useCloudMusicStore } from "@/stores/cloudMusic";
 import { useI18n } from "@/i18n";
 import { useProjectStore } from "@/stores/project";
 import { useTransportStore } from "@/stores/transport";
 import { useYueStore } from "@/stores/yue";
+import { pickAudioToSave } from "@/api/dialogs";
+import { downloadFromServer } from "@/utils/download";
+import { isTauri } from "@/utils/platform";
 import { trackHue } from "@/utils/trackColor";
 
 const KEY = "ai-daw-inspire";
 /** 列表上限：再老的记录只占内存和 localStorage，用户不会翻到那么远。 */
 const MAX_ITEMS = 50;
+/** 一批最多几首：再多只是排队更久，用户通常也就挑 2–4 首里的一条。 */
+export const MAX_BATCH = 8;
 /** 同时缓存的音频 Blob URL 上限（每个可能几十 MB，不能无限攒）。 */
 const MAX_URLS = 24;
 
@@ -169,8 +177,16 @@ export const useInspireStore = defineStore("inspire", () => {
   let token = 0;
   let ticker: number | null = null;
   let stopJob: (() => void) | null = null;
+  /** 这一首结束（成功 / 失败 / 取消）时兑现：批处理靠它一首一首往下走。 */
+  let settleCraft: (() => void) | null = null;
+  let craftDone: Promise<void> = Promise.resolve();
 
-  const crafting = computed(() => craft.value !== null);
+  /** 一批生成：总数与已完成数；单首生成时是 `null`。 */
+  const batch = ref<{ total: number; done: number } | null>(null);
+  /** 用户点了停止：当前这首照常取消，后面的不再开始。 */
+  let batchStopped = false;
+
+  const crafting = computed(() => craft.value !== null || batch.value !== null);
 
   /** 进度百分比：云端有真实进度，本地只知道「在跑」（返回 `null` = 不定长进度条）。 */
   const progressPct = computed(() =>
@@ -202,6 +218,23 @@ export const useInspireStore = defineStore("inspire", () => {
   const duration = ref(0);
   const playError = ref<string | null>(null);
 
+  // ---- 焦点（灵感页里底部播放键控制的那一首） ----
+  /**
+   * 当前选中（有焦点）的记录 id。
+   *
+   * 灵感页的卡片、以及底部栏那颗播放键，是**同一份状态的两个入口**：点卡片里的播放键
+   * 会选中这张卡，底部播放键跟着变成它的播放 / 暂停；反过来点底部播放键也只动这一首。
+   * 它只属于「此刻页面上的选择」，所以不持久化，切走时由 `leaveView` 清掉。
+   */
+  const focusedId = ref<string | null>(null);
+  const focusedItem = computed(
+    () => items.value.find((item) => item.id === focusedId.value) ?? null,
+  );
+  /** 焦点卡是不是正在响——底部播放键的图标 / 光晕直接读它。 */
+  const focusedPlaying = computed(
+    () => focusedId.value !== null && playingId.value === focusedId.value,
+  );
+
   let el: HTMLAudioElement | null = null;
   let raf = 0;
   const urls = new Map<string, string>();
@@ -221,6 +254,10 @@ export const useInspireStore = defineStore("inspire", () => {
   /** 新记录插到最前；超过上限的挤掉最老的（连它的 Blob URL 一起回收）。 */
   function push(item: InspireItem): void {
     items.value = [item, ...items.value].slice(0, MAX_ITEMS);
+    // 被挤掉的正好是焦点卡时，焦点跟着失效，别让底部播放键指向一条不在列表里的记录。
+    if (focusedId.value && !items.value.some((entry) => entry.id === focusedId.value)) {
+      focusedId.value = null;
+    }
     const keep = new Set(items.value.map((i) => i.path));
     for (const path of [...urls.keys()]) {
       if (!keep.has(path)) dropUrl(path);
@@ -242,6 +279,8 @@ export const useInspireStore = defineStore("inspire", () => {
     if (!item) return;
     forget(id);
     items.value = items.value.filter((i) => i.id !== id);
+    // 删掉的正是焦点卡：焦点交给下一条，底部播放键不会悬空。
+    if (focusedId.value === id) focusedId.value = items.value[0]?.id ?? null;
     if (!items.value.some((i) => i.path === item.path)) dropUrl(item.path);
   }
 
@@ -251,6 +290,7 @@ export const useInspireStore = defineStore("inspire", () => {
     el = null;
     loadedId.value = null;
     duration.value = 0;
+    focusedId.value = null;
     items.value = [];
     for (const path of [...urls.keys()]) dropUrl(path);
   }
@@ -395,14 +435,62 @@ export const useInspireStore = defineStore("inspire", () => {
     return String(err instanceof Error ? err.message : err);
   }
 
+  /** 选中一张卡（点卡片、点播放、拖进度都会走到这里）。 */
+  function focusItem(item: InspireItem): void {
+    // 记录可能刚被删掉（删除按钮的 click 会先冒泡到卡片）：别把焦点钉在一条不存在的记录上。
+    if (!items.value.some((entry) => entry.id === item.id)) return;
+    if (focusedId.value === item.id) return;
+    focusedId.value = item.id;
+    // 换到另一张卡就停掉正在试听的那一首：焦点卡与底部播放键必须是同一首，
+    // 否则按钮显示「暂停」而声音来自别的卡，状态就对不上了。
+    if (playingId.value && playingId.value !== item.id) stopPlayback();
+  }
+
+  /** 进入灵感页 / 列表变化时：焦点为空或已失效就选第一条，底部播放键才有明确对象。 */
+  function ensureFocused(): void {
+    if (focusedId.value && items.value.some((item) => item.id === focusedId.value)) return;
+    focusedId.value = items.value[0]?.id ?? null;
+  }
+
+  /** 底部播放键在灵感页的动作：控制焦点卡（没有焦点就落到第一条）。 */
+  async function toggleFocused(): Promise<void> {
+    const item = focusedItem.value ?? items.value[0];
+    if (item) await toggle(item);
+  }
+
+  /** 离开灵感页：解除同步（停试听 + 清焦点），底部播放键回到工程走带。 */
+  function leaveView(): void {
+    stopPlayback();
+    focusedId.value = null;
+  }
+
+  /**
+   * 试听开始前停掉工程走带：两路声音叠在一起谁也听不清。
+   *
+   * 反向的那一半在文件末尾的 watch 里（工程一开播就停试听）——两个方向都要管，
+   * 否则从编排页带着播放状态切到灵感页时，点一下卡片就会变成两首歌同时响。
+   */
+  async function quietTransport(): Promise<void> {
+    if (!transport.playing) return;
+    try {
+      await transport.stop();
+    } catch {
+      // 停不下来也不该拦住试听：引擎的错误由传输层自己提示。
+    }
+  }
+
   /** 播放 / 暂停这一首。 */
   async function toggle(item: InspireItem): Promise<void> {
+    focusItem(item);
+    // 正在读盘：重复点击不再开第二条读取（封面播放键与底部播放键都可能被点到）。
+    if (loadingId.value === item.id) return;
     if (playingId.value === item.id) {
       el?.pause();
       playingId.value = null;
       cancelRaf();
       return;
     }
+    await quietTransport();
     const audio = await ensure(item);
     if (!audio) return;
     try {
@@ -417,12 +505,14 @@ export const useInspireStore = defineStore("inspire", () => {
 
   /** 从某个比例处开始试听（拖动进度条）。没在播的先播起来，符合「拖着听」的直觉。 */
   async function seekTo(item: InspireItem, ratio: number): Promise<void> {
+    focusItem(item);
     const audio = await ensure(item);
     if (!audio) return;
     const total = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : item.seconds;
     const target = clamp01(ratio) * (total || 0);
     if (playingId.value !== item.id) {
       try {
+        await quietTransport();
         await audio.play();
         playingId.value = item.id;
         startRaf();
@@ -461,6 +551,10 @@ export const useInspireStore = defineStore("inspire", () => {
     error.value = null;
     craft.value = { token, request, startedAt: Date.now() };
     elapsed.value = 0;
+    settleCraft = null;
+    craftDone = new Promise<void>((resolve) => {
+      settleCraft = resolve;
+    });
     if (ticker !== null) window.clearInterval(ticker);
     ticker = window.setInterval(() => {
       if (craft.value) elapsed.value = Math.round((Date.now() - craft.value.startedAt) / 1000);
@@ -479,6 +573,10 @@ export const useInspireStore = defineStore("inspire", () => {
     }
     craft.value = null;
     elapsed.value = 0;
+    // 兑现「这一首结束了」：批处理在这个 await 上接着跑下一首。
+    const done = settleCraft;
+    settleCraft = null;
+    done?.();
   }
 
   function record(
@@ -537,17 +635,29 @@ export const useInspireStore = defineStore("inspire", () => {
    *
    * 补在这里而不是提交时改 `prompt`，是为了让列表标题/描述保持用户原话，
    * 不被一个技术性后缀污染。
+   *
+   * **ACE-Step 不补**：它的器乐路径就是「歌词留空」，风格里再塞否定式提示会被规划器
+   * 的 CoT 重写带偏（实测纯音乐开关打开时反而「乱弹」）。给它保持和「不勾纯音乐 + 歌词
+   * 留空」完全一样的请求，才是它听感正常的那一版。
    */
   function styleOf(request: CraftRequest): string {
     const style = request.prompt.trim();
     if (!request.instrumental) return style;
-    if (!style) return "instrumental";
-    return /\binstrumental\b/i.test(style) ? style : `${style}, instrumental`;
+    if (/^ace-step-/.test(request.target ?? "")) return style;
+    // 纯器乐：风格里明确写「不要人声」。光把歌词清空不够——YuE2 会自己给人声部安排旋律，
+    // 风格条件写清楚才稳（YuE2 Studio 的做法也是把器乐意图写进风格）。
+    if (!style) return "instrumental, no vocals";
+    return /\binstrumental\b/i.test(style) ? style : `${style}, instrumental, no vocals`;
   }
 
-  /** 本地生成：引擎与权重**必须已经在位**（由调用方先过门槛），这里只管跑。 */
+  /**
+   * 本地生成：引擎与权重**必须已经在位**（由调用方先过门槛），这里只管跑。
+   *
+   * 返回时这一首**已经结束**（成功 / 失败 / 取消都算）：批处理要靠它一首一首串行。
+   */
   async function craftLocal(request: CraftRequest): Promise<void> {
-    if (crafting.value) return;
+    // 只看「有没有这一首在跑」，不看 `crafting`：批处理期间 `crafting` 会一直为真。
+    if (craft.value) return;
     const mine = beginCraft(request);
     const args: YueComposeArgs = {
       style: styleOf(request),
@@ -562,8 +672,8 @@ export const useInspireStore = defineStore("inspire", () => {
       // 灵感页只负责「先听歌」：渲染结果只落盘，**不碰工程**。
       // 要进编排页，得用户点卡片上的「导入」——那才是「我要它」的表达。
       place_in_project: false,
-      // 纯器乐：YuE2 后端会先出谱、把旋律从 Vocal 搬进 Ins，再渲染。
-      // 只把歌词清空是不够的——模型照样会给人声部安排旋律。
+      // 纯音乐：后端会把整份歌词换成 `[instrumental]` 标签块。只把歌词清空是不够的——
+      // 模型照样会给人声部安排旋律，标签块才压得住。
       instrumental: request.instrumental === true,
       // 续写：只吃语义码（不是音频），后端会强制走 cot=off 接着往下长。
       semantic_prefix_file: request.semanticPrefix ?? null,
@@ -589,12 +699,15 @@ export const useInspireStore = defineStore("inspire", () => {
     if (yue.job.state === "idle") {
       settle();
       error.value = yue.error ?? i18n.t("inspire.failed");
+      return;
     }
+    // 引擎在后台跑：等到这一首真的结束（done / failed / 取消）再放批处理往下走。
+    await craftDone;
   }
 
   /** 云端生成：`generate()` 等到成品落盘才返回，所以结果直接落库。 */
   async function craftCloud(request: CraftRequest): Promise<void> {
-    if (crafting.value) return;
+    if (craft.value) return;
     const mine = beginCraft(request);
     const providerId = request.target;
     if (!providerId) {
@@ -619,8 +732,42 @@ export const useInspireStore = defineStore("inspire", () => {
     record(request, result.path, result.duration, model);
   }
 
-  /** 停掉正在跑的那次生成（本地 / 云端各走各的取消）。 */
+  /**
+   * 一次提交 **1–N 首**（进阶选项里的「数量」）。
+   *
+   * 串行跑，不并发：本地是一次引擎请求（同一份权重、同一块显存），云端是一次计费调用，
+   * 同时发 N 个只会互相抢资源 / 触发限流。每首之间换种子——固定种子往后加 1，
+   * `-1`（随机）保持不变——所以同一条提示词能拿到 N 个不同的 take。
+   *
+   * 中途点「停止」：当前这首照常取消，后面的不再开始；已经生成好的留在列表里。
+   */
+  async function craftBatch(request: CraftRequest, count: number): Promise<void> {
+    const total = Math.min(MAX_BATCH, Math.max(1, Math.trunc(Number(count) || 1)));
+    if (crafting.value) return;
+    if (total <= 1) {
+      await (request.source === "cloud" ? craftCloud(request) : craftLocal(request));
+      return;
+    }
+    batchStopped = false;
+    batch.value = { total, done: 0 };
+    try {
+      for (let index = 0; index < total; index += 1) {
+        if (batchStopped) break;
+        const seed =
+          typeof request.seed === "number" && request.seed >= 0 ? request.seed + index : request.seed;
+        const one: CraftRequest = { ...request, seed };
+        await (request.source === "cloud" ? craftCloud(one) : craftLocal(one));
+        if (batch.value) batch.value.done = index + 1;
+      }
+    } finally {
+      batch.value = null;
+      batchStopped = false;
+    }
+  }
+
+  /** 停掉正在跑的那次生成（本地 / 云端各走各的取消）。批处理里等于「这首停下、不再开下一首」。 */
   async function cancelCraft(): Promise<void> {
+    batchStopped = true;
     const current = craft.value;
     if (!current) return;
     // 先抬 token：取消后即使后端还推一条 done 过来，也不会被当成这次的结果。
@@ -656,8 +803,46 @@ export const useInspireStore = defineStore("inspire", () => {
     error.value = null;
   }
 
-  // ---- 续写 ----
+  // ---- 下载到本地 ----
 
+  /** 文件名：标题去掉不能出现在路径里的字符，最多 60 字。 */
+  function fileNameOf(item: InspireItem): string {
+    const base = (item.title || "").replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim();
+    return `${(base || "take").slice(0, 60)}.wav`;
+  }
+
+  /** 桌面端默认落到「下载」目录；浏览器端只给文件名（没有对话框）。 */
+  async function defaultSavePath(name: string): Promise<string> {
+    if (!isTauri()) return name;
+    try {
+      const { downloadDir, join } = await import("@tauri-apps/api/path");
+      return await join(await downloadDir(), name);
+    } catch {
+      return name;
+    }
+  }
+
+  /**
+   * **下载到本地**：桌面端走系统保存对话框，浏览器端落到数据目录的 `exports/` 再下载。
+   *
+   * 返回最终落地的绝对路径；用户取消返回 `null`（不当成错误）。
+   */
+  async function saveToDisk(item: InspireItem): Promise<string | null> {
+    error.value = null;
+    try {
+      const dest = await pickAudioToSave(await defaultSavePath(fileNameOf(item)));
+      if (dest === null) return null;
+      const saved = await yueSaveAudio(item.path, dest);
+      // 浏览器客户端没有保存对话框（dest 为空）：后端落到 exports/，这里走 /download 拉下来。
+      if (!dest) await downloadFromServer(saved);
+      return saved;
+    } catch (err) {
+      error.value = String(err);
+      return null;
+    }
+  }
+
+  // ---- 续写 ----
   /**
    * 一条记录的旁挂文件。
    *
@@ -757,6 +942,7 @@ export const useInspireStore = defineStore("inspire", () => {
     // 生成
     craft,
     crafting,
+    batch,
     craftTitle,
     elapsed,
     progressPct,
@@ -764,11 +950,14 @@ export const useInspireStore = defineStore("inspire", () => {
     error,
     craftLocal,
     craftCloud,
+    craftBatch,
     cancelCraft,
     clearError,
     // 续写
     canContinue,
     craftContinuation,
+    // 下载到本地
+    saveToDisk,
     // 导入工程
     importingId,
     importToProject,
@@ -782,5 +971,13 @@ export const useInspireStore = defineStore("inspire", () => {
     toggle,
     seekTo,
     stopPlayback,
+    // 焦点（灵感页 ↔ 底部播放键）
+    focusedId,
+    focusedItem,
+    focusedPlaying,
+    focusItem,
+    ensureFocused,
+    toggleFocused,
+    leaveView,
   };
 });

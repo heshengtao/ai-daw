@@ -1088,8 +1088,10 @@ const zh: Record<string, string> = {
   "model.yue2-q8-0": "YuE2 3B · Q8_0（默认）",
   "model.yue2-q4-0": "YuE2 3B · Q4_0",
   "model.yue2-bf16": "YuE2 3B · BF16",
-  "model.ace-step-turbo-q8": "ACE-Step 1.5 Turbo · Q8_0（默认 · 省空间）",
-  "model.ace-step-turbo-bf16": "ACE-Step 1.5 Turbo · BF16（最接近原版权重）",
+  "model.ace-step-turbo-q8": "ACE-Step 1.5 Turbo · Q8_0",
+  "model.ace-step-turbo-bf16": "ACE-Step 1.5 Turbo · BF16",
+  "model.ace-step-base-bf16": "ACE-Step 1.5 Base · BF16",
+  "model.ace-step-base-q8": "ACE-Step 1.5 Base · Q8_0",
   // 执行后端（后端 `local-ai::backend::catalog`）同理。
   "backend.cpu": "CPU",
   "backend.cpu.note": "纯 CPU（默认，全平台可用）",
@@ -2531,8 +2533,8 @@ const zh: Record<string, string> = {
   // ---- 模型家族差异（YuE2 有谱面 / 续写 / 翻唱；ACE-Step 是「描述 + 歌词 → 整首」）----
   "yue.describe": "音乐描述",
   "yue.describeHint": "一句话描述想要的音乐，例如 cinematic synth pop with clear vocals",
-  "yue.needPrompt": "先写一句音乐描述（ACE-Step 靠它决定风格）",
-  "yue.onlyYue2": "翻唱、续写、谱面、LoRA 只对 YuE2 有效；ACE-Step 直接按「描述 + 歌词」出整首",
+  "yue.needPrompt": "先写一句音乐描述（风格由它决定）",
+  "yue.onlyYue2": "翻唱、续写、谱面、LoRA 只对 YuE2 有效",
   "yue.stepsHintTurbo": "Turbo 档上限 8 步（再多也不会更细）",
 
   // ---- Hugging Face 授权（gated 仓库） ----
@@ -2576,15 +2578,18 @@ const zh: Record<string, string> = {
   "inspire.lyrics": "歌词",
   "inspire.lyricsHint": "每行一句；用结构标签分段",
   "inspire.lyricsPlaceholder": "[Verse]\n写你的歌词，每行一句\n\n[Chorus]\n副歌重复的那一句",
-  "inspire.lyricsCarried": "已带入 {count} 行歌词",
-  "inspire.lyricsEdit": "去编辑",
+  "inspire.lyricsOptional": "可留空：留空由模型写词",
+  "inspire.lyricsSimplePlaceholder": "写几句歌词（可留空）",
   "inspire.duration": "时长",
   "inspire.steps": "步数",
   "inspire.seed": "种子",
   "inspire.seedHint": "种子 -1 = 每次都不一样；固定它就能复现同一首",
   "inspire.lyricsAuto": "歌词留空 = 由模型写词",
-  "inspire.voices": "是否有人声",
-  "inspire.voicesHint": "关掉就是纯音乐，不使用歌词",
+  "inspire.instrumental": "纯音乐",
+  "inspire.instrumentalSwitchHint": "打开就是纯音乐：歌词换成 [Verse]/[Chorus] + [instrumental] 段落模板",
+  "inspire.takes": "数量",
+  "inspire.batchProgress": "第 {index}/{total} 首 · {time}",
+  "inspire.batchHint": "逐首串行生成：每首换一个种子，中途点「停止」就停在这一首",
   "inspire.discard": "清空输入",
   "inspire.create": "生成",
   "inspire.stop": "停止",
@@ -2640,7 +2645,11 @@ const zh: Record<string, string> = {
   "inspire.continueTotal": "总长 {length}（引擎单次上限 600 秒）",
   "inspire.continueStart": "开始续写",
   "inspire.continueTitle": "{title}（续写）",
+  "inspire.instrumentalHint": "纯音乐：歌词会换成带 [Verse] / [Chorus] / [Outro] 段落标签的 [instrumental] 模板，风格里也写明了 “instrumental, no vocals”（随时可以自己改）",
   "inspire.continueNeedsCode": "这首没有语义码，续写不了：只有本机生成的曲子才会落一份语义码",
+  "inspire.download": "下载到本地",
+  "inspire.downloadHint": "把这段音频另存到本地",
+  "inspire.savedTo": "已保存到 {path}",
 };
 
 export default zh;

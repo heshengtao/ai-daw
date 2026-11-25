@@ -165,22 +165,45 @@ export const STYLE_PRESETS: StylePreset[]
 
 样式复用歌词区 `[Verse]` 那排芯片的 `.tags` / `.chip`（`m3-chip tag`），不新造控件。
 
-### 4.3 纯音乐 / 有人声开关
+### 4.3 纯音乐开关
 
-用 `Md3Segmented`（与「简单/进阶」同一个控件）放在参数区：
+参数区一个 `Md3Switch`（左标签右开关），**问的是「是不是纯音乐」**：打开 = 纯音乐，
+关掉 = 正常唱歌。默认关，与「歌词留空 = 模型写词」的旧行为一致。
 
-- **有人声**（默认）：歌词照常提交；歌词留空时沿用现有语义——本地让模型自己写词，
-  提示语仍是 `inspire.lyricsAuto`。
-- **纯音乐**：歌词输入区禁用（内容保留不删，切回来还在），提交时 `lyrics: ""`，并在提示词末尾
-  补 `instrumental`（去重：已经有了就不重复加）。
+- **关（有人声）**：歌词照常提交；歌词留空时沿用现有语义——本地让模型自己写词，提示语
+  仍是 `inspire.lyricsAuto`。
+- **开（纯音乐）**：歌词输入区禁用（内容保留不删，切回来还在），风格里补一句
+  `instrumental, no vocals`（去重，补进去的文字在风格框里可见可改）；提交时歌词由后端整份
+  换成「段落模板」。
 
-对应 `CraftRequest.instrumental`：本地映射为「是否传歌词」，云端映射为它的 `instrumental` 参数。
-原来 `submitLocal` 里的 `instrumental: !lyrics.value.trim()` 推导删除，改为读开关。
+**为什么是「后端换歌词」而不是「前端传空歌词」**：YuE2 没有真的 `instrumental` 开关，官方
+文档的「歌词留空 = 器乐」实测压不住人声（模型照样给人声部排旋律），只写一段
+`[instrumental]` 也不够稳。模板 = 10 个段落标签（`[Verse]` / `[Bridge]` / `[Chorus]` /
+`[Outro]`）各带 4 行 `[instrumental]`，共 50 行（`yue_engine::INSTRUMENTAL_LYRICS`）：
+模型既没有能唱的词、每一段又都被标成器乐，人声基本不出现；段落骨架还让曲式有起伏，
+比一整块 `[instrumental]` 听感丰富。替换放在后端，CLI / MCP / AI 面板的 `compose_song`
+也就自动走同一条路。
+
+对应 `CraftRequest.instrumental`：本地映射为「后端换不换歌词」，云端映射为它的
+`instrumental` 参数。原来 `submitLocal` 里的 `instrumental: !lyrics.value.trim()` 推导删除，
+改为读开关。
+
+### 4.5 一批生成 1–N 首
+
+进阶参数里加一个「数量」（1–8，`MAX_BATCH`）。**串行跑**，不并发：本地是一次引擎请求
+（同一份权重和显存），云端是一次计费调用，同时发 N 个只会互相抢资源或触发限流。
+
+- 种子：固定种子每首 +1（`-1` 保持随机），所以同一条提示词能拿到 N 个不同 take；
+- 状态行显示「第 i/N 首 · 用时」，停止按钮取消当前这首并停掉后续；
+- 每首都是完整的一次生成，完成即入列表；生成完的那几首不会因为后面的失败被回滚；
+- 实现落在 store 的 `craftBatch`：每首 `await` 到结束（`craftDone` 在 `settle()` 里兑现），
+  再开下一首，RPC 与事件协议都不用动。
 
 ### 4.4 与后端字段的关系
 
-`ComposeArgs.instrumental` 不存在，纯音乐在后端就是 `lyrics` 为空；因此这一项**只改前端**，
-不需要动 RPC 协议。`instrumental` 补进 style 是给模型的条件提示，不是给后端的开关。
+`CraftRequest.instrumental` → `YueComposeArgs.instrumental` → `ComposeArgs.instrumental`：
+前端只把开关状态传下去，**歌词怎么换由后端决定**（见 4.3）。ACE-Step 是「一句歌词都不发」
+（这版 C++ 端口不认 `[Instrumental]` 标签，发了反而被当成歌词正文、把规划器带乱）。
 
 ## 5 文件清单
 
