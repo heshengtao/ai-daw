@@ -3,7 +3,7 @@
  * 面板标签栏：标签 + 「+」打开选择器。
  * 作为顶栏的一部分渲染（与顶栏同一行），不再单独占一行。
  */
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   PlusIcon,
   XMarkIcon,
@@ -90,18 +90,56 @@ function onKey(e: KeyboardEvent): void {
   if (e.key === "Escape" && pickerOpen.value) pickerOpen.value = false;
 }
 
+const tabsEl = ref<HTMLElement | null>(null);
+const tabPill = ref({ left: 0, width: 0, visible: false });
+let tabsResizeObserver: ResizeObserver | null = null;
+
+function syncTabPill(): void {
+  void nextTick(() => {
+    const box = tabsEl.value;
+    const el = box?.querySelector<HTMLElement>(".tab.on");
+    if (!box || !el) {
+      tabPill.value = { left: 0, width: 0, visible: false };
+      return;
+    }
+    tabPill.value = { left: el.offsetLeft, width: el.offsetWidth, visible: true };
+  });
+}
+
+watch(
+  () => [layout.activeTab, visibleTabs.value.join("|")],
+  syncTabPill,
+  { immediate: true },
+);
+
 onMounted(() => {
   document.addEventListener("pointerdown", onDocPointer);
   window.addEventListener("keydown", onKey);
+  window.addEventListener("resize", syncTabPill);
+  if (tabsEl.value && typeof ResizeObserver !== "undefined") {
+    tabsResizeObserver = new ResizeObserver(syncTabPill);
+    tabsResizeObserver.observe(tabsEl.value);
+  }
+  void document.fonts?.ready.then(syncTabPill);
+  syncTabPill();
 });
 onUnmounted(() => {
   document.removeEventListener("pointerdown", onDocPointer);
   window.removeEventListener("keydown", onKey);
+  window.removeEventListener("resize", syncTabPill);
+  tabsResizeObserver?.disconnect();
+  tabsResizeObserver = null;
 });
 </script>
 
 <template>
-  <div class="tabs" role="tablist">
+  <div ref="tabsEl" class="tabs" role="tablist">
+    <div
+      v-if="tabPill.visible"
+      class="tab-pill"
+      :style="{ transform: `translate3d(${tabPill.left}px, 0, 0)`, width: `${tabPill.width}px` }"
+      aria-hidden="true"
+    />
     <div
       v-for="id in visibleTabs"
       :key="id"
@@ -158,6 +196,7 @@ onUnmounted(() => {
 
 <style scoped>
 .tabs {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -169,7 +208,22 @@ onUnmounted(() => {
 .tabs::-webkit-scrollbar {
   display: none;
 }
+.tab-pill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 10px;
+  background-color: rgb(var(--md-secondary-container));
+  pointer-events: none;
+  will-change: transform, width;
+  transition:
+    transform 300ms cubic-bezier(0.05, 0.7, 0.1, 1),
+    width 300ms cubic-bezier(0.05, 0.7, 0.1, 1);
+}
 .tab {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -180,14 +234,15 @@ onUnmounted(() => {
   cursor: pointer;
   white-space: nowrap;
   flex: 0 0 auto;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+    color var(--md-dur-effects-fast) var(--md-spring-effects-fast);
 }
-.tab:hover {
+.tab:hover:not(.on) {
   background-color: rgb(var(--md-on-surface-variant) / var(--md-state-hover-alpha));
   color: rgb(var(--md-on-surface));
 }
 .tab.on {
-  background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
 }
 .tab-icon {

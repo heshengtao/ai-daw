@@ -14,8 +14,10 @@ const props = withDefaults(
     step?: number;
     label?: string;
     disabled?: boolean;
+    formatValue?: (value: number) => string;
+    showBubble?: boolean;
   }>(),
-  { min: 0, max: 100, step: 1, disabled: false },
+  { min: 0, max: 100, step: 1, disabled: false, formatValue: undefined, showBubble: true },
 );
 const emit = defineEmits<{
   (e: "update:modelValue", v: number): void;
@@ -32,6 +34,10 @@ const ratio = computed(() => {
   if (span <= 0) return 0;
   return Math.min(1, Math.max(0, (props.modelValue - props.min) / span));
 });
+
+const bubbleText = computed(() =>
+  props.formatValue ? props.formatValue(props.modelValue) : String(props.modelValue),
+);
 
 /** 量化到步长并夹在区间内。 */
 function quantize(v: number): number {
@@ -145,12 +151,26 @@ function onKey(e: KeyboardEvent): void {
     @pointercancel="onPointerUp"
     @keydown="onKey"
   >
-    <div class="track">
-      <div class="track-active" :style="{ width: `${ratio * 100}%` }" />
-    </div>
-    <div class="thumb" :style="{ left: `${ratio * 100}%` }">
-      <span class="thumb-state" />
-    </div>
+    <span
+      class="track-active"
+      :style="{ width: `max(0px, calc(${ratio * 100}% - 6px))` }"
+      aria-hidden="true"
+    />
+    <span
+      class="track-inactive"
+      :style="{ width: `max(0px, calc(${(1 - ratio) * 100}% - 6px))` }"
+      aria-hidden="true"
+    />
+    <span v-if="ratio < 0.96" class="stop-dot" aria-hidden="true" />
+    <span class="handle" :style="{ left: `${ratio * 100}%` }" aria-hidden="true" />
+    <span
+      v-if="showBubble"
+      class="value-bubble"
+      :style="{ left: `${ratio * 100}%` }"
+      aria-hidden="true"
+    >
+      {{ bubbleText }}
+    </span>
   </div>
 </template>
 
@@ -158,7 +178,7 @@ function onKey(e: KeyboardEvent): void {
 .m3-slider {
   position: relative;
   width: 100%;
-  height: 24px;
+  height: 32px;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -169,86 +189,84 @@ function onKey(e: KeyboardEvent): void {
   opacity: 0.38;
   cursor: default;
 }
-.track {
+.track-active {
   position: absolute;
   left: 0;
-  right: 0;
-  height: 4px;
-  border-radius: 999px;
-  background-color: rgb(var(--md-surface-container-highest));
-  overflow: hidden;
-}
-.track-active {
-  height: 100%;
-  border-radius: 999px;
+  height: 12px;
+  border-radius: 6px 2.5px 2.5px 6px;
   background-color: rgb(var(--md-primary));
-  transition: width var(--md-ease-emphasized);
+  pointer-events: none;
 }
-.m3-slider.dragging .track-active {
-  transition: none;
-}
-.thumb {
+.track-inactive {
   position: absolute;
+  right: 0;
+  height: 12px;
+  border-radius: 2.5px 6px 6px 2.5px;
+  background-color: rgb(var(--md-secondary-container));
+  pointer-events: none;
+}
+.stop-dot {
+  position: absolute;
+  right: 4px;
   top: 50%;
   width: 4px;
   height: 4px;
-  margin-left: -2px;
+  border-radius: 999px;
   transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: left var(--md-ease-emphasized);
+  background-color: rgb(var(--md-primary));
+  pointer-events: none;
 }
-.m3-slider.dragging .thumb {
-  transition: none;
-}
-/* 手柄本体 */
-.thumb::after {
-  content: "";
+.handle {
   position: absolute;
-  width: 18px;
-  height: 18px;
+  top: 50%;
+  width: 4px;
+  height: 26px;
   border-radius: 999px;
   background-color: rgb(var(--md-primary));
+  transform: translate(-50%, -50%);
+  pointer-events: none;
   transition:
-    width var(--md-ease-emphasized),
-    height var(--md-ease-emphasized);
+    width var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    height var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy);
 }
-.m3-slider:hover .thumb::after,
-.m3-slider.dragging .thumb::after {
-  width: 20px;
-  height: 20px;
+.m3-slider:hover .handle {
+  height: 29px;
 }
-/* 状态层：悬停 / 拖拽时扩散 */
-.thumb-state {
+.m3-slider.dragging .handle {
+  width: 2.5px;
+  height: 32px;
+}
+.m3-slider:focus-visible .handle {
+  outline: 2px solid rgb(var(--md-primary));
+  outline-offset: 3px;
+}
+.value-bubble {
   position: absolute;
-  width: 36px;
-  height: 36px;
+  bottom: calc(100% + 2px);
+  padding: 4px 9px;
   border-radius: 999px;
-  background-color: rgb(var(--md-primary));
+  background-color: rgb(var(--md-inverse-surface));
+  color: rgb(var(--md-inverse-on-surface));
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
   opacity: 0;
-  transform: scale(0.6);
+  transform: translate(-50%, 6px) scale(0.6);
   transition:
-    opacity var(--md-ease-emphasized),
-    transform var(--md-ease-emphasized);
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    opacity var(--md-dur-effects-fast) var(--md-spring-effects-fast);
 }
-.m3-slider:hover .thumb-state {
-  opacity: 0.1;
-  transform: scale(1);
+.m3-slider:hover:not(.disabled) .value-bubble,
+.m3-slider.dragging .value-bubble {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
 }
-.m3-slider.dragging .thumb-state {
-  opacity: 0.16;
-  transform: scale(1);
-}
-.m3-slider:focus-visible .thumb::after {
-  box-shadow: 0 0 0 3px rgb(var(--md-primary) / 0.3);
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .track-active,
-  .thumb,
-  .thumb::after,
-  .thumb-state {
+  .handle,
+  .value-bubble {
     transition: none;
   }
 }

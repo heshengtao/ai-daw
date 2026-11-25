@@ -570,24 +570,33 @@ onUnmounted(() => stop?.());
 .pill {
   cursor: pointer;
   font: inherit;
-  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
-  border-radius: 999px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.75);
+  border-radius: 9px;
   background: transparent;
   color: rgb(var(--md-on-surface-variant));
-  font-size: 10px;
-  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  transition:
+    border-radius var(--md-dur-effects-default) var(--md-spring-effects-default),
+    background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
+    border-color var(--md-dur-effects-default) var(--md-spring-effects-default),
+    color var(--md-dur-effects-default) var(--md-spring-effects-default);
 }
 .chip {
   cursor: pointer;
 }
-.pill:hover {
-  background-color: rgb(var(--md-primary) / 0.12);
+.pill:hover,
+.chip:hover {
+  background-color: rgb(var(--md-primary) / 0.1);
   color: rgb(var(--md-on-surface));
 }
 .chip.active {
+  border-radius: 999px;
   border-color: transparent;
-  background-color: rgb(var(--md-primary));
-  color: rgb(var(--md-on-primary));
+  background-color: rgb(var(--md-secondary-container));
+  color: rgb(var(--md-on-secondary-container));
+  font-weight: 600;
 }
 .list {
   flex: 1;

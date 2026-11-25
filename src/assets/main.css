@@ -26,6 +26,11 @@
     --md-on-surface-variant:  73 69 79;
     --md-on-surface-muted:    121 116 126;
 
+    /* Inverse surfaces (Snackbar / Tooltip / Floating Badges) */
+    --md-inverse-surface:     49 48 51;
+    --md-inverse-on-surface:  244 239 244;
+    --md-inverse-primary:     208 188 255;
+
     /* Primary */
     --md-primary:             103 80 164;
     --md-on-primary:          255 255 255;
@@ -110,12 +115,38 @@
     --md-shape-corner-md: 12px;
     --md-shape-corner-lg: 16px;
     --md-shape-corner-xl: 24px;
+    --md-shape-corner-xxl: 28px;
     --md-shape-corner-full: 999px;
 
     /* State layers */
     --md-state-hover-alpha: 0.08;
     --md-state-focus-alpha: 0.12;
     --md-state-press-alpha: 0.12;
+
+    /* M3 Expressive 物理弹簧（Spatial 带过冲，Effects 临界阻尼零过冲） */
+    --md-spring-spatial-fast: linear(
+      0, 0.009, 0.035 2.1%, 0.141, 0.281 6.7%, 0.723 12.9%, 0.938 16.7%, 1.017,
+      1.077, 1.121, 1.149 24.3%, 1.159, 1.163, 1.161, 1.154 29.9%, 1.129 32.8%,
+      1.051 39.6%, 1.017 43.1%, 0.991, 0.977 51%, 0.974 53.8%, 0.975 57.1%,
+      0.997 69.8%, 1.003 76.9%, 1.004 83.8%, 1
+    );
+    --md-spring-spatial-default: linear(
+      0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%, 0.849 31.5%,
+      0.937 38.1%, 0.968 41.8%, 0.991 45.7%, 1.006 50.1%, 1.015 55%, 1.017 63.9%,
+      1.001
+    );
+    --md-spring-spatial-bouncy: linear(
+      0, 0.009, 0.037 2.2%, 0.149 4.8%, 0.728 13.8%, 0.955 18.1%, 1.087 22%,
+      1.142 25.5%, 1.147 28.4%, 1.122 32%, 1.013 40.7%, 0.971 46.2%, 0.964 50.5%,
+      0.997 64%, 1.009 73%, 1.002 86%, 1
+    );
+    --md-spring-effects-fast: cubic-bezier(0.31, 0.94, 0.34, 1);
+    --md-spring-effects-default: cubic-bezier(0.34, 0.8, 0.34, 1);
+    --md-dur-spatial-fast: 320ms;
+    --md-dur-spatial-default: 460ms;
+    --md-dur-spatial-bouncy: 380ms;
+    --md-dur-effects-fast: 140ms;
+    --md-dur-effects-default: 200ms;
 
     /* Expressive motion — 弹簧**只给缓动曲线，不带时长**。
        MD3 Expressive 的写法是 `240ms cubic-bezier(...)` 这种「时长 + 曲线」打包值，
@@ -160,6 +191,10 @@
     --md-on-surface:          230 224 233;
     --md-on-surface-variant:   202 196 208;
     --md-on-surface-muted:     147 143 153;
+
+    --md-inverse-surface:     230 224 233;
+    --md-inverse-on-surface:   49 48 51;
+    --md-inverse-primary:     103 80 164;
 
     --md-primary:             208 188 255;
     --md-on-primary:           56 30 114;
@@ -406,24 +441,25 @@
   .btn-filled {
     @apply relative inline-flex items-center justify-center gap-2 px-6 h-11
            bg-[rgb(var(--md-primary))] text-[rgb(var(--md-on-primary))]
-           font-medium text-sm leading-none rounded-full
+           font-medium text-sm leading-none
            disabled:opacity-40 disabled:pointer-events-none disabled:transform-none
            overflow-hidden select-none cursor-pointer;
+    border-radius: 22px;
     box-shadow: var(--md-elevation-1);
     letter-spacing: 0.1px;
-    /* 不用 `transition: all`：它会把 width / height / font-size 这些「一次性重排」
-       也拉进过渡，状态一变就多花一帧；这里只列真正会动的属性。 */
     transition:
-      transform var(--md-duration-short-2) var(--md-ease-standard),
-      box-shadow var(--md-duration-short-2) var(--md-ease-standard),
-      background-color var(--md-duration-short-2) var(--md-ease-standard),
-      background-image var(--md-duration-short-2) var(--md-ease-standard),
-      border-color var(--md-duration-short-2) var(--md-ease-standard),
-      color var(--md-duration-short-2) var(--md-ease-standard);
+      border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      box-shadow var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      background-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      background-image var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      border-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      color var(--md-dur-effects-fast) var(--md-spring-effects-fast);
   }
 
   .btn-filled:active {
-    transform: scale(0.97);
+    border-radius: 11px;
+    transform: scale(0.96);
   }
 
   .btn-filled:hover {
@@ -440,23 +476,24 @@
   .btn-tonal {
     @apply relative inline-flex items-center justify-center gap-2 px-6 h-11
            bg-[rgb(var(--md-secondary-container))] text-[rgb(var(--md-on-secondary-container))]
-           font-medium text-sm leading-none rounded-full
+           font-medium text-sm leading-none
            disabled:opacity-40 disabled:pointer-events-none disabled:transform-none
            overflow-hidden select-none cursor-pointer;
+    border-radius: 22px;
     letter-spacing: 0.1px;
-    /* 不用 `transition: all`：它会把 width / height / font-size 这些「一次性重排」
-       也拉进过渡，状态一变就多花一帧；这里只列真正会动的属性。 */
     transition:
-      transform var(--md-duration-short-2) var(--md-ease-standard),
-      box-shadow var(--md-duration-short-2) var(--md-ease-standard),
-      background-color var(--md-duration-short-2) var(--md-ease-standard),
-      background-image var(--md-duration-short-2) var(--md-ease-standard),
-      border-color var(--md-duration-short-2) var(--md-ease-standard),
-      color var(--md-duration-short-2) var(--md-ease-standard);
+      border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      box-shadow var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      background-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      background-image var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      border-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      color var(--md-dur-effects-fast) var(--md-spring-effects-fast);
   }
 
   .btn-tonal:active {
-    transform: scale(0.97);
+    border-radius: 11px;
+    transform: scale(0.96);
   }
 
   .btn-tonal:hover {
@@ -473,23 +510,24 @@
   .btn-outlined {
     @apply relative inline-flex items-center justify-center gap-2 px-6 h-11
            border border-[rgb(var(--md-outline-variant))]
-           text-[rgb(var(--md-primary))] font-medium text-sm leading-none rounded-full
+           text-[rgb(var(--md-primary))] font-medium text-sm leading-none
            disabled:opacity-40 disabled:pointer-events-none disabled:transform-none
            overflow-hidden select-none cursor-pointer;
+    border-radius: 22px;
     letter-spacing: 0.1px;
-    /* 不用 `transition: all`：它会把 width / height / font-size 这些「一次性重排」
-       也拉进过渡，状态一变就多花一帧；这里只列真正会动的属性。 */
     transition:
-      transform var(--md-duration-short-2) var(--md-ease-standard),
-      box-shadow var(--md-duration-short-2) var(--md-ease-standard),
-      background-color var(--md-duration-short-2) var(--md-ease-standard),
-      background-image var(--md-duration-short-2) var(--md-ease-standard),
-      border-color var(--md-duration-short-2) var(--md-ease-standard),
-      color var(--md-duration-short-2) var(--md-ease-standard);
+      border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      box-shadow var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      background-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      background-image var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      border-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      color var(--md-dur-effects-fast) var(--md-spring-effects-fast);
   }
 
   .btn-outlined:active {
-    transform: scale(0.97);
+    border-radius: 11px;
+    transform: scale(0.96);
   }
 
   .btn-outlined:hover {
@@ -500,23 +538,24 @@
   /* Text Button */
   .btn-text {
     @apply relative inline-flex items-center justify-center gap-2 px-4 h-10
-           text-[rgb(var(--md-primary))] font-medium text-sm leading-none rounded-full
+           text-[rgb(var(--md-primary))] font-medium text-sm leading-none
            disabled:opacity-40 disabled:pointer-events-none disabled:transform-none
            overflow-hidden select-none cursor-pointer;
+    border-radius: 20px;
     letter-spacing: 0.1px;
-    /* 不用 `transition: all`：它会把 width / height / font-size 这些「一次性重排」
-       也拉进过渡，状态一变就多花一帧；这里只列真正会动的属性。 */
     transition:
-      transform var(--md-duration-short-2) var(--md-ease-standard),
-      box-shadow var(--md-duration-short-2) var(--md-ease-standard),
-      background-color var(--md-duration-short-2) var(--md-ease-standard),
-      background-image var(--md-duration-short-2) var(--md-ease-standard),
-      border-color var(--md-duration-short-2) var(--md-ease-standard),
-      color var(--md-duration-short-2) var(--md-ease-standard);
+      border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      box-shadow var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      background-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      background-image var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      border-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      color var(--md-dur-effects-fast) var(--md-spring-effects-fast);
   }
 
   .btn-text:active {
-    transform: scale(0.96);
+    border-radius: 10px;
+    transform: scale(0.95);
   }
 
   .btn-text:hover { background-color: rgba(var(--md-primary) / var(--md-state-hover-alpha)); }
@@ -524,21 +563,19 @@
   /* Icon Button */
   .btn-icon {
     @apply relative inline-flex items-center justify-center w-10 h-10
-           text-[rgb(var(--md-on-surface-variant))] rounded-full
+           text-[rgb(var(--md-on-surface-variant))]
            overflow-hidden cursor-pointer select-none;
-    /* 不用 `transition: all`：它会把 width / height / font-size 这些「一次性重排」
-       也拉进过渡，状态一变就多花一帧；这里只列真正会动的属性。 */
+    border-radius: 20px;
     transition:
-      transform var(--md-duration-short-2) var(--md-ease-standard),
-      box-shadow var(--md-duration-short-2) var(--md-ease-standard),
-      background-color var(--md-duration-short-2) var(--md-ease-standard),
-      background-image var(--md-duration-short-2) var(--md-ease-standard),
-      border-color var(--md-duration-short-2) var(--md-ease-standard),
-      color var(--md-duration-short-2) var(--md-ease-standard);
+      border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      background-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      color var(--md-dur-effects-fast) var(--md-spring-effects-fast);
   }
 
   .btn-icon:active {
-    transform: scale(0.90);
+    border-radius: 11px;
+    transform: scale(0.91);
   }
 
   .btn-icon:hover { background-color: rgba(var(--md-on-surface-variant) / var(--md-state-hover-alpha)); }
@@ -863,36 +900,59 @@
 
   /* ---- MD3 Expressive primitives ---- */
 
-  /* 分段按钮组（主题选择等） */
+  /* 分段按钮组（Connected Button Group 风格） */
   .m3-seg {
-    @apply inline-flex items-center p-1 rounded-full;
-    background-color: rgb(var(--md-surface-container-high));
-    gap: 2px;
+    @apply inline-flex items-center;
+    gap: 3px;
   }
 
   .m3-seg-btn {
-    @apply relative inline-flex items-center justify-center gap-2 px-4 h-9 rounded-full
-           text-sm font-medium cursor-pointer select-none border-0 bg-transparent;
+    @apply relative inline-flex items-center justify-center gap-2 px-4 h-9
+           text-sm font-medium cursor-pointer select-none border-0;
+    border-radius: 8px;
+    background-color: rgb(var(--md-surface-container-highest));
     color: rgb(var(--md-on-surface-variant));
     white-space: nowrap;
-    /* 颜色不该「弹」：弹簧曲线用在颜色上既看不出过冲、又把反馈拖到 240ms。
-       状态色统一走标准减速的短时长。 */
     transition:
-      color var(--md-duration-short-2) var(--md-ease-standard),
-      background-color var(--md-duration-short-2) var(--md-ease-standard);
+      border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      padding var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      color var(--md-dur-effects-default) var(--md-spring-effects-default),
+      background-color var(--md-dur-effects-default) var(--md-spring-effects-default);
   }
 
-  .m3-seg-btn:hover {
+  .m3-seg-btn:first-child {
+    border-radius: 18px 8px 8px 18px;
+  }
+
+  .m3-seg-btn:last-child {
+    border-radius: 8px 18px 18px 8px;
+  }
+
+  .m3-seg-btn:only-child {
+    border-radius: 18px;
+  }
+
+  .m3-seg-btn:hover:not(.on) {
     color: rgb(var(--md-on-surface));
+    filter: brightness(1.06);
+  }
+
+  .m3-seg-btn:active {
+    padding-left: 19px;
+    padding-right: 19px;
+    border-radius: 13px;
   }
 
   .m3-seg-btn.on {
+    border-radius: 18px;
+    padding-left: 18px;
+    padding-right: 18px;
     background-color: rgb(var(--md-secondary-container));
     color: rgb(var(--md-on-secondary-container));
-    box-shadow: var(--md-elevation-1);
+    font-weight: 600;
   }
 
-  /* MD3 开关：无原生外观；用强调减速曲线，不带过冲 */
+  /* MD3 Expressive 开关：软弹按压拉伸 + Spatial Bouncy 弹簧 */
   .m3-switch {
     @apply relative inline-flex items-center flex-none cursor-pointer border-0;
     width: 52px;
@@ -902,8 +962,8 @@
     background-color: rgb(var(--md-surface-container-highest));
     border: 2px solid rgb(var(--md-outline));
     transition:
-      background-color var(--md-ease-emphasized),
-      border-color var(--md-ease-emphasized);
+      background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
+      border-color var(--md-dur-effects-default) var(--md-spring-effects-default);
   }
 
   .m3-switch::after {
@@ -913,14 +973,19 @@
     left: 6px;
     width: 16px;
     height: 16px;
-    margin-top: -8px;
+    transform: translateY(-50%);
     background-color: rgb(var(--md-outline));
     transition:
-      left var(--md-ease-emphasized-decel),
-      width var(--md-ease-emphasized-decel),
-      height var(--md-ease-emphasized-decel),
-      margin-top var(--md-ease-emphasized-decel),
-      background-color var(--md-ease-emphasized-decel);
+      left var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      width var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      height var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      background-color var(--md-dur-effects-default) var(--md-spring-effects-default);
+  }
+
+  .m3-switch:active:not(:disabled)::after {
+    left: 0;
+    width: 27px;
+    height: 27px;
   }
 
   .m3-switch.on {
@@ -929,13 +994,16 @@
   }
 
   .m3-switch.on::after {
-    /* 轨道内宽 = 52 − 2×2(border) = 48；把手 24，右侧留 2（与 AI 面板的开关同一比例） →
-       left = 48 − 24 − 2 = 22。（原值 26 会把把手压在右边框上、18 又离得太远。） */
     left: 22px;
     width: 24px;
     height: 24px;
-    margin-top: -12px;
     background-color: rgb(var(--md-on-primary));
+  }
+
+  .m3-switch.on:active:not(:disabled)::after {
+    left: 19px;
+    width: 27px;
+    height: 27px;
   }
 
   /* ---- 对话框 / 检查器共用的 MD3 表单原语 ----
@@ -1131,7 +1199,7 @@
     border-top: 1px solid rgb(var(--md-outline-variant) / 0.3);
   }
 
-  /* 对话框里的按钮：比主界面大按钮小一号，高度与 NumberField / Select 对齐 */
+  /* 对话框与面板里的按钮：M3 Expressive 按压形变 + 弹簧反馈 */
   .m3-btn {
     display: inline-flex;
     align-items: center;
@@ -1140,18 +1208,29 @@
     height: 34px;
     padding: 0 16px;
     border: 0;
-    border-radius: 999px;
+    border-radius: 17px;
     font-family: inherit;
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     white-space: nowrap;
     cursor: pointer;
-    transition: filter 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+    transition:
+      border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      filter var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      background-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      color var(--md-dur-effects-fast) var(--md-spring-effects-fast);
+  }
+
+  .m3-btn:active:not(:disabled) {
+    border-radius: 9px;
+    transform: scale(0.95);
   }
 
   .m3-btn.filled {
     background-color: rgb(var(--md-primary));
     color: rgb(var(--md-on-primary));
+    box-shadow: var(--md-elevation-1);
   }
 
   .m3-btn.tonal {
@@ -1203,16 +1282,25 @@
     flex: 0 0 auto;
     padding: 0;
     border: 0;
-    border-radius: 999px;
+    border-radius: 17px;
     background: transparent;
     color: rgb(var(--md-on-surface-variant));
     cursor: pointer;
-    transition: background-color 0.14s ease, color 0.14s ease;
+    transition:
+      border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+      background-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+      color var(--md-dur-effects-fast) var(--md-spring-effects-fast);
   }
 
   .m3-icon-btn:hover {
     background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
     color: rgb(var(--md-on-surface));
+  }
+
+  .m3-icon-btn:active {
+    border-radius: 10px;
+    transform: scale(0.91);
   }
 
   .m3-icon-btn.danger {
@@ -1228,15 +1316,20 @@
     align-items: center;
     height: 28px;
     padding: 0 12px;
-    border: 1px solid rgb(var(--md-outline-variant) / 0.7);
-    border-radius: 999px;
+    border: 1px solid rgb(var(--md-outline-variant) / 0.75);
+    border-radius: 9px;
     background: transparent;
     color: rgb(var(--md-on-surface));
     font-family: inherit;
     font-size: 11.5px;
+    font-weight: 500;
     white-space: nowrap;
     cursor: pointer;
-    transition: background-color 0.14s ease, border-color 0.14s ease;
+    transition:
+      border-radius var(--md-dur-effects-default) var(--md-spring-effects-default),
+      background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
+      border-color var(--md-dur-effects-default) var(--md-spring-effects-default),
+      color var(--md-dur-effects-default) var(--md-spring-effects-default);
   }
 
   .m3-chip:hover {
@@ -1245,9 +1338,11 @@
   }
 
   .m3-chip.on {
+    border-radius: 999px;
     border-color: transparent;
     background-color: rgb(var(--md-secondary-container));
     color: rgb(var(--md-on-secondary-container));
+    font-weight: 600;
   }
 }
 
@@ -1351,39 +1446,35 @@
 
 .view-enter-active {
   transition:
-    opacity var(--md-duration-short-2) var(--md-ease-standard-decel),
-    transform var(--md-duration-short-2) var(--md-ease-emphasized-decel);
+    opacity 200ms cubic-bezier(0.2, 0, 0, 1),
+    transform 280ms cubic-bezier(0.05, 0.7, 0.1, 1);
   will-change: opacity, transform;
 }
 
 .view-leave-active {
-  /* 退场**不做**过渡：`mode="out-in"` 是串行的，留一段淡出等于把「点完到看见新页」
-     又往后推一段。旧页一帧内让开、新页淡入，手感最接近「即时切换」。
-     （`transition: none` 会让 Vue 立刻判定结束，不会白等那 90ms。） */
   transition: none;
 }
 
 .view-enter-from {
   opacity: 0;
-  transform: translateY(6px);
+  transform: translate3d(0, 8px, 0);
 }
 
-/* 右侧面板换标签：只淡入 + 轻微上浮，不做横向滑动（面板本身没有位移）。 */
+/* 右侧面板换标签：Effects 淡入 + 柔和上浮 */
 .pane-enter-active {
   transition:
-    opacity var(--md-duration-short-2) var(--md-ease-standard-decel),
-    transform var(--md-duration-short-2) var(--md-ease-emphasized-decel);
+    opacity var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-default);
   will-change: opacity, transform;
 }
 
 .pane-leave-active {
-  /* 与路由切换同理：面板换标签不要让用户等旧内容退干净。 */
   transition: none;
 }
 
 .pane-enter-from {
   opacity: 0;
-  transform: translateY(6px);
+  transform: translate3d(0, 7px, 0);
 }
 
 /* ===== Responsive ===== */

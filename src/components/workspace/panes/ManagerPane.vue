@@ -1714,30 +1714,49 @@ async function doRevealModel(id: string): Promise<void> {
 .tabs {
   display: flex;
   align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
+  gap: 3px;
+  flex-wrap: nowrap;
   min-width: 0;
 }
 .tab {
-  height: 28px;
-  padding: 0 12px;
+  height: 30px;
+  padding: 0 13px;
   border: 0;
-  border-radius: 999px;
-  background: transparent;
+  border-radius: 7px;
+  background-color: rgb(var(--md-surface-container-highest));
   color: rgb(var(--md-on-surface-variant));
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition: background-color 0.14s ease, color 0.14s ease;
+  transition:
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    padding var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
+    color var(--md-dur-effects-default) var(--md-spring-effects-default);
 }
-.tab:hover {
-  background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
+.tab:first-child {
+  border-radius: 15px 7px 7px 15px;
+}
+.tab:last-child {
+  border-radius: 7px 15px 15px 7px;
+}
+.tab:hover:not(.on) {
+  color: rgb(var(--md-on-surface));
+  filter: brightness(1.06);
+}
+.tab:active {
+  padding: 0 16px;
+  border-radius: 11px;
 }
 .tab.on {
+  border-radius: 15px;
+  padding: 0 15px;
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
+  font-weight: 600;
 }
 .tab-count {
   font-size: 10px;
@@ -1752,26 +1771,34 @@ async function doRevealModel(id: string): Promise<void> {
   align-items: center;
   gap: 4px;
 }
-/* 显眼的「导入插件」：图标 + 文字（窄面板里会换到下一行）。 */
+/* 显眼的「导入插件」：M3 Expressive Filled 形变按钮。 */
 .import-btn {
   flex: 0 0 auto;
-  height: 30px;
-  padding: 0 14px;
+  height: 32px;
+  padding: 0 15px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 16px;
   background-color: rgb(var(--md-primary));
   color: rgb(var(--md-on-primary));
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   white-space: nowrap;
-  transition: background-color 0.14s ease;
+  box-shadow: var(--md-elevation-1);
+  transition:
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    filter var(--md-dur-effects-fast) var(--md-spring-effects-fast);
 }
 .import-btn:hover:not(:disabled) {
-  background-color: rgb(var(--md-primary) / 0.88);
+  filter: brightness(1.08);
+}
+.import-btn:active:not(:disabled) {
+  border-radius: 8px;
+  transform: scale(0.95);
 }
 .import-btn:disabled {
   opacity: 0.45;
@@ -1886,24 +1913,31 @@ async function doRevealModel(id: string): Promise<void> {
   gap: 4px;
 }
 .chip {
-  height: 24px;
-  padding: 0 10px;
-  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
-  border-radius: 999px;
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid rgb(var(--md-outline-variant) / 0.75);
+  border-radius: 9px;
   background: transparent;
   color: rgb(var(--md-on-surface-variant));
-  font-size: 11px;
+  font-size: 11.5px;
+  font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+  transition:
+    border-radius var(--md-dur-effects-default) var(--md-spring-effects-default),
+    background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
+    color var(--md-dur-effects-default) var(--md-spring-effects-default),
+    border-color var(--md-dur-effects-default) var(--md-spring-effects-default);
 }
 .chip:hover {
   background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
 }
 .chip.on {
+  border-radius: 999px;
   border-color: transparent;
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
+  font-weight: 600;
 }
 .meta {
   display: flex;
@@ -2182,35 +2216,42 @@ async function doRevealModel(id: string): Promise<void> {
 }
 .mini-btn {
   flex: 0 0 auto;
-  height: 26px;
-  padding: 0 12px;
-  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
-  border-radius: 999px;
-  background: transparent;
-  color: rgb(var(--md-on-surface-variant));
-  font-size: 11px;
+  height: 29px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 15px;
+  background-color: rgb(var(--md-surface-container-highest));
+  color: rgb(var(--md-on-surface));
+  font-size: 11.5px;
+  font-weight: 500;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   white-space: nowrap;
-  transition: background-color 0.14s ease, color 0.14s ease;
+  transition:
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    filter var(--md-dur-effects-fast) var(--md-spring-effects-fast);
 }
 .mini-btn:hover:not(:disabled) {
-  background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
+  filter: brightness(1.06);
+}
+.mini-btn:active:not(:disabled) {
+  border-radius: 8px;
+  transform: scale(0.95);
 }
 .mini-btn.primary {
-  border-color: transparent;
   background-color: rgb(var(--md-primary));
   color: rgb(var(--md-on-primary));
+  font-weight: 600;
 }
 .mini-btn.primary:hover:not(:disabled) {
-  background-color: rgb(var(--md-primary) / 0.88);
+  filter: brightness(1.08);
 }
 .mini-btn.danger {
-  border-color: transparent;
-  background-color: rgb(var(--md-error));
-  color: rgb(var(--md-on-error));
+  background-color: rgb(var(--md-error-container));
+  color: rgb(var(--md-on-error-container));
 }
 .mini-btn:disabled {
   opacity: 0.45;

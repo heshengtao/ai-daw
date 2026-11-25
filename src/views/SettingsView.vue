@@ -19,6 +19,7 @@ import { useSettingsStore, MAX_DEFAULT_TEMPO, MIN_DEFAULT_TEMPO } from "@/stores
 import { useOnboardingStore } from "@/stores/onboarding";
 import { useAgentStore } from "@/stores/agent";
 import Md3Slider from "@/components/common/Md3Slider.vue";
+import Md3WavyProgress from "@/components/common/Md3WavyProgress.vue";
 import NumberField from "@/components/common/NumberField.vue";
 import ComboField from "@/components/common/ComboField.vue";
 import Md3Select, { type SelectOption } from "@/components/common/Md3Select.vue";
@@ -2498,18 +2499,10 @@ onUnmounted(() => {
                 </div>
               </div>
               <div v-if="updater.phase === 'downloading'" class="col-row">
-                <div
-                  class="update-progress"
-                  role="progressbar"
-                  :aria-valuenow="Math.round(updater.progress * 100)"
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                >
-                  <div
-                    class="update-progress-fill"
-                    :style="{ width: `${Math.round(updater.progress * 100)}%` }"
-                  />
-                </div>
+                <Md3WavyProgress
+                  :value="updater.progress"
+                  :label="i18n.t('settings.update.download')"
+                />
               </div>
               <div v-if="updater.info?.notes" class="col-row">
                 <span class="row-title">{{ i18n.t("settings.update.notes") }}</span>
@@ -2602,19 +2595,27 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   height: 40px;
-  padding: 0 8px;
+  padding: 0 12px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 20px;
   background: transparent;
   color: rgb(var(--md-on-surface-variant));
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: background-color var(--md-ease-emphasized), color var(--md-ease-emphasized);
+  transition:
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    background-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+    color var(--md-dur-effects-fast) var(--md-spring-effects-fast);
 }
 .back:hover {
   background-color: rgb(var(--md-on-surface-variant) / var(--md-state-hover-alpha));
   color: rgb(var(--md-on-surface));
+}
+.back:active {
+  border-radius: 12px;
+  transform: scale(0.97);
 }
 .back:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
@@ -2628,7 +2629,7 @@ onUnmounted(() => {
 .nav-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   margin-top: 4px;
 }
 .nav-item {
@@ -2638,22 +2639,31 @@ onUnmounted(() => {
   min-height: 52px;
   padding: 6px 14px;
   border: 0;
-  border-radius: 14px;
+  border-radius: 16px;
   background: transparent;
   color: rgb(var(--md-on-surface-variant));
   text-align: left;
   cursor: pointer;
-  transition: background-color var(--md-ease-emphasized), color var(--md-ease-emphasized);
+  transition:
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    background-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+    color var(--md-dur-effects-fast) var(--md-spring-effects-fast);
 }
 .nav-item:hover {
   background-color: rgb(var(--md-on-surface-variant) / var(--md-state-hover-alpha));
   color: rgb(var(--md-on-surface));
+}
+.nav-item:active {
+  border-radius: 12px;
+  transform: scale(0.98);
 }
 .nav-item:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 1px;
 }
 .nav-item.on {
+  border-radius: 26px;
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
 }
@@ -2661,16 +2671,18 @@ onUnmounted(() => {
   position: absolute;
   left: 4px;
   top: 50%;
-  width: 3px;
+  width: 3.5px;
   height: 0;
   border-radius: 999px;
   background-color: rgb(var(--md-primary));
   transform: translateY(-50%);
   opacity: 0;
-  transition: height var(--md-ease-emphasized), opacity var(--md-ease-emphasized);
+  transition:
+    height var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    opacity var(--md-dur-effects-fast) var(--md-spring-effects-fast);
 }
 .nav-item.on .nav-ind {
-  height: 20px;
+  height: 22px;
   opacity: 1;
 }
 .nav-text {
@@ -2727,10 +2739,31 @@ onUnmounted(() => {
   padding: 0 4px 8px;
 }
 .card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+.card > .row,
+.card > .col-row,
+.card > .runtime-row,
+.card > .probe {
   background-color: var(--app-inset);
   border: 1px solid rgb(var(--md-outline-variant) / 0.22);
-  border-radius: 20px;
-  padding: 4px 16px;
+  border-radius: 6px;
+  padding-left: 18px;
+  padding-right: 18px;
+}
+.card > :first-child {
+  border-top-left-radius: 22px;
+  border-top-right-radius: 22px;
+}
+.card > :last-child {
+  border-bottom-left-radius: 22px;
+  border-bottom-right-radius: 22px;
 }
 .row {
   display: flex;
@@ -2738,10 +2771,7 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 20px;
   min-height: 62px;
-  padding: 10px 0;
-}
-.row + .row {
-  border-top: 1px solid rgb(var(--md-outline-variant) / 0.3);
+  padding: 12px 18px;
 }
 .row-text {
   display: flex;
@@ -2764,11 +2794,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 12px 0;
-}
-.col-row + .col-row,
-.col-row + .row {
-  border-top: 1px solid rgb(var(--md-outline-variant) / 0.3);
+  padding: 14px 18px;
 }
 /* 数据目录路径：长、可选中复制；用等宽字体避免 `\` 与 `l` 看混。 */
 .row-sub.path,
@@ -2843,30 +2869,38 @@ onUnmounted(() => {
   gap: 10px;
   flex: 0 0 auto;
 }
-/* 色板：自绘圆钮 */
+/* 色板：自绘圆钮（选中变形为方圆） */
 .swatch {
   position: relative;
   width: 36px;
   height: 36px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 18px;
   padding: 0;
   cursor: pointer;
   box-shadow: var(--md-elevation-1);
-  transition: transform var(--md-ease-emphasized);
+  transition:
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy);
 }
 .swatch:hover {
-  transform: scale(1.08);
+  transform: scale(1.1);
+}
+.swatch:active {
+  transform: scale(0.92);
 }
 .swatch:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 2px;
 }
+.swatch.on {
+  border-radius: 11px;
+}
 .swatch.on::after {
   content: "";
   position: absolute;
   inset: -4px;
-  border-radius: 999px;
+  border-radius: 14px;
   border: 2px solid rgb(var(--md-primary));
 }
 
@@ -2908,34 +2942,46 @@ onUnmounted(() => {
     transition: none;
   }
 }
-/* 重新扫描按钮 */
+/* 设置页动作按钮：M3 Expressive Tonal / Filled / Error Tonal + 按压形变 */
 .scan-btn {
   flex: 0 0 auto;
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
-  border-radius: 999px;
-  background: transparent;
-  color: rgb(var(--md-primary));
-  font-size: 12px;
-  font-weight: 500;
+  height: 36px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 18px;
+  background-color: rgb(var(--md-secondary-container));
+  color: rgb(var(--md-on-secondary-container));
+  font-size: 12.5px;
+  font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.14s ease;
+  white-space: nowrap;
+  transition:
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    filter var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+    box-shadow var(--md-dur-effects-fast) var(--md-spring-effects-fast);
 }
 .scan-btn:hover:not(:disabled) {
-  background-color: rgb(var(--md-primary) / 0.08);
+  filter: brightness(1.06);
+}
+.scan-btn:active:not(:disabled) {
+  border-radius: 10px;
+  transform: scale(0.95);
 }
 .scan-btn.primary {
-  border-color: transparent;
   background-color: rgb(var(--md-primary));
   color: rgb(var(--md-on-primary));
+  box-shadow: var(--md-elevation-1);
 }
 .scan-btn.primary:hover:not(:disabled) {
   filter: brightness(1.08);
+  box-shadow: var(--md-elevation-2);
 }
 .scan-btn:disabled {
   opacity: 0.45;
-  color: rgb(var(--md-primary));
   cursor: default;
 }
 /* 扫描目录行：路径用等宽字体，长路径允许在任意位置换行。 */
@@ -2947,12 +2993,13 @@ onUnmounted(() => {
   overflow-wrap: anywhere;
   user-select: text;
 }
-/* 移除目录：唯一会「丢东西」的按钮，用错误色区分。 */
+/* 移除目录：唯一会「丢东西」的按钮，用错误容器色区分。 */
 .scan-btn.danger {
-  color: rgb(var(--md-error));
+  background-color: rgb(var(--md-error-container));
+  color: rgb(var(--md-on-error-container));
 }
 .scan-btn.danger:hover:not(:disabled) {
-  background-color: rgb(var(--md-error) / 0.08);
+  filter: brightness(1.06);
 }
 /* MCP 端口输入：与其它 md3-field 同形状，只是更窄并右对齐。 */
 .port-input {

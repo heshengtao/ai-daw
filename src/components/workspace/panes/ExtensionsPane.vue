@@ -385,30 +385,49 @@ onMounted(() => {
 .tabs {
   display: flex;
   align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
+  gap: 3px;
+  flex-wrap: nowrap;
   min-width: 0;
 }
 .tab {
-  height: 28px;
-  padding: 0 12px;
+  height: 30px;
+  padding: 0 13px;
   border: 0;
-  border-radius: 999px;
-  background: transparent;
+  border-radius: 7px;
+  background-color: rgb(var(--md-surface-container-highest));
   color: rgb(var(--md-on-surface-variant));
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition: background-color 0.14s ease, color 0.14s ease;
+  transition:
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    padding var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
+    color var(--md-dur-effects-default) var(--md-spring-effects-default);
 }
-.tab:hover {
-  background-color: rgb(var(--md-on-surface) / var(--md-state-hover-alpha));
+.tab:first-child {
+  border-radius: 15px 7px 7px 15px;
+}
+.tab:last-child {
+  border-radius: 7px 15px 15px 7px;
+}
+.tab:hover:not(.on) {
+  color: rgb(var(--md-on-surface));
+  filter: brightness(1.06);
+}
+.tab:active {
+  padding: 0 16px;
+  border-radius: 11px;
 }
 .tab.on {
+  border-radius: 15px;
+  padding: 0 15px;
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
+  font-weight: 600;
 }
 .tab-count {
   font-size: 10px;
@@ -419,19 +438,31 @@ onMounted(() => {
 }
 .import-btn {
   flex: 0 0 auto;
-  height: 30px;
-  padding: 0 14px;
+  height: 32px;
+  padding: 0 15px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 16px;
   background-color: rgb(var(--md-primary));
   color: rgb(var(--md-on-primary));
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+  box-shadow: var(--md-elevation-1);
+  transition:
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    filter var(--md-dur-effects-fast) var(--md-spring-effects-fast);
+}
+.import-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.import-btn:active:not(:disabled) {
+  border-radius: 8px;
+  transform: scale(0.95);
 }
 .import-btn:disabled {
   opacity: 0.5;

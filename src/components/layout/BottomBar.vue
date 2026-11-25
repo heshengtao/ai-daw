@@ -819,24 +819,27 @@ function onRetryAudio(): void {
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 999px;
+  border-radius: 22px;
   cursor: pointer;
   background-color: rgb(var(--md-primary));
   color: rgb(var(--md-on-primary));
   box-shadow: var(--md-elevation-1);
   transition:
-    transform var(--md-ease-emphasized),
-    background-color var(--md-ease-emphasized),
-    box-shadow var(--md-ease-emphasized);
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
+    box-shadow var(--md-dur-effects-default) var(--md-spring-effects-default);
 }
 .play-btn:hover {
-  transform: scale(1.07);
+  transform: scale(1.06);
   box-shadow: var(--md-elevation-2);
 }
 .play-btn:active {
-  transform: scale(0.93);
+  border-radius: 12px;
+  transform: scale(0.92);
 }
 .play-btn.playing {
+  border-radius: 14px;
   background-color: rgb(var(--md-secondary-container));
   color: rgb(var(--md-on-secondary-container));
 }

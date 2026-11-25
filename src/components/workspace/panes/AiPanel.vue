@@ -1485,50 +1485,70 @@ watch(
    同一件事在两个面板里必须长得一样——用 `.iface-btn` 那套描边样式会和调音台对不上。 */
 .run-btn {
   flex: 0 0 auto;
-  height: 30px;
-  padding: 0 14px;
+  height: 32px;
+  padding: 0 15px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 16px;
   background-color: rgb(var(--md-primary));
   color: rgb(var(--md-on-primary));
-  font-size: 11.5px;
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  transition: filter 0.14s ease;
+  box-shadow: var(--md-elevation-1);
+  transition:
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    box-shadow var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+    filter var(--md-dur-effects-fast) var(--md-spring-effects-fast);
 }
 .run-btn:hover:not(:disabled) {
   filter: brightness(1.08);
+  box-shadow: var(--md-elevation-2);
+}
+.run-btn:active:not(:disabled) {
+  border-radius: 8px;
+  transform: scale(0.95);
 }
 .run-btn:disabled {
   opacity: 0.45;
   cursor: default;
+  box-shadow: none;
 }
 .run-btn:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
   outline-offset: 2px;
 }
-/* 按钮：与插件面板的「界面」按钮同一套。 */
+/* 按钮：M3 Expressive Tonal 形变按钮。 */
 .iface-btn {
   flex: 0 0 auto;
-  height: 26px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 12px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border: 1px solid rgb(var(--md-outline-variant) / 0.7);
-  border-radius: 999px;
-  background: transparent;
-  color: rgb(var(--md-primary));
-  font-size: 11px;
+  border: 0;
+  border-radius: 14px;
+  background-color: rgb(var(--md-secondary-container));
+  color: rgb(var(--md-on-secondary-container));
+  font-size: 11.5px;
+  font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  transition: background-color 0.14s ease;
+  transition:
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    filter var(--md-dur-effects-fast) var(--md-spring-effects-fast);
 }
 .iface-btn:hover:not(:disabled) {
-  background-color: rgb(var(--md-primary) / 0.08);
+  filter: brightness(1.06);
+}
+.iface-btn:active:not(:disabled) {
+  border-radius: 7px;
+  transform: scale(0.95);
 }
 .iface-btn:disabled {
   opacity: 0.45;
@@ -1542,26 +1562,45 @@ watch(
 /* ---- 顶部标签 / 分组标题 / 运行后端 ---- */
 .ai-tabs {
   display: flex;
-  gap: 6px;
+  gap: 3px;
   padding: 0 12px 10px;
 }
 .ai-tab {
-  height: 28px;
-  padding: 0 12px;
+  height: 30px;
+  padding: 0 13px;
   border: 0;
-  border-radius: 999px;
-  background: transparent;
+  border-radius: 7px;
+  background-color: rgb(var(--md-surface-container-highest));
   color: rgb(var(--md-on-surface-variant));
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
+  transition:
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    padding var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
+    color var(--md-dur-effects-default) var(--md-spring-effects-default);
 }
-.ai-tab:hover {
-  background-color: rgb(var(--md-on-surface-variant) / var(--md-state-hover-alpha));
+.ai-tab:first-child {
+  border-radius: 15px 7px 7px 15px;
+}
+.ai-tab:last-child {
+  border-radius: 7px 15px 15px 7px;
+}
+.ai-tab:hover:not(.on) {
+  color: rgb(var(--md-on-surface));
+  filter: brightness(1.06);
+}
+.ai-tab:active {
+  padding: 0 16px;
+  border-radius: 11px;
 }
 .ai-tab.on {
-  background-color: rgb(var(--md-primary) / 0.16);
-  color: rgb(var(--md-primary));
-  font-weight: 500;
+  border-radius: 15px;
+  padding: 0 15px;
+  background-color: rgb(var(--md-secondary-container));
+  color: rgb(var(--md-on-secondary-container));
+  font-weight: 600;
 }
 .ai-sep {
   margin: 6px 0 0;

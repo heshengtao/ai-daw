@@ -14,7 +14,7 @@ const route = useRoute();
 const router = useRouter();
 const i18n = useI18n();
 const buttons = ref<(HTMLElement | null)[]>([]);
-const pill = ref<{ left: string; width: string }>({ left: "0px", width: "0px" });
+const pill = ref<{ left: number; width: number; ready: boolean }>({ left: 0, width: 0, ready: false });
 
 const activeIndex = computed(() =>
   props.items.findIndex((i) => route.path === i.path || route.path.startsWith(`${i.path}/`)),
@@ -24,7 +24,7 @@ function updatePill(): void {
   void nextTick(() => {
     const idx = activeIndex.value;
     const el = idx >= 0 ? buttons.value[idx] : null;
-    if (el) pill.value = { left: `${el.offsetLeft}px`, width: `${el.offsetWidth}px` };
+    if (el) pill.value = { left: el.offsetLeft, width: el.offsetWidth, ready: true };
   });
 }
 
@@ -42,9 +42,9 @@ onUnmounted(() => window.removeEventListener("resize", updatePill));
     :style="{ backgroundColor: 'rgb(var(--md-surface-container-high))' }"
   >
     <div
-      v-if="activeIndex >= 0"
-      class="absolute top-1 bottom-1 rounded-full pointer-events-none motion-pill"
-      :style="{ left: pill.left, width: pill.width, backgroundColor: 'rgb(var(--md-secondary-container))' }"
+      v-if="activeIndex >= 0 && pill.ready"
+      class="absolute left-0 top-1 bottom-1 rounded-full pointer-events-none motion-pill"
+      :style="{ transform: `translate3d(${pill.left}px, 0, 0)`, width: `${pill.width}px`, backgroundColor: 'rgb(var(--md-secondary-container))' }"
     />
     <button
       v-for="(item, idx) in items"
@@ -62,9 +62,10 @@ onUnmounted(() => window.removeEventListener("resize", updatePill));
 
 <style scoped>
 .motion-pill {
+  will-change: transform, width;
   transition:
-    left 0.32s cubic-bezier(0.34, 1.56, 0.64, 1),
-    width 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+    transform 300ms cubic-bezier(0.05, 0.7, 0.1, 1),
+    width 300ms cubic-bezier(0.05, 0.7, 0.1, 1);
 }
 @media (prefers-reduced-motion: reduce) {
   .motion-pill {

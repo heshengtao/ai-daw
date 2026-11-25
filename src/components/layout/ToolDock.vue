@@ -138,10 +138,11 @@ const toolIndex = computed(() => Math.max(0, toolOptions.findIndex((t) => t.id =
   bottom: 0;
   left: 0;
   width: 34px;
-  border-radius: 999px;
+  border-radius: 12px;
   background-color: rgb(var(--md-secondary-container));
-  transform: translateX(calc(var(--idx, 0) * 36px));
-  transition: transform var(--md-duration-medium-2) var(--md-ease-spring-fast);
+  transform: translate3d(calc(var(--idx, 0) * 36px), 0, 0);
+  will-change: transform;
+  transition: transform 300ms cubic-bezier(0.05, 0.7, 0.1, 1);
   pointer-events: none;
 }
 .dock-btn {
@@ -154,18 +155,23 @@ const toolIndex = computed(() => Math.max(0, toolOptions.findIndex((t) => t.id =
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 999px;
+  border-radius: 17px;
   background: transparent;
   color: rgb(var(--md-on-surface-variant));
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+  transition:
+    border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    transform var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
+    background-color var(--md-dur-effects-fast) var(--md-spring-effects-fast),
+    color var(--md-dur-effects-fast) var(--md-spring-effects-fast);
 }
 .dock-btn:hover {
   background-color: rgb(var(--md-on-surface-variant) / var(--md-state-hover-alpha));
   color: rgb(var(--md-on-surface));
 }
 .dock-btn:active {
-  transform: scale(0.94);
+  border-radius: 10px;
+  transform: scale(0.91);
 }
 .dock-btn:focus-visible {
   outline: 2px solid rgb(var(--md-primary));
