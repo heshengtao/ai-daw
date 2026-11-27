@@ -318,7 +318,7 @@ function onKeyDown(event: KeyboardEvent): void {
   font: inherit;
   font-size: 12.5px;
   line-height: 1.3;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   outline: none;
   transition:

@@ -1373,7 +1373,7 @@ watch(
 .lyric-hint {
   flex: 1 1 auto;
   min-width: 0;
-  text-align: right;
+  text-align: end;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

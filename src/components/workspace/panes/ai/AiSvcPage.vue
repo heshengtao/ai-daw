@@ -259,7 +259,7 @@ watch(
   <div class="ai-subpage">
     <header class="sub-head">
       <button class="sub-icon" :aria-label="i18n.t('common.back')" @click="emit('back')">
-        <ArrowLeftIcon class="w-[15px] h-[15px]" />
+        <ArrowLeftIcon class="w-[15px] h-[15px] rtl-flip" />
       </button>
       <h1 class="sub-title">{{ i18n.t("ai.voiceSwapShort") }}</h1>
       <span class="sub-badge" :class="{ on: ready }">

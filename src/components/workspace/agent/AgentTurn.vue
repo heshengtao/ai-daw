@@ -167,7 +167,7 @@ const showProcess = computed(() => hasProcess.value || props.turn.status !== "do
   background: transparent;
   color: rgb(var(--md-on-surface-muted));
   font-size: 12px;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: color 0.12s ease;
 }

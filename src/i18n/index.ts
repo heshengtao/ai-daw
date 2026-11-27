@@ -135,18 +135,17 @@ const locale = ref<Locale>(initial());
 applyDocumentLang(locale.value);
 
 /**
- * 把语言写到 `<html>`：CSS 与屏幕阅读器都靠它。
+ * 把语言与书写方向写到 `<html>`：CSS、屏幕阅读器与镜像布局都靠它。
  *
- * **书写方向固定 LTR，包括阿拉伯语。** 这不是偷懒：时间轴（小节从右往左倒着排）、
- * 走带、自动化曲线在 RTL 下会整体镜像，语义全错；DAW 的时间轴本来就该从左往右读。
- * 阿拉伯文本身由浏览器 bidi 算法正确连写与排版，只是版面保持从左到右。
- * `isRtlLocale()` 仍然导出，将来若要给「非时间轴页面」做局部镜像可以直接用。
+ * 阿拉伯语是 RTL，整页镜像；**时间轴类组件（编排 / 编辑 / 乐谱 / 调音台 / 走带）
+ * 自己在模板上标了 `dir="ltr"`**——小节要从左往右读、自动化曲线与钢琴卷帘的横轴
+ * 也一样，把它们镜像过来语义就反了。所以这里只管外层，时间轴保持 LTR 是组件级的决定。
  */
 function applyDocumentLang(value: Locale): void {
   if (typeof document === "undefined") return;
   const meta = LOCALE_MAP[value] ?? LOCALE_MAP[FALLBACK];
   document.documentElement.lang = meta.bcp47;
-  document.documentElement.dir = "ltr";
+  document.documentElement.dir = meta.dir;
 }
 
 /** 切换语言（设置页调用）。 */

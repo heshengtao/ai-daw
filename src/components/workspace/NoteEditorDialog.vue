@@ -875,7 +875,7 @@ async function applyActive(): Promise<void> {
 
 .head-summary {
   max-width: 52%;
-  text-align: right;
+  text-align: end;
 }
 
 .preview {

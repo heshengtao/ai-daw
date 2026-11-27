@@ -286,7 +286,7 @@ async function toggleSolo(s: Strip): Promise<void> {
 </script>
 
 <template>
-  <div class="mix">
+  <div class="mix" dir="ltr">
     <div class="mix-strips">
       <div
         v-for="s in strips"
@@ -516,7 +516,7 @@ async function toggleSolo(s: Strip): Promise<void> {
   color: rgb(var(--md-on-surface));
   font-size: 11px;
   font-weight: 600;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 .strip-name:hover {

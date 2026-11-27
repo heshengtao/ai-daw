@@ -219,7 +219,7 @@ function onKey(e: KeyboardEvent): void {
   color: rgb(var(--md-primary));
   font-family: inherit;
   font-size: 13px;
-  text-align: left;
+  text-align: start;
   text-decoration: underline;
   cursor: pointer;
   word-break: break-all;

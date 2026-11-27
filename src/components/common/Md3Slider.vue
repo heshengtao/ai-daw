@@ -137,6 +137,7 @@ function onKey(e: KeyboardEvent): void {
   <div
     ref="root"
     class="m3-slider"
+    dir="ltr"
     :class="{ dragging, disabled }"
     role="slider"
     :tabindex="disabled ? -1 : 0"

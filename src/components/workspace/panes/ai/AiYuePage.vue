@@ -1286,7 +1286,7 @@ watch(
         :aria-label="i18n.t('common.back')"
         @click="emit('back')"
       >
-        <ArrowLeftIcon class="w-[15px] h-[15px]" />
+        <ArrowLeftIcon class="w-[15px] h-[15px] rtl-flip" />
       </button>
       <h1 class="sub-title">{{ i18n.t("yue.title") }}</h1>
       <span class="sub-badge" :class="{ on: yue.ready }">{{ engineBadge }}</span>

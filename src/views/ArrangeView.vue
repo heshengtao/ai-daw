@@ -1701,7 +1701,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="arrange-root">
+  <div class="arrange-root" dir="ltr">
     <div
       ref="scroller"
       class="arrange"

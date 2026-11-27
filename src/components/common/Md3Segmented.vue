@@ -73,11 +73,14 @@ const emit = defineEmits<{ (e: "update:modelValue", value: string): void }>();
     background-color var(--md-dur-effects-default) var(--md-spring-effects-default),
     color var(--md-dur-effects-default) var(--md-spring-effects-default);
 }
+/* 首尾的「大圆角」用逻辑角：RTL 下自动换到另一边，不用再写一套镜像规则 */
 .md3-seg-btn:first-child {
-  border-radius: 18px 8px 8px 18px;
+  border-start-start-radius: 18px;
+  border-end-start-radius: 18px;
 }
 .md3-seg-btn:last-child {
-  border-radius: 8px 18px 18px 8px;
+  border-start-end-radius: 18px;
+  border-end-end-radius: 18px;
 }
 .md3-seg-btn:only-child {
   border-radius: 18px;

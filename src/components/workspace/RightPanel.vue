@@ -86,7 +86,7 @@ const pickable = computed(() => [
                   <span class="empty-label">{{ p.label }}</span>
                   <span class="empty-hint">{{ p.hint }}</span>
                 </span>
-                <ChevronRightIcon class="empty-arrow" />
+                <ChevronRightIcon class="empty-arrow rtl-flip" />
               </button>
             </li>
           </ul>
@@ -180,7 +180,7 @@ const pickable = computed(() => [
   border-radius: 14px;
   background: transparent;
   color: rgb(var(--md-on-surface));
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: background-color var(--md-duration-short-2) var(--md-ease-standard);
 }

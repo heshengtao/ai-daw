@@ -688,7 +688,7 @@ function pickPad(option: PresetOption): void {
   border-radius: 20px;
   background-color: rgb(var(--md-surface-container-high));
   color: rgb(var(--md-on-surface));
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: background-color 0.14s ease, color 0.14s ease;
 }

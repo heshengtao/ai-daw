@@ -384,7 +384,7 @@ function onRetryAudio(): void {
 </script>
 
 <template>
-  <footer class="bottom-bar" data-tour="transport">
+  <footer class="bottom-bar" data-tour="transport" dir="ltr">
     <!--
       左翼：编辑历史 → 录音输入 → 输出 → 工程读数 → 传输左簇。
       `flex-end` 让它**贴住播放键**，富余空间全部留给窗口左缘。
@@ -1060,7 +1060,7 @@ function onRetryAudio(): void {
   color: rgb(var(--md-on-surface));
   font-weight: 600;
   min-width: 20px;
-  text-align: right;
+  text-align: end;
 }
 /* AI 忙碌胶囊：只在代理写东西时出现，本身就是「活着」的信号，不再有空闲态。 */
 .ai-pill {

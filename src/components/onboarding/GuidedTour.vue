@@ -251,12 +251,12 @@ const cardStyle = computed(() =>
             </div>
             <div class="actions">
               <button v-if="stepIndex > 0" class="nav ghost" @click="prev">
-                <ArrowLeftIcon class="w-[15px] h-[15px]" />
+                <ArrowLeftIcon class="w-[15px] h-[15px] rtl-flip" />
                 {{ i18n.t("onboarding.tour.prev") }}
               </button>
               <button ref="nextBtn" class="nav primary" @click="next">
                 {{ isLast ? i18n.t("onboarding.tour.done") : i18n.t("onboarding.tour.next") }}
-                <ArrowRightIcon v-if="!isLast" class="w-[15px] h-[15px]" />
+                <ArrowRightIcon v-if="!isLast" class="w-[15px] h-[15px] rtl-flip" />
               </button>
             </div>
           </div>

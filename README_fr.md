@@ -326,7 +326,7 @@ VST3 et CLAP sous Windows, macOS et Linux ; **Audio Units (AU / AUv3)** égalem
 
 ### Quelles langues l'interface prend-elle en charge ?
 
-Chinois simplifié, chinois traditionnel, anglais, japonais, coréen, espagnol, français, allemand, russe et arabe. Changez à tout moment dans **Paramètres → Général → Langue** ; votre choix est mémorisé et, tant que vous ne le modifiez pas, l'interface suit la langue de votre système. Les dictionnaires se trouvent dans `src/i18n/`, et toute chaîne absente d'une traduction revient à l'anglais. Le texte arabe est entièrement pris en charge — la timeline conserve sa disposition de gauche à droite, car l'axe temporel d'un DAW se lit de gauche à droite. Le README est traduit dans ces mêmes dix langues.
+Chinois simplifié, chinois traditionnel, anglais, japonais, coréen, espagnol, français, allemand, russe et arabe. Changez à tout moment dans **Paramètres → Général → Langue** ; votre choix est mémorisé et, tant que vous ne le modifiez pas, l'interface suit la langue de votre système. Les dictionnaires se trouvent dans `src/i18n/`, et toute chaîne absente d'une traduction revient à l'anglais. Le texte arabe est entièrement pris en charge et toute l'interface s'inverse pour l'écriture de droite à gauche ; seuls la timeline, la partition et la table de mixage restent de gauche à droite, car l'axe temporel d'un DAW se lit de gauche à droite. Le README est traduit dans ces mêmes dix langues.
 
 ### Faut-il que l'application soit ouverte pour qu'un agent la pilote ?
 

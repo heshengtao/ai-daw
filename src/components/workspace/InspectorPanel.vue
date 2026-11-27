@@ -909,7 +909,7 @@ function openNoteEditor(tab: "strum" | "expr" | "midi" | "lyric"): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: right;
+  text-align: end;
   color: rgb(var(--md-on-surface-variant));
   font-weight: 400;
 }

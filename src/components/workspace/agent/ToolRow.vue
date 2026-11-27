@@ -104,7 +104,7 @@ const inputText = computed(() => {
   border: 0;
   background: transparent;
   color: rgb(var(--md-on-surface-variant));
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 .row:hover {

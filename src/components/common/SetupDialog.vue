@@ -221,7 +221,7 @@ function choose(kind: string): void {
   color: inherit;
   font: inherit;
   font-size: 11.5px;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 .choice:hover {

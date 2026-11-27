@@ -99,7 +99,7 @@ const title = computed(() =>
   color: rgb(var(--md-on-surface));
   font-size: 9.5px;
   line-height: 14px;
-  text-align: left;
+  text-align: start;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

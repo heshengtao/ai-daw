@@ -297,7 +297,7 @@ async function stopIfRunning(): Promise<void> {
   border-radius: 16px;
   background-color: rgb(var(--md-surface-container-highest));
   color: rgb(var(--md-on-surface));
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: border-color 0.14s ease, background-color 0.14s ease;
 }

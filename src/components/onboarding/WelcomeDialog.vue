@@ -413,7 +413,7 @@ onUnmounted(() => {
   border: 1px solid rgb(var(--md-outline-variant) / 0.5);
   background-color: rgb(var(--md-surface-container-high));
   color: rgb(var(--md-on-surface));
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   animation: starter-in var(--md-duration-medium-2) var(--md-ease-emphasized-decel) both;
   animation-delay: calc(var(--i) * 28ms + 60ms);

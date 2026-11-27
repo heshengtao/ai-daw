@@ -271,6 +271,7 @@ onUnmounted(() => {
   width: 100%;
   height: 34px;
   padding: 0 10px 0 12px;
+  padding-inline: 12px 10px;
   border: 1px solid rgb(var(--md-outline) / 0.7);
   border-radius: 999px;
   background-color: rgb(var(--md-surface-container-high));
@@ -378,7 +379,7 @@ onUnmounted(() => {
   border-radius: 12px;
   background: transparent;
   color: rgb(var(--md-on-surface));
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: background-color 0.14s ease;
 }

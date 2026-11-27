@@ -213,7 +213,7 @@ onUnmounted(() => {
   color: rgb(var(--md-on-surface));
   font-family: inherit;
   font-size: 12.5px;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: background-color var(--md-duration-short-2) var(--md-ease-standard);
 }

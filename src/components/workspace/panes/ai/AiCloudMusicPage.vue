@@ -94,7 +94,7 @@ onMounted(async () => {
   <section class="ai-subpage">
     <div class="sub-head">
       <button class="sub-icon" :aria-label="i18n.t('common.back')" @click="emit('back')">
-        <ArrowLeftIcon class="w-[15px] h-[15px]" />
+        <ArrowLeftIcon class="w-[15px] h-[15px] rtl-flip" />
       </button>
       <h2 class="sub-title">{{ i18n.t("ai.cloudMusicPageTitle") }}</h2>
       <span v-if="provider" class="sub-badge on">{{ provider.name }}</span>

@@ -355,7 +355,7 @@ function onKey(e: KeyboardEvent): void {
   border-radius: 14px;
   background-color: transparent;
   color: rgb(var(--md-on-surface));
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: border-color 0.15s ease, background-color 0.15s ease;
 }

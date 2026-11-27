@@ -1344,7 +1344,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="editor">
+  <div class="editor" dir="ltr">
     <!-- 顶部标尺：左侧 60px 与琴键列对齐；其余与卷帘内容同一横坐标原点。
          两块都在卷帘的滚动容器之外，滚轮要显式转发给卷帘（见 onChromeWheel）。 -->
     <div class="ruler-row">

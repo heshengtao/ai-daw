@@ -433,6 +433,31 @@
   input, select, textarea, button { font-family: inherit; }
 }
 
+/* ===== RTL（阿拉伯语）=====
+ *
+ * 整页镜像由 `<html dir="rtl">` 完成；时间轴类组件（编排 / 编辑 / 乐谱 / 调音台 /
+ * 走带）自己在模板上写了 `dir="ltr"`，不参与镜像——小节、钢琴卷帘、自动化曲线与
+ * 调音台的横轴都必须从左往右读。
+ *
+ * 这里只补两类东西：
+ *   1. 方向性图标（返回箭头、"展开"小箭头）在 RTL 下要翻个方向；
+ *   2. 数字 / 时间码等 LATIN 片段保持自身方向，不被 bidi 拆散。
+ */
+html[dir="rtl"] .rtl-flip {
+  transform: scaleX(-1);
+}
+/* 折叠行的小箭头：收起时指向「展开方向」（RTL 下是从右往左），展开后朝下 */
+html[dir="rtl"] .chevron:not(.open) {
+  transform: scaleX(-1);
+}
+/* 时间码 / 计数这类「数 + 单位」的串按 LTR 读，避免 00:00 被拆成 00:00 的镜像 */
+html[dir="rtl"] .num,
+html[dir="rtl"] .timecode,
+html[dir="rtl"] .tabular-nums {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
 /* ===== Material You Components ===== */
 @layer components {
   /* ---- Buttons ---- */
@@ -1617,7 +1642,7 @@ body:focus-within {
 .learn-markdown td {
   border: 1px solid rgb(var(--md-outline-variant) / 0.6);
   padding: 0.4em 0.6em;
-  text-align: left;
+  text-align: start;
 }
 .learn-markdown th {
   background-color: rgb(var(--md-surface-container-highest));

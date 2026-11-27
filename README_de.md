@@ -345,7 +345,7 @@ VST3 und CLAP unter Windows, macOS und Linux; **Audio Units (AU / AUv3)** zusät
 
 ### Welche Sprachen unterstützt die Oberfläche?
 
-Vereinfachtes Chinesisch, traditionelles Chinesisch, Englisch, Japanisch, Koreanisch, Spanisch, Französisch, Deutsch, Russisch und Arabisch. Wechseln Sie jederzeit unter **Einstellungen → Allgemein → Sprache**; die Wahl wird gemerkt und folgt bis dahin Ihrer Systemsprache. Die Wörterbücher liegen in `src/i18n/`, und jede Zeichenkette, für die eine Übersetzung fehlt, fällt auf Englisch zurück. Arabischer Text wird vollständig unterstützt — die Timeline behält ihr Links-nach-rechts-Layout, weil die Zeitachse einer DAW von links nach rechts gelesen wird. Die README ist in dieselben zehn Sprachen übersetzt.
+Vereinfachtes Chinesisch, traditionelles Chinesisch, Englisch, Japanisch, Koreanisch, Spanisch, Französisch, Deutsch, Russisch und Arabisch. Wechseln Sie jederzeit unter **Einstellungen → Allgemein → Sprache**; die Wahl wird gemerkt und folgt bis dahin Ihrer Systemsprache. Die Wörterbücher liegen in `src/i18n/`, und jede Zeichenkette, für die eine Übersetzung fehlt, fällt auf Englisch zurück. Arabischer Text wird vollständig unterstützt und die gesamte Oberfläche spiegelt sich für Rechts-nach-links; nur Timeline, Partitur und Mixer bleiben links nach rechts, weil die Zeitachse einer DAW von links nach rechts gelesen wird. Die README ist in dieselben zehn Sprachen übersetzt.
 
 ### Muss die App laufen, damit ein Agent sie steuern kann?
 

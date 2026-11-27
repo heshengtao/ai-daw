@@ -512,7 +512,7 @@ onMounted(() => {
 .row-value {
   flex: 0 0 auto;
   min-width: 68px;
-  text-align: right;
+  text-align: end;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: rgb(var(--md-on-surface-variant));

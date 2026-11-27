@@ -1321,7 +1321,7 @@ onUnmounted(() => {
     <!-- 设置自带的侧栏 -->
     <aside class="settings-nav">
       <button class="back" @click="back">
-        <ArrowLeftIcon class="back-icon" />
+        <ArrowLeftIcon class="back-icon rtl-flip" />
         <span class="back-label">{{ i18n.t("settings.title") }}</span>
       </button>
 
@@ -2645,7 +2645,7 @@ onUnmounted(() => {
   border-radius: 16px;
   background: transparent;
   color: rgb(var(--md-on-surface-variant));
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition:
     border-radius var(--md-dur-spatial-fast) var(--md-spring-spatial-bouncy),
@@ -3008,7 +3008,7 @@ onUnmounted(() => {
 .port-input {
   width: 104px;
   flex: 0 0 auto;
-  text-align: right;
+  text-align: end;
 }
 .port-input:disabled {
   opacity: 0.5;

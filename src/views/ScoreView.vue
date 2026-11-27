@@ -79,7 +79,7 @@ const trackLabel = computed(() => (scope.value === "all" ? "" : (selection.track
 </script>
 
 <template>
-  <div class="score-view">
+  <div class="score-view" dir="ltr">
     <header class="head">
       <h1 class="title">{{ i18n.t("score.title") }}</h1>
 

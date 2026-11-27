@@ -191,11 +191,13 @@ const projectBaseName = computed(() => {
 
 function onResizeLeft(delta: number): void {
   // 左栏上限为窗口的 1/4（由 layout store 统一夹紧）。
-  layout.resizeTrack(delta);
+  // RTL 下音轨栏实际在右边，往左拖才是变大：把增量取反。
+  layout.resizeTrack(i18n.isRtl.value ? -delta : delta);
 }
 function onResizeRight(delta: number): void {
   // 右栏上限为「扣掉左栏后剩余区域的 2/3」。
-  layout.resizeInspector(delta);
+  // RTL 下检查器实际在左边，往右拖才是变大：把增量取反。
+  layout.resizeInspector(i18n.isRtl.value ? -delta : delta);
 }
 
 /** 窗口尺寸变化后重新夹紧左右面板宽度。 */

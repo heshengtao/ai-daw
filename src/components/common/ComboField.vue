@@ -252,7 +252,7 @@ onUnmounted(() => {
   border-radius: 12px;
   background: transparent;
   color: rgb(var(--md-on-surface));
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: background-color 0.14s ease;
 }

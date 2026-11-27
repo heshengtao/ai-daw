@@ -300,7 +300,7 @@ function onMouseDown(e: MouseEvent): void {
     <div class="bar-main">
       <Tooltip v-if="!isSettings && !layout.showTrackHeaders" :text="i18n.t('topbar.showTracks')">
         <button class="bar-btn" :aria-label="i18n.t('topbar.showTracksLabel')" @click="layout.showTrackHeaders = true">
-          <PanelIcon side="left" :filled="false" class="bar-icon" />
+          <PanelIcon :side="i18n.isRtl.value ? 'right' : 'left'" :filled="false" class="bar-icon" />
         </button>
       </Tooltip>
 
@@ -426,7 +426,7 @@ function onMouseDown(e: MouseEvent): void {
           :aria-label="layout.showInspector ? i18n.t('topbar.hidePanel') : i18n.t('topbar.showPanel')"
           @click="layout.showInspector = !layout.showInspector"
         >
-          <PanelIcon side="right" :filled="layout.showInspector" class="bar-icon" />
+          <PanelIcon :side="i18n.isRtl.value ? 'left' : 'right'" :filled="layout.showInspector" class="bar-icon" />
         </button>
       </Tooltip>
     </div>

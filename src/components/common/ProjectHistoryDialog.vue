@@ -385,7 +385,7 @@ function clipFill(trackIndex: number, clip: HistoryClip): string {
   background: transparent;
   color: inherit;
   font: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 .card-open:disabled {

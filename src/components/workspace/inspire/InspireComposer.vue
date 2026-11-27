@@ -841,7 +841,7 @@ onUnmounted(() => {
   background: transparent;
   color: rgb(var(--md-on-surface-variant));
   font-size: 11px;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: border-color var(--md-duration-short-2) var(--md-ease-standard),
     background-color var(--md-duration-short-2) var(--md-ease-standard);
