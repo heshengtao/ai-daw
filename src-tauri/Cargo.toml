@@ -76,6 +76,11 @@ opt-level = 3
 [profile.dev.package.rustysynth-ext]
 opt-level = 3
 
+# 依赖（非本 workspace 成员）只保留 line-tables-only 调试信息：完整 DWARF 让
+# target/debug/deps 膨胀数倍。本 crate 是独立 workspace，仓库根的同名段覆盖不到。
+[profile.dev.package."*"]
+debug = 1
+
 # Opt out of the repository-root Cargo workspace: this crate is its own
 # workspace root and is therefore not built by `cargo test --workspace`.
 [workspace]
