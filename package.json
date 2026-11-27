@@ -20,7 +20,10 @@
     "selftest:import": "rolldown tools/import-selftest.ts -o .tmp/import-selftest.mjs -f esm -p node && node .tmp/import-selftest.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
-    "fetch:soundfonts": "node tools/fetch-soundfont-registry.mjs"
+    "fetch:soundfonts": "node tools/fetch-soundfont-registry.mjs",
+    "i18n:extract": "node tools/i18n-extract.mjs",
+    "i18n:merge": "node tools/i18n-merge.mjs",
+    "i18n:check": "node tools/i18n-check.mjs"
   },
   "dependencies": {
     "@coderline/alphatab": "^1.8.4",

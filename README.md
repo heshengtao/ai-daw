@@ -10,8 +10,9 @@
 </p>
 
 <p align="center">
-  <a href="README_zh.md"><b>简体中文</b></a> ·
-  <a href="README.md"><b>English</b></a>
+  <a href="README_zh.md">简体中文</a> · <a href="README_zh-TW.md">繁體中文</a> · <a href="README.md"><b>English</b></a> · <a href="README_ja.md">日本語</a> ·
+  <a href="README_ko.md">한국어</a> · <a href="README_es.md">Español</a> · <a href="README_fr.md">Français</a> · <a href="README_de.md">Deutsch</a> ·
+  <a href="README_ru.md">Русский</a> · <a href="README_ar.md">العربية</a>
 </p>
 
 <p align="center">
@@ -27,7 +28,7 @@ It is a real DAW: a multi-track timeline, a piano roll, a mixer with sends and b
 
 Everything runs on your own machine. No account, no API key, no audio leaving your computer.
 
-<img src="./assets/screenshots/01-arrange.png" width="100%" alt="AI DAW — the arrange view: three tracks with clips on the timeline, the track inspector on the right, and an automation lane along the bottom">
+<img src="./assets/screenshots/01-arrange.png" width="100%" alt="AI DAW — the arrange view: six tracks of clips on the timeline, the inspector on the right showing an EQ-and-reverb chain, and an automation lane along the bottom">
 
 ## Why this matters
 
@@ -48,7 +49,7 @@ Being small is a feature, not a compromise.
 - **A lightweight footprint** — no Electron, no cloud, no bundled model zoo. The macOS app is about 38 MB — for reference, mainstream DAWs such as Ableton Live, Logic Pro, and FL Studio typically install at 1–3 GB, making AI DAW **95%+ smaller**.
 - **Fast to start** — nothing heavyweight loads at boot; AI models are pulled in only when you use them.
 - **Big models on demand, never in the installer** — heavy work such as music generation is not integrated by default. **Singing voice** (SoulX-Singer, 1.4 GB) and **voice swap** (SoulX-Singer-SVC, 2.4 GB) are opt-in models in Manager → Models: download them when you want them, and they cost no disk until then.
-- **Built to be extended** — interfaces for plugging external AI models into the workflow are on the roadmap.
+- **Built to be extended** — **app extensions** (npm packages) already add agent tools and sidebar panels; interfaces for plugging external AI models into the workflow are on the roadmap.
 
 ## Drive it from any AI harness
 
@@ -68,7 +69,7 @@ npx skills add heshengtao/ai-daw
 Install this Skill: https://github.com/heshengtao/ai-daw
 ```
 
-Every edit an agent makes goes through the same command pipeline as the UI: it lands in the undo history, shows up in the interface, and is attributed to the agent — so you can always see what it did and undo it.
+Every edit an agent makes goes through the same command pipeline as the UI: it lands in the undo history, shows up in the interface, and is attributed to the agent — so you can always see what it did and undo it. Prefer to stay in the app? **Write with AI** opens the same loop as a chat panel (Settings → Text generation).
 
 ## Features
 
@@ -77,24 +78,32 @@ Every edit an agent makes goes through the same command pipeline as the UI: it l
 The leftmost view in the top bar is **Inspire**: a full-page "write → generate → listen" desk. Write on the left, listen on the right. No likes, no shares, no upgrade gates — only your description, your lyrics, and the playback bar.
 
 - **One dropdown, two engines** — local YuE2 / ACE-Step weights and any configured cloud service (Suno / Mureka / Lyria …) share a single list; adding a provider means changing one place
-- **Simple / Advanced** — Simple takes one line of description; Advanced lets you write lyrics with `[Verse]` / `[Chorus]` / `[Bridge]` / `[Outro]` tags and tune duration, steps and seed
+- **Simple / Advanced** — Simple takes one line of description; Advanced lets you write lyrics with `[Verse]` / `[Chorus]` / `[Bridge]` / `[Outro]` tags, flip the **Instrumental** switch, and tune duration, steps and seed
+- **Batch takes** — ask for up to 8 takes in one press; they render one after another, each with a fresh seed, and land in the list as they finish
+- **Continue a take** — every local render keeps a semantic code, so **Continue** writes the next stretch from where that take stopped — the model gets the structure, not just the audio
 - **It fetches what it needs** — missing weights, a missing engine, or a stopped engine are handled in order when you press Generate
-- **Takes in a column** — grouped by day; each take uses its **waveform** as the cover, tinted by the project track colour, with that take's playback bar underneath: click to listen, drag to scrub
-- **The list stays local** — generation history lives on your machine; clearing it never touches tracks or audio files in the project
+- **Takes in a column** — grouped by day; each take gets a **generated cover** in the project's track hues, an always-visible play button and its own playback bar: click to listen, drag to scrub. The focused card is also what the bottom-bar transport key drives
+- **Yours to keep** — history lives on your machine; clearing it never touches the project, and a take only enters the session (＋) or reaches disk (save) when you ask
+
+<p align="center">
+  <img src="./assets/screenshots/02-inspire.png" width="100%" alt="The Inspire page: the composer on the left in Advanced mode with a style description, lyrics and takes, and the generation history on the right with generated covers and playback bars">
+</p>
 
 ### Arranging & Editing — Compose on a real timeline
 
 Lay out a song the way you hear it. Drag clips across tracks, split them where the music changes, and let the ruler and grid follow a tempo and time signature you can change anywhere in the song. MIDI clips draw their own notes and audio clips draw their own waveform, so you can read the arrangement at a glance.
 
 - **Multi-track arranging** — MIDI and audio clips side by side, cross-track drag & drop, marquee select
-- **A piano roll that reads well** — clip previews show notes; the editor gives you velocity, zoom, and a keyboard
+- **A piano roll that reads well** — clip previews show notes; the editor gives you velocity, zoom, and a virtual keyboard
+- **Notation and tab** — the score lane draws staff notation or guitar tab from the same notes, and MusicXML comes out at export
 - **Dynamic tempo & meter** — change tempo or time signature at any point; the grid follows
 - **Transport & loop** — play, stop, seek, loop a region, metronome
 - **Automation lanes** — draw curves for anything a plugin or the built-in synth exposes
+- **Tools at the pointer** — a floating dock switches draw / erase / select / split / lyric, and one click swaps the bottom lane between automation, score and keyboard
 - **A real editing toolkit** — split, move, copy/paste, undo/redo, plus a keyboard-shortcut cheat sheet
 
 <p align="center">
-  <img src="./assets/screenshots/02-edit.png" width="100%" alt="The piano-roll editor showing a chord clip's notes and a velocity lane">
+  <img src="./assets/screenshots/03-edit.png" width="100%" alt="The piano-roll editor: a melody clip's notes with the velocity lane underneath, and the track's EQ and reverb chain in the inspector">
 </p>
 
 ### Mixing & Mastering — Finish the track
@@ -108,7 +117,7 @@ Balance the song, then make it loud. Channel strips give you gain, pan, sends, b
 - **Export** — lossless WAV or LAME-encoded MP3 (sample rate and bitrate your pick), a standard MIDI file, or a MusicXML score
 
 <p align="center">
-  <img src="./assets/screenshots/03-mix.png" width="100%" alt="The mixer: channel strips for the master bus and each track, with faders, pan and mute/solo">
+  <img src="./assets/screenshots/04-mix.png" width="100%" alt="The Mix view: channel strips for the master bus, five instrument tracks and a reverb bus, with faders, pans, sends, inserts and live meters">
 </p>
 
 ### Plugins — Bring your own instruments and effects
@@ -120,14 +129,29 @@ AI DAW hosts **VST3** and **CLAP** plugins everywhere, plus **Audio Units (AU / 
 - **Local import** — bring in a plugin you have installed elsewhere
 - **Editors & parameters** — open a plugin's own UI, or drive its parameters from the inspector and automation lanes; AU plugins without their own view get a generic parameter panel
 - **SoundFont libraries** — import your own `.sf2` / `.sf3` (one bank expands into dozens of presets), or install an open bank such as MuseScore General, FluidR3 or FreePats from the built-in SoundFont index
+- **One download manager** — plugins, SoundFonts, AI models and runtimes share a single manager with live progress, cancel, and a per-item install state
 
 <p align="center">
-  <img src="./assets/screenshots/04-plugins.png" width="100%" alt="The plugins panel: a built-in synth and effect list, with filters for built-in and external plugins">
+  <img src="./assets/screenshots/05-plugins.png" width="100%" alt="The plugins panel: the SoundFont library plus built-in instruments grouped by family, with built-in / external filters">
+</p>
+
+### App extensions — Extend the app itself
+
+Audio plugins extend the sound; **app extensions** extend the application. They ship as npm packages and can add **MCP tools** an agent can call plus **panels** that render in the right-hand sidebar — so a workflow you are missing can be added without forking the app.
+
+- **npm distribution** — install from an index (`index.json`) or straight from a registry; `engines.aidaw` says which app versions an extension supports, and mirrors cover offline or firewalled networks
+- **Discover and installed** — the panel lists everything your indexes know about (version, author, install / update) next to everything that runs (state, tools, panes, enable / reload / uninstall)
+- **Two sides of an extension** — server-side tools run in the daemon's QuickJS host and reach the session through the same commands as the UI; client-side panes are ESM loaded into the webview with hot reload
+- **Local folders too** — Import folder installs an extension you are building yourself; `examples/extensions/hello` is the minimal reference (one tool, one pane)
+- **Not the audio chain** — for VST3 / CLAP / AU see **Plugins** above; this is the app, not the mixer
+
+<p align="center">
+  <img src="./assets/screenshots/06-extensions.png" width="100%" alt="The App extensions panel: Discover list with versions, authors and install buttons, the index status chip, and the Installed / Discover tabs">
 </p>
 
 ### Local AI — Turn audio into material you can work with
 
-The AI features are built for real sessions, not demos. Point them at a track and they hand back something you can keep editing: MIDI notes you can move, a vocal take with less room noise, stems you can rebalance. Everything runs on your own hardware — CPU by default, with optional CoreML (macOS) and DirectML (Windows) acceleration.
+The AI features are built for real sessions, not demos. Point them at a track and they hand back something you can keep editing: MIDI notes you can move, a vocal take with less room noise, stems you can rebalance. Everything runs on your own hardware — CPU by default, with optional CoreML (macOS) and DirectML (Windows) acceleration. Every job sits in one **AI panel**, filtered by **All / Generate / Convert**, and each row tells you whether its model is already installed.
 
 - **Tempo detection** — Beat This! (ISMIR 2024) infers a global BPM and time signature in one pass
 - **Audio-to-MIDI** — Basic Pitch turns a recorded performance into editable notes; switch the model to **MuScriptor** (via the audio.cpp engine) for multi-instrument transcription, which lands one MIDI track per instrument. 393 MB–5.1 GB, downloaded on demand (CC BY-NC 4.0 — non-commercial)
@@ -138,7 +162,7 @@ The AI features are built for real sessions, not demos. Point them at a track an
 - **Offline by design** — no account, no API key, no uploads
 
 <p align="center">
-  <img src="./assets/screenshots/05-ai-panel.png" width="100%" alt="The AI panel: MCP server status, plus entries for audio-to-MIDI, voice cleanup, stem separation and tempo detection">
+  <img src="./assets/screenshots/07-ai-panel.png" width="100%" alt="The AI panel filtered to Convert: stem separation, vocal denoise, audio-to-MIDI and tempo detection, each with its model and run button">
 </p>
 
 ### MCP Server — Let an AI agent work in your session
@@ -147,10 +171,11 @@ Flip one switch and your project becomes something an AI assistant can operate. 
 
 - **MCP over HTTP** — a loopback-only endpoint your agent connects to
 - **Live edits** — agent actions show up immediately as ordinary project changes
+- **Song Agent in the app** — the **Write with AI** button opens a chat panel that composes against the same tools; point it at any OpenAI-compatible model in Settings → Text generation
 - **`aidaw` CLI** — installable onto your `PATH` from Settings
 
 <p align="center">
-  <img src="./assets/screenshots/06-settings-ai-mcp.png" width="100%" alt="Settings → AI / MCP: execution backend selection and the MCP server endpoint">
+  <img src="./assets/screenshots/08-settings-ai-mcp.png" width="100%" alt="Settings → AI / MCP: execution backend selection and the MCP server switch, port, status and endpoint">
 </p>
 
 ## Installation
@@ -288,6 +313,7 @@ src-tauri/          Tauri shell: windows, native plugin editors, auto-updater
 crates/daemon/      the whole backend: project engine, audio host, MCP, HTTP
 crates/engine/      DSP + scheduling + rendering (no Tauri dependency)
 crates/ipc/         the command/event schema shared by app, CLI and MCP
+crates/extensions/  app-extension host: npm install, manifests, QuickJS tools, client panes
 src/                Vue 3 frontend — identical for desktop and browser
 ```
 
@@ -303,7 +329,7 @@ Yes. AI DAW is open source under Apache 2.0. There are no paid tiers and no feat
 
 ### Does it work offline?
 
-Yes. The app and every AI model run locally. The only network access is downloading plugin packages and AI models (which you start), and fetching the plugin registry.
+Yes. The app and every AI model run locally. The only network access is downloading plugin packages and AI models (which you start), fetching the plugin and extension indexes, and calling a cloud music service if you configure one.
 
 ### Do I need a GPU?
 
@@ -318,6 +344,10 @@ No model weights are ever part of the repository or the installers, and each mod
 ### Which plugin formats are supported?
 
 VST3 and CLAP on Windows, macOS and Linux; **Audio Units (AU / AUv3)** as well on macOS.
+
+### Which languages does the interface support?
+
+Simplified Chinese, Traditional Chinese, English, Japanese, Korean, Spanish, French, German, Russian and Arabic. Switch any time in **Settings → General → Language**; the choice is remembered and follows your system language until you do. Dictionaries live in `src/i18n/`, and any string a translation is missing falls back to English. Arabic text is fully supported — the timeline keeps its left-to-right layout, because a DAW's time axis reads left to right. The README is translated into the same ten languages.
 
 ### Do I need the app running to let an agent drive it?
 

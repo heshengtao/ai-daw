@@ -296,8 +296,9 @@ function onAccent(a: AccentColor): void {
  * 语言 / 主题 / 代理方式 / 下载源，以及下面的两个 AI 后端。之前这里各自手写
  * `.m3-seg`，而 AI 后端又用了另一套控件，宽度一紧就直接换行，看起来像两个组件。
  */
-const localeSegOptions = computed<SegmentedOption[]>(() =>
-  i18n.locales.map((l) => ({ value: l.id, label: l.label })),
+/** 语言下拉：母语写法 + 英文名，10 种语言用胶囊排不下，改下拉。 */
+const localeOptions = computed<SelectOption[]>(() =>
+  i18n.locales.map((l) => ({ id: l.id, label: l.label, hint: l.english })),
 );
 const themeSegOptions = computed<SegmentedOption[]>(() =>
   THEMES.map((t) => ({ value: t.id, label: i18n.t(t.labelKey) })),
@@ -1385,10 +1386,12 @@ onUnmounted(() => {
                   <span class="row-sub">{{ i18n.t("settings.language.hint") }}</span>
                 </div>
                 <div class="row-control">
-                  <Md3Segmented
+                  <Md3Select
                     :model-value="i18n.locale.value"
-                    :options="localeSegOptions"
-                    :aria-label="i18n.t('settings.language.label')"
+                    :options="localeOptions"
+                    :label="i18n.t('settings.language.label')"
+                    searchable
+                    class="locale-select"
                     @update:model-value="onLocalePick"
                   />
                 </div>

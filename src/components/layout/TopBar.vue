@@ -14,7 +14,7 @@
  * 顶栏横跨「工作区 + 右侧面板」两列，右端恒等于窗口右端——
  * 因此面板开关固定在顶栏最右，展开/收起时鼠标不用移动。
  */
-import { computed, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -96,6 +96,94 @@ const navIndex = computed(() => {
   return navItems.findIndex((item) => isActive(item.path));
 });
 
+/** 当前视图那一格的位置：胶囊是**按内容宽度**排的，滑块得按真实几何走。 */
+const thumbStyle = ref<{ left: string; width: string }>({ left: "3px", width: "0px" });
+
+function updateThumb(): void {
+  const nav = navRef.value;
+  if (!nav) return;
+  const index = navIndex.value;
+  const button = index >= 0 ? nav.querySelectorAll<HTMLElement>(".view-btn")[index] : null;
+  if (!button) return;
+  thumbStyle.value = { left: `${button.offsetLeft}px`, width: `${button.offsetWidth}px` };
+}
+
+watch(navIndex, () => void nextTick(updateThumb), { immediate: true });
+
+/**
+ * 顶栏的「自动让位」：视图胶囊是**等宽格子**（滑块要按格平移），所以一门外语里
+ * 最长的那个视图名会决定每一格多宽——德语 / 俄语的长词（Arrangement、Аранжировка）
+ * 在 1360px 宽的顶栏里放不下五格。
+ *
+ * 放不下就把视图名收起来、只留图标（每格都有 title 与 aria-label，鼠标停留能看到全名），
+ * 而不是把词截成「Ins… / Arr…」这种半截货。窗口变宽 / 切回短语言时会自动恢复文字。
+ */
+const navRef = ref<HTMLElement | null>(null);
+const compactNav = ref(false);
+
+function labelsTruncated(): boolean {
+  const nav = navRef.value;
+  if (!nav) return false;
+  // 胶囊被压缩到放不下时会整体溢出（先于文字自己截断）：两种都算「放不下」
+  if (nav.scrollWidth > nav.clientWidth + 4) return true;
+  const labels = nav.querySelectorAll<HTMLElement>(".view-label");
+  // 留 4px 容差：字体渲染 / 子像素取整会让宽度差一两像素，不值得为它把文字全收掉
+  return [...labels].some((el) => el.scrollWidth > el.clientWidth + 4);
+}
+
+async function fitTopBar(): Promise<void> {
+  compactNav.value = false;
+  await nextTick();
+  if (labelsTruncated()) compactNav.value = true;
+  await nextTick();
+  updateThumb();
+}
+
+let fitTimer: number | null = null;
+let resizeObserver: ResizeObserver | null = null;
+function scheduleFit(): void {
+  if (fitTimer !== null) window.clearTimeout(fitTimer);
+  fitTimer = window.setTimeout(() => {
+    fitTimer = null;
+    void fitTopBar();
+  }, 80);
+}
+
+/**
+ * 首帧时右侧标签区 / 音轨栏可能还没排完，量到的宽度偏窄；错一次就会一直缩着。
+ * 所以启动后连量几次（0 / 150 / 400 / 900ms），并在可用宽度变大时重新量。
+ */
+const fitTimers: number[] = [];
+onMounted(() => {
+  for (const delay of [0, 150, 400, 900]) {
+    fitTimers.push(window.setTimeout(() => void fitTopBar(), delay));
+  }
+  void (document.fonts?.ready ?? Promise.resolve()).then(() => void fitTopBar());
+  window.addEventListener("resize", scheduleFit);
+  const parent = navRef.value?.parentElement;
+  if (parent && typeof ResizeObserver !== "undefined") {
+    let lastWidth = parent.getBoundingClientRect().width;
+    const observer = new ResizeObserver(() => {
+      const width = parent.getBoundingClientRect().width;
+      // 只在「变宽」时重新量：收起文字本身会让胶囊变窄，别自己跟自己死循环
+      if (width > lastWidth + 4) scheduleFit();
+      lastWidth = width;
+    });
+    observer.observe(parent);
+    resizeObserver = observer;
+  }
+});
+onUnmounted(() => {
+  window.removeEventListener("resize", scheduleFit);
+  if (fitTimer !== null) window.clearTimeout(fitTimer);
+  for (const timer of fitTimers) window.clearTimeout(timer);
+  resizeObserver?.disconnect();
+});
+
+watch(
+  [() => i18n.locale.value, () => layout.showInspector, () => layout.showTrackHeaders],
+  () => scheduleFit(),
+);
 const projectName = computed(() => {
   const name = projectStore.project?.name;
   return !name || name === "untitled" ? i18n.t("settings.untitled") : name;
@@ -228,19 +316,14 @@ function onMouseDown(e: MouseEvent): void {
 
       <!-- 中：四个视图，带文字 + 滑块 -->
       <nav
+        ref="navRef"
         class="view-nav"
-        :class="{ 'is-settings': isSettings }"
-        :style="{ '--nav-count': navItems.length }"
+        :class="{ 'is-settings': isSettings, 'is-compact': compactNav }"
         data-tour="views"
         role="tablist"
         :aria-label="i18n.t('topbar.viewGroup')"
       >
-        <span
-          class="view-thumb"
-          :class="{ hidden: navIndex < 0 }"
-          :style="{ '--idx': Math.max(navIndex, 0) }"
-          aria-hidden="true"
-        />
+        <span class="view-thumb" :class="{ hidden: navIndex < 0 }" :style="thumbStyle" aria-hidden="true" />
         <button
           v-for="item in navItems"
           :key="item.path"
@@ -248,6 +331,7 @@ function onMouseDown(e: MouseEvent): void {
           role="tab"
           :class="{ on: isActive(item.path) && !isSettings }"
           :aria-selected="isActive(item.path) && !isSettings"
+          :title="i18n.t(item.labelKey)"
           @click="router.push(item.path)"
         >
           <component :is="item.icon" class="view-icon" />
@@ -401,8 +485,11 @@ function onMouseDown(e: MouseEvent): void {
   display: flex;
   align-items: baseline;
   gap: 7px;
-  min-width: 0;
-  flex: 0 1 auto;
+  /* 长语言（德语 / 俄语）的视图名会把中间那段撑宽：工程名**先保底**再考虑截断，
+     否则整个名字块会被压成 0 宽，只剩一支铅笔。 */
+  flex: 0 0 auto;
+  min-width: 80px;
+  max-width: 180px;
 }
 .name-strong {
   font-weight: 500;
@@ -445,30 +532,31 @@ function onMouseDown(e: MouseEvent): void {
 /* ---- 视图胶囊：图标 + 文字，当前项有滑块 ---- */
 .view-nav {
   position: relative;
-  display: grid;
-  grid-template-columns: repeat(var(--nav-count, 4), minmax(0, 1fr));
+  display: flex;
   align-items: center;
+  gap: 2px;
   height: 36px;
   margin-left: 8px;
   padding: 3px;
   border-radius: 999px;
   background-color: rgb(var(--md-surface-container-high));
   border: 1px solid rgb(var(--md-outline-variant) / 0.35);
-  flex: 0 0 auto;
+  /* 可压缩：窗口不够宽时先截断视图名，别去挤工程名与其他动作 */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
 }
 .view-thumb {
   position: absolute;
   top: 3px;
   bottom: 3px;
-  left: 3px;
-  width: calc((100% - 6px) / var(--nav-count, 4));
   border-radius: 999px;
   background-color: rgb(var(--md-secondary-container));
   box-shadow: var(--md-elevation-1);
-  transform: translate3d(calc(var(--idx, 0) * 100%), 0, 0);
-  will-change: transform;
+  will-change: left, width;
   transition:
-    transform 300ms cubic-bezier(0.05, 0.7, 0.1, 1),
+    left 300ms cubic-bezier(0.05, 0.7, 0.1, 1),
+    width 300ms cubic-bezier(0.05, 0.7, 0.1, 1),
     opacity var(--md-dur-effects-fast) var(--md-spring-effects-fast);
 }
 .view-thumb.hidden {
@@ -482,6 +570,8 @@ function onMouseDown(e: MouseEvent): void {
   justify-content: center;
   gap: 6px;
   height: 30px;
+  min-width: 0;
+  flex: 0 0 auto;
   padding: 0 10px;
   border: 0;
   border-radius: 999px;
@@ -510,9 +600,23 @@ function onMouseDown(e: MouseEvent): void {
   height: 16px;
   flex: 0 0 auto;
 }
+.view-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .view-nav.is-settings .view-btn {
   color: rgb(var(--md-on-surface-variant));
 }
+/* 收成图标时把左右内边距压小，一行仍等宽，不会因为文字消失而左右跳动 */
+.view-nav.is-compact .view-label {
+  display: none;
+}
+.view-nav.is-compact .view-btn {
+  padding: 0 8px;
+}
+
+
 
 /* ---- 动作区 ---- */
 .bar-actions {
@@ -632,12 +736,7 @@ function onMouseDown(e: MouseEvent): void {
   .view-btn {
     padding: 0 8px;
   }
-  .view-nav {
-    grid-template-columns: repeat(4, 40px);
-  }
-  .view-thumb {
-    width: 40px;
-  }
+
 }
 @media (max-width: 900px) {
   .ai-label {

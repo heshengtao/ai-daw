@@ -54,5 +54,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: i18n dictionaries
+        run: pnpm i18n:check
+
       - name: Type check + bundle
         run: pnpm build
